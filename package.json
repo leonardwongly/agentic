@@ -1,0 +1,40 @@
+{
+  "name": "agentic",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @agentic/web",
+    "build": "npm run build -w @agentic/web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "docs:render": "node scripts/render-docs.mjs",
+    "docs:validate": "node scripts/validate-docs.mjs",
+    "docs:build": "npm run docs:render && npm run docs:validate"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.6",
+    "jszip": "^3.10.1",
+    "next": "^16.0.0",
+    "pg": "^8.16.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^24.9.1",
+    "@types/pg": "^8.15.5",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.2"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@agentic/integrations",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts"
+}
+

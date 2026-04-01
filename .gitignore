@@ -1,0 +1,13 @@
+node_modules
+.next
+coverage
+dist
+build/*.pdf
+build/*.docx
+build/*.json
+docs-preview.md
+.env
+.env.local
+.DS_Store
+.agentic
+test-results

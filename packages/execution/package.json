@@ -1,0 +1,7 @@
+{
+  "name": "@agentic/execution",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts"
+}
+

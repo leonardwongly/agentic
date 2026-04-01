@@ -1,0 +1,7 @@
+{
+  "name": "@agentic/agents",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts"
+}
+

@@ -1,0 +1,61 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": false,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@agentic/contracts": [
+        "packages/contracts/src/index.ts"
+      ],
+      "@agentic/orchestrator": [
+        "packages/orchestrator/src/index.ts"
+      ],
+      "@agentic/memory": [
+        "packages/memory/src/index.ts"
+      ],
+      "@agentic/policy": [
+        "packages/policy/src/index.ts"
+      ],
+      "@agentic/execution": [
+        "packages/execution/src/index.ts"
+      ],
+      "@agentic/agents": [
+        "packages/agents/src/index.ts"
+      ],
+      "@agentic/integrations": [
+        "packages/integrations/src/index.ts"
+      ],
+      "@agentic/observability": [
+        "packages/observability/src/index.ts"
+      ],
+      "@agentic/notifications": [
+        "packages/notifications/src/index.ts"
+      ],
+      "@agentic/db": [
+        "packages/db/src/index.ts"
+      ],
+      "@agentic/repository": [
+        "packages/repository/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "apps",
+    "packages",
+    "tests"
+  ]
+}
+

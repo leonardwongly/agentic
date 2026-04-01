@@ -1,0 +1,7 @@
+{
+  "name": "@agentic/memory",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts"
+}
+
