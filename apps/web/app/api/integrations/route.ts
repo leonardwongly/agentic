@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { IntegrationAccountSchema, nowIso } from "@agentic/contracts";
+import { IntegrationAccountSchema, SYSTEM_USER_ID, nowIso } from "@agentic/contracts";
 import { isAuthError, requireApiSession } from "../../../lib/auth";
 import { getSeededRepository } from "../../../lib/server";
 
@@ -16,7 +16,7 @@ export async function GET(request: Request) {
     await requireApiSession(request);
     const repository = await getSeededRepository();
     return NextResponse.json({
-      integrations: await repository.listIntegrations()
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
     });
   } catch (error) {
     if (isAuthError(error)) {
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     await requireApiSession(request);
     const body = UpdateIntegrationSchema.parse(await request.json());
     const repository = await getSeededRepository();
-    const existing = (await repository.listIntegrations()).find((integration) => integration.id === body.id);
+    const existing = (await repository.listIntegrations(SYSTEM_USER_ID)).find((integration) => integration.id === body.id);
 
     if (!existing) {
       return NextResponse.json({ error: `Integration ${body.id} was not found.` }, { status: 404 });
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       integration,
-      dashboard: await repository.getDashboardData()
+      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
     if (isAuthError(error)) {

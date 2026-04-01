@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { respondToApproval } from "@agentic/orchestrator";
 import { isAuthError, requireApiSession } from "../../../../../lib/auth";
 import { getSeededRepository } from "../../../../../lib/server";
@@ -16,7 +17,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     const body = ApprovalResponseSchema.parse(await request.json());
     const repository = await getSeededRepository();
-    const goals = await repository.listGoals();
+    const goals = await repository.listGoals(SYSTEM_USER_ID);
     const bundle = goals.find((candidate) => candidate.approvals.some((approval) => approval.id === id));
 
     if (!bundle) {
@@ -33,7 +34,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     return NextResponse.json({
       bundle: updatedBundle,
-      dashboard: await repository.getDashboardData()
+      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
     if (isAuthError(error)) {
