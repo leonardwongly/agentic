@@ -65,6 +65,41 @@ describe("watchers route", () => {
     expect(payload.error).toContain("Goal goal-does-not-exist was not found.");
   });
 
+  it("returns 404 when creating a watcher for another user's goal", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const secondaryUserId = "user-secondary";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(secondaryUserId);
+
+    const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Watch someone else's private workflow.");
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await watchersRoute(
+      new Request("http://localhost/api/watchers", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          goalId: secondaryBundle.goal.id,
+          targetEntity: "priority-inbox",
+          condition: "urgent thread appears",
+          frequency: "hourly",
+          triggerAction: "notify me"
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(404);
+    expect(payload.error).toContain(`Goal ${secondaryBundle.goal.id} was not found.`);
+  });
+
   it("lists only watchers for the authenticated user's goals", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH

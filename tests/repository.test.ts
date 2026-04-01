@@ -148,4 +148,24 @@ describe("repository", () => {
     expect(primaryDashboard.watchers.some((watcher) => watcher.id === "watcher-secondary")).toBe(false);
     expect(unauthorizedGoalLookup).toEqual([]);
   });
+
+  it("returns null when loading a goal bundle owned by another user", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const secondaryUserId = "user-secondary";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(secondaryUserId);
+
+    const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Keep this planning workflow private.");
+
+    const hiddenBundle = await repository.getGoalBundleForUser(secondaryBundle.goal.id, SYSTEM_USER_ID);
+    const visibleBundle = await repository.getGoalBundleForUser(secondaryBundle.goal.id, secondaryUserId);
+
+    expect(hiddenBundle).toBeNull();
+    expect(visibleBundle?.goal.id).toBe(secondaryBundle.goal.id);
+  });
 });

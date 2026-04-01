@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     await requireApiSession(request);
     const body = CreateWatcherSchema.parse(await request.json());
     const repository = await getSeededRepository();
-    const goal = await repository.getGoalBundle(body.goalId);
+    const goal = await repository.getGoalBundleForUser(body.goalId, SYSTEM_USER_ID);
 
     if (!goal) {
       return NextResponse.json({ error: `Goal ${body.goalId} was not found.` }, { status: 404 });

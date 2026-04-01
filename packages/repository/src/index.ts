@@ -81,6 +81,7 @@ export type AgenticRepository = {
   seedDefaults(userId?: string): Promise<void>;
   saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle>;
   getGoalBundle(goalId: string): Promise<GoalBundle | null>;
+  getGoalBundleForUser(goalId: string, userId?: string): Promise<GoalBundle | null>;
   listGoals(userId?: string): Promise<GoalBundle[]>;
   listApprovals(userId?: string): Promise<ApprovalRequest[]>;
   listMemory(userId?: string): Promise<MemoryRecord[]>;
@@ -321,6 +322,16 @@ class FileRepository implements AgenticRepository {
   async getGoalBundle(goalId: string): Promise<GoalBundle | null> {
     const bundle = bundleFromStore(await this.readStore(), goalId);
     return bundle ? GoalBundleSchema.parse(clone(bundle)) : null;
+  }
+
+  async getGoalBundleForUser(goalId: string, userId = SYSTEM_USER_ID): Promise<GoalBundle | null> {
+    const bundle = await this.getGoalBundle(goalId);
+
+    if (!bundle || bundle.goal.userId !== userId) {
+      return null;
+    }
+
+    return GoalBundleSchema.parse(clone(bundle));
   }
 
   async listGoals(userId = SYSTEM_USER_ID): Promise<GoalBundle[]> {
@@ -890,6 +901,18 @@ class PostgresRepository implements AgenticRepository {
   }
 
   async getGoalBundle(goalId: string): Promise<GoalBundle | null> {
+    const bundle = await this.mapGoalBundle(goalId);
+    return bundle ? GoalBundleSchema.parse(clone(bundle)) : null;
+  }
+
+  async getGoalBundleForUser(goalId: string, userId = SYSTEM_USER_ID): Promise<GoalBundle | null> {
+    await this.ready;
+    const result = await this.pool.query("select id from goals where id = $1 and user_id = $2 limit 1", [goalId, userId]);
+
+    if (result.rowCount === 0) {
+      return null;
+    }
+
     const bundle = await this.mapGoalBundle(goalId);
     return bundle ? GoalBundleSchema.parse(clone(bundle)) : null;
   }
