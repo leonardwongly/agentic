@@ -13,10 +13,16 @@ const CreateLocalNoteSchema = z
   })
   .strict();
 
+const SearchLocalNotesQuerySchema = z.object({
+  q: z.string().trim().max(200).optional().default("")
+});
+
 export async function GET(request: Request) {
   try {
     await requireApiSession(request);
-    const query = new URL(request.url).searchParams.get("q")?.trim() ?? "";
+    const query = SearchLocalNotesQuerySchema.parse({
+      q: new URL(request.url).searchParams.get("q") ?? ""
+    }).q;
 
     return NextResponse.json({
       notes: await searchLocalNotes(query)

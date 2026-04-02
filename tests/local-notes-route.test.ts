@@ -77,6 +77,19 @@ describe("local notes routes", () => {
     expect(payload.error).toContain("10000");
   });
 
+  it("rejects oversized local-note search queries", async () => {
+    const response = await localNotesRouteGet(
+      new Request(`http://localhost/api/integrations/local-notes?q=${"x".repeat(201)}`, {
+        method: "GET",
+        headers: buildAuthorizedHeaders()
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("q must be at most 200 characters.");
+  });
+
   it("rejects oversized local-note update payloads", async () => {
     const createdResponse = await localNotesRoutePost(
       new Request("http://localhost/api/integrations/local-notes", {
