@@ -14,6 +14,7 @@ This design introduces a dedicated, file-backed self-improvement memory subsyste
 2. Define strict schemas for semantic, episodic, and working-memory records.
 3. Expose a narrow repository API that owns validation, path safety, and atomic file writes.
 4. Keep the first slice easy to inspect, test, and evolve.
+5. Provide an implementation-ready task breakdown so the work can be executed in small, reviewable steps.
 
 ## Non-goals
 
@@ -62,6 +63,23 @@ This design introduces a dedicated, file-backed self-improvement memory subsyste
 4. Clear corruption failures instead of silent recovery.
 5. A narrow repository API that future slices can reuse unchanged.
 6. Fast, deterministic tests using temp directories.
+7. An implementation sequence that a developer can execute without guessing missing coordination details.
+
+## Delivery outcome
+
+At the end of slice 1, the repository should have a dedicated self-improvement memory package that:
+
+1. Creates and manages a separate `.agentic/self-improvement/` store.
+2. Validates semantic, episodic, and working-memory payloads with strict schemas.
+3. Performs safe, atomic file reads and writes.
+4. Exposes a small repository interface for future hook scripts and app integrations.
+5. Includes tests for correctness, abuse cases, corruption handling, and basic concurrency sanity.
+
+The expected outcome is not just "files on disk." The expected outcome is a stable internal platform that later slices can depend on:
+
+1. Hook tooling can write session and error snapshots without knowing file formats.
+2. Pattern extraction code can append episodes and upsert patterns without touching raw JSON.
+3. App integration can consume read-only views later without duplicating validation or path logic.
 
 ## Storage boundary decision
 
@@ -365,6 +383,68 @@ clearWorkingMemory()
 3. Postgres parity.
 4. Background compaction or migration jobs.
 
+## Workflow coordination
+
+This slice introduces a new internal workflow with clear boundaries between callers and storage code.
+
+### Coordination model
+
+1. Callers express intent.
+   Examples:
+   - "append this episode"
+   - "upsert this semantic pattern"
+   - "record the current session"
+2. The repository validates and normalizes inputs.
+3. The repository resolves safe paths under the fixed base directory.
+4. The repository performs atomic writes or validated reads.
+5. The repository returns typed results or typed failures.
+
+### Why this coordination matters
+
+Without a central coordination layer, future hook scripts, app code, and retrospective tooling would each end up:
+
+1. Re-implementing validation.
+2. Re-implementing path handling.
+3. Writing incompatible JSON.
+4. Creating different corruption and race-condition behaviors.
+
+This design prevents that by making the repository the only owner of:
+
+1. File naming.
+2. Directory creation.
+3. Atomic write semantics.
+4. Version handling.
+5. Corruption detection.
+
+### Example workflow: append an episode
+
+1. A future hook or internal caller constructs an episode payload.
+2. The caller invokes `appendEpisode(payload)`.
+3. The repository validates the payload against `EpisodeRecordSchema`.
+4. The repository derives the year directory from `timestamp`.
+5. The repository creates the directory if needed.
+6. The repository derives a safe filename from timestamp and a sanitized slug.
+7. The repository checks whether the episode ID already exists.
+8. The repository writes a temp file and renames it into place.
+9. The repository returns the persisted episode.
+
+### Example workflow: update current session
+
+1. A future pre-start hook captures session context.
+2. The caller invokes `writeCurrentSession(session)`.
+3. The repository validates the payload.
+4. The repository writes `working/current-session.json` atomically.
+5. Later callers can read that snapshot using `readWorkingMemory()`.
+
+### Example workflow: evolve a semantic pattern
+
+1. A later extraction component decides a reusable pattern should be created or reinforced.
+2. The caller invokes `upsertSemanticPattern(pattern)`.
+3. The repository reads and validates the current semantic file.
+4. The repository preserves `createdAt` if the pattern already exists.
+5. The repository updates `updatedAt` and writes the full file atomically.
+6. The repository returns the normalized stored pattern.
+
 ## Write and corruption semantics
 
 ### Reads
@@ -428,6 +508,310 @@ Measurement plan:
 
 1. Track semantic upsert latency as pattern count grows.
 2. Track episode listing latency as year directories accumulate files.
+
+## Task breakdown
+
+This section is the execution-oriented breakdown for implementing slice 1. Each task is designed to be small enough for review and to keep behavior changes isolated.
+
+### Phase 1: Package scaffold
+
+Task 1.1: Create workspace package
+
+Sub-tasks:
+
+1. Add `packages/self-improvement-memory/package.json`.
+2. Add `packages/self-improvement-memory/src/index.ts`.
+3. Align the package naming and export style with the existing monorepo packages.
+4. Ensure the root workspace can resolve the new package in tests.
+
+Why:
+
+1. This isolates self-improvement memory from product-domain memory.
+2. It keeps the new subsystem importable without modifying unrelated app code.
+
+Task 1.2: Define public package boundary
+
+Sub-tasks:
+
+1. Decide which types and schemas are exported publicly.
+2. Keep helper functions internal unless callers need them.
+3. Export only the repository factory and domain types needed by future slices.
+
+Why:
+
+1. A narrow public API makes later refactors safer.
+2. Internal path and IO helpers should remain private.
+
+### Phase 2: Schema and type system
+
+Task 2.1: Define top-level file schemas
+
+Sub-tasks:
+
+1. Add schema for `SemanticPatternsFile`.
+2. Add schema for versioned working-memory snapshot files.
+3. Define shared helper schemas for bounded JSON metadata.
+
+Why:
+
+1. Top-level file schemas define the persistent contract.
+2. Versioning belongs in the file schemas, not only the repository logic.
+
+Task 2.2: Define record-level schemas
+
+Sub-tasks:
+
+1. Add `SemanticPatternSchema`.
+2. Add `EpisodeRecordSchema`.
+3. Add schemas for current-session, last-error, and session-end payloads.
+4. Add enums for episode outcome and working-session status if needed.
+
+Why:
+
+1. Record schemas are reused across reads, writes, and tests.
+2. Tight validation closes off malformed input early.
+
+Task 2.3: Define limits and invariants
+
+Sub-tasks:
+
+1. Add max lengths to text fields.
+2. Add max item counts to arrays.
+3. Add `.strict()` where unknown fields should fail.
+4. Bound metadata depth and allowed JSON value types.
+
+Why:
+
+1. This is the main defense against accidental or hostile store growth.
+2. These limits turn vague quality concerns into enforceable rules.
+
+### Phase 3: Internal filesystem primitives
+
+Task 3.1: Base-dir resolution
+
+Sub-tasks:
+
+1. Define the default base dir as `.agentic/self-improvement`.
+2. Allow an override for tests and future tooling.
+3. Resolve the final path canonically.
+4. Ensure repository-owned paths always stay under the base dir.
+
+Why:
+
+1. This is the main path-traversal boundary.
+2. All later file operations depend on it.
+
+Task 3.2: Safe path helpers
+
+Sub-tasks:
+
+1. Create helpers for semantic, working, and episodic file paths.
+2. Sanitize filename slugs.
+3. Derive year directories from episode timestamps.
+4. Add guardrails so helper output cannot escape the base dir.
+
+Why:
+
+1. Path logic should be written once and tested once.
+2. Episodic naming is where path bugs are most likely.
+
+Task 3.3: Atomic JSON IO helpers
+
+Sub-tasks:
+
+1. Create a helper to read and validate JSON.
+2. Create a helper to write temp files and rename them atomically.
+3. Ensure parent directories exist before writes.
+4. Standardize error wrapping for corruption vs storage failures.
+
+Why:
+
+1. These helpers are cross-cutting concerns used by every repository method.
+2. If they are wrong, every call site is wrong.
+
+### Phase 4: Bootstrap and reads
+
+Task 4.1: Implement `seed()`
+
+Sub-tasks:
+
+1. Create the base directory.
+2. Create the `episodic/` and `working/` directories.
+3. Create an empty `semantic-patterns.json` if missing.
+4. Create empty versioned working-memory files if missing.
+5. Keep the operation idempotent.
+
+Why:
+
+1. Callers should not need to care whether the store exists yet.
+2. Tests need deterministic bootstrap behavior.
+
+Task 4.2: Implement read methods
+
+Sub-tasks:
+
+1. Implement `readSemanticPatterns()`.
+2. Implement `getSemanticPattern(id)`.
+3. Implement `readWorkingMemory()`.
+4. Implement `getEpisode(id, year?)`.
+5. Implement `listEpisodes(filters?)`.
+
+Why:
+
+1. Read paths establish how the package exposes validated state.
+2. They also prove the schemas and path helpers work together.
+
+### Phase 5: Write methods
+
+Task 5.1: Implement semantic upsert
+
+Sub-tasks:
+
+1. Load and validate the current semantic file.
+2. Merge or replace by ID.
+3. Preserve `createdAt` on update.
+4. Refresh `updatedAt`.
+5. Atomically rewrite the semantic file.
+
+Why:
+
+1. Semantic patterns are the only shared-document write path in v1.
+2. This is the place where last-write-win behavior must be explicit.
+
+Task 5.2: Implement episodic append
+
+Sub-tasks:
+
+1. Validate the episode.
+2. Derive the year directory and safe filename.
+3. Check for duplicate IDs.
+4. Write the episode as a new file.
+5. Return the persisted record.
+
+Why:
+
+1. Episode append is the primary ingestion path for concrete experiences.
+2. It should behave predictably and fail closed on duplicates.
+
+Task 5.3: Implement working-memory writes
+
+Sub-tasks:
+
+1. Implement `writeCurrentSession(sessionOrNull)`.
+2. Implement `writeLastError(errorOrNull)`.
+3. Implement `writeSessionEnd(snapshotOrNull)`.
+4. Implement `clearWorkingMemory()`.
+
+Why:
+
+1. Working memory is mutable by design.
+2. Each snapshot needs a clear replace-or-clear behavior.
+
+### Phase 6: Verification
+
+Task 6.1: Schema tests
+
+Sub-tasks:
+
+1. Add valid-case tests.
+2. Add unknown-field rejection tests.
+3. Add oversize rejection tests.
+4. Add invalid-enum tests.
+
+Task 6.2: Repository tests
+
+Sub-tasks:
+
+1. Add bootstrap tests for `seed()`.
+2. Add semantic read/write tests.
+3. Add episodic append and list tests.
+4. Add working-memory write/clear tests.
+5. Add corruption-handling tests.
+
+Task 6.3: Abuse and sanity tests
+
+Sub-tasks:
+
+1. Add path-safety tests.
+2. Add duplicate-episode rejection tests.
+3. Add concurrent semantic write sanity tests.
+4. Add basic linear-growth sanity tests for episode append/list.
+
+Why:
+
+1. The subsystem is mostly persistence logic.
+2. Persistence logic without abuse-path tests is not production-ready even for local-only use.
+
+## Implementation workflow
+
+This section describes how a developer should execute the work, not just what should exist at the end.
+
+### Recommended execution sequence
+
+1. Create the package scaffold.
+2. Add schemas and types.
+3. Add internal path helpers.
+4. Add atomic IO helpers.
+5. Implement `seed()`.
+6. Implement read methods.
+7. Implement semantic upsert.
+8. Implement episodic append and list methods.
+9. Implement working-memory writes and clears.
+10. Add and run tests continuously after each step.
+
+### Recommended review checkpoints
+
+Checkpoint 1: package and schema review
+
+Verify:
+
+1. The exported surface is not too broad.
+2. Field constraints are concrete and justified.
+3. Unknown fields are rejected where intended.
+
+Checkpoint 2: filesystem helper review
+
+Verify:
+
+1. Base-dir handling is safe.
+2. Atomic writes are actually atomic.
+3. Error wrapping separates corruption from ordinary missing-file cases.
+
+Checkpoint 3: repository behavior review
+
+Verify:
+
+1. Duplicate behavior is explicit.
+2. `createdAt` preservation works.
+3. Working-memory clear semantics are unambiguous.
+
+Checkpoint 4: test review
+
+Verify:
+
+1. Happy-path coverage exists.
+2. Abuse-path coverage exists.
+3. Tests use temp directories and remain deterministic.
+
+## How this achieves later slices
+
+This slice is intentionally foundational. It enables later work as follows:
+
+1. Hook tooling slice:
+   - writes into working memory and episodic memory through repository calls
+   - does not need to know file formats
+2. Agentic app integration slice:
+   - can add read-only inspection surfaces over validated data
+   - does not need raw filesystem logic in route handlers
+3. Skill/package hardening slice:
+   - can convert completed work into episodes and patterns
+   - can record evolution sources using stable IDs
+
+Without slice 1, the later slices would either:
+
+1. Duplicate file logic in multiple places.
+2. Create incompatible schemas.
+3. Increase corruption and path-safety risk.
 
 ## Test plan
 
@@ -503,4 +887,4 @@ Measurement plan:
 
 1. The spec-review subagent step from the brainstorming workflow is blocked in this session because sub-agent spawning is not authorized here.
 2. If that authorization becomes available later, run a dedicated spec review pass against this file before implementation.
-
+3. A future implementation-plan document should map these phases to exact files and test commands before coding begins.
