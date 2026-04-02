@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { isAuthError, requireApiSession } from "../../../../lib/auth";
 import { getSeededRepository, runDocsBuild } from "../../../../lib/server";
 
@@ -9,7 +10,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       result,
-      dashboard: await repository.getDashboardData()
+      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
     if (isAuthError(error)) {
