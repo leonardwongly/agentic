@@ -81,6 +81,558 @@ The expected outcome is not just "files on disk." The expected outcome is a stab
 2. Pattern extraction code can append episodes and upsert patterns without touching raw JSON.
 3. App integration can consume read-only views later without duplicating validation or path logic.
 
+## Assumptions
+
+1. The first implementation target is local development and test environments, not distributed deployment.
+2. Node 20, TypeScript, Zod, and the repository’s current workspace conventions remain the active stack.
+3. The self-improvement subsystem is internal infrastructure and should not be exposed through user-facing routes in slice 1.
+4. Future writers will be low-volume and mostly local, so atomic file safety matters more than high-throughput concurrency.
+5. The existing monorepo conventions should be followed unless there is a strong reason to diverge.
+
+## Implementation overview
+
+This implementation is structured as a dedicated internal package that acts as the single storage authority for self-improvement state.
+
+At a high level, the approach is:
+
+1. Define strict domain schemas for three memory classes:
+   - semantic memory for reusable patterns
+   - episodic memory for concrete experiences
+   - working memory for mutable session snapshots
+2. Encapsulate all filesystem access inside a repository package.
+3. Use versioned JSON documents on disk for transparency and manual inspectability.
+4. Protect the store with validation, path normalization, and atomic file writes.
+5. Keep the public API narrow so later slices can build on stable interfaces instead of raw files.
+
+This is deliberately not implemented as a generic storage layer. It is a domain-specific repository because:
+
+1. semantic patterns and episodes have different invariants
+2. working memory has replace-or-clear semantics instead of append semantics
+3. each domain needs different error and duplicate handling
+
+## Technologies, frameworks, and methodology
+
+### Technologies
+
+1. TypeScript
+   Used for explicit typing, stable package exports, and clear repository contracts.
+2. Zod
+   Used for runtime validation of persisted documents and caller-provided payloads.
+3. Node.js filesystem APIs
+   Used for directory creation, file reads, and atomic temp-file writes plus rename.
+4. Vitest
+   Used for deterministic, isolated unit and repository tests.
+
+### Methodology
+
+1. Domain-first design
+   The data model is defined before filesystem operations are implemented.
+2. Repository pattern
+   All callers interact through a repository boundary instead of touching files directly.
+3. Fail-closed validation
+   Invalid payloads and corrupt files are rejected explicitly rather than tolerated.
+4. Incremental implementation
+   The system is delivered in phases so correctness can be established before integration.
+5. Minimal-safe design
+   The design avoids generic abstractions and heavier backends until they are justified.
+
+## Why this approach was chosen
+
+The main design choice is to optimize for correctness, inspectability, and maintainability first.
+
+This means:
+
+1. JSON files are favored over a database in slice 1 because they are easy to inspect and diff.
+2. One episode per file is favored over a shared log because it avoids merge-like write behavior for append operations.
+3. A dedicated repository package is favored over extending the product runtime store because it preserves trust boundaries.
+4. Strict schemas are favored over permissive parsing because internal learning systems become unreliable quickly if malformed state is allowed to accumulate.
+
+The design intentionally accepts one trade-off:
+
+1. semantic upserts are last-write-win in true concurrent write scenarios
+
+That trade-off is acceptable in slice 1 because:
+
+1. writes are expected to be low volume
+2. the store is local-only
+3. the repository API can later be preserved while the storage internals are upgraded
+
+## Component structure
+
+The implementation is split into a small number of focused components.
+
+### 1. Domain schemas and types
+
+Responsibility:
+
+1. Define the exact structure of semantic patterns, episode records, and working-memory snapshots.
+2. Enforce field constraints, enums, lengths, and versioning.
+
+Why this component exists:
+
+1. Every other component depends on a stable definition of valid data.
+2. Validation rules should not be scattered across repository methods.
+
+### 2. Path-resolution layer
+
+Responsibility:
+
+1. Resolve the base directory.
+2. Derive paths for semantic, episodic, and working-memory files.
+3. Sanitize filenames and guarantee all writes remain under the base directory.
+
+Why this component exists:
+
+1. Path handling is a security boundary.
+2. Path logic is error-prone and should be centralized and tested once.
+
+### 3. Atomic IO layer
+
+Responsibility:
+
+1. Read JSON text from disk.
+2. Parse and validate file contents.
+3. Write validated data through temp-file-plus-rename semantics.
+4. Distinguish missing-file bootstrap behavior from corruption behavior.
+
+Why this component exists:
+
+1. Persistence safety is cross-cutting.
+2. Atomicity and corruption handling must be consistent across all repository methods.
+
+### 4. Repository layer
+
+Responsibility:
+
+1. Expose the public API callers use.
+2. Coordinate validation, path resolution, IO, and domain-specific rules.
+3. Implement upsert, append, list, and clear semantics.
+
+Why this component exists:
+
+1. This is the boundary that future hooks, app code, and extraction jobs will share.
+2. Domain rules belong here, not in individual callers.
+
+### 5. Test layer
+
+Responsibility:
+
+1. Verify schema correctness.
+2. Verify repository behavior under normal and failure conditions.
+3. Verify safety properties such as path confinement and duplicate rejection.
+
+Why this component exists:
+
+1. Persistence code fails in subtle ways.
+2. The system should be proven through fast isolated tests before other slices depend on it.
+
+## How the components interact
+
+The interaction model is intentionally simple and directional.
+
+1. A caller invokes a repository method.
+2. The repository validates the caller payload using the domain schema.
+3. The repository asks the path layer for the correct target path.
+4. The repository calls the IO layer to read the current file, if needed.
+5. The repository applies domain rules:
+   - append-only for episodes
+   - upsert for semantic patterns
+   - replace-or-clear for working memory
+6. The repository sends the final validated payload back to the IO layer for atomic persistence.
+7. The repository returns typed results to the caller.
+
+This keeps the dependency flow one-way:
+
+1. schemas do not depend on repository code
+2. path helpers do not know business logic
+3. IO helpers do not know semantic versus episodic behavior
+4. repository code coordinates the other components
+
+## End-to-end workflow
+
+The following describes how the implementation behaves from the moment a caller wants to persist information until that information is safely stored and later retrieved.
+
+### Workflow A: Store a new episode
+
+1. A future hook or retrospective job constructs an episode payload.
+2. The caller invokes `appendEpisode(payload)`.
+3. The repository validates the payload against `EpisodeRecordSchema`.
+4. The repository derives the year directory from the episode timestamp.
+5. The repository generates a safe filename from timestamp and a sanitized slug.
+6. The repository checks whether an episode with the same ID already exists.
+7. If a duplicate exists, the repository raises a conflict-style error and does not write.
+8. If the write is valid, the repository serializes the episode to JSON.
+9. The IO layer writes the JSON to a temp file in the target directory.
+10. The temp file is renamed atomically into the final location.
+11. The repository returns the validated persisted episode.
+
+### Workflow B: Upsert a semantic pattern
+
+1. A future extraction component produces or updates a semantic pattern.
+2. The caller invokes `upsertSemanticPattern(pattern)`.
+3. The repository validates the payload against `SemanticPatternSchema`.
+4. The repository loads `semantic-patterns.json`.
+5. The IO layer parses and validates the current file.
+6. The repository merges by pattern ID.
+7. If the ID already exists, `createdAt` is preserved and `updatedAt` is refreshed.
+8. The full semantic file is validated again before write.
+9. The IO layer writes the updated semantic file atomically.
+10. The repository returns the normalized stored pattern.
+
+### Workflow C: Update working memory
+
+1. A future pre-start, error-capture, or session-end caller prepares a snapshot.
+2. The caller invokes one of:
+   - `writeCurrentSession(...)`
+   - `writeLastError(...)`
+   - `writeSessionEnd(...)`
+3. The repository validates the payload or validates `null` for clear operations.
+4. The path layer resolves the target working-memory file.
+5. The IO layer writes a small versioned JSON snapshot atomically.
+6. Later readers call `readWorkingMemory()` to load all three snapshots into one typed object.
+
+## Data flow
+
+This section describes the data movement through the system, including transformations and validation boundaries.
+
+### Input data flow
+
+1. External-to-package input starts as untrusted TypeScript objects from future callers.
+2. The repository validates these objects immediately using Zod.
+3. Invalid objects are rejected before any path or filesystem work happens.
+
+### Persistence data flow
+
+1. Validated in-memory objects are normalized into versioned JSON documents.
+2. The repository passes these documents to atomic write helpers.
+3. The documents are persisted to domain-specific locations under the base directory.
+
+### Read data flow
+
+1. Raw JSON is read from disk.
+2. The JSON is parsed.
+3. Parsed objects are validated against the expected schema.
+4. Validated objects are returned to the caller as typed values.
+5. Invalid file contents fail with an integrity error instead of being returned partially.
+
+### Control flow versus data flow
+
+Control flow:
+
+1. caller -> repository -> path helper -> IO helper -> repository -> caller
+
+Data flow:
+
+1. caller payload -> schema validation -> normalized object -> JSON document -> atomic write -> disk
+
+On read:
+
+1. disk -> JSON text -> parsed object -> schema validation -> typed object -> caller
+
+## Detailed implementation process
+
+This is the detailed process a developer would follow to build the implementation end-to-end.
+
+### Step 1: Create the package boundary
+
+1. Add the new package directory.
+2. Add its `package.json`.
+3. Add the initial `src/index.ts`.
+4. Ensure exports can be consumed by tests.
+
+Purpose:
+
+1. Establish a clean unit of ownership before adding logic.
+
+### Step 2: Implement the domain model
+
+1. Add enums and schemas for:
+   - semantic patterns
+   - episodes
+   - current session
+   - last error
+   - session end
+2. Add top-level versioned file schemas.
+3. Add inferred TypeScript types from the schemas.
+
+Purpose:
+
+1. Make the contract explicit before implementing persistence.
+
+### Step 3: Implement path safety
+
+1. Add default base-dir resolution.
+2. Add test-only override support.
+3. Add path builders for all domain files.
+4. Add filename sanitization for episodic records.
+5. Add guards to ensure resulting paths stay rooted under the base dir.
+
+Purpose:
+
+1. Establish the filesystem trust boundary before any writes occur.
+
+### Step 4: Implement atomic IO
+
+1. Add JSON parse-and-validate helpers.
+2. Add temp-file write helpers.
+3. Add directory bootstrap support.
+4. Add typed error wrapping for:
+   - invalid payloads
+   - corruption
+   - duplicate writes
+   - storage failures
+
+Purpose:
+
+1. Ensure persistence behavior is safe and consistent before domain operations are added.
+
+### Step 5: Implement bootstrap
+
+1. Add `seed()`.
+2. Create the directory tree if missing.
+3. Create empty semantic and working-memory files if missing.
+4. Keep the operation idempotent.
+
+Purpose:
+
+1. Make the repository safe to call without requiring pre-provisioning.
+
+### Step 6: Implement reads
+
+1. Add semantic file reads.
+2. Add single-pattern lookup.
+3. Add episode lookup and listing.
+4. Add unified working-memory reads.
+
+Purpose:
+
+1. Prove that the repository can interpret the on-disk model correctly before writes become more complex.
+
+### Step 7: Implement writes
+
+1. Add semantic upsert logic.
+2. Add episodic append logic.
+3. Add working-memory replace-or-clear logic.
+
+Purpose:
+
+1. Complete the repository’s write surface once the read and IO foundation is verified.
+
+### Step 8: Add test coverage
+
+1. Add schema tests.
+2. Add repository tests.
+3. Add corruption tests.
+4. Add abuse-path tests.
+5. Add concurrency sanity tests.
+
+Purpose:
+
+1. Prevent future slices from depending on a persistence layer that has not been stress-tested in realistic failure modes.
+
+## Design decisions and rationale
+
+### Decision 1: Separate store from runtime store
+
+Chosen:
+
+1. Separate `.agentic/self-improvement/` storage
+
+Reason:
+
+1. Preserves trust boundaries and avoids leaking internal learning state into product data.
+
+Alternative sacrificed:
+
+1. Simpler reuse of the existing runtime-store structure
+
+Mitigation:
+
+1. Reuse conventions, not the same file.
+
+### Decision 2: Flat JSON over SQLite or journaled events
+
+Chosen:
+
+1. Flat JSON documents with one episode per file
+
+Reason:
+
+1. Lowest implementation complexity with strong inspectability.
+
+Alternative sacrificed:
+
+1. Better concurrency and replay semantics
+
+Mitigation:
+
+1. Keep the repository API stable so the backend can change later.
+
+### Decision 3: Dedicated repository over generic document store
+
+Chosen:
+
+1. Domain-specific repository methods
+
+Reason:
+
+1. Each memory domain has different invariants and write behavior.
+
+Alternative sacrificed:
+
+1. A smaller-looking generic API
+
+Mitigation:
+
+1. Keep the dedicated API small and explicit.
+
+### Decision 4: Strict validation and bounded fields
+
+Chosen:
+
+1. Fail-closed validation with field caps
+
+Reason:
+
+1. Internal persistence becomes unreliable if malformed or oversized records are allowed through.
+
+Alternative sacrificed:
+
+1. More permissive ingestion of loosely shaped data
+
+Mitigation:
+
+1. Allow future callers to normalize upstream before calling the repository.
+
+## Potential challenges and limitations
+
+### Challenge 1: Concurrent semantic writes
+
+Issue:
+
+1. Two writers can read the same semantic file and overwrite each other’s changes.
+
+Impact:
+
+1. Valid JSON is preserved, but one update can be lost.
+
+Response:
+
+1. Accept this in v1.
+2. Keep semantic writes low volume.
+3. Preserve the API so version checks or journaling can be added later.
+
+### Challenge 2: Corrupt local files
+
+Issue:
+
+1. Manual edits or interrupted writes outside the repository can leave invalid JSON or invalid schema shapes.
+
+Impact:
+
+1. Reads could return bad state if corruption is not detected.
+
+Response:
+
+1. Validate after every read.
+2. Raise integrity errors instead of silently recovering with partial data.
+
+### Challenge 3: Path safety for episodic filenames
+
+Issue:
+
+1. Episode names and other text can include hostile or invalid path characters.
+
+Impact:
+
+1. Unsafe filenames or path traversal if not sanitized.
+
+Response:
+
+1. Never use caller-provided raw strings as paths.
+2. Use repository-owned filename derivation and root confinement checks.
+
+### Challenge 4: Unbounded growth
+
+Issue:
+
+1. Episodes and metadata can grow over time.
+
+Impact:
+
+1. Slower listing and larger semantic rewrites.
+
+Response:
+
+1. Bound payload sizes.
+2. Use one-file-per-episode to localize write costs.
+3. Keep a future migration path to stronger storage backends.
+
+## Edge cases and error handling
+
+### Edge case: store does not exist yet
+
+Handling:
+
+1. `seed()` creates the expected structure.
+2. Missing required files are bootstrapped with empty versioned payloads.
+
+### Edge case: caller passes malformed payload
+
+Handling:
+
+1. Reject at validation time.
+2. Do not touch the filesystem.
+
+### Edge case: duplicate episode ID
+
+Handling:
+
+1. Reject with a conflict-style repository error.
+2. Preserve append-only behavior.
+
+### Edge case: semantic file is missing
+
+Handling:
+
+1. Bootstrap an empty semantic file through `seed()` and continue.
+
+### Edge case: semantic file is corrupt
+
+Handling:
+
+1. Throw an integrity error.
+2. Do not overwrite the corrupt file automatically.
+
+### Edge case: working-memory clear operation
+
+Handling:
+
+1. Persist a versioned file whose `value` is `null`.
+2. Avoid ambiguous "missing file means cleared" behavior.
+
+### Edge case: weird characters in content
+
+Handling:
+
+1. Content remains in JSON payload fields.
+2. Filenames use sanitized derived values, not raw content.
+
+### Edge case: base-dir override in tests
+
+Handling:
+
+1. Resolve the override canonically.
+2. Keep all derived paths under that root.
+
+### Edge case: interrupted write
+
+Handling:
+
+1. Temp file may remain.
+2. Final file should remain intact because rename is atomic.
+3. Future cleanup of temp files can be added later if needed.
+
 ## Storage boundary decision
 
 The self-improvement store lives in a separate operator-side directory:
