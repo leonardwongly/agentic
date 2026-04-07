@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { clearSessionCookie, createSessionCookie, getAuthMode, verifyAccessKey } from "../../../lib/auth";
+import { isContentTypeError, requireJsonContentType } from "../../../lib/api-errors";
+import { AGENTIC_SESSION_COOKIE, checkSessionRateLimit, clearSessionCookie, createSessionCookie, getAuthMode, recordSessionSuccess, revokeSessionToken, verifyAccessKey } from "../../../lib/auth";
 
 const SessionRequestSchema = z
   .object({
@@ -10,6 +11,21 @@ const SessionRequestSchema = z
 
 export async function POST(request: Request) {
   try {
+    requireJsonContentType(request);
+
+    const rateLimitKey = request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "unknown";
+    const rateLimit = checkSessionRateLimit(rateLimitKey);
+
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: "Too many login attempts. Please try again later." },
+        {
+          status: 429,
+          headers: { "Retry-After": String(Math.ceil(rateLimit.retryAfterMs / 1000)) }
+        }
+      );
+    }
+
     const authMode = getAuthMode();
 
     if (authMode.requiresConfiguredKey) {
@@ -27,6 +43,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "The supplied access key was rejected." }, { status: 401 });
     }
 
+    recordSessionSuccess(rateLimitKey);
+
     const response = NextResponse.json({
       ok: true
     });
@@ -35,6 +53,9 @@ export async function POST(request: Request) {
     response.cookies.set(cookie.name, cookie.value, cookie.options);
     return response;
   } catch (error) {
+    if (isContentTypeError(error)) {
+      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
+    }
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : "Failed to create a session."
@@ -44,7 +65,17 @@ export async function POST(request: Request) {
   }
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  const existingToken = request.headers.get("cookie")
+    ?.split(";")
+    .map((s) => s.trim())
+    .find((s) => s.startsWith(`${AGENTIC_SESSION_COOKIE}=`))
+    ?.slice(AGENTIC_SESSION_COOKIE.length + 1);
+
+  if (existingToken) {
+    revokeSessionToken(existingToken);
+  }
+
   const response = NextResponse.json({ ok: true });
   const cookie = clearSessionCookie();
 

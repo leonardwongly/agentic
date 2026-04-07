@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+export function requireJsonContentType(request: Request): void {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw Object.assign(new Error("Request Content-Type must be application/json."), { name: "ContentTypeError" });
+  }
+}
+
+export function isContentTypeError(error: unknown): error is Error {
+  return error instanceof Error && error.name === "ContentTypeError";
+}
+
 function formatIssuePath(path: PropertyKey[]): string {
   const label = path.map((segment) => String(segment)).join(".").trim();
   return label.length > 0 ? label : "request";

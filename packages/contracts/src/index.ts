@@ -141,6 +141,8 @@ export const PolicyDecisionSchema = z.object({
   requiresApproval: z.boolean()
 });
 
+export const APPROVAL_EXPIRY_MS = 48 * 60 * 60 * 1000; // 48 hours
+
 export const ApprovalRequestSchema = z.object({
   id: z.string().min(1),
   goalId: z.string().min(1),
@@ -151,15 +153,19 @@ export const ApprovalRequestSchema = z.object({
   decision: ApprovalDecisionSchema,
   requestedAction: z.string().min(1),
   createdAt: z.string().datetime(),
+  expiryAt: z.string().datetime(),
   respondedAt: z.string().datetime().nullable().default(null)
 });
+
+export const watcherFrequencyValues = ["realtime", "5min", "15min", "hourly", "daily"] as const;
+export const WatcherFrequencySchema = z.enum(watcherFrequencyValues);
 
 export const WatcherSchema = z.object({
   id: z.string().min(1),
   goalId: z.string().min(1),
   targetEntity: z.string().min(1),
   condition: z.string().min(1),
-  frequency: z.string().min(1),
+  frequency: WatcherFrequencySchema,
   triggerAction: z.string().min(1),
   sourceSystems: z.array(z.string()).default([]),
   status: z.enum(["active", "paused", "expired"]).default("active"),
@@ -177,7 +183,8 @@ export const ActionLogSchema = z.object({
   kind: z.string().min(1),
   message: z.string().min(1),
   details: z.record(z.string(), z.unknown()).default({}),
-  createdAt: z.string().datetime()
+  createdAt: z.string().datetime(),
+  prevHash: z.string().nullable().default(null)
 });
 
 export const IntegrationAccountSchema = z.object({
@@ -220,6 +227,7 @@ export type Task = z.infer<typeof TaskSchema>;
 export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
 export type PolicyDecision = z.infer<typeof PolicyDecisionSchema>;
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
+export type WatcherFrequency = z.infer<typeof WatcherFrequencySchema>;
 export type Watcher = z.infer<typeof WatcherSchema>;
 export type ActionLog = z.infer<typeof ActionLogSchema>;
 export type IntegrationAccount = z.infer<typeof IntegrationAccountSchema>;

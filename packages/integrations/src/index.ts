@@ -96,3 +96,90 @@ export function inferCapabilitiesFromRequest(request: string): Capability[] {
 }
 
 export * from "./local-notes";
+
+// ---------------------------------------------------------------------------
+// Capability enforcement at integration call sites
+// ---------------------------------------------------------------------------
+
+/**
+ * The maximum capability set each agent type is permitted to hold.
+ * Any capability granted to an agent outside this set is a misconfiguration.
+ */
+const AGENT_CAPABILITY_ALLOWLIST: Record<string, Capability[]> = {
+  communications: ["read", "search", "draft", "send"],
+  calendar: ["read", "search", "schedule", "update"],
+  workflow: ["read", "search", "draft", "create", "update", "monitor"],
+  research: ["read", "search", "draft"],
+  knowledge: ["read", "search", "create", "monitor"],
+  travel: ["read", "search", "draft", "monitor"],
+  "personal-admin": ["read", "search", "draft", "create", "update", "monitor"],
+  "finance-support": ["read", "search", "draft"],
+  orchestrator: ["read", "search", "draft", "create", "update", "monitor", "schedule", "send", "approve", "delete"]
+};
+
+export class CapabilityViolationError extends Error {
+  constructor(
+    public readonly agent: string,
+    public readonly requiredCapability: Capability,
+    public readonly grantedCapabilities: Capability[]
+  ) {
+    super(
+      `Agent "${agent}" attempted to invoke a "${requiredCapability}" operation but only has: [${grantedCapabilities.join(", ")}].`
+    );
+    this.name = "CapabilityViolationError";
+  }
+}
+
+export class CapabilityAllowlistViolationError extends Error {
+  constructor(
+    public readonly agent: string,
+    public readonly disallowedCapability: Capability,
+    public readonly allowedCapabilities: Capability[]
+  ) {
+    super(
+      `Agent "${agent}" was granted capability "${disallowedCapability}" which is outside its allowlist: [${allowedCapabilities.join(", ")}].`
+    );
+    this.name = "CapabilityAllowlistViolationError";
+  }
+}
+
+/**
+ * Assert that a specific capability was granted to the agent for this task.
+ * Use at integration call sites before executing any operation.
+ */
+export function assertAgentCapability(
+  agent: string,
+  requiredCapability: Capability,
+  grantedCapabilities: Capability[]
+): void {
+  if (!grantedCapabilities.includes(requiredCapability)) {
+    throw new CapabilityViolationError(agent, requiredCapability, grantedCapabilities);
+  }
+}
+
+/**
+ * Verify that every capability granted to an agent is within its type-level allowlist.
+ * Call this at task execution time to catch orchestrator misconfigurations early.
+ */
+export function assertCapabilitiesWithinAllowlist(agent: string, grantedCapabilities: Capability[]): void {
+  const allowed = AGENT_CAPABILITY_ALLOWLIST[agent] ?? [];
+  for (const capability of grantedCapabilities) {
+    if (!allowed.includes(capability)) {
+      throw new CapabilityAllowlistViolationError(agent, capability, allowed);
+    }
+  }
+}
+
+/**
+ * Wrap any integration method call with a capability check.
+ * The call only executes if the agent holds the required capability for this task.
+ */
+export function callWithCapabilityCheck<T>(
+  agent: string,
+  requiredCapability: Capability,
+  grantedCapabilities: Capability[],
+  fn: () => T
+): T {
+  assertAgentCapability(agent, requiredCapability, grantedCapabilities);
+  return fn();
+}

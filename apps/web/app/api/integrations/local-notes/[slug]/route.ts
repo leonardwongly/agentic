@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { readLocalNote, searchLocalNotes, updateLocalNote } from "@agentic/integrations";
-import { formatValidationError } from "../../../../../lib/api-errors";
+import { formatValidationError, isContentTypeError, requireJsonContentType } from "../../../../../lib/api-errors";
 import { getSeededRepository } from "../../../../../lib/server";
 import { isAuthError, requireApiSession } from "../../../../../lib/auth";
 
@@ -49,6 +49,7 @@ export async function GET(request: Request, context: RouteContext) {
 
 export async function PUT(request: Request, context: RouteContext) {
   try {
+    requireJsonContentType(request);
     await requireApiSession(request);
     const { slug } = await context.params;
     const body = UpdateLocalNoteSchema.parse(await request.json());
@@ -65,6 +66,9 @@ export async function PUT(request: Request, context: RouteContext) {
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
+    if (isContentTypeError(error)) {
+      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
+    }
     if (isAuthError(error)) {
       return NextResponse.json({ error: error.message }, { status: 401 });
     }

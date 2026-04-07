@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { createLocalNote, searchLocalNotes } from "@agentic/integrations";
-import { formatValidationError } from "../../../../lib/api-errors";
+import { formatValidationError, isContentTypeError, requireJsonContentType } from "../../../../lib/api-errors";
 import { getSeededRepository } from "../../../../lib/server";
 import { isAuthError, requireApiSession } from "../../../../lib/auth";
 
@@ -47,6 +47,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    requireJsonContentType(request);
     await requireApiSession(request);
     const body = CreateLocalNoteSchema.parse(await request.json());
     const [note, repository] = await Promise.all([createLocalNote(body), getSeededRepository()]);
@@ -57,6 +58,9 @@ export async function POST(request: Request) {
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
+    if (isContentTypeError(error)) {
+      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
+    }
     if (isAuthError(error)) {
       return NextResponse.json({ error: error.message }, { status: 401 });
     }
