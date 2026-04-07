@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { NextConfig } from "next";
+import { BASE_SECURITY_HEADERS } from "./lib/security-headers";
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -33,7 +34,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/:path*",
-        headers: securityHeaders
+        headers: [...BASE_SECURITY_HEADERS]
       }
     ];
   },

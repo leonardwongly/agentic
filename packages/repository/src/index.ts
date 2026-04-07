@@ -4,10 +4,13 @@ import { Pool, type PoolClient } from "pg";
 import { z } from "zod";
 import {
   ActionLogSchema,
+  AgentDefinitionSchema,
+  AgentMetricsSchema,
   ApprovalRequestSchema,
   ArtifactSchema,
   GoalBundleSchema,
   GoalSchema,
+  GoalTemplateSchema,
   IntegrationAccountSchema,
   MemoryRecordSchema,
   SYSTEM_USER_ID,
@@ -17,9 +20,12 @@ import {
   clone,
   nowIso,
   type ActionLog,
+  type AgentDefinition,
+  type AgentMetrics,
   type ApprovalRequest,
   type Artifact,
   type GoalBundle,
+  type GoalTemplate,
   type IntegrationAccount,
   type MemoryRecord,
   type Watcher
@@ -56,7 +62,10 @@ const RuntimeStoreSchema = z.object({
   watchers: z.array(WatcherSchema),
   integrations: z.array(IntegrationAccountSchema),
   artifacts: z.array(ArtifactSchema),
-  policyRules: z.array(PolicyRuleRecordSchema)
+  policyRules: z.array(PolicyRuleRecordSchema),
+  templates: z.array(GoalTemplateSchema).default([]),
+  agents: z.array(AgentDefinitionSchema).default([]),
+  agentMetrics: z.array(AgentMetricsSchema).default([])
 });
 
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
@@ -90,10 +99,20 @@ export type AgenticRepository = {
   saveWatcher(watcher: Watcher): Promise<Watcher>;
   listIntegrations(userId?: string): Promise<IntegrationAccount[]>;
   upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount>;
+  listTemplates(userId?: string): Promise<GoalTemplate[]>;
+  saveTemplate(template: GoalTemplate): Promise<GoalTemplate>;
+  deleteTemplate(templateId: string): Promise<void>;
   getDashboardData(userId?: string): Promise<DashboardData>;
+  // Agent Management
+  listAgents(userId?: string): Promise<AgentDefinition[]>;
+  getAgent(agentId: string): Promise<AgentDefinition | null>;
+  saveAgent(agent: AgentDefinition): Promise<AgentDefinition>;
+  deleteAgent(agentId: string): Promise<void>;
+  getAgentMetrics(agentId: string, period?: "day" | "week" | "month" | "all"): Promise<AgentMetrics | null>;
+  saveAgentMetrics(metrics: AgentMetrics): Promise<AgentMetrics>;
 };
 
-const migrationPath = path.join(process.cwd(), "packages", "db", "migrations", "0001_init.sql");
+const migrationPath = path.join(/* turbopackIgnore: true */ process.cwd(), "packages", "db", "migrations", "0001_init.sql");
 
 function resolveDefaultStorePath(): string {
   const configured = process.env.AGENTIC_RUNTIME_STORE_PATH?.trim();
@@ -102,7 +121,7 @@ function resolveDefaultStorePath(): string {
     return path.resolve(configured);
   }
 
-  return path.join(process.cwd(), ".agentic", "runtime-store.json");
+  return path.join(/* turbopackIgnore: true */ process.cwd(), ".agentic", "runtime-store.json");
 }
 
 function createEmptyStore(): RuntimeStore {
@@ -118,7 +137,10 @@ function createEmptyStore(): RuntimeStore {
     watchers: [],
     integrations: [],
     artifacts: [],
-    policyRules: []
+    policyRules: [],
+    templates: [],
+    agents: [],
+    agentMetrics: []
   });
 }
 
@@ -203,6 +225,10 @@ async function normalizeStore(raw: string): Promise<RuntimeStore> {
   return RuntimeStoreSchema.parse(JSON.parse(raw) as unknown);
 }
 
+function isStoreCorruptionError(error: unknown): boolean {
+  return error instanceof SyntaxError || error instanceof z.ZodError;
+}
+
 function bundleFromStore(store: RuntimeStore, goalId: string): GoalBundle | null {
   const goal = store.goals.find((candidate) => candidate.id === goalId);
 
@@ -237,6 +263,137 @@ function goalIdsForUser(store: RuntimeStore, userId: string): Set<string> {
   return new Set(store.goals.filter((goal) => goal.userId === userId).map((goal) => goal.id));
 }
 
+// Built-in agent definitions to seed into the database
+function defaultAgents(userId: string): AgentDefinition[] {
+  const timestamp = nowIso();
+  
+  const builtInAgents: Array<{ name: string; displayName: string; description: string; systemPrompt: string; artifactType: "summary" | "brief" | "checklist" | "draft" | "explanation"; category: "productivity" | "communication" | "research" | "scheduling" | "finance" | "development" | "creative" | "administrative" | "custom" }> = [
+    {
+      name: "communications",
+      displayName: "Communications Agent",
+      description: "Triage communications, draft replies, and prepare escalation notes",
+      systemPrompt: "You are a communications triage specialist. You analyze inbound messages, identify urgency and sender context, draft replies, and prepare escalation notes. Be concise and actionable. Output sender-aware guidance with clear priority rankings.",
+      artifactType: "summary",
+      category: "communication"
+    },
+    {
+      name: "calendar",
+      displayName: "Calendar Agent",
+      description: "Review schedules, detect conflicts, and recommend reschedules",
+      systemPrompt: "You are a calendar and scheduling analyst. You review existing commitments, detect conflicts, identify overload windows, and recommend reschedule candidates. Output a structured brief with time-block analysis.",
+      artifactType: "brief",
+      category: "scheduling"
+    },
+    {
+      name: "workflow",
+      displayName: "Workflow Agent",
+      description: "Decompose requests into action items with checkpoints",
+      systemPrompt: "You are a workflow planner. You decompose requests into concrete, ordered action items with checkpoints and reminders. Output a structured checklist with dependencies and resumable checkpoints.",
+      artifactType: "checklist",
+      category: "productivity"
+    },
+    {
+      name: "research",
+      displayName: "Research Agent",
+      description: "Gather evidence, compare options, and surface risks",
+      systemPrompt: "You are a research analyst. You gather evidence, compare options, surface risks and assumptions, and separate confirmed facts from inferences. Output a structured brief with sourced findings.",
+      artifactType: "brief",
+      category: "research"
+    },
+    {
+      name: "knowledge",
+      displayName: "Knowledge Agent",
+      description: "Surface relevant preferences and contextual background",
+      systemPrompt: "You are a knowledge retrieval specialist. You surface relevant preferences, standing instructions, and contextual background. Prioritize confirmed information over inferred. Output a structured explanation.",
+      artifactType: "explanation",
+      category: "research"
+    },
+    {
+      name: "travel",
+      displayName: "Travel Agent",
+      description: "Assemble itineraries, checklists, and travel assessments",
+      systemPrompt: "You are a travel preparation specialist. You assemble itineraries, checklists, booking confirmations, and travel risk assessments. Output a comprehensive travel brief.",
+      artifactType: "brief",
+      category: "administrative"
+    },
+    {
+      name: "personal-admin",
+      displayName: "Personal Admin Agent",
+      description: "Handle routine personal tasks and life logistics",
+      systemPrompt: "You are a personal administration specialist. You handle routine personal tasks, document organization, and life logistics. Output an actionable summary.",
+      artifactType: "summary",
+      category: "administrative"
+    },
+    {
+      name: "finance-support",
+      displayName: "Finance Agent",
+      description: "Track expenses and prepare budget summaries",
+      systemPrompt: "You are a finance operations specialist. You track expenses, prepare budget summaries, and flag financial action items. Output a structured financial brief.",
+      artifactType: "brief",
+      category: "finance"
+    },
+    {
+      name: "orchestrator",
+      displayName: "Orchestrator Agent",
+      description: "Coordinate between agents and ensure workflow coherence",
+      systemPrompt: "You are a meta-orchestrator. You coordinate between specialized agents, resolve conflicts, and ensure workflow coherence. Output a coordination summary.",
+      artifactType: "summary",
+      category: "productivity"
+    }
+  ];
+
+  return builtInAgents.map((agent) =>
+    AgentDefinitionSchema.parse({
+      id: `agent-builtin-${agent.name}`,
+      userId,
+      name: agent.name,
+      displayName: agent.displayName,
+      description: agent.description,
+      icon: getAgentIcon(agent.category),
+      category: agent.category,
+      tags: ["built-in"],
+      systemPrompt: agent.systemPrompt,
+      promptVariables: [],
+      artifactType: agent.artifactType,
+      behaviorConfig: {
+        temperature: 0.7,
+        maxTokens: 1500,
+        topP: 1,
+        frequencyPenalty: 0,
+        presencePenalty: 0,
+        responseStyle: "balanced",
+        formality: "professional"
+      },
+      allowedCapabilities: ["read", "search"],
+      blockedCapabilities: [],
+      maxRiskClass: "R2",
+      integrationPermissions: [],
+      memoryPermissions: [],
+      isBuiltIn: true,
+      parentAgentId: null,
+      version: 1,
+      status: "active",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    })
+  );
+}
+
+function getAgentIcon(category: string): string {
+  const icons: Record<string, string> = {
+    communication: "📨",
+    scheduling: "📅",
+    research: "🔍",
+    productivity: "✅",
+    finance: "💰",
+    administrative: "🏠",
+    development: "💻",
+    creative: "🎨",
+    custom: "🤖"
+  };
+  return icons[category] || "🤖";
+}
+
 class FileRepository implements AgenticRepository {
   backend = "file" as const;
 
@@ -252,6 +409,10 @@ class FileRepository implements AgenticRepository {
         const store = createEmptyStore();
         await this.writeStore(store);
         return store;
+      }
+
+      if (isStoreCorruptionError(error)) {
+        throw new Error(`Runtime store at ${this.storePath} is corrupted. Restore or delete the file and retry.`);
       }
 
       throw error;
@@ -285,6 +446,11 @@ class FileRepository implements AgenticRepository {
 
     if (!store.policyRules.some((rule) => rule.userId === userId)) {
       store.policyRules.push(...defaultPolicyRules(userId));
+    }
+
+    // Seed built-in agents
+    if (!store.agents.some((agent) => agent.isBuiltIn && agent.userId === userId)) {
+      store.agents.push(...defaultAgents(userId));
     }
 
     await this.writeStore(store);
@@ -404,6 +570,85 @@ class FileRepository implements AgenticRepository {
     store.integrations = upsertById(store.integrations, validated);
     await this.writeStore(store);
     return IntegrationAccountSchema.parse(clone(validated));
+  }
+
+  async listTemplates(userId = SYSTEM_USER_ID): Promise<GoalTemplate[]> {
+    const store = await this.readStore();
+    return sortByCreatedDesc(store.templates.filter((template) => template.userId === userId)).map((template) =>
+      GoalTemplateSchema.parse(clone(template))
+    );
+  }
+
+  async saveTemplate(template: GoalTemplate): Promise<GoalTemplate> {
+    const store = await this.readStore();
+    const validated = GoalTemplateSchema.parse(template);
+    store.templates = upsertById(store.templates, validated);
+    await this.writeStore(store);
+    return GoalTemplateSchema.parse(clone(validated));
+  }
+
+  async deleteTemplate(templateId: string): Promise<void> {
+    const store = await this.readStore();
+    store.templates = store.templates.filter((template) => template.id !== templateId);
+    await this.writeStore(store);
+  }
+
+  async listAgents(userId = SYSTEM_USER_ID): Promise<AgentDefinition[]> {
+    const store = await this.readStore();
+    const agents = store.agents.filter((agent) => agent.userId === userId || agent.isBuiltIn);
+    return agents.map((agent) => AgentDefinitionSchema.parse(clone(agent)));
+  }
+
+  async getAgent(agentId: string): Promise<AgentDefinition | null> {
+    const store = await this.readStore();
+    const agent = store.agents.find((a) => a.id === agentId);
+    return agent ? AgentDefinitionSchema.parse(clone(agent)) : null;
+  }
+
+  async saveAgent(agent: AgentDefinition): Promise<AgentDefinition> {
+    const store = await this.readStore();
+    const validated = AgentDefinitionSchema.parse(agent);
+    store.agents = upsertById(store.agents, validated);
+    await this.writeStore(store);
+    return AgentDefinitionSchema.parse(clone(validated));
+  }
+
+  async deleteAgent(agentId: string): Promise<void> {
+    const store = await this.readStore();
+    const agent = store.agents.find((a) => a.id === agentId);
+
+    if (agent?.isBuiltIn) {
+      throw new Error("Cannot delete a built-in agent");
+    }
+
+    store.agents = store.agents.filter((a) => a.id !== agentId);
+    store.agentMetrics = store.agentMetrics.filter((m) => m.agentId !== agentId);
+    await this.writeStore(store);
+  }
+
+  async getAgentMetrics(
+    agentId: string,
+    period: "day" | "week" | "month" | "all" = "all"
+  ): Promise<AgentMetrics | null> {
+    const store = await this.readStore();
+    const metrics = store.agentMetrics.find((m) => m.agentId === agentId && m.period === period);
+    return metrics ? AgentMetricsSchema.parse(clone(metrics)) : null;
+  }
+
+  async saveAgentMetrics(metrics: AgentMetrics): Promise<AgentMetrics> {
+    const store = await this.readStore();
+    const validated = AgentMetricsSchema.parse(metrics);
+    const key = `${validated.agentId}:${validated.period}`;
+    const existingIndex = store.agentMetrics.findIndex((m) => `${m.agentId}:${m.period}` === key);
+
+    if (existingIndex >= 0) {
+      store.agentMetrics[existingIndex] = validated;
+    } else {
+      store.agentMetrics.push(validated);
+    }
+
+    await this.writeStore(store);
+    return AgentMetricsSchema.parse(clone(validated));
   }
 
   async getDashboardData(userId = SYSTEM_USER_ID): Promise<DashboardData> {
@@ -1089,6 +1334,45 @@ class PostgresRepository implements AgenticRepository {
   async upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount> {
     await this.withTransaction((client) => this.saveIntegrationWithClient(client, account));
     return IntegrationAccountSchema.parse(clone(account));
+  }
+
+  async listTemplates(_userId = SYSTEM_USER_ID): Promise<GoalTemplate[]> {
+    throw new Error("PostgresRepository.listTemplates is not implemented.");
+  }
+
+  async saveTemplate(_template: GoalTemplate): Promise<GoalTemplate> {
+    throw new Error("PostgresRepository.saveTemplate is not implemented.");
+  }
+
+  async deleteTemplate(_templateId: string): Promise<void> {
+    throw new Error("PostgresRepository.deleteTemplate is not implemented.");
+  }
+
+  async listAgents(_userId = SYSTEM_USER_ID): Promise<AgentDefinition[]> {
+    throw new Error("PostgresRepository.listAgents is not implemented.");
+  }
+
+  async getAgent(_agentId: string): Promise<AgentDefinition | null> {
+    throw new Error("PostgresRepository.getAgent is not implemented.");
+  }
+
+  async saveAgent(_agent: AgentDefinition): Promise<AgentDefinition> {
+    throw new Error("PostgresRepository.saveAgent is not implemented.");
+  }
+
+  async deleteAgent(_agentId: string): Promise<void> {
+    throw new Error("PostgresRepository.deleteAgent is not implemented.");
+  }
+
+  async getAgentMetrics(
+    _agentId: string,
+    _period?: "day" | "week" | "month" | "all"
+  ): Promise<AgentMetrics | null> {
+    throw new Error("PostgresRepository.getAgentMetrics is not implemented.");
+  }
+
+  async saveAgentMetrics(_metrics: AgentMetrics): Promise<AgentMetrics> {
+    throw new Error("PostgresRepository.saveAgentMetrics is not implemented.");
   }
 
   async getDashboardData(userId = SYSTEM_USER_ID): Promise<DashboardData> {

@@ -9,6 +9,7 @@ import {
   WatcherSchema,
   nowIso,
   type ActionLog,
+  type AgentDefinition,
   type ApprovalDecision,
   type ApprovalRequest,
   type Goal,
@@ -25,6 +26,14 @@ import { inferCapabilitiesFromRequest } from "@agentic/integrations";
 import { rankRelevantMemories } from "@agentic/memory";
 import { createActionLog } from "@agentic/observability";
 import { evaluateTaskPolicy } from "@agentic/policy";
+import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
+
+export { captureMemoriesFromBundle, type CapturedMemories } from "./memory-capture";
+export { executeApprovedTask, executeApprovedTasks, type ExecutionResult } from "./execution-dispatch";
+export { generateMorningBriefing } from "./morning-briefing";
+export { refineGoal } from "./goal-refinement";
+export { createGoalTemplate, interpolateTemplate, computeNextRun, shouldTemplateRun } from "./goal-templates";
 
 export type ScenarioKey = "inbox-triage" | "weekly-planning" | "travel-preparation" | "general-coordination";
 
@@ -206,7 +215,7 @@ const scenarioCatalog: Record<
   }
 };
 
-function detectScenario(request: string): ScenarioKey {
+function detectScenarioRegex(request: string): ScenarioKey {
   const normalized = request.toLowerCase();
 
   if (/(inbox|email|reply|triage|messages?)/.test(normalized)) {
@@ -222,6 +231,56 @@ function detectScenario(request: string): ScenarioKey {
   }
 
   return "general-coordination";
+}
+
+async function detectScenarioLlm(request: string): Promise<ScenarioKey> {
+  const validScenarios: ScenarioKey[] = ["inbox-triage", "weekly-planning", "travel-preparation", "general-coordination"];
+  const prompt = `Classify this user request into exactly one scenario. Reply with ONLY the scenario key, nothing else.
+
+Scenarios:
+- inbox-triage: Email management, message triage, drafting replies, communication follow-ups
+- weekly-planning: Calendar review, week planning, scheduling, focus blocks, commitment management
+- travel-preparation: Trip planning, flights, hotels, itineraries, travel checklists, packing
+- general-coordination: Everything else — general tasks, research, administrative work, multi-domain requests
+
+User request: "${request.slice(0, 500)}"
+
+Scenario key:`;
+
+  try {
+    if (process.env.ANTHROPIC_API_KEY) {
+      const client = new Anthropic();
+      const response = await client.messages.create({
+        model: process.env.ANTHROPIC_MODEL ?? "claude-opus-4-6",
+        max_tokens: 20,
+        messages: [{ role: "user", content: prompt }]
+      });
+      const text = response.content.find((b) => b.type === "text")?.text?.trim().toLowerCase() ?? "";
+      const matched = validScenarios.find((s) => text.includes(s));
+      if (matched) return matched;
+    } else if (process.env.OPENAI_API_KEY) {
+      const client = new OpenAI();
+      const response = await client.chat.completions.create({
+        model: process.env.OPENAI_MODEL ?? "gpt-5.4",
+        max_tokens: 20,
+        messages: [{ role: "user", content: prompt }]
+      });
+      const text = response.choices[0]?.message?.content?.trim().toLowerCase() ?? "";
+      const matched = validScenarios.find((s) => text.includes(s));
+      if (matched) return matched;
+    }
+  } catch {
+    // Fall through to regex
+  }
+
+  return detectScenarioRegex(request);
+}
+
+async function detectScenario(request: string): Promise<ScenarioKey> {
+  if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) {
+    return detectScenarioLlm(request);
+  }
+  return detectScenarioRegex(request);
 }
 
 function normalizeRequest(request: string): string {
@@ -273,12 +332,13 @@ function recomputeStatuses(tasks: Task[], approvals: ApprovalRequest[], watchers
   };
 }
 
-export function processUserRequest(params: {
+export async function processUserRequest(params: {
   userId: string;
   request: string;
   memories: MemoryRecord[];
   integrations: IntegrationAccount[];
-}): GoalBundle {
+  agentDefinition?: AgentDefinition;
+}): Promise<GoalBundle> {
   const request = normalizeRequest(params.request);
 
   if (!request) {
@@ -292,7 +352,7 @@ export function processUserRequest(params: {
   const relevantMemories = rankRelevantMemories(request, params.memories, 5, {
     agent: "orchestrator"
   });
-  const scenario = detectScenario(request);
+  const scenario = await detectScenario(request);
   const catalog = scenarioCatalog[scenario];
   const goalId = crypto.randomUUID();
   const workflow = createWorkflowState(goalId, scenario);
@@ -364,7 +424,8 @@ export function processUserRequest(params: {
     const decision = evaluateTaskPolicy({
       capabilities,
       confidence: plannedTask.confidence,
-      title: plannedTask.title
+      title: plannedTask.title,
+      memories: params.memories
     });
     const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
     const task = createTask({
@@ -378,7 +439,9 @@ export function processUserRequest(params: {
       toolCapabilities: capabilities,
       state
     });
-    const agentResult = runAgent(task, catalog.title);
+    const agentResult = await runAgent(task, catalog.title, {
+      agentDefinition: params.agentDefinition
+    });
     const nextTask = TaskSchema.parse({
       ...task,
       artifactIds: agentResult.artifacts.map((artifact) => artifact.id)

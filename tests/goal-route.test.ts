@@ -16,7 +16,7 @@ describe("goal route", () => {
     userId: string,
     request: string
   ) {
-    const bundle = processUserRequest({
+    const bundle = await processUserRequest({
       userId,
       request,
       memories: await repository.listMemory(userId),

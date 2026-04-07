@@ -1,8 +1,7 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
-import { SYSTEM_USER_ID, WatcherFrequencySchema, WatcherSchema, nowIso } from "@agentic/contracts";
-import { isContentTypeError, requireJsonContentType } from "../../../lib/api-errors";
-import { isAuthError, requireApiSession } from "../../../lib/auth";
+import { SYSTEM_USER_ID, WatcherSchema, nowIso } from "@agentic/contracts";
+import { requireApiSession } from "../../../lib/auth";
+import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { getSeededRepository } from "../../../lib/server";
 
 const CreateWatcherSchema = z
@@ -20,20 +19,11 @@ export async function GET(request: Request) {
   try {
     await requireApiSession(request);
     const repository = await getSeededRepository();
-    return NextResponse.json({
+    return authenticatedJson({
       watchers: await repository.listWatchers({ userId: SYSTEM_USER_ID })
     });
   } catch (error) {
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to list watchers."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to list watchers.");
   }
 }
 
@@ -41,12 +31,12 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     await requireApiSession(request);
-    const body = CreateWatcherSchema.parse(await request.json());
+    const body = await parseJsonBody(request, CreateWatcherSchema);
     const repository = await getSeededRepository();
     const goal = await repository.getGoalBundleForUser(body.goalId, SYSTEM_USER_ID);
 
     if (!goal) {
-      return NextResponse.json({ error: `Goal ${body.goalId} was not found.` }, { status: 404 });
+      throw new ApiRouteError(404, `Goal ${body.goalId} was not found.`);
     }
 
     const watcher = WatcherSchema.parse({
@@ -65,23 +55,11 @@ export async function POST(request: Request) {
 
     await repository.saveWatcher(watcher);
 
-    return NextResponse.json({
+    return authenticatedJson({
       watcher,
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
-    if (isContentTypeError(error)) {
-      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
-    }
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to save watcher."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to save watcher.");
   }
 }

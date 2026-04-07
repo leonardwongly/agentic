@@ -1,0 +1,6 @@
+{
+  "name": "@agentic/self-improvement-memory",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts"
+}

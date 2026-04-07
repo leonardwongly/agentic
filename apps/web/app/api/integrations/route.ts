@@ -1,8 +1,7 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { IntegrationAccountSchema, SYSTEM_USER_ID, nowIso } from "@agentic/contracts";
-import { isContentTypeError, requireJsonContentType } from "../../../lib/api-errors";
-import { isAuthError, requireApiSession } from "../../../lib/auth";
+import { requireApiSession } from "../../../lib/auth";
+import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { getSeededRepository } from "../../../lib/server";
 
 const UpdateIntegrationSchema = z
@@ -16,20 +15,11 @@ export async function GET(request: Request) {
   try {
     await requireApiSession(request);
     const repository = await getSeededRepository();
-    return NextResponse.json({
+    return authenticatedJson({
       integrations: await repository.listIntegrations(SYSTEM_USER_ID)
     });
   } catch (error) {
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to list integrations."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to list integrations.");
   }
 }
 
@@ -37,12 +27,12 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     await requireApiSession(request);
-    const body = UpdateIntegrationSchema.parse(await request.json());
+    const body = await parseJsonBody(request, UpdateIntegrationSchema);
     const repository = await getSeededRepository();
     const existing = (await repository.listIntegrations(SYSTEM_USER_ID)).find((integration) => integration.id === body.id);
 
     if (!existing) {
-      return NextResponse.json({ error: `Integration ${body.id} was not found.` }, { status: 404 });
+      throw new ApiRouteError(404, `Integration ${body.id} was not found.`);
     }
 
     const integration = IntegrationAccountSchema.parse({
@@ -53,23 +43,11 @@ export async function POST(request: Request) {
 
     await repository.upsertIntegration(integration);
 
-    return NextResponse.json({
+    return authenticatedJson({
       integration,
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
-    if (isContentTypeError(error)) {
-      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
-    }
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to update integration."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to update integration.");
   }
 }

@@ -119,6 +119,16 @@ function resolveAccessKey(): { key: string | null; source: "env" | "development-
   return { key: null, source: "missing" };
 }
 
+export function getServerSigningSecret(scope: "session" | "share" = "session"): string {
+  const resolved = resolveAccessKey();
+
+  if (!resolved.key) {
+    throw new AuthError("AGENTIC_ACCESS_KEY is not configured for this runtime.");
+  }
+
+  return scope === "session" ? resolved.key : `${resolved.key}:agentic-share-v1`;
+}
+
 function deriveSessionToken(secret: string, userId = SYSTEM_USER_ID): string {
   return crypto.createHmac("sha256", secret).update(`${userId}:agentic-session-v1`).digest("hex");
 }
@@ -156,20 +166,13 @@ export function verifyAccessKey(candidate: string | null | undefined): boolean {
 }
 
 export function buildSessionToken(userId = SYSTEM_USER_ID): string {
-  const resolved = resolveAccessKey();
-
-  if (!resolved.key) {
-    throw new AuthError("AGENTIC_ACCESS_KEY is not configured for this runtime.");
-  }
-
-  return deriveSessionToken(resolved.key, userId);
+  return deriveSessionToken(getServerSigningSecret("session"), userId);
 }
 
 export function isAuthorizedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): boolean {
-  const resolved = resolveAccessKey();
   const token = candidate?.trim();
 
-  if (!token || !resolved.key) {
+  if (!token) {
     return false;
   }
 
@@ -177,7 +180,11 @@ export function isAuthorizedSessionToken(candidate: string | null | undefined, u
     return false;
   }
 
-  return constantTimeEqual(token, deriveSessionToken(resolved.key, userId));
+  try {
+    return constantTimeEqual(token, deriveSessionToken(getServerSigningSecret("session"), userId));
+  } catch {
+    return false;
+  }
 }
 
 export function createSessionCookie(userId = SYSTEM_USER_ID) {

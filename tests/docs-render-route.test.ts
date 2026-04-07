@@ -2,6 +2,7 @@ import { SYSTEM_USER_ID } from "@agentic/contracts";
 import type { AgenticRepository, DashboardData } from "@agentic/repository";
 import { vi } from "vitest";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import { expectNoStoreHeaders } from "./route-test-helpers";
 
 const { runDocsBuildMock } = vi.hoisted(() => ({
   runDocsBuildMock: vi.fn(async () => ({
@@ -97,5 +98,19 @@ describe("docs render route", () => {
     expect(response.status).toBe(200);
     expect(runDocsBuildMock).toHaveBeenCalledTimes(1);
     expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
+    expectNoStoreHeaders(response);
+  });
+
+  it("does not leak raw docs-build internals on failures", async () => {
+    runDocsBuildMock.mockImplementationOnce(async () => {
+      throw new Error("spawn /bin/node EACCES");
+    });
+
+    const response = await docsRenderRoute(buildAuthorizedRequest());
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(500);
+    expect(payload.error).toBe("Failed to render the document.");
+    expectNoStoreHeaders(response);
   });
 });

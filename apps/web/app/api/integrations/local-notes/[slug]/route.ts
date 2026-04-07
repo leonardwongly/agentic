@@ -1,10 +1,9 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { readLocalNote, searchLocalNotes, updateLocalNote } from "@agentic/integrations";
-import { formatValidationError, isContentTypeError, requireJsonContentType } from "../../../../../lib/api-errors";
 import { getSeededRepository } from "../../../../../lib/server";
-import { isAuthError, requireApiSession } from "../../../../../lib/auth";
+import { requireApiSession } from "../../../../../lib/auth";
+import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
 
 const NoteSlugSchema = z.string().trim().min(1).max(120).regex(/^[a-z0-9-]+$/);
 
@@ -26,24 +25,11 @@ export async function GET(request: Request, context: RouteContext) {
     await requireApiSession(request);
     const { slug } = await context.params;
 
-    return NextResponse.json({
+    return authenticatedJson({
       note: await readLocalNote(NoteSlugSchema.parse(slug))
     });
   } catch (error) {
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: formatValidationError(error) }, { status: 400 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to load the local note."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to load the local note.");
   }
 }
 
@@ -52,7 +38,7 @@ export async function PUT(request: Request, context: RouteContext) {
     requireJsonContentType(request);
     await requireApiSession(request);
     const { slug } = await context.params;
-    const body = UpdateLocalNoteSchema.parse(await request.json());
+    const body = await parseJsonBody(request, UpdateLocalNoteSchema);
     const note = await updateLocalNote({
       slug: NoteSlugSchema.parse(slug),
       title: body.title,
@@ -60,28 +46,12 @@ export async function PUT(request: Request, context: RouteContext) {
     });
     const [notes, repository] = await Promise.all([searchLocalNotes(""), getSeededRepository()]);
 
-    return NextResponse.json({
+    return authenticatedJson({
       note,
       notes,
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
-    if (isContentTypeError(error)) {
-      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
-    }
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: formatValidationError(error) }, { status: 400 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to update the local note."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to update the local note.");
   }
 }

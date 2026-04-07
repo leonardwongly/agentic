@@ -1,3 +1,4 @@
+import { unstable_noStore as noStore } from "next/cache";
 import { listLocalNotes } from "@agentic/integrations";
 import { AuthGate } from "../components/auth-gate";
 import { Dashboard } from "../components/dashboard";
@@ -7,6 +8,8 @@ import { getSeededRepository } from "../lib/server";
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
+  noStore();
+
   const authenticated = await hasActiveSession();
 
   if (!authenticated) {

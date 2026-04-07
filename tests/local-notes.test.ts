@@ -48,4 +48,42 @@ describe("local notes adapter", () => {
       )
     ).rejects.toThrow();
   });
+
+  it("keeps duplicate titles distinct and preserves trimmed unicode-rich titles", async () => {
+    const basePath = await mkdtemp(path.join(os.tmpdir(), "agentic-notes-"));
+    const first = await createLocalNote(
+      {
+        title: "  SRE / Incident: 東京 !!!  ",
+        content: "first"
+      },
+      basePath
+    );
+    const second = await createLocalNote(
+      {
+        title: "SRE / Incident: 東京 !!!",
+        content: "second"
+      },
+      basePath
+    );
+
+    expect(first.slug).not.toBe(second.slug);
+    expect(first.slug).toMatch(/^sre-incident-[a-f0-9]{8}$/);
+    expect(second.slug).toMatch(/^sre-incident-[a-f0-9]{8}$/);
+    expect(first.title).toBe("SRE / Incident: 東京 !!!");
+    expect(second.title).toBe("SRE / Incident: 東京 !!!");
+  });
+
+  it("rejects oversized direct writes before touching disk", async () => {
+    const basePath = await mkdtemp(path.join(os.tmpdir(), "agentic-notes-"));
+
+    await expect(
+      createLocalNote(
+        {
+          title: "Oversized",
+          content: "x".repeat(10_001)
+        },
+        basePath
+      )
+    ).rejects.toThrow();
+  });
 });

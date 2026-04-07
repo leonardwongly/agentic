@@ -1,10 +1,9 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { createLocalNote, searchLocalNotes } from "@agentic/integrations";
-import { formatValidationError, isContentTypeError, requireJsonContentType } from "../../../../lib/api-errors";
 import { getSeededRepository } from "../../../../lib/server";
-import { isAuthError, requireApiSession } from "../../../../lib/auth";
+import { requireApiSession } from "../../../../lib/auth";
+import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 
 const CreateLocalNoteSchema = z
   .object({
@@ -24,24 +23,11 @@ export async function GET(request: Request) {
       q: new URL(request.url).searchParams.get("q") ?? ""
     }).q;
 
-    return NextResponse.json({
+    return authenticatedJson({
       notes: await searchLocalNotes(query)
     });
   } catch (error) {
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: formatValidationError(error) }, { status: 400 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to list local notes."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to list local notes.");
   }
 }
 
@@ -49,31 +35,15 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     await requireApiSession(request);
-    const body = CreateLocalNoteSchema.parse(await request.json());
+    const body = await parseJsonBody(request, CreateLocalNoteSchema);
     const [note, repository] = await Promise.all([createLocalNote(body), getSeededRepository()]);
 
-    return NextResponse.json({
+    return authenticatedJson({
       note,
       notes: await searchLocalNotes(""),
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
-    if (isContentTypeError(error)) {
-      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
-    }
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: formatValidationError(error) }, { status: 400 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to create a local note."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to create a local note.");
   }
 }

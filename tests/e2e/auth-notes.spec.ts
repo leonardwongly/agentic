@@ -27,15 +27,20 @@ test("unlocks the dashboard and edits a local note end-to-end", async ({ page })
   const editorBody = page.getByPlaceholder("Open a note to edit its body.");
 
   await expect(editorTitle).toHaveValue(title);
-  await editorBody.fill(updatedBody);
+  await editorBody.click();
+  await editorBody.press("ControlOrMeta+A");
+  await editorBody.press("Backspace");
+  await editorBody.pressSequentially(updatedBody);
+  await expect(editorBody).toHaveValue(updatedBody);
   await page.getByRole("button", { name: "Save selected note" }).click();
 
   await expect(page.getByText(`Saved note "${title}".`)).toBeVisible();
 
-  await page.getByPlaceholder("Search local notes").fill(updatedBody);
+  await page.getByPlaceholder("Search local notes").fill(title);
   await page.getByRole("button", { name: "Search" }).click();
 
   const updatedSearchResult = page.locator(".list-item.vertical").filter({ hasText: title }).first();
   await expect(updatedSearchResult.getByText(title, { exact: true })).toBeVisible();
+  await expect(updatedSearchResult).toContainText(updatedBody);
   await expect(editorBody).toHaveValue(updatedBody);
 });

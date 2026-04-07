@@ -1,30 +1,25 @@
-import { NextResponse } from "next/server";
+import { z } from "zod";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
-import { isAuthError, requireApiSession } from "../../../../lib/auth";
+import { requireApiSession } from "../../../../lib/auth";
+import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
+
+const GoalIdSchema = z.string().trim().min(1).max(200);
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     await requireApiSession(request);
     const { id } = await context.params;
+    const goalId = GoalIdSchema.parse(id);
     const repository = await getSeededRepository();
-    const bundle = await repository.getGoalBundleForUser(id, SYSTEM_USER_ID);
+    const bundle = await repository.getGoalBundleForUser(goalId, SYSTEM_USER_ID);
 
     if (!bundle) {
-      return NextResponse.json({ error: `Goal ${id} was not found.` }, { status: 404 });
+      throw new ApiRouteError(404, `Goal ${goalId} was not found.`);
     }
 
-    return NextResponse.json({ bundle });
+    return authenticatedJson({ bundle });
   } catch (error) {
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to load goal."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to load goal.");
   }
 }

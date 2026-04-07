@@ -1,7 +1,11 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
-import { isContentTypeError, requireJsonContentType } from "../../../lib/api-errors";
-import { AGENTIC_SESSION_COOKIE, checkSessionRateLimit, clearSessionCookie, createSessionCookie, getAuthMode, recordSessionSuccess, revokeSessionToken, verifyAccessKey } from "../../../lib/auth";
+import { AGENTIC_SESSION_COOKIE, clearSessionCookie, createSessionCookie, getAuthMode, revokeSessionToken, verifyAccessKey } from "../../../lib/auth";
+import { authenticatedError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
+import {
+  clearFailedSessionUnlockAttempts,
+  getSessionUnlockRateLimitStatus,
+  recordFailedSessionUnlockAttempt
+} from "../../../lib/session-unlock-rate-limit";
 
 const SessionRequestSchema = z
   .object({
@@ -29,23 +33,50 @@ export async function POST(request: Request) {
     const authMode = getAuthMode();
 
     if (authMode.requiresConfiguredKey) {
-      return NextResponse.json(
+      return authenticatedError(503, "AGENTIC_ACCESS_KEY is not configured.");
+    }
+
+    const rateLimitStatus = getSessionUnlockRateLimitStatus(request);
+
+    if (rateLimitStatus.throttled) {
+      return authenticatedJson(
         {
-          error: "AGENTIC_ACCESS_KEY is not configured."
+          error: "Too many failed unlock attempts. Try again later."
         },
-        { status: 503 }
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(rateLimitStatus.retryAfterSeconds)
+          }
+        }
       );
     }
 
-    const body = SessionRequestSchema.parse(await request.json());
+    const body = await parseJsonBody(request, SessionRequestSchema);
 
     if (!verifyAccessKey(body.accessKey)) {
-      return NextResponse.json({ error: "The supplied access key was rejected." }, { status: 401 });
+      const failureStatus = recordFailedSessionUnlockAttempt(request);
+
+      if (failureStatus.throttled) {
+        return authenticatedJson(
+          {
+            error: "Too many failed unlock attempts. Try again later."
+          },
+          {
+            status: 429,
+            headers: {
+              "Retry-After": String(failureStatus.retryAfterSeconds)
+            }
+          }
+        );
+      }
+
+      return authenticatedError(401, "The supplied access key was rejected.");
     }
 
-    recordSessionSuccess(rateLimitKey);
+    clearFailedSessionUnlockAttempts(request);
 
-    const response = NextResponse.json({
+    const response = authenticatedJson({
       ok: true
     });
     const cookie = createSessionCookie();
@@ -53,15 +84,7 @@ export async function POST(request: Request) {
     response.cookies.set(cookie.name, cookie.value, cookie.options);
     return response;
   } catch (error) {
-    if (isContentTypeError(error)) {
-      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
-    }
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to create a session."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to create a session.");
   }
 }
 
@@ -76,7 +99,7 @@ export async function DELETE(request: Request) {
     revokeSessionToken(existingToken);
   }
 
-  const response = NextResponse.json({ ok: true });
+  const response = authenticatedJson({ ok: true });
   const cookie = clearSessionCookie();
 
   response.cookies.set(cookie.name, cookie.value, cookie.options);

@@ -116,7 +116,7 @@ describe("route user scoping", () => {
   });
 
   it("passes the system user explicitly when responding to approvals", async () => {
-    const bundle = processUserRequest({
+    const bundle = await processUserRequest({
       userId: SYSTEM_USER_ID,
       request: "Review my inbox and draft responses.",
       memories: [

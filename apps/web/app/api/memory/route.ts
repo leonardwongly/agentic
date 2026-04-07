@@ -1,9 +1,8 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
-import { isContentTypeError, requireJsonContentType } from "../../../lib/api-errors";
-import { isAuthError, requireApiSession } from "../../../lib/auth";
+import { requireApiSession } from "../../../lib/auth";
+import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { getSeededRepository } from "../../../lib/server";
 
 const CreateMemorySchema = z
@@ -18,20 +17,11 @@ export async function GET(request: Request) {
   try {
     await requireApiSession(request);
     const repository = await getSeededRepository();
-    return NextResponse.json({
+    return authenticatedJson({
       memories: await repository.listMemory(SYSTEM_USER_ID)
     });
   } catch (error) {
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to list memory."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to list memory.");
   }
 }
 
@@ -39,7 +29,7 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     await requireApiSession(request);
-    const body = CreateMemorySchema.parse(await request.json());
+    const body = await parseJsonBody(request, CreateMemorySchema);
     const repository = await getSeededRepository();
     const record = createMemoryRecord({
       userId: SYSTEM_USER_ID,
@@ -54,23 +44,11 @@ export async function POST(request: Request) {
 
     await repository.saveMemory(record);
 
-    return NextResponse.json({
+    return authenticatedJson({
       memory: record,
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
-    if (isContentTypeError(error)) {
-      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
-    }
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to save memory."
-      },
-      { status: 400 }
-    );
+    return handleApiError(error, "Failed to save memory.");
   }
 }

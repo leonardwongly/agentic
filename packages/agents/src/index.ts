@@ -1,7 +1,18 @@
-import { AgentResultSchema, ArtifactSchema, nowIso, type AgentName, type AgentResult, type Task } from "@agentic/contracts";
+import { AgentResultSchema, ArtifactSchema, nowIso, type AgentDefinition, type AgentName, type AgentResult, type Task } from "@agentic/contracts";
 import { assertCapabilitiesWithinAllowlist } from "@agentic/integrations";
 
-function buildArtifact(task: Task, title: string, content: string, artifactType: "summary" | "brief" | "checklist" | "draft" | "explanation") {
+// Options for running an agent with custom configuration
+export type RunAgentOptions = {
+  agentDefinition?: AgentDefinition;
+};
+
+function buildArtifact(
+  task: Task,
+  title: string,
+  content: string,
+  artifactType: "summary" | "brief" | "checklist" | "draft" | "explanation",
+  agentId?: string
+) {
   return ArtifactSchema.parse({
     id: crypto.randomUUID(),
     goalId: task.goalId,
@@ -10,13 +21,30 @@ function buildArtifact(task: Task, title: string, content: string, artifactType:
     title,
     content,
     metadata: {
-      agent: task.assignedAgent
+      agent: task.assignedAgent,
+      ...(agentId && { agentDefinitionId: agentId })
     },
     createdAt: nowIso()
   });
 }
 
-function contentForTask(task: Task, scenario: string): { summary: string; artifactType: "summary" | "brief" | "checklist" | "draft" | "explanation"; content: string } {
+// Generate content for dynamic agent definitions
+function contentForDynamicAgent(
+  agent: AgentDefinition,
+  task: Task,
+  scenario: string
+): { summary: string; artifactType: "summary" | "brief" | "checklist" | "draft" | "explanation"; content: string } {
+  const artifactType = agent.artifactType as "summary" | "brief" | "checklist" | "draft" | "explanation";
+  
+  return {
+    summary: `${agent.displayName} processed "${task.title}".`,
+    artifactType,
+    content: `Scenario: ${scenario}\n\nAgent: ${agent.displayName}\n\nSystem prompt preview:\n${agent.systemPrompt.slice(0, 200)}...\n\nThis task was processed by a custom agent configuration.`
+  };
+}
+
+// Generate content for built-in agents (fallback)
+function contentForBuiltInAgent(task: Task, scenario: string): { summary: string; artifactType: "summary" | "brief" | "checklist" | "draft" | "explanation"; content: string } {
   switch (task.assignedAgent) {
     case "communications":
       return {
@@ -57,18 +85,27 @@ function contentForTask(task: Task, scenario: string): { summary: string; artifa
   }
 }
 
-export function runAgent(task: Task, scenario: string): AgentResult {
+export function runAgent(task: Task, scenario: string, options?: RunAgentOptions): AgentResult {
   // Enforce that every capability granted to this agent is within its type-level allowlist.
-  // Catches orchestrator misconfigurations before any action is taken.
   assertCapabilitiesWithinAllowlist(task.assignedAgent, task.toolCapabilities);
 
-  const result = contentForTask(task, scenario);
-  const artifact = buildArtifact(task, `${task.title} output`, result.content, result.artifactType);
+  // Use dynamic agent definition if provided, otherwise fall back to built-in
+  const result = options?.agentDefinition
+    ? contentForDynamicAgent(options.agentDefinition, task, scenario)
+    : contentForBuiltInAgent(task, scenario);
+
+  const agentId = options?.agentDefinition?.id;
+  const artifact = buildArtifact(task, `${task.title} output`, result.content, result.artifactType, agentId);
+
+  // Determine confidence based on agent source and risk class
+  const baseConfidence = options?.agentDefinition
+    ? 0.75
+    : (task.riskClass === "R1" ? 0.82 : 0.73);
 
   return AgentResultSchema.parse({
     agent: task.assignedAgent satisfies AgentName,
     summary: result.summary,
-    confidence: task.riskClass === "R1" ? 0.82 : 0.73,
+    confidence: baseConfidence,
     artifacts: [artifact],
     proposedToolCalls: [],
     nextSteps: [
@@ -79,3 +116,20 @@ export function runAgent(task: Task, scenario: string): AgentResult {
   });
 }
 
+// List of built-in agent names for reference
+export const BUILT_IN_AGENT_NAMES: AgentName[] = [
+  "communications",
+  "calendar", 
+  "workflow",
+  "research",
+  "knowledge",
+  "travel",
+  "personal-admin",
+  "finance-support",
+  "orchestrator"
+];
+
+// Check if an agent name is a built-in agent
+export function isBuiltInAgent(agentName: string): agentName is AgentName {
+  return BUILT_IN_AGENT_NAMES.includes(agentName as AgentName);
+}

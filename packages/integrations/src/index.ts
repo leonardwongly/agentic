@@ -1,5 +1,8 @@
 import { CapabilitySchema, IntegrationAccountSchema, nowIso, type Capability, type IntegrationAccount } from "@agentic/contracts";
 import { defaultLocalNotesBasePath, ensureLocalNotesDirectory, seedLocalNotes } from "./local-notes";
+import { isGmailReady } from "./gmail";
+import { isCalendarReady } from "./google-calendar";
+import { isSlackReady } from "./slack";
 
 export type IntegrationTemplate = {
   key: string;
@@ -13,18 +16,18 @@ export type IntegrationTemplate = {
 
 export const integrationTemplates: IntegrationTemplate[] = [
   {
-    key: "mock-email",
-    name: "Manual Email Adapter",
+    key: "gmail",
+    name: "Gmail Adapter",
     system: "email",
-    status: "manual",
-    scopes: ["messages.read", "messages.draft"],
+    status: isGmailReady() ? "ready" : "manual",
+    scopes: ["messages.read", "messages.draft", "messages.send"],
     capabilities: ["read", "search", "draft", "send"]
   },
   {
-    key: "mock-calendar",
-    name: "Manual Calendar Adapter",
+    key: "google-calendar",
+    name: "Google Calendar Adapter",
     system: "calendar",
-    status: "manual",
+    status: isCalendarReady() ? "ready" : "manual",
     scopes: ["calendar.read", "calendar.write"],
     capabilities: ["read", "search", "schedule", "update"]
   },
@@ -47,6 +50,14 @@ export const integrationTemplates: IntegrationTemplate[] = [
       provider: "local-filesystem",
       basePath: defaultLocalNotesBasePath()
     }
+  },
+  {
+    key: "slack",
+    name: "Slack Adapter",
+    system: "messaging",
+    status: isSlackReady() ? "ready" : "disabled",
+    scopes: ["chat.write", "chat.update"],
+    capabilities: ["read", "send"]
   }
 ];
 
@@ -183,3 +194,7 @@ export function callWithCapabilityCheck<T>(
   assertAgentCapability(agent, requiredCapability, grantedCapabilities);
   return fn();
 }
+
+export * from "./gmail";
+export * from "./google-calendar";
+export * from "./slack";

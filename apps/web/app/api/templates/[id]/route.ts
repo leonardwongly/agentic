@@ -1,0 +1,83 @@
+import { z } from "zod";
+import { SYSTEM_USER_ID, GoalTemplateSchema, nowIso } from "@agentic/contracts";
+import { computeNextRun } from "@agentic/orchestrator";
+import { requireApiSession } from "../../../../lib/auth";
+import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import { getSeededRepository } from "../../../../lib/server";
+
+const TemplateIdSchema = z.string().trim().min(1).max(200);
+
+const PatchScheduleSchema = z
+  .object({
+    schedule: z.object({
+      enabled: z.boolean(),
+      cron: z.string().max(100),
+      timezone: z.string().max(100)
+    })
+  })
+  .strict();
+
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    await requireApiSession(request);
+    const { id } = await context.params;
+    const templateId = TemplateIdSchema.parse(id);
+    const repository = await getSeededRepository();
+    const templates = await repository.listTemplates(SYSTEM_USER_ID);
+    const existing = templates.find((t) => t.id === templateId);
+
+    if (!existing) {
+      throw new ApiRouteError(404, `Template ${templateId} was not found.`);
+    }
+
+    await repository.deleteTemplate(templateId);
+
+    return authenticatedJson({
+      deleted: templateId,
+      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+    });
+  } catch (error) {
+    return handleApiError(error, "Failed to delete template.");
+  }
+}
+
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    await requireApiSession(request);
+    const { id } = await context.params;
+    const templateId = TemplateIdSchema.parse(id);
+    const body = await parseJsonBody(request, PatchScheduleSchema);
+    const repository = await getSeededRepository();
+    const templates = await repository.listTemplates(SYSTEM_USER_ID);
+    const existing = templates.find((t) => t.id === templateId);
+
+    if (!existing) {
+      throw new ApiRouteError(404, `Template ${templateId} was not found.`);
+    }
+
+    const nextRunAt = body.schedule.enabled && body.schedule.cron
+      ? computeNextRun(body.schedule.cron, body.schedule.timezone)
+      : null;
+
+    const updated = GoalTemplateSchema.parse({
+      ...existing,
+      schedule: {
+        enabled: body.schedule.enabled,
+        cron: body.schedule.cron,
+        timezone: body.schedule.timezone,
+        lastRunAt: existing.schedule.lastRunAt,
+        nextRunAt
+      },
+      updatedAt: nowIso()
+    });
+
+    const saved = await repository.saveTemplate(updated);
+
+    return authenticatedJson({
+      template: saved,
+      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+    });
+  } catch (error) {
+    return handleApiError(error, "Failed to update template schedule.");
+  }
+}

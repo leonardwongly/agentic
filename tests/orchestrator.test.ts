@@ -21,8 +21,8 @@ function buildContext() {
 }
 
 describe("orchestrator", () => {
-  it("creates approval-gated inbox triage bundles", () => {
-    const bundle = processUserRequest({
+  it("creates approval-gated inbox triage bundles", async () => {
+    const bundle = await processUserRequest({
       ...buildContext(),
       request: "Triage my inbox and prepare replies for important clients."
     });
@@ -33,8 +33,8 @@ describe("orchestrator", () => {
     expect(bundle.workflow.checkpoint).toBe("approval-gate");
   });
 
-  it("registers watchers for travel preparation", () => {
-    const bundle = processUserRequest({
+  it("registers watchers for travel preparation", async () => {
+    const bundle = await processUserRequest({
       ...buildContext(),
       request: "Help me prepare for my upcoming travel itinerary."
     });
@@ -43,8 +43,8 @@ describe("orchestrator", () => {
     expect(bundle.watchers.length).toBeGreaterThan(0);
   });
 
-  it("updates task and workflow state after approval", () => {
-    const bundle = processUserRequest({
+  it("updates task and workflow state after approval", async () => {
+    const bundle = await processUserRequest({
       ...buildContext(),
       request: "Review my inbox and draft responses."
     });
@@ -65,17 +65,17 @@ describe("orchestrator", () => {
     expect(updated.actionLogs.at(-1)?.kind).toBe("approval.responded");
   });
 
-  it("rejects oversized requests", () => {
-    expect(() =>
+  it("rejects oversized requests", async () => {
+    await expect(
       processUserRequest({
         ...buildContext(),
         request: "x".repeat(2_001)
       })
-    ).toThrow(/2000 character safety limit/);
+    ).rejects.toThrow(/2000 character safety limit/);
   });
 
-  it("only resolves relevant orchestrator-accessible memories into planning context", () => {
-    const bundle = processUserRequest({
+  it("only resolves relevant orchestrator-accessible memories into planning context", async () => {
+    const bundle = await processUserRequest({
       userId: SYSTEM_USER_ID,
       request: "Help me prepare for travel with my passport checklist.",
       memories: [

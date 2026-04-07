@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
-import { isAuthError, requireApiSession } from "../../../../lib/auth";
+import { requireApiSession } from "../../../../lib/auth";
+import { authenticatedJson, handleApiError } from "../../../../lib/api-response";
 import { getSeededRepository, runDocsBuild } from "../../../../lib/server";
 
 export async function POST(request: Request) {
@@ -8,20 +8,11 @@ export async function POST(request: Request) {
     await requireApiSession(request);
     const [result, repository] = await Promise.all([runDocsBuild(), getSeededRepository()]);
 
-    return NextResponse.json({
+    return authenticatedJson({
       result,
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
-    if (isAuthError(error)) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to render the document."
-      },
-      { status: 500 }
-    );
+    return handleApiError(error, "Failed to render the document.");
   }
 }

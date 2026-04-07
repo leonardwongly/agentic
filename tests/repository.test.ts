@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID, WatcherSchema, nowIso } from "@agentic/contracts";
@@ -11,7 +11,7 @@ describe("repository", () => {
     userId: string,
     request: string
   ) {
-    const bundle = processUserRequest({
+    const bundle = await processUserRequest({
       userId,
       request,
       memories: await repository.listMemory(userId),
@@ -167,5 +167,17 @@ describe("repository", () => {
 
     expect(hiddenBundle).toBeNull();
     expect(visibleBundle?.goal.id).toBe(secondaryBundle.goal.id);
+  });
+
+  it("fails fast with a clear error when the file-backed store is corrupted", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    await writeFile(storePath, "{not-valid-json", "utf8");
+
+    const repository = createRepository({
+      storePath
+    });
+
+    await expect(repository.listGoals(SYSTEM_USER_ID)).rejects.toThrow(/Runtime store .* is corrupted/);
   });
 });

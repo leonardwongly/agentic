@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { nowIso } from "@agentic/contracts";
@@ -15,6 +15,13 @@ export const LocalNoteDocumentSchema = z.object({
 
 export type LocalNoteDocument = z.infer<typeof LocalNoteDocumentSchema>;
 
+const LocalNoteMutationSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  content: z.string().trim().min(1).max(10_000)
+});
+
+const LocalNoteSlugSchema = z.string().trim().min(1).max(120).regex(/^[a-z0-9-]+$/);
+
 export function defaultLocalNotesBasePath(): string {
   const configured = process.env.AGENTIC_NOTES_PATH?.trim();
 
@@ -22,7 +29,7 @@ export function defaultLocalNotesBasePath(): string {
     return path.resolve(configured);
   }
 
-  return path.join(process.cwd(), ".agentic", "notes");
+  return path.join(/* turbopackIgnore: true */ process.cwd(), ".agentic", "notes");
 }
 
 function toSlug(value: string): string {
@@ -36,7 +43,7 @@ function toSlug(value: string): string {
 
 function safeNotePath(basePath: string, slug: string): string {
   const resolvedBase = path.resolve(basePath);
-  const candidate = path.resolve(resolvedBase, `${toSlug(slug)}.md`);
+  const candidate = path.resolve(resolvedBase, `${LocalNoteSlugSchema.parse(slug)}.md`);
 
   if (candidate !== resolvedBase && !candidate.startsWith(`${resolvedBase}${path.sep}`)) {
     throw new Error("Rejected an unsafe note path.");
@@ -66,6 +73,13 @@ async function parseLocalNote(notePath: string): Promise<LocalNoteDocument> {
     createdAt: fileInfo.birthtime.toISOString(),
     updatedAt: fileInfo.mtime.toISOString()
   });
+}
+
+async function writeNoteAtomically(notePath: string, content: string): Promise<void> {
+  const tempPath = `${notePath}.${crypto.randomUUID()}.tmp`;
+
+  await writeFile(tempPath, content, "utf8");
+  await rename(tempPath, notePath);
 }
 
 export async function listLocalNotes(basePath = defaultLocalNotesBasePath()): Promise<LocalNoteDocument[]> {
@@ -104,11 +118,12 @@ export async function createLocalNote(
   basePath = defaultLocalNotesBasePath()
 ): Promise<LocalNoteDocument> {
   const resolvedBase = await ensureLocalNotesDirectory(basePath);
-  const slug = `${toSlug(params.title)}-${crypto.randomUUID().slice(0, 8)}`;
+  const normalized = LocalNoteMutationSchema.parse(params);
+  const slug = `${toSlug(normalized.title)}-${crypto.randomUUID().slice(0, 8)}`;
   const notePath = safeNotePath(resolvedBase, slug);
-  const content = `# ${params.title.trim()}\n\n${params.content.trim()}\n`;
+  const content = `# ${normalized.title}\n\n${normalized.content}\n`;
 
-  await writeFile(notePath, content, "utf8");
+  await writeNoteAtomically(notePath, content);
   return readLocalNote(slug, resolvedBase);
 }
 
@@ -116,11 +131,14 @@ export async function updateLocalNote(
   params: { slug: string; content: string; title?: string },
   basePath = defaultLocalNotesBasePath()
 ): Promise<LocalNoteDocument> {
-  const existing = await readLocalNote(params.slug, basePath);
-  const nextTitle = params.title?.trim() || existing.title;
-  const nextContent = `# ${nextTitle}\n\n${params.content.trim()}\n`;
+  const existing = await readLocalNote(LocalNoteSlugSchema.parse(params.slug), basePath);
+  const normalized = LocalNoteMutationSchema.parse({
+    title: params.title ?? existing.title,
+    content: params.content
+  });
+  const nextContent = `# ${normalized.title}\n\n${normalized.content}\n`;
 
-  await writeFile(existing.path, nextContent, "utf8");
+  await writeNoteAtomically(existing.path, nextContent);
   return readLocalNote(existing.slug, basePath);
 }
 

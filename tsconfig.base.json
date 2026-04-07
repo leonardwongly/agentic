@@ -49,6 +49,9 @@
       ],
       "@agentic/repository": [
         "packages/repository/src/index.ts"
+      ],
+      "@agentic/self-improvement-memory": [
+        "packages/self-improvement-memory/src/index.ts"
       ]
     }
   },
@@ -58,4 +61,3 @@
     "tests"
   ]
 }
-
