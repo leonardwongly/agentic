@@ -1,4 +1,5 @@
 import {
+  APPROVAL_EXPIRY_MS,
   ActionLogSchema,
   ApprovalRequestSchema,
   GoalBundleSchema,
@@ -303,6 +304,12 @@ export function processUserRequest(params: {
   const requestCapabilities = inferCapabilitiesFromRequest(request);
   const confidenceBias = Math.min(0.08, relevantMemories.length * 0.01);
 
+  function appendLog(input: Parameters<typeof createActionLog>[0]): ActionLog {
+    const entry = createActionLog({ ...input, prevLog: logs.at(-1) ?? null });
+    logs.push(entry);
+    return entry;
+  }
+
   const goal = GoalSchema.parse({
     id: goalId,
     userId: params.userId,
@@ -321,35 +328,31 @@ export function processUserRequest(params: {
     updatedAt: createdAt
   });
 
-  logs.push(
-    createActionLog({
-      goalId: goal.id,
-      workflowId: workflow.id,
-      actor: "orchestrator",
-      kind: "goal.created",
-      message: `Created goal "${goal.title}" from the user request.`,
-      details: {
-        intent: goal.intent,
-        status: goal.status
-      }
-    })
-  );
-  logs.push(
-    createActionLog({
-      goalId,
-      workflowId: workflow.id,
-      actor: "orchestrator",
-      kind: "context.resolved",
-      message: "Resolved memories and integration surfaces before planning.",
-      details: {
-        memoryCount: params.memories.length,
-        resolvedMemoryCount: relevantMemories.length,
-        resolvedMemoryIds: relevantMemories.map((memory) => memory.id),
-        integrationCount: params.integrations.length,
-        requestCapabilities
-      }
-    })
-  );
+  appendLog({
+    goalId: goal.id,
+    workflowId: workflow.id,
+    actor: "orchestrator",
+    kind: "goal.created",
+    message: `Created goal "${goal.title}" from the user request.`,
+    details: {
+      intent: goal.intent,
+      status: goal.status
+    }
+  });
+  appendLog({
+    goalId,
+    workflowId: workflow.id,
+    actor: "orchestrator",
+    kind: "context.resolved",
+    message: "Resolved memories and integration surfaces before planning.",
+    details: {
+      memoryCount: params.memories.length,
+      resolvedMemoryCount: relevantMemories.length,
+      resolvedMemoryIds: relevantMemories.map((memory) => memory.id),
+      integrationCount: params.integrations.length,
+      requestCapabilities
+    }
+  });
 
   for (const plannedTask of catalog.tasks) {
     const capabilities = Array.from(
@@ -383,33 +386,30 @@ export function processUserRequest(params: {
 
     tasks.push(nextTask);
     artifacts.push(...agentResult.artifacts);
-    logs.push(
-      createActionLog({
-        goalId,
-        taskId: nextTask.id,
-        workflowId: workflow.id,
-        actor: "policy",
-        kind: "policy.evaluated",
-        message: `Evaluated policy for "${nextTask.title}".`,
-        details: decision
-      })
-    );
-    logs.push(
-      createActionLog({
-        goalId,
-        taskId: nextTask.id,
-        workflowId: workflow.id,
-        actor: nextTask.assignedAgent,
-        kind: "agent.completed",
-        message: agentResult.summary,
-        details: {
-          confidence: agentResult.confidence,
-          nextSteps: agentResult.nextSteps
-        }
-      })
-    );
+    appendLog({
+      goalId,
+      taskId: nextTask.id,
+      workflowId: workflow.id,
+      actor: "policy",
+      kind: "policy.evaluated",
+      message: `Evaluated policy for "${nextTask.title}".`,
+      details: decision
+    });
+    appendLog({
+      goalId,
+      taskId: nextTask.id,
+      workflowId: workflow.id,
+      actor: nextTask.assignedAgent,
+      kind: "agent.completed",
+      message: agentResult.summary,
+      details: {
+        confidence: agentResult.confidence,
+        nextSteps: agentResult.nextSteps
+      }
+    });
 
     if (decision.requiresApproval) {
+      const approvalCreatedAt = nowIso();
       const approval = ApprovalRequestSchema.parse({
         id: crypto.randomUUID(),
         goalId,
@@ -419,44 +419,41 @@ export function processUserRequest(params: {
         riskClass: decision.riskClass,
         decision: "pending",
         requestedAction: nextTask.summary,
-        createdAt: nowIso(),
+        createdAt: approvalCreatedAt,
+        expiryAt: new Date(Date.now() + APPROVAL_EXPIRY_MS).toISOString(),
         respondedAt: null
       });
 
       approvals.push(approval);
-      logs.push(
-        createActionLog({
-          goalId,
-          taskId: nextTask.id,
-          workflowId: workflow.id,
-          actor: "policy",
-          kind: "approval.requested",
-          message: `Queued approval for "${nextTask.title}".`,
-          details: {
-            approvalId: approval.id,
-            requestedAction: approval.requestedAction
-          }
-        })
-      );
+      appendLog({
+        goalId,
+        taskId: nextTask.id,
+        workflowId: workflow.id,
+        actor: "policy",
+        kind: "approval.requested",
+        message: `Queued approval for "${nextTask.title}".`,
+        details: {
+          approvalId: approval.id,
+          requestedAction: approval.requestedAction
+        }
+      });
     }
   }
 
   const watchers = catalog.watcherFactory(goalId);
 
   for (const watcher of watchers) {
-    logs.push(
-      createActionLog({
-        goalId,
-        workflowId: workflow.id,
-        actor: "workflow",
-        kind: "watcher.created",
-        message: `Registered watcher "${watcher.targetEntity}".`,
-        details: {
-          condition: watcher.condition,
-          frequency: watcher.frequency
-        }
-      })
-    );
+    appendLog({
+      goalId,
+      workflowId: workflow.id,
+      actor: "workflow",
+      kind: "watcher.created",
+      message: `Registered watcher "${watcher.targetEntity}".`,
+      details: {
+        condition: watcher.condition,
+        frequency: watcher.frequency
+      }
+    });
   }
 
   const statuses = recomputeStatuses(tasks, approvals, watchers);
@@ -495,6 +492,10 @@ export function respondToApproval(params: {
 
   if (approval.decision !== "pending") {
     throw new Error(`Approval ${params.approvalId} has already been handled.`);
+  }
+
+  if (new Date(approval.expiryAt).getTime() <= Date.now()) {
+    throw new Error(`Approval ${params.approvalId} has expired and can no longer be actioned.`);
   }
 
   const respondedAt = nowIso();
@@ -544,7 +545,8 @@ export function respondToApproval(params: {
           details: {
             approvalId: approval.id,
             decision: params.decision
-          }
+          },
+          prevLog: bundle.actionLogs.at(-1) ?? null
         })
       )
     ]

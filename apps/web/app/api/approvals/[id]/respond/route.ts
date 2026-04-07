@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { respondToApproval } from "@agentic/orchestrator";
+import { isContentTypeError, requireJsonContentType } from "../../../../../lib/api-errors";
 import { isAuthError, requireApiSession } from "../../../../../lib/auth";
 import { getSeededRepository } from "../../../../../lib/server";
 
@@ -13,6 +14,7 @@ const ApprovalResponseSchema = z
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    requireJsonContentType(request);
     await requireApiSession(request);
     const { id } = await context.params;
     const body = ApprovalResponseSchema.parse(await request.json());
@@ -37,6 +39,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
+    if (isContentTypeError(error)) {
+      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
+    }
     if (isAuthError(error)) {
       return NextResponse.json({ error: error.message }, { status: 401 });
     }

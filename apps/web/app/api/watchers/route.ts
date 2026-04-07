@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { SYSTEM_USER_ID, WatcherSchema, nowIso } from "@agentic/contracts";
+import { SYSTEM_USER_ID, WatcherFrequencySchema, WatcherSchema, nowIso } from "@agentic/contracts";
+import { isContentTypeError, requireJsonContentType } from "../../../lib/api-errors";
 import { isAuthError, requireApiSession } from "../../../lib/auth";
 import { getSeededRepository } from "../../../lib/server";
 
@@ -9,7 +10,7 @@ const CreateWatcherSchema = z
     goalId: z.string().trim().min(1),
     targetEntity: z.string().trim().min(1).max(80),
     condition: z.string().trim().min(1).max(200),
-    frequency: z.string().trim().min(1).max(40),
+    frequency: WatcherFrequencySchema,
     triggerAction: z.string().trim().min(1).max(200),
     sourceSystems: z.array(z.string().trim().min(1).max(40)).max(8).optional()
   })
@@ -38,6 +39,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    requireJsonContentType(request);
     await requireApiSession(request);
     const body = CreateWatcherSchema.parse(await request.json());
     const repository = await getSeededRepository();
@@ -68,6 +70,9 @@ export async function POST(request: Request) {
       dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
     });
   } catch (error) {
+    if (isContentTypeError(error)) {
+      return NextResponse.json({ error: (error as Error).message }, { status: 415 });
+    }
     if (isAuthError(error)) {
       return NextResponse.json({ error: error.message }, { status: 401 });
     }

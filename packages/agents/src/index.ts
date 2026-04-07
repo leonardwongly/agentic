@@ -1,4 +1,5 @@
 import { AgentResultSchema, ArtifactSchema, nowIso, type AgentName, type AgentResult, type Task } from "@agentic/contracts";
+import { assertCapabilitiesWithinAllowlist } from "@agentic/integrations";
 
 function buildArtifact(task: Task, title: string, content: string, artifactType: "summary" | "brief" | "checklist" | "draft" | "explanation") {
   return ArtifactSchema.parse({
@@ -57,6 +58,10 @@ function contentForTask(task: Task, scenario: string): { summary: string; artifa
 }
 
 export function runAgent(task: Task, scenario: string): AgentResult {
+  // Enforce that every capability granted to this agent is within its type-level allowlist.
+  // Catches orchestrator misconfigurations before any action is taken.
+  assertCapabilitiesWithinAllowlist(task.assignedAgent, task.toolCapabilities);
+
   const result = contentForTask(task, scenario);
   const artifact = buildArtifact(task, `${task.title} output`, result.content, result.artifactType);
 

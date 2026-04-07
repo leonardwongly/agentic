@@ -2,6 +2,71 @@ import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 
+// ---------------------------------------------------------------------------
+// Rate limiting for the session endpoint
+// ---------------------------------------------------------------------------
+
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute sliding window
+const RATE_LIMIT_MAX_ATTEMPTS = 10; // attempts before lockout
+const RATE_LIMIT_LOCKOUT_MS = 5 * 60_000; // 5 minute lockout
+
+type RateLimitEntry = {
+  attempts: number;
+  windowStart: number;
+  lockedUntil: number | null;
+};
+
+const rateLimitStore = new Map<string, RateLimitEntry>();
+
+export function checkSessionRateLimit(key: string): { allowed: boolean; retryAfterMs: number } {
+  const now = Date.now();
+  const entry = rateLimitStore.get(key) ?? { attempts: 0, windowStart: now, lockedUntil: null };
+
+  if (entry.lockedUntil !== null) {
+    if (now < entry.lockedUntil) {
+      return { allowed: false, retryAfterMs: entry.lockedUntil - now };
+    }
+    // lockout expired — reset
+    entry.attempts = 0;
+    entry.windowStart = now;
+    entry.lockedUntil = null;
+  }
+
+  if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    entry.attempts = 0;
+    entry.windowStart = now;
+  }
+
+  entry.attempts += 1;
+  rateLimitStore.set(key, entry);
+
+  if (entry.attempts > RATE_LIMIT_MAX_ATTEMPTS) {
+    entry.lockedUntil = now + RATE_LIMIT_LOCKOUT_MS;
+    rateLimitStore.set(key, entry);
+    return { allowed: false, retryAfterMs: RATE_LIMIT_LOCKOUT_MS };
+  }
+
+  return { allowed: true, retryAfterMs: 0 };
+}
+
+export function recordSessionSuccess(key: string): void {
+  rateLimitStore.delete(key);
+}
+
+// ---------------------------------------------------------------------------
+// Server-side session revocation
+// ---------------------------------------------------------------------------
+
+const revokedTokens = new Set<string>();
+
+export function revokeSessionToken(token: string): void {
+  revokedTokens.add(token);
+}
+
+export function isSessionTokenRevoked(token: string): boolean {
+  return revokedTokens.has(token);
+}
+
 export const AGENTIC_SESSION_COOKIE = "agentic_session";
 export const AGENTIC_ACCESS_KEY_HEADER = "x-agentic-access-key";
 
@@ -30,6 +95,8 @@ function readCookieValue(cookieHeader: string | null | undefined, cookieName: st
   return null;
 }
 
+let _devKeyWarningEmitted = false;
+
 function resolveAccessKey(): { key: string | null; source: "env" | "development-fallback" | "missing" } {
   const configured = process.env.AGENTIC_ACCESS_KEY?.trim();
 
@@ -38,6 +105,14 @@ function resolveAccessKey(): { key: string | null; source: "env" | "development-
   }
 
   if (process.env.NODE_ENV !== "production") {
+    if (!_devKeyWarningEmitted) {
+      console.warn(
+        "[agentic] SECURITY WARNING: AGENTIC_ACCESS_KEY is not set. " +
+          "Using the well-known development fallback key. " +
+          "Do not expose this instance to external networks."
+      );
+      _devKeyWarningEmitted = true;
+    }
     return { key: "agentic-local-dev-key", source: "development-fallback" };
   }
 
@@ -45,7 +120,7 @@ function resolveAccessKey(): { key: string | null; source: "env" | "development-
 }
 
 function deriveSessionToken(secret: string, userId = SYSTEM_USER_ID): string {
-  return crypto.createHash("sha256").update(`${userId}:${secret}:agentic-session-v1`).digest("hex");
+  return crypto.createHmac("sha256", secret).update(`${userId}:agentic-session-v1`).digest("hex");
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -95,6 +170,10 @@ export function isAuthorizedSessionToken(candidate: string | null | undefined, u
   const token = candidate?.trim();
 
   if (!token || !resolved.key) {
+    return false;
+  }
+
+  if (isSessionTokenRevoked(token)) {
     return false;
   }
 
