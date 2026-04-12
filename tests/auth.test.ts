@@ -2,13 +2,17 @@ import {
   AGENTIC_SESSION_COOKIE,
   AGENTIC_ACCESS_KEY_HEADER,
   buildSessionToken,
+  checkSessionRateLimit,
   clearSessionCookie,
   createSessionCookie,
   getAuthMode,
   isAuthorizedSessionToken,
+  parseAuthorizedSessionToken,
   requireApiSession,
+  revokeSessionToken,
   verifyAccessKey
 } from "../apps/web/lib/auth";
+import { resetAuthSessionStateStoreForTesting, setAuthSessionStateStoreForTesting, type AuthSessionStateStore } from "../apps/web/lib/auth-session-store";
 import {
   clearFailedSessionUnlockAttempts,
   getSessionUnlockRateLimitStatus,
@@ -24,6 +28,7 @@ describe("auth helpers", () => {
     process.env.AGENTIC_ACCESS_KEY = originalKey;
     process.env.NODE_ENV = originalNodeEnv;
     resetSessionUnlockRateLimit();
+    resetAuthSessionStateStoreForTesting();
   });
 
   it("verifies a configured access key and derived session token", () => {
@@ -36,6 +41,81 @@ describe("auth helpers", () => {
     const token = buildSessionToken();
     expect(isAuthorizedSessionToken(token)).toBe(true);
     expect(isAuthorizedSessionToken("not-a-token")).toBe(false);
+    expect(parseAuthorizedSessionToken(token)).toMatchObject({
+      userId: "user-primary"
+    });
+  });
+
+  it("issues distinct signed session tokens and honors revocation", () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.NODE_ENV = "test";
+
+    const firstToken = buildSessionToken();
+    const secondToken = buildSessionToken();
+
+    expect(firstToken).not.toBe(secondToken);
+    expect(isAuthorizedSessionToken(firstToken)).toBe(true);
+
+    revokeSessionToken(firstToken);
+
+    expect(isAuthorizedSessionToken(firstToken)).toBe(false);
+    expect(isAuthorizedSessionToken(secondToken)).toBe(true);
+  });
+
+  it("supports swapping in a shared auth session state store boundary", () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.NODE_ENV = "test";
+
+    const rateLimitEntries = new Map<string, { attempts: number; windowStart: number; lockedUntil: number | null }>();
+    const revokedSessionIds = new Map<string, number>();
+    const store: AuthSessionStateStore = {
+      getRateLimitEntry(key) {
+        const entry = rateLimitEntries.get(key);
+        return entry ? { ...entry } : null;
+      },
+      setRateLimitEntry(key, entry) {
+        rateLimitEntries.set(key, { ...entry });
+      },
+      deleteRateLimitEntry(key) {
+        rateLimitEntries.delete(key);
+      },
+      revokeSession(sessionId, expiresAtMs) {
+        revokedSessionIds.set(sessionId, expiresAtMs);
+      },
+      isSessionRevoked(sessionId, now = Date.now()) {
+        for (const [revokedId, expiresAtMs] of revokedSessionIds.entries()) {
+          if (expiresAtMs <= now) {
+            revokedSessionIds.delete(revokedId);
+          }
+        }
+
+        return revokedSessionIds.has(sessionId);
+      },
+      reset() {
+        rateLimitEntries.clear();
+        revokedSessionIds.clear();
+      }
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const token = buildSessionToken();
+    const session = parseAuthorizedSessionToken(token);
+
+    expect(session).not.toBeNull();
+
+    for (let index = 0; index < 10; index += 1) {
+      expect(checkSessionRateLimit("198.51.100.25").allowed).toBe(true);
+    }
+
+    expect(checkSessionRateLimit("198.51.100.25")).toMatchObject({
+      allowed: false
+    });
+
+    revokeSessionToken(token);
+
+    expect(revokedSessionIds.has(session!.sessionId)).toBe(true);
+    expect(isAuthorizedSessionToken(token)).toBe(false);
   });
 
   it("reports missing configuration in production without the development fallback", () => {
@@ -60,7 +140,10 @@ describe("auth helpers", () => {
           }
         })
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      authMethod: "access_key",
+      userId: "user-primary"
+    });
   });
 
   it("accepts a valid session cookie from the request headers", async () => {
@@ -75,7 +158,10 @@ describe("auth helpers", () => {
           }
         })
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      authMethod: "session",
+      userId: "user-primary"
+    });
   });
 
   it("rejects unauthorized requests with an auth error", async () => {

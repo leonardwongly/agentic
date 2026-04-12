@@ -1,15 +1,8 @@
 "use client";
 
-import { useCallback, useState, useRef, useEffect, type ReactNode } from "react";
-
-// Natural Language Dashboard: Query and command via conversation
-
-export type NLIntent =
-  | { type: "query"; target: string; filters?: Record<string, string>; timeRange?: string }
-  | { type: "command"; action: string; params: Record<string, unknown>; requiresConfirm?: boolean }
-  | { type: "summary"; timeRange: "today" | "week" | "since-last-login" | "custom" }
-  | { type: "clarify"; question: string; options?: string[] }
-  | { type: "unknown"; rawQuery: string };
+import { useCallback, useState, useRef, useEffect } from "react";
+import type { NLIntentCapabilitySummary } from "../../lib/nl-capabilities";
+import { parseIntent, type NLIntent } from "./nl-intent";
 
 export type NLResult = {
   success: boolean;
@@ -18,70 +11,14 @@ export type NLResult = {
   suggestedActions?: Array<{ label: string; action: () => void }>;
 };
 
-// Simple intent parser (would be replaced by LLM in production)
-export function parseIntent(query: string): NLIntent {
-  const lower = query.toLowerCase().trim();
+export type NLExecutionPayload = Omit<NLResult, "success">;
 
-  // Summary patterns
-  if (lower.includes("what happened") || lower.includes("while i was away") || lower.includes("catch me up")) {
-    return { type: "summary", timeRange: "since-last-login" };
-  }
-  if (lower.includes("today") && (lower.includes("summary") || lower.includes("brief"))) {
-    return { type: "summary", timeRange: "today" };
-  }
-  if (lower.includes("this week") || lower.includes("weekly")) {
-    return { type: "summary", timeRange: "week" };
+function integrationCapabilityTone(readinessTier: string, connectionStatus: string) {
+  if (connectionStatus === "missing" || connectionStatus === "disabled") {
+    return "experimental";
   }
 
-  // Query patterns
-  if (lower.startsWith("show") || lower.startsWith("list") || lower.startsWith("find")) {
-    if (lower.includes("approval")) {
-      const filters: Record<string, string> = {};
-      if (lower.includes("r2")) filters.riskClass = "R2";
-      if (lower.includes("r3")) filters.riskClass = "R3";
-      if (lower.includes("r4")) filters.riskClass = "R4";
-      if (lower.includes("pending")) filters.status = "pending";
-      return { type: "query", target: "approvals", filters };
-    }
-    if (lower.includes("goal")) {
-      const filters: Record<string, string> = {};
-      if (lower.includes("running") || lower.includes("active")) filters.status = "running";
-      if (lower.includes("completed") || lower.includes("done")) filters.status = "completed";
-      if (lower.includes("failed")) filters.status = "failed";
-      return { type: "query", target: "goals", filters };
-    }
-    if (lower.includes("agent")) {
-      return { type: "query", target: "agents" };
-    }
-    if (lower.includes("memory") || lower.includes("memories")) {
-      return { type: "query", target: "memories" };
-    }
-  }
-
-  // Command patterns
-  if (lower.startsWith("approve")) {
-    const params: Record<string, unknown> = {};
-    if (lower.includes("all r2")) {
-      params.riskClass = "R2";
-      params.all = true;
-    } else if (lower.includes("all")) {
-      params.all = true;
-    }
-    return { type: "command", action: "approve", params, requiresConfirm: true };
-  }
-  if (lower.startsWith("reject")) {
-    return { type: "command", action: "reject", params: {}, requiresConfirm: true };
-  }
-  if (lower.startsWith("create") && lower.includes("goal")) {
-    const match = lower.match(/create (?:a )?goal (?:to )?(.+)/);
-    const request = match ? match[1] : "";
-    return { type: "command", action: "create-goal", params: { request } };
-  }
-  if (lower.includes("morning briefing") || lower.includes("daily brief")) {
-    return { type: "command", action: "briefing", params: { type: "morning" } };
-  }
-
-  return { type: "unknown", rawQuery: query };
+  return readinessTier;
 }
 
 // NL Input component
@@ -89,9 +26,32 @@ type NLInputProps = {
   onExecute: (intent: NLIntent) => Promise<NLResult>;
   placeholder?: string;
   className?: string;
+  capabilitySummary?: NLIntentCapabilitySummary;
 };
 
-export function NLInput({ onExecute, placeholder = "Ask anything or type a command...", className = "" }: NLInputProps) {
+function buildCapabilityPlaceholder(capabilitySummary?: NLIntentCapabilitySummary, fallback?: string) {
+  if (!capabilitySummary) {
+    return fallback ?? "Ask anything or type a command...";
+  }
+
+  const examples = capabilitySummary.commands
+    .filter((command) => command.status !== "unavailable")
+    .slice(0, 3)
+    .map((command) => command.example);
+
+  if (examples.length === 0) {
+    return fallback ?? "Use a bounded control command...";
+  }
+
+  return examples.join(" | ");
+}
+
+export function NLInput({
+  onExecute,
+  placeholder = "Ask anything or type a command...",
+  className = "",
+  capabilitySummary
+}: NLInputProps) {
   const [query, setQuery] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastResult, setLastResult] = useState<NLResult | null>(null);
@@ -105,6 +65,44 @@ export function NLInput({ onExecute, placeholder = "Ask anything or type a comma
     if (!query.trim() || isProcessing) return;
 
     const parsedIntent = parseIntent(query);
+
+    if (parsedIntent.type === "clarify") {
+      setLastResult({
+        success: false,
+        message: parsedIntent.question,
+        suggestedActions: (parsedIntent.options ?? []).map((option) => ({
+          label: option,
+          action: () => {
+            setQuery(option);
+            setShowPreview(false);
+            inputRef.current?.focus();
+          }
+        }))
+      });
+      return;
+    }
+
+    if (parsedIntent.type === "unknown") {
+      const suggestedExamples =
+        capabilitySummary?.commands
+          .filter((command) => command.status !== "unavailable")
+          .slice(0, 3)
+          .map((command) => command.example) ?? [];
+
+      setLastResult({
+        success: false,
+        message: "The NL bar only supports a bounded set of control commands right now.",
+        suggestedActions: suggestedExamples.map((example) => ({
+          label: example,
+          action: () => {
+            setQuery(example);
+            setShowPreview(false);
+            inputRef.current?.focus();
+          }
+        }))
+      });
+      return;
+    }
     
     // For commands that require confirmation, show preview first
     if (parsedIntent.type === "command" && parsedIntent.requiresConfirm && !showPreview) {
@@ -146,7 +144,7 @@ export function NLInput({ onExecute, placeholder = "Ask anything or type a comma
             setQuery(e.target.value);
             setShowPreview(false);
           }}
-          placeholder={placeholder}
+          placeholder={buildCapabilityPlaceholder(capabilitySummary, placeholder)}
           className="nl-input"
           disabled={isProcessing}
         />
@@ -154,6 +152,43 @@ export function NLInput({ onExecute, placeholder = "Ask anything or type a comma
           {isProcessing ? "..." : "→"}
         </button>
       </form>
+
+      {capabilitySummary ? (
+        <div className="nl-capability-summary">
+          <p className="nl-capability-headline">{capabilitySummary.headline}</p>
+          <div className="nl-capability-pills">
+            {capabilitySummary.commands
+              .filter((command) => command.status !== "unavailable")
+              .map((command) => (
+                <button
+                  key={command.id}
+                  type="button"
+                  className={`nl-capability-pill ${command.status}`}
+                  onClick={() => {
+                    setQuery(command.example);
+                    setShowPreview(false);
+                    inputRef.current?.focus();
+                  }}
+                  title={command.reason}
+                >
+                  {command.example}
+                </button>
+              ))}
+          </div>
+          <div className="nl-capability-integrations">
+            {capabilitySummary.integrations.map((integration) => (
+              <span
+                key={integration.label}
+                className={`nl-capability-integration ${integrationCapabilityTone(integration.readinessTier, integration.connectionStatus)}`}
+                title={integration.reason}
+              >
+                {integration.label}: {integration.readinessLabel}
+              </span>
+            ))}
+          </div>
+          <p className="nl-capability-note">{capabilitySummary.unsupportedNote}</p>
+        </div>
+      ) : null}
 
       {/* Intent preview */}
       {intent && query.trim() && !showPreview && (
@@ -204,9 +239,10 @@ export function NLInput({ onExecute, placeholder = "Ask anything or type a comma
 type NLFloatingBarProps = {
   onExecute: (intent: NLIntent) => Promise<NLResult>;
   isVisible?: boolean;
+  capabilitySummary?: NLIntentCapabilitySummary;
 };
 
-export function NLFloatingBar({ onExecute, isVisible = true }: NLFloatingBarProps) {
+export function NLFloatingBar({ onExecute, isVisible = true, capabilitySummary }: NLFloatingBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Keyboard shortcut to toggle
@@ -239,11 +275,12 @@ export function NLFloatingBar({ onExecute, isVisible = true }: NLFloatingBarProp
             }
             return result;
           }}
+          capabilitySummary={capabilitySummary}
         />
       ) : (
         <button type="button" className="nl-expand-btn" onClick={() => setIsExpanded(true)}>
           <span className="nl-expand-icon">💬</span>
-          <span className="nl-expand-hint">Press / to ask or command</span>
+          <span className="nl-expand-hint">Press / for bounded control commands</span>
         </button>
       )}
     </div>
@@ -252,55 +289,45 @@ export function NLFloatingBar({ onExecute, isVisible = true }: NLFloatingBarProp
 
 // Hook to execute NL intents
 export function useNLExecutor(handlers: {
-  onQuery: (target: string, filters?: Record<string, string>) => Promise<unknown>;
-  onCommand: (action: string, params: Record<string, unknown>) => Promise<void>;
-  onSummary: (timeRange: string) => Promise<string>;
+  onQuery: (target: string, filters?: Record<string, string>) => Promise<NLExecutionPayload>;
+  onCommand: (action: string, params: Record<string, unknown>) => Promise<NLExecutionPayload>;
+  onSummary: (timeRange: string) => Promise<NLExecutionPayload>;
 }) {
   const execute = useCallback(
     async (intent: NLIntent): Promise<NLResult> => {
       try {
         switch (intent.type) {
           case "query": {
-            const data = await handlers.onQuery(intent.target, intent.filters);
+            const result = await handlers.onQuery(intent.target, intent.filters);
             return {
               success: true,
-              message: `Found results for ${intent.target}`,
-              data
+              ...result
             };
           }
           case "command": {
-            await handlers.onCommand(intent.action, intent.params);
+            const result = await handlers.onCommand(intent.action, intent.params);
             return {
               success: true,
-              message: `Executed: ${intent.action}`
+              ...result
             };
           }
           case "summary": {
-            const summary = await handlers.onSummary(intent.timeRange);
+            const result = await handlers.onSummary(intent.timeRange);
             return {
               success: true,
-              message: summary
+              ...result
             };
           }
           case "clarify": {
             return {
-              success: true,
-              message: intent.question,
-              suggestedActions: intent.options?.map((opt) => ({
-                label: opt,
-                action: () => console.log("Selected:", opt)
-              }))
+              success: false,
+              message: intent.question
             };
           }
           case "unknown": {
             return {
               success: false,
-              message: "I didn't understand that. Try 'show approvals', 'approve all R2', or 'create goal to...'",
-              suggestedActions: [
-                { label: "Show approvals", action: () => {} },
-                { label: "Today's summary", action: () => {} },
-                { label: "Create goal", action: () => {} }
-              ]
+              message: "The NL bar only supports a bounded control-command set right now."
             };
           }
         }

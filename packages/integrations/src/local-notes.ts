@@ -2,18 +2,7 @@ import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promi
 import path from "node:path";
 import { z } from "zod";
 import { nowIso } from "@agentic/contracts";
-
-export const LocalNoteDocumentSchema = z.object({
-  id: z.string().min(1),
-  slug: z.string().min(1),
-  title: z.string().min(1),
-  content: z.string(),
-  path: z.string().min(1),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
-});
-
-export type LocalNoteDocument = z.infer<typeof LocalNoteDocumentSchema>;
+import { LocalNoteDocumentSchema, type LocalNoteDocument } from "./local-notes-schema";
 
 const LocalNoteMutationSchema = z.object({
   title: z.string().trim().min(1).max(120),

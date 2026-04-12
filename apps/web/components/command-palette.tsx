@@ -13,11 +13,13 @@ type Command = {
 
 type CommandPaletteProps = {
   onCreateGoal: (request: string) => void;
+  onFocusRequestComposer: () => void;
+  onNavigateToSection: (sectionId: string) => void;
   onLogout: () => void;
   isPending: boolean;
 };
 
-export function CommandPalette({ onCreateGoal, onLogout, isPending }: CommandPaletteProps) {
+export function CommandPalette({ onCreateGoal, onFocusRequestComposer, onNavigateToSection, onLogout, isPending }: CommandPaletteProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -54,7 +56,7 @@ export function CommandPalette({ onCreateGoal, onLogout, isPending }: CommandPal
       label: "Create custom goal...",
       description: "Focus the request input to type a custom goal",
       category: "action",
-      action: () => { close(); document.querySelector<HTMLTextAreaElement>(".request-card textarea")?.focus(); },
+      action: () => { close(); onFocusRequestComposer(); },
       keywords: ["goal", "create", "new", "request", "custom"]
     },
     {
@@ -62,7 +64,7 @@ export function CommandPalette({ onCreateGoal, onLogout, isPending }: CommandPal
       label: "View approvals",
       description: "Jump to the approvals inbox",
       category: "navigate",
-      action: () => { close(); document.getElementById("section-approvals")?.scrollIntoView({ behavior: "smooth" }); },
+      action: () => { close(); onNavigateToSection("approvals"); },
       keywords: ["approvals", "approve", "reject", "pending"]
     },
     {
@@ -70,7 +72,7 @@ export function CommandPalette({ onCreateGoal, onLogout, isPending }: CommandPal
       label: "Search memories",
       description: "Jump to the memory inspector",
       category: "navigate",
-      action: () => { close(); document.getElementById("section-memory")?.scrollIntoView({ behavior: "smooth" }); },
+      action: () => { close(); onNavigateToSection("memory"); },
       keywords: ["memory", "memories", "search", "knowledge"]
     },
     {
@@ -78,7 +80,7 @@ export function CommandPalette({ onCreateGoal, onLogout, isPending }: CommandPal
       label: "View artifacts",
       description: "Jump to recent artifacts",
       category: "navigate",
-      action: () => { close(); document.getElementById("section-artifacts")?.scrollIntoView({ behavior: "smooth" }); },
+      action: () => { close(); onNavigateToSection("artifacts"); },
       keywords: ["artifacts", "output", "results"]
     },
     {
@@ -86,7 +88,7 @@ export function CommandPalette({ onCreateGoal, onLogout, isPending }: CommandPal
       label: "Open notes",
       description: "Jump to local notes editor",
       category: "navigate",
-      action: () => { close(); document.getElementById("section-notes")?.scrollIntoView({ behavior: "smooth" }); },
+      action: () => { close(); onNavigateToSection("notes"); },
       keywords: ["notes", "local", "editor"]
     },
     {
@@ -94,7 +96,7 @@ export function CommandPalette({ onCreateGoal, onLogout, isPending }: CommandPal
       label: "View integrations",
       description: "Jump to integration adapters",
       category: "navigate",
-      action: () => { close(); document.getElementById("section-integrations")?.scrollIntoView({ behavior: "smooth" }); },
+      action: () => { close(); onNavigateToSection("integrations"); },
       keywords: ["integrations", "gmail", "calendar", "adapters"]
     },
     {

@@ -7,6 +7,7 @@ create table if not exists users (
 create table if not exists workflows (
   id text primary key,
   goal_id text not null,
+  workspace_id text,
   status text not null,
   current_step text not null,
   checkpoint text,
@@ -17,6 +18,7 @@ create table if not exists workflows (
 create table if not exists goals (
   id text primary key,
   user_id text not null,
+  workspace_id text,
   workflow_id text not null,
   title text not null,
   request text not null,
@@ -27,6 +29,9 @@ create table if not exists goals (
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
+
+alter table workflows add column if not exists workspace_id text;
+alter table goals add column if not exists workspace_id text;
 
 create table if not exists tasks (
   id text primary key,
@@ -80,9 +85,145 @@ create table if not exists approval_requests (
   risk_class text not null,
   decision text not null,
   requested_action text not null,
+  action_intent jsonb,
+  preview jsonb not null default '{}'::jsonb,
+  decision_scope text,
+  decision_rationale text,
+  history jsonb not null default '[]'::jsonb,
   created_at timestamptz not null,
+  expiry_at timestamptz not null,
   responded_at timestamptz
 );
+
+alter table approval_requests add column if not exists action_intent jsonb;
+alter table approval_requests add column if not exists preview jsonb not null default '{}'::jsonb;
+alter table approval_requests add column if not exists decision_scope text;
+alter table approval_requests add column if not exists decision_rationale text;
+alter table approval_requests add column if not exists history jsonb not null default '[]'::jsonb;
+
+create table if not exists commitments (
+  id text primary key,
+  user_id text not null,
+  title text not null,
+  summary text not null,
+  status text not null,
+  source_kind text not null,
+  source_id text not null,
+  goal_id text,
+  approval_id text,
+  due_at timestamptz,
+  confidence real not null,
+  evidence jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create table if not exists workspaces (
+  id text primary key,
+  owner_user_id text not null,
+  slug text not null,
+  name text not null,
+  description text not null default '',
+  is_personal boolean not null default false,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create unique index if not exists workspaces_slug_idx
+  on workspaces (slug);
+
+create table if not exists workspace_members (
+  id text primary key,
+  workspace_id text not null,
+  user_id text not null,
+  role text not null,
+  joined_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create unique index if not exists workspace_members_workspace_user_idx
+  on workspace_members (workspace_id, user_id);
+
+create table if not exists workspace_selections (
+  user_id text primary key,
+  workspace_id text not null,
+  selected_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create table if not exists workspace_governance (
+  workspace_id text primary key,
+  approval_mode text not null,
+  require_audit_exports boolean not null default false,
+  max_auto_run_risk_class text not null,
+  external_send_requires_approval boolean not null default true,
+  calendar_write_requires_approval boolean not null default true,
+  retention_days integer not null,
+  updated_by text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create table if not exists briefing_preferences (
+  user_id text primary key,
+  timezone text not null,
+  focus text not null,
+  schedules jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create table if not exists goal_templates (
+  id text primary key,
+  user_id text not null,
+  name text not null,
+  description text not null,
+  request text not null,
+  parameters jsonb not null default '{}'::jsonb,
+  schedule jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create table if not exists workflow_templates (
+  id text primary key,
+  user_id text not null,
+  name text not null,
+  description text not null,
+  nodes jsonb not null default '[]'::jsonb,
+  edges jsonb not null default '[]'::jsonb,
+  triggers jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create table if not exists autopilot_settings (
+  user_id text primary key,
+  mode text not null,
+  debounce_minutes integer not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create table if not exists autopilot_events (
+  id text primary key,
+  user_id text not null,
+  kind text not null,
+  source_id text not null,
+  idempotency_key text,
+  mode text not null,
+  summary text not null,
+  status text not null,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null,
+  processed_at timestamptz,
+  result_goal_id text,
+  error text
+);
+
+create unique index if not exists autopilot_events_user_idempotency_idx
+  on autopilot_events (user_id, idempotency_key)
+  where idempotency_key is not null;
 
 create table if not exists action_logs (
   id text primary key,
@@ -94,6 +235,32 @@ create table if not exists action_logs (
   message text not null,
   details jsonb not null default '{}'::jsonb,
   created_at timestamptz not null
+);
+
+create table if not exists evidence_records (
+  id text primary key,
+  user_id text not null,
+  goal_id text not null,
+  task_id text not null,
+  approval_id text not null,
+  source_kind text not null,
+  source_id text not null,
+  source_summary text not null,
+  risk_class text not null,
+  requested_action text not null,
+  request_rationale text not null,
+  requires_approval boolean not null,
+  decision text not null,
+  decision_scope text not null,
+  decision_rationale text,
+  responded_at timestamptz not null,
+  resulting_task_state text not null,
+  resulting_goal_status text not null,
+  action_log_ids jsonb not null default '[]'::jsonb,
+  artifact_ids jsonb not null default '[]'::jsonb,
+  memory_ids jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
 );
 
 create table if not exists watchers (
@@ -134,3 +301,91 @@ create table if not exists artifacts (
   created_at timestamptz not null
 );
 
+create table if not exists agent_definitions (
+  id text primary key,
+  user_id text not null,
+  name text not null,
+  display_name text not null,
+  description text not null,
+  icon text not null,
+  category text not null,
+  tags jsonb not null default '[]'::jsonb,
+  system_prompt text not null,
+  prompt_variables jsonb not null default '[]'::jsonb,
+  artifact_type text not null,
+  behavior_config jsonb not null default '{}'::jsonb,
+  allowed_capabilities jsonb not null default '[]'::jsonb,
+  blocked_capabilities jsonb not null default '[]'::jsonb,
+  max_risk_class text not null,
+  integration_permissions jsonb not null default '[]'::jsonb,
+  memory_permissions jsonb not null default '[]'::jsonb,
+  is_built_in boolean not null default false,
+  parent_agent_id text,
+  version integer not null,
+  status text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create unique index if not exists agent_definitions_user_name_idx
+  on agent_definitions (user_id, name);
+
+create table if not exists agent_metrics (
+  agent_id text not null,
+  period text not null,
+  period_start timestamptz not null,
+  period_end timestamptz not null,
+  tasks_total integer not null,
+  tasks_completed integer not null,
+  tasks_failed integer not null,
+  tasks_blocked integer not null,
+  approvals_requested integer not null,
+  approvals_approved integer not null,
+  approvals_rejected integer not null,
+  average_confidence real,
+  average_execution_time_ms integer,
+  artifacts_produced integer not null,
+  artifacts_by_type jsonb not null default '{}'::jsonb,
+  error_count integer not null,
+  last_error_at timestamptz,
+  last_error_message text,
+  feedback_count integer not null,
+  user_correction_count integer not null default 0,
+  post_approval_failure_count integer not null default 0,
+  average_rating real,
+  success_rate real,
+  approval_rate real,
+  correction_rate real,
+  post_approval_failure_rate real,
+  updated_at timestamptz not null,
+  primary key (agent_id, period)
+);
+
+create table if not exists operator_products (
+  id text primary key,
+  user_id text not null,
+  slug text not null,
+  name text not null,
+  tagline text not null,
+  description text not null,
+  icon text not null,
+  recommended_agent_ids jsonb not null default '[]'::jsonb,
+  recommended_template_ids jsonb not null default '[]'::jsonb,
+  recommended_integrations jsonb not null default '[]'::jsonb,
+  kpis jsonb not null default '[]'::jsonb,
+  onboarding_steps jsonb not null default '[]'::jsonb,
+  is_built_in boolean not null default false,
+  status text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create unique index if not exists operator_products_user_slug_idx
+  on operator_products (user_id, slug);
+
+create table if not exists operator_product_selections (
+  user_id text primary key,
+  operator_product_id text not null,
+  selected_at timestamptz not null,
+  updated_at timestamptz not null
+);

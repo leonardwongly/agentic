@@ -7,13 +7,13 @@ type RouteParams = { params: Promise<{ id: string }> };
 
 export async function GET(request: Request, { params }: RouteParams) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const { id } = await params;
     const repository = await getSeededRepository();
 
     const agent = await repository.getAgent(id);
 
-    if (!agent) {
+    if (!agent || (!agent.isBuiltIn && agent.userId !== principal.userId)) {
       return authenticatedJson({ error: "Agent not found" }, { status: 404 });
     }
 

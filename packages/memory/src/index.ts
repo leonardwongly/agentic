@@ -1,5 +1,7 @@
 import { MemoryRecordSchema, nowIso, type AgentName, type MemoryRecord, type MemoryType } from "@agentic/contracts";
 
+export type MemoryFreshness = "fresh" | "review_due" | "expired" | "low_confidence";
+
 function tokenize(input: string): string[] {
   return input
     .toLowerCase()
@@ -54,6 +56,24 @@ export function isMemoryExpired(record: MemoryRecord, now = Date.now()): boolean
   return expiryAt !== null && expiryAt <= now;
 }
 
+export function getMemoryFreshness(record: MemoryRecord, now = Date.now()): MemoryFreshness {
+  if (isMemoryExpired(record, now)) {
+    return "expired";
+  }
+
+  if (record.confidence < 0.7) {
+    return "low_confidence";
+  }
+
+  const reviewAt = parseOptionalDate(record.reviewAt);
+
+  if (reviewAt !== null && reviewAt <= now) {
+    return "review_due";
+  }
+
+  return "fresh";
+}
+
 export function canAgentAccessMemory(record: MemoryRecord, agent: AgentName): boolean {
   return record.permissions.includes(agent);
 }
@@ -65,10 +85,21 @@ export function scoreMemoryRecord(query: string, record: MemoryRecord, now = Dat
   const overlap = queryTokens.filter((token) => contentTokens.has(token)).length;
   const categoryOverlap = queryTokens.filter((token) => categoryTokens.has(token)).length;
   const typeBonus = record.memoryType === "confirmed" ? 0.35 : record.memoryType === "observed" ? 0.2 : 0.1;
-  const reviewAt = parseOptionalDate(record.reviewAt);
-  const staleReviewPenalty = reviewAt !== null && reviewAt < now ? -0.15 : 0;
+  const freshnessPenalty = (() => {
+    switch (getMemoryFreshness(record, now)) {
+      case "review_due":
+        return -0.2;
+      case "low_confidence":
+        return -0.25;
+      case "expired":
+        return -1;
+      case "fresh":
+      default:
+        return 0;
+    }
+  })();
 
-  return overlap + categoryOverlap * 0.5 + typeBonus + record.confidence + staleReviewPenalty;
+  return overlap + categoryOverlap * 0.5 + typeBonus + record.confidence + freshnessPenalty;
 }
 
 export function rankRelevantMemories(

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { formatValidationError } from "./api-errors";
+import { formatValidationError, isContentTypeError } from "./api-errors";
 import { isAuthError } from "./auth";
 
 export const AUTHENTICATED_API_CACHE_CONTROL = "private, no-store, max-age=0, must-revalidate";
@@ -72,6 +72,10 @@ export function handleApiError(error: unknown, fallbackMessage: string) {
 
   if (error instanceof ApiRouteError) {
     return authenticatedError(error.status, error.message);
+  }
+
+  if (isContentTypeError(error)) {
+    return authenticatedError(415, "Content-Type must be application/json.");
   }
 
   console.error(fallbackMessage, error);

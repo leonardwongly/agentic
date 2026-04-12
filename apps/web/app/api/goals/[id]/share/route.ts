@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { requireApiSession } from "../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../../lib/api-response";
 import { buildGoalShareUrl, createGoalShareCreatedLog, createGoalShareToken, getGoalShareExpiry } from "../../../../../lib/share";
@@ -15,11 +14,11 @@ type RouteContext = {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const { id } = await context.params;
     const goalId = GoalIdSchema.parse(id);
     const repository = await getSeededRepository();
-    const bundle = await repository.getGoalBundleForUser(goalId, SYSTEM_USER_ID);
+    const bundle = await repository.getGoalBundleForUser(goalId, principal.userId);
 
     if (!bundle) {
       throw new ApiRouteError(404, `Goal ${goalId} was not found.`);
@@ -37,7 +36,7 @@ export async function POST(request: Request, context: RouteContext) {
     return authenticatedJson({
       shareUrl: buildGoalShareUrl(request.url, token),
       expiresAt,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to create a goal share link.");

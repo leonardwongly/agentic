@@ -68,6 +68,7 @@ function buildApprovalBlocks(approval: {
   rationale: string;
   riskClass: string;
   requestedAction: string;
+  actionValue: string;
 }): unknown[] {
   return [
     {
@@ -121,7 +122,7 @@ function buildApprovalBlocks(approval: {
           },
           style: "primary",
           action_id: "approval_approve",
-          value: approval.id
+          value: approval.actionValue
         },
         {
           type: "button",
@@ -132,7 +133,7 @@ function buildApprovalBlocks(approval: {
           },
           style: "danger",
           action_id: "approval_reject",
-          value: approval.id
+          value: approval.actionValue
         }
       ]
     }
@@ -151,6 +152,7 @@ export async function sendApprovalMessage(params: {
     rationale: string;
     riskClass: string;
     requestedAction: string;
+    actionValue: string;
   };
 }): Promise<{ ok: boolean; ts: string }> {
   const blocks = buildApprovalBlocks(params.approval);

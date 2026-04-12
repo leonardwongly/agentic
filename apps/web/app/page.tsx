@@ -17,7 +17,11 @@ export default async function HomePage() {
   }
 
   const repository = await getSeededRepository();
-  const [dashboard, notes] = await Promise.all([repository.getDashboardData(), listLocalNotes()]);
+  const [dashboard, notes, commitmentInbox] = await Promise.all([
+    repository.getDashboardData(),
+    listLocalNotes(),
+    repository.listCommitmentInbox()
+  ]);
 
-  return <Dashboard initialData={dashboard} initialNotes={notes} />;
+  return <Dashboard initialData={dashboard} initialNotes={notes} initialCommitmentInbox={commitmentInbox} />;
 }

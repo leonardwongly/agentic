@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Agentic is a single-user agentic operating system for coordinating work across messages, calendars, tasks, notes, and generated artifacts. The first release prioritizes trustworthy execution over provider-specific depth.
+Agentic is a trusted execution control plane for coordinating work across messages, calendars, tasks, notes, and generated artifacts. The first release prioritizes trustworthy execution over provider-specific depth, and keeps the daily operating loop centered on commitments, approvals, and evidence.
 
 The product is intentionally designed as a modular monolith so the first milestone can stay fast to iterate, easy to test, and auditable from the first user request through every policy decision and resulting artifact.
 
@@ -181,7 +181,7 @@ Each agent must emit schema-validated JSON and stay inside an allowlisted capabi
 | 2 | Specialist quality | Five bounded agents, routing rules, evaluation metrics |
 | 3 | Persistent execution | Delayed jobs, retries, resumable checkpoints, richer watcher behavior |
 | 4 | Personalization | Memory ranking improvements, policy tuning, selective proactivity |
-| 5 | Ecosystem expansion | Real provider adapters and later multi-user growth |
+| 5 | Ecosystem expansion | Real provider adapters and later broader workspace growth |
 
 ## Security Requirements
 

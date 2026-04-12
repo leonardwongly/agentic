@@ -43,7 +43,61 @@ export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject
           <label>Requested Action</label>
           <div className="detail-value">{approval.requestedAction}</div>
         </div>
+        <div className="detail-field">
+          <label>Preview Summary</label>
+          <div className="detail-value">{approval.preview.summary}</div>
+        </div>
+        {approval.preview.target ? (
+          <div className="detail-field">
+            <label>Target</label>
+            <div className="detail-value">{approval.preview.target}</div>
+          </div>
+        ) : null}
+        {approval.decisionScope ? (
+          <div className="detail-field">
+            <label>Decision Scope</label>
+            <div className="detail-value">{approval.decisionScope.replace(/_/g, " ")}</div>
+          </div>
+        ) : null}
+        {approval.decisionRationale ? (
+          <div className="detail-field">
+            <label>Decision Note</label>
+            <div className="detail-value">{approval.decisionRationale}</div>
+          </div>
+        ) : null}
       </div>
+
+      {approval.explanation ? (
+        <div className="detail-section">
+          <h4>Why This Needs Review</h4>
+          <div className="detail-list-item">
+            <p className="detail-list-summary">{approval.explanation.requestReason}</p>
+            <div className="detail-list-meta">
+              <span>{approval.explanation.impactSummary}</span>
+              {approval.explanation.decisionSummary ? <span>{approval.explanation.decisionSummary}</span> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {approval.preview.changes.length > 0 ? (
+        <div className="detail-section">
+          <h4>Planned Changes</h4>
+          {approval.preview.changes.map((change) => (
+            <div className="detail-list-item" key={`${change.label}-${change.after}-${change.before}`}>
+              <div className="detail-list-header">
+                <strong>{change.label}</strong>
+              </div>
+              <p className="detail-list-summary">
+                {change.before ? `Before: ${change.before}` : "Before: not set"}
+              </p>
+              <p className="detail-list-summary">
+                {change.after ? `After: ${change.after}` : "After: cleared"}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {relatedGoal && (
         <div className="detail-section">
@@ -113,7 +167,44 @@ export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject
             <span className="detail-meta-item">
               <strong>Responded:</strong> <RelativeTime date={approval.respondedAt} />
             </span>
+            {approval.explanation?.evidence.updatedAt ? (
+              <span className="detail-meta-item">
+                <strong>Evidence Updated:</strong> <RelativeTime date={approval.explanation.evidence.updatedAt} />
+              </span>
+            ) : null}
           </div>
+          {approval.explanation?.outcomeSummary || approval.explanation?.evidenceSummary ? (
+            <div className="detail-list-item">
+              <div className="detail-list-header">
+                <strong>Outcome And Evidence</strong>
+              </div>
+              {approval.explanation.outcomeSummary ? (
+                <p className="detail-list-summary">{approval.explanation.outcomeSummary}</p>
+              ) : null}
+              {approval.explanation.evidenceSummary ? (
+                <p className="detail-list-summary">{approval.explanation.evidenceSummary}</p>
+              ) : null}
+              <div className="detail-list-meta">
+                <span>Logs: {approval.explanation.evidence.actionLogCount}</span>
+                <span>Artifacts: {approval.explanation.evidence.artifactCount}</span>
+                <span>Memories: {approval.explanation.evidence.memoryCount}</span>
+              </div>
+            </div>
+          ) : null}
+          {approval.history.length > 0 ? (
+            <div className="detail-list-item">
+              <div className="detail-list-header">
+                <strong>Decision history</strong>
+              </div>
+              <div className="detail-list-meta">
+                {approval.history.map((entry) => (
+                  <span key={entry.createdAt}>
+                    {entry.decision} · {entry.scope.replace(/_/g, " ")} · <RelativeTime date={entry.createdAt} />
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>

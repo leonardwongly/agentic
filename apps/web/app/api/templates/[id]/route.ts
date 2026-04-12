@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID, GoalTemplateSchema, nowIso } from "@agentic/contracts";
+import { GoalTemplateSchema, nowIso } from "@agentic/contracts";
 import { computeNextRun } from "@agentic/orchestrator";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
@@ -19,11 +19,11 @@ const PatchScheduleSchema = z
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const { id } = await context.params;
     const templateId = TemplateIdSchema.parse(id);
     const repository = await getSeededRepository();
-    const templates = await repository.listTemplates(SYSTEM_USER_ID);
+    const templates = await repository.listTemplates(principal.userId);
     const existing = templates.find((t) => t.id === templateId);
 
     if (!existing) {
@@ -34,7 +34,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
 
     return authenticatedJson({
       deleted: templateId,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to delete template.");
@@ -43,12 +43,12 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const { id } = await context.params;
     const templateId = TemplateIdSchema.parse(id);
     const body = await parseJsonBody(request, PatchScheduleSchema);
     const repository = await getSeededRepository();
-    const templates = await repository.listTemplates(SYSTEM_USER_ID);
+    const templates = await repository.listTemplates(principal.userId);
     const existing = templates.find((t) => t.id === templateId);
 
     if (!existing) {
@@ -75,7 +75,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
     return authenticatedJson({
       template: saved,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to update template schedule.");

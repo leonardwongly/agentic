@@ -1,7 +1,9 @@
 import { z } from "zod";
-import { IntegrationAccountSchema, SYSTEM_USER_ID, nowIso } from "@agentic/contracts";
+import { describeIntegrationReadiness } from "@agentic/integrations";
+import { IntegrationAccountSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
+import { requireJsonContentType } from "../../../lib/api-errors";
 import { getSeededRepository } from "../../../lib/server";
 
 const UpdateIntegrationSchema = z
@@ -11,12 +13,19 @@ const UpdateIntegrationSchema = z
   })
   .strict();
 
+function serializeIntegration(account: z.infer<typeof IntegrationAccountSchema>) {
+  return {
+    ...account,
+    readiness: describeIntegrationReadiness(account)
+  };
+}
+
 export async function GET(request: Request) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const repository = await getSeededRepository();
     return authenticatedJson({
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      integrations: (await repository.listIntegrations(principal.userId)).map(serializeIntegration)
     });
   } catch (error) {
     return handleApiError(error, "Failed to list integrations.");
@@ -26,10 +35,10 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, UpdateIntegrationSchema);
     const repository = await getSeededRepository();
-    const existing = (await repository.listIntegrations(SYSTEM_USER_ID)).find((integration) => integration.id === body.id);
+    const existing = (await repository.listIntegrations(principal.userId)).find((integration) => integration.id === body.id);
 
     if (!existing) {
       throw new ApiRouteError(404, `Integration ${body.id} was not found.`);
@@ -44,8 +53,8 @@ export async function POST(request: Request) {
     await repository.upsertIntegration(integration);
 
     return authenticatedJson({
-      integration,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      integration: serializeIntegration(integration),
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to update integration.");

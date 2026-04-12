@@ -2,11 +2,9 @@ import { z } from "zod";
 import {
   AgentCategorySchema,
   AgentDefinitionSchema,
-  AgentStatusSchema,
   ArtifactTypeSchema,
   CapabilitySchema,
   RiskClassSchema,
-  SYSTEM_USER_ID,
   nowIso
 } from "@agentic/contracts";
 import { requireApiSession } from "../../../lib/auth";
@@ -45,11 +43,11 @@ const CreateAgentSchema = z
 
 export async function GET(request: Request) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const repository = await getSeededRepository();
 
     return authenticatedJson({
-      agents: await repository.listAgents(SYSTEM_USER_ID)
+      agents: await repository.listAgents(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to list agents.");
@@ -58,14 +56,14 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, CreateAgentSchema);
     const repository = await getSeededRepository();
 
     const now = nowIso();
     const agent = AgentDefinitionSchema.parse({
       id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      userId: SYSTEM_USER_ID,
+      userId: principal.userId,
       name: body.name,
       displayName: body.displayName,
       description: body.description ?? "",
@@ -101,7 +99,7 @@ export async function POST(request: Request) {
 
     return authenticatedJson({
       agent: saved,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to create agent.");

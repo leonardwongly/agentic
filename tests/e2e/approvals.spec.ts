@@ -4,12 +4,13 @@ import { unlockDashboard } from "./helpers";
 test("creates and approves an inbox-triage goal end-to-end", async ({ page }) => {
   await unlockDashboard(page);
 
-  await page.getByPlaceholder("Example: Triage my inbox and draft replies for anything urgent.").fill(
+  const requestCard = page.locator(".request-card");
+  await requestCard.getByPlaceholder("Example: Triage my inbox and draft replies for anything urgent.").fill(
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Create goal" }).click();
+  await requestCard.locator(".hero-button-row").getByRole("button", { name: "Create goal" }).click();
 
-  await expect(page.getByText("Created a new goal bundle.")).toBeVisible();
+  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible();
   await expect(
     page
       .locator(".request-card .list-item")
@@ -19,14 +20,14 @@ test("creates and approves an inbox-triage goal end-to-end", async ({ page }) =>
       .first()
   ).toBeVisible();
 
-  const approvalRow = page.locator(".list-item.vertical").filter({
+  const approvalRow = page.locator("#section-approvals .list-item.vertical").filter({
     hasText: "Prepare sender-aware drafts requires approval"
   });
 
   await expect(approvalRow).toBeVisible();
-  await approvalRow.getByRole("button", { name: "Approve" }).click();
+  await approvalRow.getByRole("button", { name: "Approve once" }).click();
 
-  await expect(page.getByText("Marked the approval as approved.")).toBeVisible();
+  await expect(page.getByText("Marked the approval as approved.").first()).toBeVisible();
   await expect(page.getByText("No pending approvals.")).toBeVisible();
 
   const approvalTimelineRow = page

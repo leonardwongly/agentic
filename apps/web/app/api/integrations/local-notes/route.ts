@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { createLocalNote, searchLocalNotes } from "@agentic/integrations";
 import { getSeededRepository } from "../../../../lib/server";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import { requireJsonContentType } from "../../../../lib/api-errors";
 
 const CreateLocalNoteSchema = z
   .object({
@@ -34,14 +34,14 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, CreateLocalNoteSchema);
     const [note, repository] = await Promise.all([createLocalNote(body), getSeededRepository()]);
 
     return authenticatedJson({
       note,
       notes: await searchLocalNotes(""),
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to create a local note.");

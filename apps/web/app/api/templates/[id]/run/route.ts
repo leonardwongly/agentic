@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID, GoalTemplateSchema, nowIso } from "@agentic/contracts";
+import { GoalTemplateSchema, nowIso } from "@agentic/contracts";
 import { processUserRequest, captureMemoriesFromBundle, interpolateTemplate, computeNextRun } from "@agentic/orchestrator";
 import { requireApiSession } from "../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../../lib/api-response";
@@ -9,11 +9,16 @@ const TemplateIdSchema = z.string().trim().min(1).max(200);
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const { id } = await context.params;
     const templateId = TemplateIdSchema.parse(id);
     const repository = await getSeededRepository();
-    const templates = await repository.listTemplates(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(principal.userId);
+    const workspaceId = dashboard.activeWorkspace?.id ?? null;
+    const workspaceGovernance = workspaceId
+      ? dashboard.workspaceGovernance ?? await repository.getWorkspaceGovernance(workspaceId, principal.userId)
+      : null;
+    const templates = await repository.listTemplates(principal.userId);
     const template = templates.find((t) => t.id === templateId);
 
     if (!template) {
@@ -23,15 +28,18 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const interpolated = interpolateTemplate(template);
 
     const [memories, integrations] = await Promise.all([
-      repository.listMemory(SYSTEM_USER_ID),
-      repository.listIntegrations(SYSTEM_USER_ID)
+      repository.listMemory(principal.userId),
+      repository.listIntegrations(principal.userId)
     ]);
 
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: principal.userId,
       request: interpolated,
+      workspaceId,
+      governance: workspaceGovernance,
       memories,
-      integrations
+      integrations,
+      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
     });
 
     await repository.saveGoalBundle(bundle);
@@ -56,7 +64,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     // Capture memories from completed goals
     if (bundle.goal.status === "completed") {
       try {
-        const captured = captureMemoriesFromBundle(bundle, SYSTEM_USER_ID);
+        const captured = captureMemoriesFromBundle(bundle, principal.userId);
         const selfImprovement = await getSeededSelfImprovementRepository();
 
         await Promise.all([
@@ -74,7 +82,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     return authenticatedJson({
       bundle,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to run template.");

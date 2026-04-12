@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { getAuthSessionStateStore, type SessionRateLimitEntry } from "./auth-session-store";
 
 // ---------------------------------------------------------------------------
 // Rate limiting for the session endpoint
@@ -10,17 +11,28 @@ const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute sliding window
 const RATE_LIMIT_MAX_ATTEMPTS = 10; // attempts before lockout
 const RATE_LIMIT_LOCKOUT_MS = 5 * 60_000; // 5 minute lockout
 
-type RateLimitEntry = {
-  attempts: number;
-  windowStart: number;
-  lockedUntil: number | null;
+const SESSION_TTL_SECONDS = 60 * 60 * 12;
+const SESSION_TOKEN_VERSION = 1 as const;
+
+type SessionTokenPayload = {
+  version: typeof SESSION_TOKEN_VERSION;
+  userId: string;
+  sessionId: string;
+  issuedAt: string;
+  expiresAt: string;
 };
 
-const rateLimitStore = new Map<string, RateLimitEntry>();
+export type AuthPrincipal = {
+  authMethod: "access_key" | "session";
+  userId: string;
+  sessionId: string | null;
+  expiresAt: string | null;
+};
 
 export function checkSessionRateLimit(key: string): { allowed: boolean; retryAfterMs: number } {
+  const store = getAuthSessionStateStore();
   const now = Date.now();
-  const entry = rateLimitStore.get(key) ?? { attempts: 0, windowStart: now, lockedUntil: null };
+  const entry: SessionRateLimitEntry = store.getRateLimitEntry(key) ?? { attempts: 0, windowStart: now, lockedUntil: null };
 
   if (entry.lockedUntil !== null) {
     if (now < entry.lockedUntil) {
@@ -38,11 +50,11 @@ export function checkSessionRateLimit(key: string): { allowed: boolean; retryAft
   }
 
   entry.attempts += 1;
-  rateLimitStore.set(key, entry);
+  store.setRateLimitEntry(key, entry);
 
   if (entry.attempts > RATE_LIMIT_MAX_ATTEMPTS) {
     entry.lockedUntil = now + RATE_LIMIT_LOCKOUT_MS;
-    rateLimitStore.set(key, entry);
+    store.setRateLimitEntry(key, entry);
     return { allowed: false, retryAfterMs: RATE_LIMIT_LOCKOUT_MS };
   }
 
@@ -50,21 +62,21 @@ export function checkSessionRateLimit(key: string): { allowed: boolean; retryAft
 }
 
 export function recordSessionSuccess(key: string): void {
-  rateLimitStore.delete(key);
+  getAuthSessionStateStore().deleteRateLimitEntry(key);
 }
-
-// ---------------------------------------------------------------------------
-// Server-side session revocation
-// ---------------------------------------------------------------------------
-
-const revokedTokens = new Set<string>();
 
 export function revokeSessionToken(token: string): void {
-  revokedTokens.add(token);
+  const session = parseAuthorizedSessionToken(token);
+
+  if (!session) {
+    return;
+  }
+
+  getAuthSessionStateStore().revokeSession(session.sessionId, Date.parse(session.expiresAt));
 }
 
-export function isSessionTokenRevoked(token: string): boolean {
-  return revokedTokens.has(token);
+export function isSessionTokenRevoked(sessionId: string): boolean {
+  return getAuthSessionStateStore().isSessionRevoked(sessionId);
 }
 
 export const AGENTIC_SESSION_COOKIE = "agentic_session";
@@ -129,8 +141,55 @@ export function getServerSigningSecret(scope: "session" | "share" = "session"): 
   return scope === "session" ? resolved.key : `${resolved.key}:agentic-share-v1`;
 }
 
-function deriveSessionToken(secret: string, userId = SYSTEM_USER_ID): string {
-  return crypto.createHmac("sha256", secret).update(`${userId}:agentic-session-v1`).digest("hex");
+function signSessionTokenPayload(secret: string, encodedPayload: string): string {
+  return crypto.createHmac("sha256", secret).update(`agentic-session-v1.${encodedPayload}`).digest("base64url");
+}
+
+function buildSessionTokenPayload(userId = SYSTEM_USER_ID, now = Date.now()): SessionTokenPayload {
+  return {
+    version: SESSION_TOKEN_VERSION,
+    userId,
+    sessionId: crypto.randomUUID(),
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + SESSION_TTL_SECONDS * 1000).toISOString()
+  };
+}
+
+function encodeSessionTokenPayload(payload: SessionTokenPayload): string {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+function decodeSessionTokenPayload(encodedPayload: string): SessionTokenPayload | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as Partial<SessionTokenPayload>;
+
+    if (
+      parsed.version !== SESSION_TOKEN_VERSION ||
+      typeof parsed.userId !== "string" ||
+      typeof parsed.sessionId !== "string" ||
+      typeof parsed.issuedAt !== "string" ||
+      typeof parsed.expiresAt !== "string"
+    ) {
+      return null;
+    }
+
+    const issuedAt = Date.parse(parsed.issuedAt);
+    const expiresAt = Date.parse(parsed.expiresAt);
+
+    if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt) {
+      return null;
+    }
+
+    return {
+      version: SESSION_TOKEN_VERSION,
+      userId: parsed.userId,
+      sessionId: parsed.sessionId,
+      issuedAt: parsed.issuedAt,
+      expiresAt: parsed.expiresAt
+    };
+  } catch {
+    return null;
+  }
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -166,25 +225,57 @@ export function verifyAccessKey(candidate: string | null | undefined): boolean {
 }
 
 export function buildSessionToken(userId = SYSTEM_USER_ID): string {
-  return deriveSessionToken(getServerSigningSecret("session"), userId);
+  const payload = buildSessionTokenPayload(userId);
+  const encodedPayload = encodeSessionTokenPayload(payload);
+  const signature = signSessionTokenPayload(getServerSigningSecret("session"), encodedPayload);
+
+  return `${encodedPayload}.${signature}`;
 }
 
-export function isAuthorizedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): boolean {
+export function parseAuthorizedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): SessionTokenPayload | null {
   const token = candidate?.trim();
 
   if (!token) {
-    return false;
+    return null;
   }
 
-  if (isSessionTokenRevoked(token)) {
-    return false;
+  const delimiterIndex = token.lastIndexOf(".");
+
+  if (delimiterIndex <= 0 || delimiterIndex === token.length - 1) {
+    return null;
+  }
+
+  const encodedPayload = token.slice(0, delimiterIndex);
+  const providedSignature = token.slice(delimiterIndex + 1);
+  const payload = decodeSessionTokenPayload(encodedPayload);
+
+  if (!payload || payload.userId !== userId) {
+    return null;
   }
 
   try {
-    return constantTimeEqual(token, deriveSessionToken(getServerSigningSecret("session"), userId));
+    const expectedSignature = signSessionTokenPayload(getServerSigningSecret("session"), encodedPayload);
+
+    if (!constantTimeEqual(providedSignature, expectedSignature)) {
+      return null;
+    }
   } catch {
-    return false;
+    return null;
   }
+
+  if (Date.parse(payload.expiresAt) <= Date.now()) {
+    return null;
+  }
+
+  if (isSessionTokenRevoked(payload.sessionId)) {
+    return null;
+  }
+
+  return payload;
+}
+
+export function isAuthorizedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): boolean {
+  return parseAuthorizedSessionToken(candidate, userId) !== null;
 }
 
 export function createSessionCookie(userId = SYSTEM_USER_ID) {
@@ -196,7 +287,7 @@ export function createSessionCookie(userId = SYSTEM_USER_ID) {
       sameSite: "lax" as const,
       secure: process.env.NODE_ENV === "production",
       path: "/",
-      maxAge: 60 * 60 * 12
+      maxAge: SESSION_TTL_SECONDS
     }
   };
 }
@@ -217,31 +308,57 @@ export function clearSessionCookie() {
 
 export async function hasActiveSession() {
   const cookieStore = await cookies();
-  return isAuthorizedSessionToken(cookieStore.get(AGENTIC_SESSION_COOKIE)?.value);
+  return parseAuthorizedSessionToken(cookieStore.get(AGENTIC_SESSION_COOKIE)?.value) !== null;
 }
 
-export async function requireApiSession(request?: Request) {
-  const headerKey = request?.headers.get(AGENTIC_ACCESS_KEY_HEADER);
+export function resolveApiPrincipal(request: Request): AuthPrincipal | null {
+  const headerKey = request.headers.get(AGENTIC_ACCESS_KEY_HEADER);
 
   if (verifyAccessKey(headerKey)) {
-    return;
+    return {
+      authMethod: "access_key",
+      userId: SYSTEM_USER_ID,
+      sessionId: null,
+      expiresAt: null
+    };
   }
 
-  if (request) {
-    const sessionToken = readCookieValue(request.headers.get("cookie"), AGENTIC_SESSION_COOKIE);
+  const sessionToken = readCookieValue(request.headers.get("cookie"), AGENTIC_SESSION_COOKIE);
+  const session = parseAuthorizedSessionToken(sessionToken);
 
-    if (isAuthorizedSessionToken(sessionToken)) {
-      return;
+  if (!session) {
+    return null;
+  }
+
+  return {
+    authMethod: "session",
+    userId: session.userId,
+    sessionId: session.sessionId,
+    expiresAt: session.expiresAt
+  };
+}
+
+export async function requireApiSession(request?: Request): Promise<AuthPrincipal> {
+  if (request) {
+    const principal = resolveApiPrincipal(request);
+
+    if (principal) {
+      return principal;
     }
 
     throw new AuthError("Unauthorized. Create a session before calling the Agentic API.");
   }
 
   const cookieStore = await cookies();
-  const sessionToken = cookieStore.get(AGENTIC_SESSION_COOKIE)?.value;
+  const session = parseAuthorizedSessionToken(cookieStore.get(AGENTIC_SESSION_COOKIE)?.value);
 
-  if (isAuthorizedSessionToken(sessionToken)) {
-    return;
+  if (session) {
+    return {
+      authMethod: "session",
+      userId: session.userId,
+      sessionId: session.sessionId,
+      expiresAt: session.expiresAt
+    };
   }
 
   throw new AuthError("Unauthorized. Create a session before calling the Agentic API.");

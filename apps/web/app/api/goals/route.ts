@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { processUserRequest, captureMemoriesFromBundle } from "@agentic/orchestrator";
 import { requireApiSession } from "../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
+import { requireJsonContentType } from "../../../lib/api-errors";
 import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../lib/server";
 
 const GoalRequestSchema = z
@@ -12,15 +12,42 @@ const GoalRequestSchema = z
   })
   .strict();
 
+async function resolveActiveWorkspaceContext(userId: string) {
+  const repository = await getSeededRepository();
+  const dashboard = await repository.getDashboardData(userId);
+  const workspaceId = dashboard.activeWorkspace?.id ?? null;
+
+  return {
+    repository,
+    workspaceId,
+    workspaceGovernance: workspaceId
+      ? dashboard.workspaceGovernance ?? await repository.getWorkspaceGovernance(workspaceId, userId)
+      : null
+  };
+}
+
+export async function GET(request: Request) {
+  try {
+    const principal = await requireApiSession(request);
+    const repository = await getSeededRepository();
+
+    return authenticatedJson({
+      dashboard: await repository.getDashboardData(principal.userId)
+    });
+  } catch (error) {
+    return handleApiError(error, "Failed to load goals dashboard.");
+  }
+}
+
 export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, GoalRequestSchema);
-    const repository = await getSeededRepository();
+    const { repository, workspaceId, workspaceGovernance } = await resolveActiveWorkspaceContext(principal.userId);
     const [memories, integrations] = await Promise.all([
-      repository.listMemory(SYSTEM_USER_ID),
-      repository.listIntegrations(SYSTEM_USER_ID)
+      repository.listMemory(principal.userId),
+      repository.listIntegrations(principal.userId)
     ]);
     
     // Fetch agent definition if agentId is provided
@@ -35,18 +62,21 @@ export async function POST(request: Request) {
     }
     
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: principal.userId,
       request: body.request,
+      workspaceId,
+      governance: workspaceGovernance,
       memories,
       integrations,
-      agentDefinition
+      agentDefinition,
+      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
     });
 
     await repository.saveGoalBundle(bundle);
 
     if (bundle.goal.status === "completed") {
       try {
-        const captured = captureMemoriesFromBundle(bundle, SYSTEM_USER_ID);
+        const captured = captureMemoriesFromBundle(bundle, principal.userId);
         const selfImprovement = await getSeededSelfImprovementRepository();
 
         await Promise.all([
@@ -64,7 +94,7 @@ export async function POST(request: Request) {
 
     return authenticatedJson({
       bundle,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to create goal.");

@@ -1,48 +1,53 @@
 import { z } from "zod";
+import {
+  BriefingFocusSchema,
+  BriefingPreferencesSchema,
+  BriefingScheduleEntrySchema,
+  nowIso
+} from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import { getSeededRepository } from "../../../../lib/server";
 
-const BriefingScheduleSchema = z
+const BriefingPreferencesUpdateSchema = z
   .object({
-    enabled: z.boolean(),
-    time: z
-      .string()
-      .regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format.")
-      .refine(
-        (t) => {
-          const [h, m] = t.split(":").map(Number);
-          return h >= 0 && h <= 23 && m >= 0 && m <= 59;
-        },
-        { message: "Time must be a valid HH:MM value." }
-      )
+    timezone: z.string().trim().min(1).max(100).optional(),
+    focus: BriefingFocusSchema.optional(),
+    schedules: z.array(BriefingScheduleEntrySchema).optional()
   })
   .strict();
 
-type BriefingScheduleConfig = z.infer<typeof BriefingScheduleSchema>;
-
-// In-memory store for MVP. A production implementation would persist
-// this to the repository or a config file.
-let briefingSchedule: BriefingScheduleConfig = {
-  enabled: false,
-  time: "08:00"
-};
-
 export async function GET(request: Request) {
   try {
-    await requireApiSession(request);
-    return authenticatedJson({ schedule: briefingSchedule });
+    const principal = await requireApiSession(request);
+    const repository = await getSeededRepository();
+    const preferences = await repository.getBriefingPreferences(principal.userId);
+    return authenticatedJson({ preferences });
   } catch (error) {
-    return handleApiError(error, "Failed to retrieve briefing schedule.");
+    return handleApiError(error, "Failed to retrieve briefing preferences.");
   }
 }
 
 export async function POST(request: Request) {
   try {
-    await requireApiSession(request);
-    const body = await parseJsonBody(request, BriefingScheduleSchema);
-    briefingSchedule = body;
-    return authenticatedJson({ schedule: briefingSchedule });
+    const principal = await requireApiSession(request);
+    const repository = await getSeededRepository();
+    const body = await parseJsonBody(request, BriefingPreferencesUpdateSchema);
+    const current = await repository.getBriefingPreferences(principal.userId);
+    const updated = BriefingPreferencesSchema.parse({
+      ...current,
+      ...body,
+      userId: principal.userId,
+      updatedAt: nowIso()
+    });
+
+    const preferences = await repository.saveBriefingPreferences(updated);
+
+    return authenticatedJson({
+      preferences,
+      dashboard: await repository.getDashboardData(principal.userId)
+    });
   } catch (error) {
-    return handleApiError(error, "Failed to update briefing schedule.");
+    return handleApiError(error, "Failed to update briefing preferences.");
   }
 }

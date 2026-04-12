@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { createGoalTemplate } from "@agentic/orchestrator";
 import { requireApiSession } from "../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
@@ -23,10 +22,10 @@ const CreateTemplateSchema = z
 
 export async function GET(request: Request) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const repository = await getSeededRepository();
     return authenticatedJson({
-      templates: await repository.listTemplates(SYSTEM_USER_ID)
+      templates: await repository.listTemplates(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to list templates.");
@@ -35,12 +34,12 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, CreateTemplateSchema);
     const repository = await getSeededRepository();
 
     const template = createGoalTemplate({
-      userId: SYSTEM_USER_ID,
+      userId: principal.userId,
       name: body.name,
       description: body.description,
       request: body.request,
@@ -52,7 +51,7 @@ export async function POST(request: Request) {
 
     return authenticatedJson({
       template: saved,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to create template.");

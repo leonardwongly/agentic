@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AgentDefinitionSchema, AgentExportSchema, SYSTEM_USER_ID, nowIso } from "@agentic/contracts";
+import { AgentDefinitionSchema, AgentExportSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
@@ -19,7 +19,7 @@ const ImportAgentSchema = z
 
 export async function POST(request: Request) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, ImportAgentSchema);
     const repository = await getSeededRepository();
 
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     const agent = AgentDefinitionSchema.parse({
       ...imported,
       id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      userId: SYSTEM_USER_ID,
+      userId: principal.userId,
       name: body.newName ?? imported.name,
       isBuiltIn: false,
       parentAgentId: imported.id,
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
 
     return authenticatedJson({
       agent: saved,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to import agent.");

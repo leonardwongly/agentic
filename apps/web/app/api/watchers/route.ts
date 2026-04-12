@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID, WatcherSchema, nowIso } from "@agentic/contracts";
+import { WatcherFrequencySchema, WatcherSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
+import { requireJsonContentType } from "../../../lib/api-errors";
 import { getSeededRepository } from "../../../lib/server";
 
 const CreateWatcherSchema = z
@@ -17,10 +18,10 @@ const CreateWatcherSchema = z
 
 export async function GET(request: Request) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const repository = await getSeededRepository();
     return authenticatedJson({
-      watchers: await repository.listWatchers({ userId: SYSTEM_USER_ID })
+      watchers: await repository.listWatchers({ userId: principal.userId })
     });
   } catch (error) {
     return handleApiError(error, "Failed to list watchers.");
@@ -30,10 +31,10 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, CreateWatcherSchema);
     const repository = await getSeededRepository();
-    const goal = await repository.getGoalBundleForUser(body.goalId, SYSTEM_USER_ID);
+    const goal = await repository.getGoalBundleForUser(body.goalId, principal.userId);
 
     if (!goal) {
       throw new ApiRouteError(404, `Goal ${body.goalId} was not found.`);
@@ -57,7 +58,7 @@ export async function POST(request: Request) {
 
     return authenticatedJson({
       watcher,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to save watcher.");

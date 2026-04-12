@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { readLocalNote, searchLocalNotes, updateLocalNote } from "@agentic/integrations";
 import { getSeededRepository } from "../../../../../lib/server";
 import { requireApiSession } from "../../../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
+import { requireJsonContentType } from "../../../../../lib/api-errors";
 
 const NoteSlugSchema = z.string().trim().min(1).max(120).regex(/^[a-z0-9-]+$/);
 
@@ -36,7 +36,7 @@ export async function GET(request: Request, context: RouteContext) {
 export async function PUT(request: Request, context: RouteContext) {
   try {
     requireJsonContentType(request);
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const { slug } = await context.params;
     const body = await parseJsonBody(request, UpdateLocalNoteSchema);
     const note = await updateLocalNote({
@@ -49,7 +49,7 @@ export async function PUT(request: Request, context: RouteContext) {
     return authenticatedJson({
       note,
       notes,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to update the local note.");

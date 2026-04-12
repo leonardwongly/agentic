@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
-import { respondToApproval, executeApprovedTasks, captureMemoriesFromBundle } from "@agentic/orchestrator";
+import { captureExecutionOutcomeSignals, executeApprovedTasks, captureMemoriesFromBundle, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
 import {
   verifySlackSignature,
   updateMessage,
@@ -14,7 +13,10 @@ import {
   listUpcomingEvents,
   createLocalNote
 } from "@agentic/integrations";
-import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../lib/server";
+import { ApprovalMutationError } from "@agentic/repository";
+import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
+import { resolveSlackActorUserId, verifySlackApprovalToken } from "../../../../lib/slack-approvals";
+import { getSeededRepository } from "../../../../lib/server";
 
 /**
  * POST /api/slack/webhook
@@ -58,6 +60,7 @@ export async function POST(request: Request) {
         action_id: string;
         value: string;
       }>;
+      user?: { id?: string };
       channel?: { id: string };
       message?: { ts: string };
     };
@@ -68,7 +71,18 @@ export async function POST(request: Request) {
     }
 
     const action = payload.actions[0];
-    const approvalId = action.value;
+    const approvalToken = verifySlackApprovalToken(action.value);
+    if (!approvalToken) {
+      return NextResponse.json({ error: "Invalid or expired approval action." }, { status: 401 });
+    }
+
+    const slackUserId = payload.user?.id?.trim() ?? "";
+    const actorUserId = slackUserId ? resolveSlackActorUserId(slackUserId) : null;
+    if (!actorUserId) {
+      return NextResponse.json({ error: "Slack actor is not authorized for approvals." }, { status: 403 });
+    }
+
+    const approvalId = approvalToken.approvalId;
     const actionId = action.action_id;
 
     let decision: "approved" | "rejected";
@@ -80,20 +94,50 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    // Look up the approval bundle
     const repository = await getSeededRepository();
-    const goals = await repository.listGoals(SYSTEM_USER_ID);
-    const bundle = goals.find((candidate) =>
-      candidate.approvals.some((approval) => approval.id === approvalId)
-    );
-
-    if (!bundle) {
-      return NextResponse.json({ error: `Approval ${approvalId} not found.` }, { status: 404 });
+    const actorBundle = await repository.getGoalBundleForUser(approvalToken.goalId, actorUserId);
+    if (!actorBundle) {
+      return NextResponse.json({ error: "Approval is not available to this actor." }, { status: 403 });
     }
 
-    const updatedBundle = respondToApproval({ bundle, approvalId, decision });
+    const actorApproval = actorBundle.approvals.find((candidate) => candidate.id === approvalId);
+    if (!actorApproval) {
+      return NextResponse.json({ error: "Approval not found for this goal." }, { status: 404 });
+    }
+
+    if ((actorBundle.goal.workspaceId ?? null) !== approvalToken.workspaceId) {
+      return NextResponse.json({ error: "Approval workspace mismatch." }, { status: 403 });
+    }
+
+    let updatedBundle = await (async () => {
+      try {
+        return await repository.respondToApproval({
+          approvalId,
+          decision,
+          userId: actorUserId,
+          scope: "once",
+          rationale: null
+        });
+      } catch (error) {
+        if (error instanceof ApprovalMutationError) {
+          if (error.code === "not_found") {
+            return NextResponse.json({ error: error.message }, { status: 404 });
+          }
+
+          // Acknowledge stale or duplicate Slack actions so Slack does not retry them forever.
+          return NextResponse.json({ ok: true, skipped: true, reason: error.code });
+        }
+
+        throw error;
+      }
+    })();
+
+    if (updatedBundle instanceof NextResponse) {
+      return updatedBundle;
+    }
 
     // Execute approved tasks via integration adapters
+    let executionResults: ExecutionResult[] = [];
     if (decision === "approved") {
       const approval = updatedBundle.approvals.find((a) => a.id === approvalId);
       if (approval) {
@@ -103,12 +147,21 @@ export async function POST(request: Request) {
             calendar: isCalendarReady() ? { createEvent, updateEvent, listUpcomingEvents } : undefined,
             notes: { createLocalNote }
           };
+          const governance = updatedBundle.goal.workspaceId
+            ? await repository.getWorkspaceGovernance(updatedBundle.goal.workspaceId, actorUserId)
+            : null;
           const { results, logs } = await executeApprovedTasks({
             bundle: updatedBundle,
             approvedTaskIds: [approval.taskId],
-            adapters
+            adapters,
+            governance
           });
-          updatedBundle.actionLogs.push(...logs);
+          executionResults = results;
+          updatedBundle = reconcileExecutionResults({
+            bundle: updatedBundle,
+            results,
+            logs
+          });
           console.log(
             `[slack-webhook][execution] Executed ${results.length} task(s):`,
             results.map((r) => `${r.action}: ${r.success ? "OK" : "FAILED"}`).join(", ")
@@ -121,20 +174,28 @@ export async function POST(request: Request) {
 
     await repository.saveGoalBundle(updatedBundle);
 
+    if (executionResults.length > 0) {
+      try {
+        await persistCapturedMemories({
+          repository,
+          captured: captureExecutionOutcomeSignals(updatedBundle, actorUserId, executionResults),
+          goalId: updatedBundle.goal.id,
+          label: "slack-execution-capture"
+        });
+      } catch (captureError) {
+        console.error("[slack-webhook][execution-capture] Failed to persist execution outcome signals:", captureError);
+      }
+    }
+
     // Capture memories when goal completes
     if (updatedBundle.goal.status === "completed") {
       try {
-        const captured = captureMemoriesFromBundle(updatedBundle, SYSTEM_USER_ID);
-        const selfImprovement = await getSeededSelfImprovementRepository();
-
-        await Promise.all([
-          ...captured.memories.map((memory) => repository.saveMemory(memory)),
-          ...captured.episodes.map((episode) => selfImprovement.appendEpisode(episode))
-        ]);
-
-        console.log(
-          `[slack-webhook][auto-capture] Goal "${updatedBundle.goal.id}" completed — persisted ${captured.memories.length} memory record(s) and ${captured.episodes.length} episode(s).`
-        );
+        await persistCapturedMemories({
+          repository,
+          captured: captureMemoriesFromBundle(updatedBundle, actorUserId),
+          goalId: updatedBundle.goal.id,
+          label: "slack-webhook][auto-capture"
+        });
       } catch (captureError) {
         console.error("[slack-webhook][auto-capture] Failed to persist captured memories:", captureError);
       }

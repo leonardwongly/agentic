@@ -68,13 +68,13 @@ export {
 
 // Natural Language Dashboard
 export { 
-  parseIntent, 
   NLInput, 
   NLFloatingBar, 
   useNLExecutor,
-  type NLIntent,
-  type NLResult 
+  type NLResult,
+  type NLExecutionPayload
 } from "./nl-dashboard";
+export { parseIntent, type NLIntent } from "./nl-intent";
 
 // Memory Search
 export { 

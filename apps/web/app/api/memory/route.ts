@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
 import { requireApiSession } from "../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
+import { requireJsonContentType } from "../../../lib/api-errors";
 import { getSeededRepository } from "../../../lib/server";
 
 const CreateMemorySchema = z
@@ -15,10 +15,10 @@ const CreateMemorySchema = z
 
 export async function GET(request: Request) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const repository = await getSeededRepository();
     return authenticatedJson({
-      memories: await repository.listMemory(SYSTEM_USER_ID)
+      memories: await repository.listMemory(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to list memory.");
@@ -28,11 +28,11 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, CreateMemorySchema);
     const repository = await getSeededRepository();
     const record = createMemoryRecord({
-      userId: SYSTEM_USER_ID,
+      userId: principal.userId,
       category: body.category,
       memoryType: body.memoryType ?? "observed",
       content: body.content,
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
 
     return authenticatedJson({
       memory: record,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to save memory.");

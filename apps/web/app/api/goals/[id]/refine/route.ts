@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { refineGoal } from "@agentic/orchestrator";
 import { requireApiSession } from "../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
@@ -21,30 +20,35 @@ type RouteContext = {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
     const { id } = await context.params;
     const goalId = GoalIdSchema.parse(id);
     const body = await parseJsonBody(request, RefinementBodySchema);
     const repository = await getSeededRepository();
-    const bundle = await repository.getGoalBundleForUser(goalId, SYSTEM_USER_ID);
+    const bundle = await repository.getGoalBundleForUser(goalId, principal.userId);
 
     if (!bundle) {
       throw new ApiRouteError(404, `Goal ${goalId} was not found.`);
     }
 
-    const memories = await repository.listMemory(SYSTEM_USER_ID);
+    const [memories, governance] = await Promise.all([
+      repository.listMemory(principal.userId),
+      bundle.goal.workspaceId ? repository.getWorkspaceGovernance(bundle.goal.workspaceId, principal.userId) : Promise.resolve(null)
+    ]);
 
     const updatedBundle = await refineGoal({
       bundle,
       refinement: body.message,
-      memories
+      memories,
+      governance,
+      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
     });
 
     await repository.saveGoalBundle(updatedBundle);
 
     return authenticatedJson({
       bundle: updatedBundle,
-      dashboard: await repository.getDashboardData(SYSTEM_USER_ID)
+      dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
     return handleApiError(error, "Failed to refine goal.");

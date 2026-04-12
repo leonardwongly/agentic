@@ -78,6 +78,14 @@ export function useDeepLink() {
     updateState({ item, panel });
   }, [updateState]);
 
+  const openTarget = useCallback((section: string, item?: string) => {
+    updateState({
+      section,
+      item,
+      panel: undefined
+    });
+  }, [updateState]);
+
   const clearState = useCallback(() => {
     setState({});
     window.history.replaceState({}, "", window.location.pathname);
@@ -92,6 +100,7 @@ export function useDeepLink() {
     setSection,
     setFilter,
     setItem,
+    openTarget,
     clearState,
     getShareableUrl
   };

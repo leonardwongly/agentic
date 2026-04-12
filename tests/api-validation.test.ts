@@ -2,12 +2,20 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { POST as approvalResponseRoute } from "../apps/web/app/api/approvals/[id]/respond/route";
+import { POST as autopilotEventsRoute } from "../apps/web/app/api/autopilot/events/route";
+import { POST as autopilotSettingsRoute } from "../apps/web/app/api/autopilot/settings/route";
 import { POST as goalsRoute } from "../apps/web/app/api/goals/route";
+import { POST as governanceRoute } from "../apps/web/app/api/governance/route";
 import { POST as integrationsRoute } from "../apps/web/app/api/integrations/route";
 import { POST as localNotesRoute } from "../apps/web/app/api/integrations/local-notes/route";
 import { POST as memoryRoute } from "../apps/web/app/api/memory/route";
+import { PATCH as memoryUpdateRoute } from "../apps/web/app/api/memory/[id]/route";
+import { POST as nlIntentRoute } from "../apps/web/app/api/nl/intent/route";
 import { POST as sessionRoute } from "../apps/web/app/api/session/route";
 import { POST as watchersRoute } from "../apps/web/app/api/watchers/route";
+import { PATCH as watcherUpdateRoute } from "../apps/web/app/api/watchers/[id]/route";
+import { POST as workflowTemplatesRoute } from "../apps/web/app/api/workflow-templates/route";
+import { POST as workspacesRoute } from "../apps/web/app/api/workspaces/route";
 import { resetSessionUnlockRateLimit } from "../apps/web/lib/session-unlock-rate-limit";
 import {
   buildAuthorizedJsonRequest,
@@ -73,6 +81,27 @@ describe("api request validation", () => {
         )
     ],
     [
+      "workspaces",
+      () =>
+        workspacesRoute(
+          buildJsonRequest("http://localhost/api/workspaces", {
+            action: "create",
+            name: "Shared Planning",
+            extra: "nope"
+          })
+        )
+    ],
+    [
+      "governance",
+      () =>
+        governanceRoute(
+          buildJsonRequest("http://localhost/api/governance", {
+            approvalMode: "always_review",
+            extra: "nope"
+          })
+        )
+    ],
+    [
       "memory",
       () =>
         memoryRoute(
@@ -98,6 +127,28 @@ describe("api request validation", () => {
         )
     ],
     [
+      "memory update",
+      () =>
+        memoryUpdateRoute(
+          buildJsonRequest("http://localhost/api/memory/memory-1", {
+            action: "review",
+            extra: "nope"
+          }),
+          { params: Promise.resolve({ id: "memory-1" }) }
+        )
+    ],
+    [
+      "watcher update",
+      () =>
+        watcherUpdateRoute(
+          buildJsonRequest("http://localhost/api/watchers/watcher-1", {
+            action: "pause",
+            extra: "nope"
+          }),
+          { params: Promise.resolve({ id: "watcher-1" }) }
+        )
+    ],
+    [
       "integrations",
       () =>
         integrationsRoute(
@@ -118,30 +169,97 @@ describe("api request validation", () => {
           }),
           { params: Promise.resolve({ id: "appr-1" }) }
         )
+    ],
+    [
+      "autopilot settings",
+      () =>
+        autopilotSettingsRoute(
+          buildJsonRequest("http://localhost/api/autopilot/settings", {
+            mode: "notify_only",
+            extra: "nope"
+          })
+        )
+    ],
+    [
+      "autopilot events",
+      () =>
+        autopilotEventsRoute(
+          buildJsonRequest("http://localhost/api/autopilot/events", {
+            kind: "watcher_triggered",
+            sourceId: "watcher-1",
+            extra: "nope"
+          })
+        )
+    ],
+    [
+      "workflow templates",
+      () =>
+        workflowTemplatesRoute(
+          buildJsonRequest("http://localhost/api/workflow-templates", {
+            name: "Daily triage",
+            description: "Review signals",
+            nodes: [],
+            edges: [],
+            triggers: [],
+            extra: "nope"
+          })
+        )
+    ],
+    [
+      "nl intent",
+      () =>
+        nlIntentRoute(
+          buildJsonRequest("http://localhost/api/nl/intent", {
+            type: "summary",
+            timeRange: "today",
+            extra: "nope"
+          })
+        )
     ]
   ])("rejects unknown fields for %s requests", async (_label, invokeRoute) => {
     const response = await invokeRoute();
     const payload = (await response.json()) as { error?: string };
+    const expectedMessage = _label === "nl intent" ? "Invalid input" : "Unrecognized key";
 
     expect(response.status).toBe(400);
-    expect(payload.error).toContain("Unrecognized key");
+    expect(payload.error).toContain(expectedMessage);
     expectNoStoreHeaders(response);
   });
 
   it.each([
     ["session", () => sessionRoute(buildInvalidJsonRequest("http://localhost/api/session"))],
     ["goals", () => goalsRoute(buildInvalidJsonRequest("http://localhost/api/goals"))],
+    ["workspaces", () => workspacesRoute(buildInvalidJsonRequest("http://localhost/api/workspaces"))],
+    ["governance", () => governanceRoute(buildInvalidJsonRequest("http://localhost/api/governance"))],
     ["memory", () => memoryRoute(buildInvalidJsonRequest("http://localhost/api/memory"))],
     ["watchers", () => watchersRoute(buildInvalidJsonRequest("http://localhost/api/watchers"))],
+    ["workflow templates", () => workflowTemplatesRoute(buildInvalidJsonRequest("http://localhost/api/workflow-templates"))],
+    [
+      "memory update",
+      () =>
+        memoryUpdateRoute(buildInvalidJsonRequest("http://localhost/api/memory/memory-1"), {
+          params: Promise.resolve({ id: "memory-1" })
+        })
+    ],
+    [
+      "watcher update",
+      () =>
+        watcherUpdateRoute(buildInvalidJsonRequest("http://localhost/api/watchers/watcher-1"), {
+          params: Promise.resolve({ id: "watcher-1" })
+        })
+    ],
     ["integrations", () => integrationsRoute(buildInvalidJsonRequest("http://localhost/api/integrations"))],
     ["local notes", () => localNotesRoute(buildInvalidJsonRequest("http://localhost/api/integrations/local-notes"))],
+    ["nl intent", () => nlIntentRoute(buildInvalidJsonRequest("http://localhost/api/nl/intent"))],
     [
       "approval response",
       () =>
         approvalResponseRoute(buildInvalidJsonRequest("http://localhost/api/approvals/appr-1/respond"), {
           params: Promise.resolve({ id: "appr-1" })
         })
-    ]
+    ],
+    ["autopilot settings", () => autopilotSettingsRoute(buildInvalidJsonRequest("http://localhost/api/autopilot/settings"))],
+    ["autopilot events", () => autopilotEventsRoute(buildInvalidJsonRequest("http://localhost/api/autopilot/events"))]
   ])("rejects malformed JSON bodies for %s requests", async (_label, invokeRoute) => {
     const response = await invokeRoute();
     const payload = (await response.json()) as { error?: string };
@@ -153,6 +271,34 @@ describe("api request validation", () => {
 
   it.each([
     ["session", () => sessionRoute(new Request("http://localhost/api/session", { method: "POST", body: "accessKey=test-access-key" }))],
+    [
+      "workspaces",
+      () =>
+        workspacesRoute(
+          new Request("http://localhost/api/workspaces", {
+            method: "POST",
+            headers: {
+              "content-type": "text/plain",
+              "x-agentic-access-key": "test-access-key"
+            },
+            body: "action=create"
+          })
+        )
+    ],
+    [
+      "governance",
+      () =>
+        governanceRoute(
+          new Request("http://localhost/api/governance", {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              "x-agentic-access-key": "test-access-key"
+            },
+            body: "approvalMode=always_review"
+          })
+        )
+    ],
     [
       "memory",
       () =>
@@ -180,6 +326,64 @@ describe("api request validation", () => {
             body: "goalId=goal-1"
           })
         )
+    ],
+    [
+      "memory update",
+      () =>
+        memoryUpdateRoute(
+          new Request("http://localhost/api/memory/memory-1", {
+            method: "PATCH",
+            headers: {
+              "content-type": "text/plain",
+              "x-agentic-access-key": "test-access-key"
+            },
+            body: "not-json"
+          }),
+          { params: Promise.resolve({ id: "memory-1" }) }
+        )
+    ],
+    [
+      "watcher update",
+      () =>
+        watcherUpdateRoute(
+          new Request("http://localhost/api/watchers/watcher-1", {
+            method: "PATCH",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              "x-agentic-access-key": "test-access-key"
+            },
+            body: "action=pause"
+          }),
+          { params: Promise.resolve({ id: "watcher-1" }) }
+        )
+    ],
+    [
+      "autopilot settings",
+      () =>
+        autopilotSettingsRoute(
+          new Request("http://localhost/api/autopilot/settings", {
+            method: "POST",
+            headers: {
+              "content-type": "text/plain",
+              "x-agentic-access-key": "test-access-key"
+            },
+            body: "mode=notify_only"
+          })
+        )
+    ],
+    [
+      "autopilot events",
+      () =>
+        autopilotEventsRoute(
+          new Request("http://localhost/api/autopilot/events", {
+            method: "POST",
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              "x-agentic-access-key": "test-access-key"
+            },
+            body: "kind=watcher_triggered"
+          })
+        )
     ]
   ])("rejects non-json content types for %s requests", async (_label, invokeRoute) => {
     const response = await invokeRoute();
@@ -187,6 +391,40 @@ describe("api request validation", () => {
 
     expect(response.status).toBe(415);
     expect(payload.error).toBe("Content-Type must be application/json.");
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects invalid approval scopes", async () => {
+    const response = await approvalResponseRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/approvals/appr-1/respond", {
+        decision: "approved",
+        scope: "forever"
+      }),
+      {
+        params: Promise.resolve({ id: "appr-1" })
+      }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("Invalid option");
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects oversized approval rationales", async () => {
+    const response = await approvalResponseRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/approvals/appr-1/respond", {
+        decision: "approved",
+        rationale: "x".repeat(1001)
+      }),
+      {
+        params: Promise.resolve({ id: "appr-1" })
+      }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("1000");
     expectNoStoreHeaders(response);
   });
 

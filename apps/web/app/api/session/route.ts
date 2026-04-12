@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { AGENTIC_SESSION_COOKIE, clearSessionCookie, createSessionCookie, getAuthMode, revokeSessionToken, verifyAccessKey } from "../../../lib/auth";
+import { NextResponse } from "next/server";
+import { AGENTIC_SESSION_COOKIE, checkSessionRateLimit, clearSessionCookie, createSessionCookie, getAuthMode, recordSessionSuccess, revokeSessionToken, verifyAccessKey } from "../../../lib/auth";
 import { authenticatedError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
+import { requireJsonContentType } from "../../../lib/api-errors";
 import {
   clearFailedSessionUnlockAttempts,
   getSessionUnlockRateLimitStatus,
@@ -75,6 +77,7 @@ export async function POST(request: Request) {
     }
 
     clearFailedSessionUnlockAttempts(request);
+    recordSessionSuccess(rateLimitKey);
 
     const response = authenticatedJson({
       ok: true

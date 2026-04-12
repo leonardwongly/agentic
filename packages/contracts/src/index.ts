@@ -26,7 +26,39 @@ export const taskStateValues = [
 export const goalStatusValues = ["planned", "running", "waiting", "completed"] as const;
 export const memoryTypeValues = ["observed", "inferred", "confirmed"] as const;
 export const approvalDecisionValues = ["pending", "approved", "rejected"] as const;
+export const approvalActionTypeValues = ["send", "schedule", "create", "update", "delete", "draft", "artifact-only"] as const;
+export const approvalDecisionScopeValues = ["once", "similar_24h", "always_review"] as const;
 export const artifactTypeValues = ["summary", "brief", "checklist", "draft", "explanation"] as const;
+export const agentExecutionModeValues = [
+  "deterministic_scaffold",
+  "custom_prompt_scaffold",
+  "manual_review_required"
+] as const;
+export const commitmentStatusValues = [
+  "pending",
+  "needs-review",
+  "scheduled",
+  "blocked",
+  "completed",
+  "stale",
+  "dismissed"
+] as const;
+export const commitmentSourceKindValues = ["goal", "approval"] as const;
+export const commitmentUrgencyValues = ["immediate", "today", "soon", "later"] as const;
+export const commitmentSuggestedActionKindValues = [
+  "review_approval",
+  "continue_goal",
+  "resolve_blocker",
+  "review_source"
+] as const;
+export const briefingTypeValues = ["startup", "midday", "pre_meeting", "end_of_day", "next_day"] as const;
+export const briefingFocusValues = ["balanced", "urgent", "deep"] as const;
+export const autopilotModeValues = ["notify_only", "draft_goal", "auto_run"] as const;
+export const autopilotEventKindValues = ["watcher_triggered", "template_due", "briefing_due"] as const;
+export const autopilotEventStatusValues = ["pending", "simulated", "notified", "executed", "debounced", "ignored", "failed"] as const;
+export const evidenceRecordSourceKindValues = ["approval_response"] as const;
+export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
+export const workspaceApprovalModeValues = ["always_review", "risk_based"] as const;
 export const agentNameValues = [
   "communications",
   "calendar",
@@ -38,6 +70,8 @@ export const agentNameValues = [
   "finance-support",
   "orchestrator"
 ] as const;
+export const operatorProductStatusValues = ["active", "draft", "archived"] as const;
+export const operatorProductReadinessValues = ["ready", "recommended", "optional", "missing"] as const;
 
 export const CapabilitySchema = z.enum(capabilityValues);
 export const RiskClassSchema = z.enum(riskClassValues);
@@ -45,8 +79,36 @@ export const TaskStateSchema = z.enum(taskStateValues);
 export const GoalStatusSchema = z.enum(goalStatusValues);
 export const MemoryTypeSchema = z.enum(memoryTypeValues);
 export const ApprovalDecisionSchema = z.enum(approvalDecisionValues);
+export const ApprovalActionTypeSchema = z.enum(approvalActionTypeValues);
+export const ApprovalDecisionScopeSchema = z.enum(approvalDecisionScopeValues);
 export const ArtifactTypeSchema = z.enum(artifactTypeValues);
+export const AgentExecutionModeSchema = z.enum(agentExecutionModeValues);
+export const CommitmentStatusSchema = z.enum(commitmentStatusValues);
+export const CommitmentSourceKindSchema = z.enum(commitmentSourceKindValues);
+export const CommitmentUrgencySchema = z.enum(commitmentUrgencyValues);
+export const CommitmentSuggestedActionKindSchema = z.enum(commitmentSuggestedActionKindValues);
+export const BriefingTypeSchema = z.enum(briefingTypeValues);
+export const BriefingFocusSchema = z.enum(briefingFocusValues);
+export const AutopilotModeSchema = z.enum(autopilotModeValues);
+export const AutopilotEventKindSchema = z.enum(autopilotEventKindValues);
+export const AutopilotEventStatusSchema = z.enum(autopilotEventStatusValues);
+export const EvidenceRecordSourceKindSchema = z.enum(evidenceRecordSourceKindValues);
+export const WorkspaceRoleSchema = z.enum(workspaceRoleValues);
+export const WorkspaceApprovalModeSchema = z.enum(workspaceApprovalModeValues);
 export const AgentNameSchema = z.enum(agentNameValues);
+export const OperatorProductStatusSchema = z.enum(operatorProductStatusValues);
+export const OperatorProductReadinessSchema = z.enum(operatorProductReadinessValues);
+
+const TimeOfDaySchema = z
+  .string()
+  .regex(/^\d{2}:\d{2}$/, "Time must be in HH:MM format.")
+  .refine(
+    (value) => {
+      const [hours, minutes] = value.split(":").map(Number);
+      return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+    },
+    { message: "Time must be a valid HH:MM value." }
+  );
 
 export const ToolInvocationSchema = z.object({
   adapterKey: z.string().min(1),
@@ -70,6 +132,7 @@ export const AgentResultSchema = z.object({
   agent: AgentNameSchema,
   summary: z.string().min(1),
   confidence: z.number().min(0).max(1),
+  executionMode: AgentExecutionModeSchema,
   artifacts: z.array(ArtifactSchema).default([]),
   proposedToolCalls: z.array(ToolInvocationSchema).default([]),
   nextSteps: z.array(z.string()).default([]),
@@ -79,6 +142,7 @@ export const AgentResultSchema = z.object({
 export const WorkflowStateSchema = z.object({
   id: z.string().min(1),
   goalId: z.string().min(1),
+  workspaceId: z.string().min(1).nullable().default(null),
   status: z.string().min(1),
   currentStep: z.string().min(1),
   checkpoint: z.string().nullable().default(null),
@@ -89,6 +153,7 @@ export const WorkflowStateSchema = z.object({
 export const GoalSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
+  workspaceId: z.string().min(1).nullable().default(null),
   workflowId: z.string().min(1),
   title: z.string().min(1),
   request: z.string().min(1),
@@ -146,6 +211,117 @@ export const PolicyDecisionSchema = z.object({
 
 export const APPROVAL_EXPIRY_MS = 48 * 60 * 60 * 1000; // 48 hours
 
+export const ApprovalPreviewChangeSchema = z.object({
+  label: z.string().min(1),
+  before: z.string().min(1),
+  after: z.string().min(1)
+});
+
+export const ApprovalImpactSchema = z.object({
+  affectedPeople: z.array(z.string()).default([]),
+  affectedSystems: z.array(z.string()).default([]),
+  permissions: z.array(CapabilitySchema).default([]),
+  rollback: z.enum(["supported", "manual", "not_supported"]).default("manual")
+});
+
+export const ApprovalPreviewSchema = z.object({
+  actionType: ApprovalActionTypeSchema,
+  summary: z.string().min(1),
+  target: z.string().min(1),
+  changes: z.array(ApprovalPreviewChangeSchema).default([]),
+  impact: ApprovalImpactSchema.default({
+    affectedPeople: [],
+    affectedSystems: [],
+    permissions: [],
+    rollback: "manual"
+  })
+});
+
+const ActionIntentEmailSchema = z.string().trim().email().max(320);
+
+export const SendMessageActionIntentSchema = z
+  .object({
+    type: z.literal("send_message"),
+    adapter: z.literal("gmail").default("gmail"),
+    to: ActionIntentEmailSchema,
+    subject: z.string().trim().min(1).max(240),
+    body: z.string().min(1).max(20_000),
+    threadId: z.string().trim().min(1).max(200).nullable().default(null),
+    mode: z.enum(["draft", "send"]).default("draft")
+  })
+  .strict();
+
+export const ScheduleEventActionIntentSchema = z
+  .object({
+    type: z.literal("schedule_event"),
+    adapter: z.literal("calendar").default("calendar"),
+    summary: z.string().trim().min(1).max(240),
+    start: z.string().datetime(),
+    end: z.string().datetime(),
+    description: z.string().max(10_000).nullable().default(null),
+    attendees: z.array(ActionIntentEmailSchema).max(50).default([])
+  })
+  .strict()
+  .refine((value) => new Date(value.start).getTime() < new Date(value.end).getTime(), {
+    message: "Schedule event intents require an end time after the start time.",
+    path: ["end"]
+  });
+
+export const CreateNoteActionIntentSchema = z
+  .object({
+    type: z.literal("create_note"),
+    adapter: z.literal("notes").default("notes"),
+    title: z.string().trim().min(1).max(240),
+    content: z.string().min(1).max(20_000)
+  })
+  .strict();
+
+export const ManualReviewActionIntentSchema = z
+  .object({
+    type: z.literal("manual_review"),
+    actionType: ApprovalActionTypeSchema,
+    summary: z.string().min(1).max(500),
+    reason: z.string().min(1).max(1_000),
+    artifactIds: z.array(z.string().min(1)).max(20).default([])
+  })
+  .strict();
+
+export const ActionIntentSchema = z.union([
+  SendMessageActionIntentSchema,
+  ScheduleEventActionIntentSchema,
+  CreateNoteActionIntentSchema,
+  ManualReviewActionIntentSchema
+]);
+
+export const ApprovalDecisionRecordSchema = z.object({
+  decision: ApprovalDecisionSchema.exclude(["pending"]),
+  scope: ApprovalDecisionScopeSchema,
+  rationale: z.string().max(1000).nullable().default(null),
+  actor: z.string().min(1),
+  createdAt: z.string().datetime()
+});
+
+export const ApprovalExplanationEvidenceSchema = z.object({
+  actionLogCount: z.number().int().min(0).default(0),
+  artifactCount: z.number().int().min(0).default(0),
+  memoryCount: z.number().int().min(0).default(0),
+  updatedAt: z.string().datetime().nullable().default(null)
+});
+
+export const ApprovalExplanationSchema = z.object({
+  requestReason: z.string().min(1).max(1000),
+  impactSummary: z.string().min(1).max(1000),
+  decisionSummary: z.string().min(1).max(1000).nullable().default(null),
+  outcomeSummary: z.string().min(1).max(1000).nullable().default(null),
+  evidenceSummary: z.string().min(1).max(1000).nullable().default(null),
+  evidence: ApprovalExplanationEvidenceSchema.default({
+    actionLogCount: 0,
+    artifactCount: 0,
+    memoryCount: 0,
+    updatedAt: null
+  })
+});
+
 export const ApprovalRequestSchema = z.object({
   id: z.string().min(1),
   goalId: z.string().min(1),
@@ -155,9 +331,242 @@ export const ApprovalRequestSchema = z.object({
   riskClass: RiskClassSchema,
   decision: ApprovalDecisionSchema,
   requestedAction: z.string().min(1),
+  actionIntent: ActionIntentSchema.nullable().default(null),
+  preview: ApprovalPreviewSchema.default({
+    actionType: "artifact-only",
+    summary: "Approval requested before execution.",
+    target: "Pending action",
+    changes: [],
+    impact: {
+      affectedPeople: [],
+      affectedSystems: [],
+      permissions: [],
+      rollback: "manual"
+    }
+  }),
+  decisionScope: ApprovalDecisionScopeSchema.nullable().default(null),
+  decisionRationale: z.string().max(1000).nullable().default(null),
+  history: z.array(ApprovalDecisionRecordSchema).default([]),
+  explanation: ApprovalExplanationSchema.nullable().default(null),
   createdAt: z.string().datetime(),
   expiryAt: z.string().datetime(),
   respondedAt: z.string().datetime().nullable().default(null)
+});
+
+export const CommitmentEvidenceSchema = z.object({
+  section: z.enum(["goals", "approvals"]),
+  itemId: z.string().min(1),
+  label: z.string().min(1)
+});
+
+export const CommitmentSuggestedActionSchema = z.object({
+  kind: CommitmentSuggestedActionKindSchema,
+  label: z.string().min(1).max(120),
+  section: z.enum(["goals", "approvals"]),
+  itemId: z.string().min(1)
+});
+
+export const CommitmentSchema = z.object({
+  id: z.string().min(1),
+  userId: z.string().min(1),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  status: CommitmentStatusSchema,
+  sourceKind: CommitmentSourceKindSchema,
+  sourceId: z.string().min(1),
+  goalId: z.string().min(1).nullable().default(null),
+  approvalId: z.string().min(1).nullable().default(null),
+  dueAt: z.string().datetime().nullable().default(null),
+  urgency: CommitmentUrgencySchema.default("later"),
+  riskClass: RiskClassSchema.nullable().default(null),
+  confidence: z.number().min(0).max(1),
+  provenanceSummary: z.string().min(1).max(280).default("Captured commitment."),
+  suggestedNextAction: CommitmentSuggestedActionSchema.nullable().default(null),
+  evidence: z.array(CommitmentEvidenceSchema).min(1),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const commitmentInboxBucketValues = [
+  "all",
+  "unresolved",
+  "urgent",
+  "due_soon",
+  "waiting_on_others",
+  "low_confidence",
+  "completed"
+] as const;
+
+export const CommitmentInboxBucketSchema = z.enum(commitmentInboxBucketValues);
+
+export const DEFAULT_COMMITMENT_INBOX_BUCKET = "unresolved" as const;
+export const DEFAULT_COMMITMENT_INBOX_LIMIT = 8;
+export const MAX_COMMITMENT_INBOX_LIMIT = 50;
+
+export const CommitmentInboxPageSchema = z.object({
+  bucket: CommitmentInboxBucketSchema,
+  items: z.array(CommitmentSchema),
+  counts: z.record(CommitmentInboxBucketSchema, z.number().int().min(0)),
+  totalCount: z.number().int().min(0),
+  limit: z.number().int().min(1).max(MAX_COMMITMENT_INBOX_LIMIT),
+  nextCursor: z.string().min(1).nullable(),
+  generatedAt: z.string().datetime()
+});
+
+export const NowQueueItemSchema = z.object({
+  commitmentId: z.string().min(1),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  status: CommitmentStatusSchema,
+  urgency: CommitmentUrgencySchema,
+  riskClass: RiskClassSchema.nullable().default(null),
+  confidence: z.number().min(0).max(1),
+  dueAt: z.string().datetime().nullable().default(null),
+  reasons: z.array(z.string().min(1)).default([]),
+  suggestedNextAction: CommitmentSuggestedActionSchema.nullable().default(null)
+});
+
+export const NowQueueSchema = z.object({
+  generatedAt: z.string().datetime(),
+  totalCount: z.number().int().min(0),
+  items: z.array(NowQueueItemSchema)
+});
+
+export const dashboardOperatingSectionKeyValues = ["now", "automation", "execution", "trust", "build"] as const;
+export const dashboardOperatingSectionStatusValues = ["healthy", "attention", "critical", "idle"] as const;
+
+export const DashboardOperatingSectionKeySchema = z.enum(dashboardOperatingSectionKeyValues);
+export const DashboardOperatingSectionStatusSchema = z.enum(dashboardOperatingSectionStatusValues);
+
+export const DashboardOperatingSectionSchema = z.object({
+  key: DashboardOperatingSectionKeySchema,
+  title: z.string().min(1),
+  description: z.string().min(1),
+  status: DashboardOperatingSectionStatusSchema,
+  targetSection: z.string().min(1),
+  targetItemId: z.string().min(1).optional(),
+  metrics: z.array(z.string().min(1)).default([]),
+  highlights: z.array(z.string().min(1)).default([])
+});
+
+export const DashboardOperatingSectionsSchema = z.object({
+  generatedAt: z.string().datetime(),
+  sections: z.array(DashboardOperatingSectionSchema).default([])
+});
+
+export const WorkspaceSchema = z.object({
+  id: z.string().min(1),
+  ownerUserId: z.string().min(1),
+  slug: z.string().min(1).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  name: z.string().min(1).max(120),
+  description: z.string().max(500).default(""),
+  isPersonal: z.boolean().default(false),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const WorkspaceMemberSchema = z.object({
+  id: z.string().min(1),
+  workspaceId: z.string().min(1),
+  userId: z.string().min(1),
+  role: WorkspaceRoleSchema,
+  joinedAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const WorkspaceSelectionSchema = z.object({
+  userId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  selectedAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const WorkspaceGovernanceSchema = z.object({
+  workspaceId: z.string().min(1),
+  approvalMode: WorkspaceApprovalModeSchema,
+  requireAuditExports: z.boolean().default(false),
+  maxAutoRunRiskClass: RiskClassSchema.default("R1"),
+  externalSendRequiresApproval: z.boolean().default(true),
+  calendarWriteRequiresApproval: z.boolean().default(true),
+  retentionDays: z.number().int().min(7).max(3650).default(365),
+  updatedBy: z.string().min(1),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const BriefingScheduleEntrySchema = z.object({
+  type: BriefingTypeSchema,
+  enabled: z.boolean(),
+  time: TimeOfDaySchema
+});
+
+export const BriefingPreferencesSchema = z.object({
+  userId: z.string().min(1),
+  timezone: z.string().min(1),
+  focus: BriefingFocusSchema,
+  schedules: z.array(BriefingScheduleEntrySchema).length(briefingTypeValues.length),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+}).superRefine((value, context) => {
+  const seen = new Set<string>();
+
+  for (const schedule of value.schedules) {
+    if (seen.has(schedule.type)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["schedules"],
+        message: `Duplicate briefing schedule for "${schedule.type}".`
+      });
+    }
+
+    seen.add(schedule.type);
+  }
+
+  for (const type of briefingTypeValues) {
+    if (!seen.has(type)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["schedules"],
+        message: `Missing briefing schedule for "${type}".`
+      });
+    }
+  }
+});
+
+export const BriefingHistoryItemSchema = z.object({
+  goalId: z.string().min(1),
+  type: BriefingTypeSchema,
+  title: z.string().min(1),
+  status: GoalStatusSchema,
+  summary: z.string().min(1),
+  generatedAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  artifactId: z.string().min(1).nullable().default(null),
+  artifactTitle: z.string().min(1).nullable().default(null)
+});
+
+export const AutopilotSettingsSchema = z.object({
+  userId: z.string().min(1),
+  mode: AutopilotModeSchema,
+  debounceMinutes: z.number().int().min(1).max(24 * 60),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const AutopilotEventSchema = z.object({
+  id: z.string().min(1),
+  userId: z.string().min(1),
+  kind: AutopilotEventKindSchema,
+  sourceId: z.string().min(1),
+  idempotencyKey: z.string().min(1).max(200).nullable().default(null),
+  mode: AutopilotModeSchema,
+  summary: z.string().min(1).max(500),
+  status: AutopilotEventStatusSchema,
+  details: z.record(z.string(), z.unknown()).default({}),
+  createdAt: z.string().datetime(),
+  processedAt: z.string().datetime().nullable().default(null),
+  resultGoalId: z.string().min(1).nullable().default(null),
+  error: z.string().max(1000).nullable().default(null)
 });
 
 export const watcherFrequencyValues = ["realtime", "5min", "15min", "hourly", "daily"] as const;
@@ -188,6 +597,32 @@ export const ActionLogSchema = z.object({
   details: z.record(z.string(), z.unknown()).default({}),
   createdAt: z.string().datetime(),
   prevHash: z.string().nullable().default(null)
+});
+
+export const EvidenceRecordSchema = z.object({
+  id: z.string().min(1),
+  userId: z.string().min(1),
+  goalId: z.string().min(1),
+  taskId: z.string().min(1),
+  approvalId: z.string().min(1),
+  sourceKind: EvidenceRecordSourceKindSchema,
+  sourceId: z.string().min(1),
+  sourceSummary: z.string().min(1).max(280),
+  riskClass: RiskClassSchema,
+  requestedAction: z.string().min(1),
+  requestRationale: z.string().min(1),
+  requiresApproval: z.literal(true),
+  decision: ApprovalDecisionSchema.exclude(["pending"]),
+  decisionScope: ApprovalDecisionScopeSchema,
+  decisionRationale: z.string().max(1000).nullable().default(null),
+  respondedAt: z.string().datetime(),
+  resultingTaskState: TaskStateSchema,
+  resultingGoalStatus: GoalStatusSchema,
+  actionLogIds: z.array(z.string().min(1)).default([]),
+  artifactIds: z.array(z.string().min(1)).default([]),
+  memoryIds: z.array(z.string().min(1)).default([]),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
 });
 
 export const IntegrationAccountSchema = z.object({
@@ -230,6 +665,53 @@ export const GoalTemplateSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
+
+export const WorkflowCanvasNodeSchema = z.object({
+  id: z.string().min(1).max(200),
+  type: z.enum(["agent", "trigger", "condition", "action", "output"]),
+  agentId: z.string().min(1).max(200).optional(),
+  label: z.string().min(1).max(200),
+  icon: z.string().min(1).max(50),
+  position: z.object({
+    x: z.number().finite(),
+    y: z.number().finite()
+  }),
+  config: z.record(z.string().min(1).max(100), z.unknown()).default({})
+});
+
+export const WorkflowCanvasEdgeSchema = z.object({
+  id: z.string().min(1).max(200),
+  source: z.string().min(1).max(200),
+  target: z.string().min(1).max(200),
+  label: z.string().max(200).optional(),
+  condition: z.string().max(500).optional()
+});
+
+export const WorkflowCanvasTriggerSchema = z.object({
+  type: z.string().min(1).max(100),
+  config: z.record(z.string().min(1).max(100), z.unknown()).default({})
+});
+
+export const WorkflowCanvasTemplateSchema = z.object({
+  id: z.string().min(1),
+  userId: z.string().min(1),
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).default(""),
+  nodes: z.array(WorkflowCanvasNodeSchema).max(100).default([]),
+  edges: z.array(WorkflowCanvasEdgeSchema).max(200).default([]),
+  triggers: z.array(WorkflowCanvasTriggerSchema).max(50).default([]),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const WorkflowCanvasTemplateCreateSchema = WorkflowCanvasTemplateSchema.omit({
+  id: true,
+  userId: true,
+  createdAt: true,
+  updatedAt: true
+}).strict();
+
+export const WorkflowCanvasTemplateUpdateSchema = WorkflowCanvasTemplateCreateSchema.partial().strict();
 
 // ============================================================================
 // AGENT MANAGEMENT SCHEMAS
@@ -385,12 +867,63 @@ export const AgentMetricsSchema = z.object({
 
   // User feedback
   feedbackCount: z.number().int().min(0).default(0),
+  userCorrectionCount: z.number().int().min(0).default(0),
+  postApprovalFailureCount: z.number().int().min(0).default(0),
   averageRating: z.number().min(0).max(10).nullable().default(null),
 
   // Computed at aggregation
   successRate: z.number().min(0).max(1).default(0),
   approvalRate: z.number().min(0).max(1).default(0),
+  correctionRate: z.number().min(0).max(1).default(0),
+  postApprovalFailureRate: z.number().min(0).max(1).default(0),
 
+  updatedAt: z.string().datetime()
+});
+
+export const OperatorProductKpiSchema = z.object({
+  id: z.string().min(1).max(100),
+  label: z.string().min(1).max(120),
+  description: z.string().max(300).default(""),
+  metric: z.string().min(1).max(120)
+});
+
+export const OperatorProductOnboardingStepSchema = z.object({
+  id: z.string().min(1).max(100),
+  title: z.string().min(1).max(120),
+  description: z.string().max(300).default(""),
+  actionLabel: z.string().min(1).max(80).nullable().default(null)
+});
+
+export const OperatorProductIntegrationRequirementSchema = z.object({
+  system: z.string().min(1).max(100),
+  label: z.string().min(1).max(120),
+  readiness: OperatorProductReadinessSchema,
+  description: z.string().max(300).default("")
+});
+
+export const OperatorProductSchema = z.object({
+  id: z.string().min(1),
+  userId: z.string().min(1),
+  slug: z.string().min(1).max(100).regex(/^[a-z][a-z0-9-]*$/),
+  name: z.string().min(1).max(120),
+  tagline: z.string().min(1).max(200),
+  description: z.string().min(1).max(1000),
+  icon: z.string().max(50).default("📦"),
+  recommendedAgentIds: z.array(z.string().min(1)).max(20).default([]),
+  recommendedTemplateIds: z.array(z.string().min(1)).max(20).default([]),
+  recommendedIntegrations: z.array(OperatorProductIntegrationRequirementSchema).max(20).default([]),
+  kpis: z.array(OperatorProductKpiSchema).max(10).default([]),
+  onboardingSteps: z.array(OperatorProductOnboardingStepSchema).max(10).default([]),
+  isBuiltIn: z.boolean().default(false),
+  status: OperatorProductStatusSchema.default("active"),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const OperatorProductSelectionSchema = z.object({
+  userId: z.string().min(1),
+  operatorProductId: z.string().min(1),
+  selectedAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
 
@@ -609,7 +1142,21 @@ export type TaskState = z.infer<typeof TaskStateSchema>;
 export type GoalStatus = z.infer<typeof GoalStatusSchema>;
 export type MemoryType = z.infer<typeof MemoryTypeSchema>;
 export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
+export type ApprovalActionType = z.infer<typeof ApprovalActionTypeSchema>;
+export type ApprovalDecisionScope = z.infer<typeof ApprovalDecisionScopeSchema>;
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>;
+export type AgentExecutionMode = z.infer<typeof AgentExecutionModeSchema>;
+export type CommitmentStatus = z.infer<typeof CommitmentStatusSchema>;
+export type CommitmentSourceKind = z.infer<typeof CommitmentSourceKindSchema>;
+export type CommitmentUrgency = z.infer<typeof CommitmentUrgencySchema>;
+export type BriefingType = z.infer<typeof BriefingTypeSchema>;
+export type BriefingFocus = z.infer<typeof BriefingFocusSchema>;
+export type AutopilotMode = z.infer<typeof AutopilotModeSchema>;
+export type AutopilotEventKind = z.infer<typeof AutopilotEventKindSchema>;
+export type AutopilotEventStatus = z.infer<typeof AutopilotEventStatusSchema>;
+export type EvidenceRecordSourceKind = z.infer<typeof EvidenceRecordSourceKindSchema>;
+export type WorkspaceRole = z.infer<typeof WorkspaceRoleSchema>;
+export type WorkspaceApprovalMode = z.infer<typeof WorkspaceApprovalModeSchema>;
 export type AgentName = z.infer<typeof AgentNameSchema>;
 export type ToolInvocation = z.infer<typeof ToolInvocationSchema>;
 export type Artifact = z.infer<typeof ArtifactSchema>;
@@ -619,13 +1166,49 @@ export type Goal = z.infer<typeof GoalSchema>;
 export type Task = z.infer<typeof TaskSchema>;
 export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
 export type PolicyDecision = z.infer<typeof PolicyDecisionSchema>;
+export type ApprovalPreviewChange = z.infer<typeof ApprovalPreviewChangeSchema>;
+export type ApprovalImpact = z.infer<typeof ApprovalImpactSchema>;
+export type ApprovalPreview = z.infer<typeof ApprovalPreviewSchema>;
+export type SendMessageActionIntent = z.infer<typeof SendMessageActionIntentSchema>;
+export type ScheduleEventActionIntent = z.infer<typeof ScheduleEventActionIntentSchema>;
+export type CreateNoteActionIntent = z.infer<typeof CreateNoteActionIntentSchema>;
+export type ManualReviewActionIntent = z.infer<typeof ManualReviewActionIntentSchema>;
+export type ActionIntent = z.infer<typeof ActionIntentSchema>;
+export type ApprovalDecisionRecord = z.infer<typeof ApprovalDecisionRecordSchema>;
+export type ApprovalExplanationEvidence = z.infer<typeof ApprovalExplanationEvidenceSchema>;
+export type ApprovalExplanation = z.infer<typeof ApprovalExplanationSchema>;
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
+export type CommitmentEvidence = z.infer<typeof CommitmentEvidenceSchema>;
+export type CommitmentSuggestedAction = z.infer<typeof CommitmentSuggestedActionSchema>;
+export type Commitment = z.infer<typeof CommitmentSchema>;
+export type CommitmentInboxBucket = z.infer<typeof CommitmentInboxBucketSchema>;
+export type CommitmentInboxPage = z.infer<typeof CommitmentInboxPageSchema>;
+export type NowQueueItem = z.infer<typeof NowQueueItemSchema>;
+export type NowQueue = z.infer<typeof NowQueueSchema>;
+export type DashboardOperatingSectionKey = z.infer<typeof DashboardOperatingSectionKeySchema>;
+export type DashboardOperatingSectionStatus = z.infer<typeof DashboardOperatingSectionStatusSchema>;
+export type DashboardOperatingSection = z.infer<typeof DashboardOperatingSectionSchema>;
+export type DashboardOperatingSections = z.infer<typeof DashboardOperatingSectionsSchema>;
+export type Workspace = z.infer<typeof WorkspaceSchema>;
+export type WorkspaceMember = z.infer<typeof WorkspaceMemberSchema>;
+export type WorkspaceSelection = z.infer<typeof WorkspaceSelectionSchema>;
+export type WorkspaceGovernance = z.infer<typeof WorkspaceGovernanceSchema>;
+export type BriefingScheduleEntry = z.infer<typeof BriefingScheduleEntrySchema>;
+export type BriefingPreferences = z.infer<typeof BriefingPreferencesSchema>;
+export type BriefingHistoryItem = z.infer<typeof BriefingHistoryItemSchema>;
+export type AutopilotSettings = z.infer<typeof AutopilotSettingsSchema>;
+export type AutopilotEvent = z.infer<typeof AutopilotEventSchema>;
 export type WatcherFrequency = z.infer<typeof WatcherFrequencySchema>;
 export type Watcher = z.infer<typeof WatcherSchema>;
 export type ActionLog = z.infer<typeof ActionLogSchema>;
+export type EvidenceRecord = z.infer<typeof EvidenceRecordSchema>;
 export type IntegrationAccount = z.infer<typeof IntegrationAccountSchema>;
 export type GoalBundle = z.infer<typeof GoalBundleSchema>;
 export type GoalTemplate = z.infer<typeof GoalTemplateSchema>;
+export type WorkflowCanvasNode = z.infer<typeof WorkflowCanvasNodeSchema>;
+export type WorkflowCanvasEdge = z.infer<typeof WorkflowCanvasEdgeSchema>;
+export type WorkflowCanvasTrigger = z.infer<typeof WorkflowCanvasTriggerSchema>;
+export type WorkflowCanvasTemplate = z.infer<typeof WorkflowCanvasTemplateSchema>;
 
 // Agent Management Types
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
@@ -637,6 +1220,13 @@ export type PromptVariable = z.infer<typeof PromptVariableSchema>;
 export type AgentBehaviorConfig = z.infer<typeof AgentBehaviorConfigSchema>;
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
 export type AgentMetrics = z.infer<typeof AgentMetricsSchema>;
+export type OperatorProductStatus = z.infer<typeof OperatorProductStatusSchema>;
+export type OperatorProductReadiness = z.infer<typeof OperatorProductReadinessSchema>;
+export type OperatorProductKpi = z.infer<typeof OperatorProductKpiSchema>;
+export type OperatorProductOnboardingStep = z.infer<typeof OperatorProductOnboardingStepSchema>;
+export type OperatorProductIntegrationRequirement = z.infer<typeof OperatorProductIntegrationRequirementSchema>;
+export type OperatorProduct = z.infer<typeof OperatorProductSchema>;
+export type OperatorProductSelection = z.infer<typeof OperatorProductSelectionSchema>;
 export type AgentActivityEventKind = z.infer<typeof AgentActivityEventKindSchema>;
 export type AgentActivityEvent = z.infer<typeof AgentActivityEventSchema>;
 export type AgentRuntimeState = z.infer<typeof AgentRuntimeStateSchema>;
@@ -660,4 +1250,3 @@ export function nowIso(): string {
 export function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
-

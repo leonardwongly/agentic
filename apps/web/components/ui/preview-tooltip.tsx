@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ApprovalRequest } from "@agentic/contracts";
 
 type PreviewTooltipProps = {
   children: React.ReactNode;
@@ -204,13 +205,7 @@ export function AgentPreview({ agent, children }: AgentPreviewProps) {
 }
 
 type ApprovalPreviewProps = {
-  approval: {
-    id: string;
-    title: string;
-    rationale: string;
-    riskClass: string;
-    createdAt: string;
-  };
+  approval: ApprovalRequest;
   children: React.ReactNode;
 };
 
@@ -221,6 +216,11 @@ export function ApprovalPreview({ approval, children }: ApprovalPreviewProps) {
     R3: "warning",
     R4: "error"
   };
+  const latestDecision = approval.history.at(-1) ?? null;
+  const hasImpact =
+    approval.preview.impact.affectedPeople.length > 0 ||
+    approval.preview.impact.affectedSystems.length > 0 ||
+    approval.preview.impact.permissions.length > 0;
 
   return (
     <PreviewTooltip
@@ -234,10 +234,51 @@ export function ApprovalPreview({ approval, children }: ApprovalPreviewProps) {
           </div>
           <p className="approval-preview-rationale">{approval.rationale}</p>
           <div className="approval-preview-meta">
-            <span>{new Date(approval.createdAt).toLocaleString()}</span>
+            <span className="preview-badge">{approval.preview.actionType}</span>
+            {approval.preview.target ? <span>{approval.preview.target}</span> : null}
           </div>
+          <p className="approval-preview-rationale">{approval.preview.summary}</p>
+          {approval.preview.changes.length > 0 ? (
+            <div className="approval-preview-changes">
+              {approval.preview.changes.slice(0, 3).map((change) => (
+                <div className="approval-preview-change" key={`${change.label}-${change.after}-${change.before}`}>
+                  <strong>{change.label}:</strong> <span>{change.after || change.before}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {hasImpact ? (
+            <div className="approval-preview-impact">
+              {approval.preview.impact.affectedPeople.length > 0 ? (
+                <p>People: {approval.preview.impact.affectedPeople.join(", ")}</p>
+              ) : null}
+              {approval.preview.impact.affectedSystems.length > 0 ? (
+                <p>Systems: {approval.preview.impact.affectedSystems.join(", ")}</p>
+              ) : null}
+              {approval.preview.impact.permissions.length > 0 ? (
+                <p>Permissions: {approval.preview.impact.permissions.join(", ")}</p>
+              ) : null}
+              <p>Rollback: {approval.preview.impact.rollback.replace(/_/g, " ")}</p>
+            </div>
+          ) : null}
+          <div className="approval-preview-meta">
+            <span>{new Date(approval.createdAt).toLocaleString()}</span>
+            {approval.decisionScope ? <span>Scope: {approval.decisionScope.replace(/_/g, " ")}</span> : null}
+          </div>
+          {approval.decisionRationale ? (
+            <p className="approval-preview-rationale">Decision note: {approval.decisionRationale}</p>
+          ) : null}
+          {latestDecision ? (
+            <div className="approval-preview-history">
+              <p>
+                Last decision: {latestDecision.decision} · {latestDecision.scope.replace(/_/g, " ")}
+              </p>
+              {latestDecision.rationale ? <p>{latestDecision.rationale}</p> : null}
+            </div>
+          ) : null}
         </div>
       }
+      maxWidth={440}
     >
       {children}
     </PreviewTooltip>

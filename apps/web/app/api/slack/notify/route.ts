@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { isSlackReady, sendApprovalMessage } from "@agentic/integrations";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import { buildSlackApprovalToken } from "../../../../lib/slack-approvals";
 import { getSeededRepository } from "../../../../lib/server";
 
 const DEFAULT_SLACK_CHANNEL = process.env.SLACK_DEFAULT_CHANNEL ?? "#approvals";
@@ -22,7 +22,7 @@ const NotifyBodySchema = z
  */
 export async function POST(request: Request) {
   try {
-    await requireApiSession(request);
+    const principal = await requireApiSession(request);
 
     if (!isSlackReady()) {
       throw new ApiRouteError(503, "Slack integration is not configured. Set SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET.");
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
 
     const body = await parseJsonBody(request, NotifyBodySchema);
     const repository = await getSeededRepository();
-    const goals = await repository.listGoals(SYSTEM_USER_ID);
+    const goals = await repository.listGoals(principal.userId);
 
     const bundle = goals.find((candidate) =>
       candidate.approvals.some((approval) => approval.id === body.approvalId)
@@ -47,6 +47,12 @@ export async function POST(request: Request) {
 
     const task = bundle.tasks.find((t) => t.id === approval.taskId);
     const channel = body.channel ?? DEFAULT_SLACK_CHANNEL;
+    const actionValue = buildSlackApprovalToken({
+      approvalId: approval.id,
+      goalId: bundle.goal.id,
+      workspaceId: bundle.goal.workspaceId,
+      expiresAt: approval.expiryAt
+    });
 
     const result = await sendApprovalMessage({
       channel,
@@ -55,7 +61,8 @@ export async function POST(request: Request) {
         title: task?.title ?? bundle.goal.title ?? "Untitled approval",
         rationale: approval.rationale ?? "No rationale provided.",
         riskClass: task?.riskClass ?? "R1",
-        requestedAction: task?.title ?? "Unknown action"
+        requestedAction: task?.title ?? "Unknown action",
+        actionValue
       }
     });
 

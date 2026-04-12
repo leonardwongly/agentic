@@ -83,7 +83,23 @@ describe("goal share helpers", () => {
               riskClass: "R2" as const,
               decision: "pending" as const,
               requestedAction: "Do not expose this approval",
+              preview: {
+                actionType: "artifact-only" as const,
+                target: "Internal review artifact",
+                summary: "Review the private approval artifact internally.",
+                changes: [],
+                impact: {
+                  affectedPeople: [],
+                  affectedSystems: ["workspace"],
+                  permissions: [],
+                  rollback: "supported"
+                }
+              },
+              decisionScope: null,
+              decisionRationale: null,
+              history: [],
               createdAt: "2026-04-02T00:00:00.000Z",
+              expiryAt: null,
               respondedAt: null
             }
           ];

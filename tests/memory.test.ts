@@ -1,4 +1,4 @@
-import { createMemoryRecord, rankRelevantMemories } from "@agentic/memory";
+import { createMemoryRecord, getMemoryFreshness, rankRelevantMemories } from "@agentic/memory";
 
 describe("memory ranking", () => {
   const fixedNow = Date.parse("2026-04-01T00:00:00.000Z");
@@ -95,5 +95,77 @@ describe("memory ranking", () => {
 
     expect(ranked).toHaveLength(1);
     expect(ranked[0]?.content).toContain("Travel checklist");
+  });
+
+  it("classifies memory freshness explicitly", () => {
+    const fresh = createMemoryRecord({
+      userId: "user-primary",
+      category: "travel",
+      memoryType: "confirmed",
+      content: "Fresh travel preference.",
+      confidence: 0.9,
+      source: "test"
+    });
+    const reviewDue = createMemoryRecord({
+      userId: "user-primary",
+      category: "travel",
+      memoryType: "confirmed",
+      content: "Needs review.",
+      confidence: 0.92,
+      source: "test",
+      reviewAt: "2026-03-31T23:59:59.000Z"
+    });
+    const lowConfidence = createMemoryRecord({
+      userId: "user-primary",
+      category: "travel",
+      memoryType: "inferred",
+      content: "Maybe prefers red-eye flights.",
+      confidence: 0.45,
+      source: "test"
+    });
+    const expired = createMemoryRecord({
+      userId: "user-primary",
+      category: "travel",
+      memoryType: "confirmed",
+      content: "Expired note.",
+      confidence: 0.98,
+      source: "test",
+      expiryAt: "2026-03-31T23:59:59.000Z"
+    });
+
+    expect(getMemoryFreshness(fresh, fixedNow)).toBe("fresh");
+    expect(getMemoryFreshness(reviewDue, fixedNow)).toBe("review_due");
+    expect(getMemoryFreshness(lowConfidence, fixedNow)).toBe("low_confidence");
+    expect(getMemoryFreshness(expired, fixedNow)).toBe("expired");
+  });
+
+  it("deprioritizes low-confidence memories when fresher evidence exists", () => {
+    const ranked = rankRelevantMemories(
+      "travel seat preference",
+      [
+        createMemoryRecord({
+          userId: "user-primary",
+          category: "travel",
+          memoryType: "inferred",
+          content: "Seat preference might be aisle.",
+          confidence: 0.42,
+          source: "test"
+        }),
+        createMemoryRecord({
+          userId: "user-primary",
+          category: "travel",
+          memoryType: "confirmed",
+          content: "Seat preference is aisle.",
+          confidence: 0.93,
+          source: "test"
+        })
+      ],
+      2,
+      {
+        now: fixedNow
+      }
+    );
+
+    expect(ranked[0]?.memoryType).toBe("confirmed");
   });
 });

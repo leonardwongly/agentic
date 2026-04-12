@@ -1,11 +1,17 @@
 import { nowIso, type GoalBundle, type MemoryRecord, type Task } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
 import { type EpisodeRecord, EpisodeRecordSchema } from "@agentic/self-improvement-memory";
+import type { ExecutionResult } from "./execution-dispatch";
 
 export type CapturedMemories = {
   memories: MemoryRecord[];
   episodes: EpisodeRecord[];
 };
+
+function summarizeExecutionDetail(detail: string): string {
+  const normalized = detail.trim().replace(/\s+/g, " ");
+  return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
+}
 
 function taskOutcome(task: Task): "success" | "partial" | "failure" {
   if (task.state === "completed") return "success";
@@ -67,9 +73,11 @@ function extractPreferenceSignals(bundle: GoalBundle, userId: string): MemoryRec
     const task = bundle.tasks.find((t) => t.id === approval.taskId);
     if (!task) continue;
 
+    const scopeClause = approval.decisionScope ? ` Scope: ${approval.decisionScope}.` : "";
+    const rationaleClause = approval.decisionRationale ? ` User rationale: ${approval.decisionRationale}.` : "";
     const content = approval.decision === "approved"
-      ? `User approved "${task.title}" (${task.riskClass}) — indicates comfort with this action type in similar contexts.`
-      : `User rejected "${task.title}" (${task.riskClass}) — indicates this action type needs different handling or shouldn't be proposed.`;
+      ? `User approved "${task.title}" (${task.riskClass}) — indicates comfort with this action type in similar contexts.${scopeClause}${rationaleClause}`
+      : `User rejected "${task.title}" (${task.riskClass}) — indicates this action type needs different handling or shouldn't be proposed.${scopeClause}${rationaleClause}`;
 
     memories.push(createMemoryRecord({
       userId,
@@ -133,6 +141,88 @@ function buildEpisodes(bundle: GoalBundle): EpisodeRecord[] {
   });
 }
 
+function extractExecutionOutcomeMemory(bundle: GoalBundle, userId: string, results: ExecutionResult[]): MemoryRecord | null {
+  if (results.length === 0) return null;
+
+  const successCount = results.filter((result) => result.success).length;
+  const failureCount = results.length - successCount;
+  const actionCounts = new Map<string, number>();
+
+  for (const result of results) {
+    actionCounts.set(result.action, (actionCounts.get(result.action) ?? 0) + 1);
+  }
+
+  const actionSummary = [...actionCounts.entries()]
+    .map(([action, count]) => `${action} x${count}`)
+    .join(", ");
+
+  return createMemoryRecord({
+    userId,
+    category: "projects",
+    memoryType: "observed",
+    content: `Execution outcomes for goal "${bundle.goal.title}": ${successCount} succeeded, ${failureCount} failed or were skipped across ${results.length} action(s). Actions: ${actionSummary}.`,
+    confidence: failureCount > 0 ? 0.9 : 0.82,
+    source: "auto-capture",
+    permissions: ["orchestrator", "workflow", "knowledge", "communications"]
+  });
+}
+
+function extractExecutionFailureMemories(bundle: GoalBundle, userId: string, results: ExecutionResult[]): MemoryRecord[] {
+  return results.flatMap((result) => {
+    if (result.success) return [];
+
+    const task = bundle.tasks.find((candidate) => candidate.id === result.taskId);
+    const taskLabel = task?.title ?? result.taskId;
+
+    return [createMemoryRecord({
+      userId,
+      category: "preferences",
+      memoryType: "observed",
+      content: `Execution issue for "${taskLabel}" on goal "${bundle.goal.title}": ${result.action} failed or was skipped. Detail: ${summarizeExecutionDetail(result.detail)}`,
+      confidence: 0.92,
+      source: "auto-capture",
+      permissions: ["orchestrator", "workflow", "knowledge", "communications"]
+    })];
+  });
+}
+
+function buildExecutionEpisodes(bundle: GoalBundle, results: ExecutionResult[]): EpisodeRecord[] {
+  return results.map((result) => {
+    const task = bundle.tasks.find((candidate) => candidate.id === result.taskId);
+    const taskTitle = task?.title ?? result.taskId;
+    const situationParts = [
+      `Goal: "${bundle.goal.title}"`,
+      `Approved task: "${taskTitle}"`,
+      `Execution action: ${result.action}`
+    ];
+
+    return EpisodeRecordSchema.parse({
+      id: crypto.randomUUID(),
+      timestamp: result.timestamp,
+      skill: task?.assignedAgent ?? "execution-engine",
+      task: `Execute approved task "${taskTitle}"`,
+      outcome: result.success ? "success" : "failure",
+      situation: situationParts.join(". "),
+      rootCause: result.success ? null : summarizeExecutionDetail(result.detail),
+      solution: result.success
+        ? `Typed action intent ${result.action} executed successfully.`
+        : `Execution engine surfaced a failure or skip for ${result.action}.`,
+      lesson: result.success
+        ? `This approved action executed cleanly with the current adapter path.`
+        : `This approved action needs adapter, payload, or policy follow-up before similar executions should be trusted.`,
+      relatedPatternId: null,
+      userFeedback: null,
+      metadata: {
+        goalId: bundle.goal.id,
+        taskId: result.taskId,
+        action: result.action,
+        success: result.success,
+        detail: summarizeExecutionDetail(result.detail)
+      }
+    });
+  });
+}
+
 export function captureMemoriesFromBundle(bundle: GoalBundle, userId: string): CapturedMemories {
   const memories: MemoryRecord[] = [];
 
@@ -147,4 +237,22 @@ export function captureMemoriesFromBundle(bundle: GoalBundle, userId: string): C
   const episodes = buildEpisodes(bundle);
 
   return { memories, episodes };
+}
+
+export function captureExecutionOutcomeSignals(bundle: GoalBundle, userId: string, results: ExecutionResult[]): CapturedMemories {
+  if (results.length === 0) {
+    return { memories: [], episodes: [] };
+  }
+
+  const memories: MemoryRecord[] = [];
+  const outcomeMemory = extractExecutionOutcomeMemory(bundle, userId, results);
+  if (outcomeMemory) {
+    memories.push(outcomeMemory);
+  }
+  memories.push(...extractExecutionFailureMemories(bundle, userId, results));
+
+  return {
+    memories,
+    episodes: buildExecutionEpisodes(bundle, results)
+  };
 }

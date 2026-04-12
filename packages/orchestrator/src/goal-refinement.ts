@@ -3,9 +3,11 @@ import {
   TaskSchema,
   WorkflowStateSchema,
   nowIso,
+  type AgentMetrics,
   type GoalBundle,
   type MemoryRecord,
-  type Task
+  type Task,
+  type WorkspaceGovernance
 } from "@agentic/contracts";
 import { createTask } from "@agentic/execution";
 import { runAgent } from "@agentic/agents";
@@ -192,6 +194,8 @@ export async function refineGoal(params: {
   bundle: GoalBundle;
   refinement: string;
   memories: MemoryRecord[];
+  resolveAgentMetrics?: (agentIdOrName: string) => Promise<AgentMetrics | null>;
+  governance?: WorkspaceGovernance | null;
 }): Promise<GoalBundle> {
   const bundle = GoalBundleSchema.parse(params.bundle);
   const refinement = params.refinement.trim();
@@ -284,11 +288,14 @@ export async function refineGoal(params: {
   // Add new tasks
   for (const planned of changes.newTasks) {
     const capabilities = planned.capabilities ?? ["read", "draft"];
+    const scorecard = await params.resolveAgentMetrics?.(planned.assignedAgent);
     const decision = evaluateTaskPolicy({
       capabilities,
       confidence: planned.confidence,
       title: planned.title,
-      memories: params.memories
+      memories: params.memories,
+      scorecard,
+      governance: params.governance
     });
     const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
     const task = createTask({
@@ -333,6 +340,7 @@ export async function refineGoal(params: {
         message: agentResult.summary,
         details: {
           confidence: agentResult.confidence,
+          executionMode: agentResult.executionMode,
           nextSteps: agentResult.nextSteps
         }
       })

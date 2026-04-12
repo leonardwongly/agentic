@@ -1,6 +1,10 @@
 import {
   APPROVAL_EXPIRY_MS,
   ActionLogSchema,
+  ActionIntentSchema,
+  type ApprovalDecisionRecord,
+  type ApprovalDecisionScope,
+  type ApprovalPreview,
   ApprovalRequestSchema,
   GoalBundleSchema,
   GoalSchema,
@@ -9,19 +13,22 @@ import {
   WatcherSchema,
   nowIso,
   type ActionLog,
+  type ActionIntent,
   type AgentDefinition,
+  type AgentMetrics,
   type ApprovalDecision,
   type ApprovalRequest,
+  type Artifact,
   type Goal,
   type GoalBundle,
   type IntegrationAccount,
   type MemoryRecord,
   type Task,
   type Watcher,
-  type WorkflowState
+  type WorkspaceGovernance
 } from "@agentic/contracts";
 import { runAgent } from "@agentic/agents";
-import { createTask, createWorkflowState, transitionTaskState } from "@agentic/execution";
+import { createTask, createWorkflowState, recomputeWorkflowStatuses, transitionTaskState } from "@agentic/execution";
 import { inferCapabilitiesFromRequest } from "@agentic/integrations";
 import { rankRelevantMemories } from "@agentic/memory";
 import { createActionLog } from "@agentic/observability";
@@ -29,9 +36,9 @@ import { evaluateTaskPolicy } from "@agentic/policy";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
-export { captureMemoriesFromBundle, type CapturedMemories } from "./memory-capture";
-export { executeApprovedTask, executeApprovedTasks, type ExecutionResult } from "./execution-dispatch";
-export { generateMorningBriefing } from "./morning-briefing";
+export { captureExecutionOutcomeSignals, captureMemoriesFromBundle, type CapturedMemories } from "./memory-capture";
+export { executeApprovedTask, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "./execution-dispatch";
+export { generateBriefing, generateMorningBriefing } from "./morning-briefing";
 export { refineGoal } from "./goal-refinement";
 export { createGoalTemplate, interpolateTemplate, computeNextRun, shouldTemplateRun } from "./goal-templates";
 
@@ -299,45 +306,194 @@ function explanationForGoal(params: {
   return `${catalog.description} The orchestrator resolved ${confirmedMemories} confirmed relevant memories and ${readyIntegrations} enabled adapters before planning the workflow.`;
 }
 
-function recomputeStatuses(tasks: Task[], approvals: ApprovalRequest[], watchers: Watcher[]): { goalStatus: Goal["status"]; workflowStatus: WorkflowState["status"] } {
-  const hasPendingApprovals = approvals.some((approval) => approval.decision === "pending");
-  const hasBlockedTask = tasks.some((task) => task.state === "blocked");
-  const hasOpenWatchers = watchers.some((watcher) => watcher.status === "active");
-  const allTasksCompleted = tasks.every((task) => task.state === "completed");
-
-  if (hasPendingApprovals) {
-    return {
-      goalStatus: "waiting",
-      workflowStatus: "waiting"
-    };
+function inferApprovalActionType(task: Task): ApprovalPreview["actionType"] {
+  if (task.toolCapabilities.includes("delete")) {
+    return "delete";
   }
 
-  if (hasBlockedTask) {
-    return {
-      goalStatus: "running",
-      workflowStatus: "running"
-    };
+  if (task.toolCapabilities.includes("send")) {
+    return "send";
   }
 
-  if (allTasksCompleted && !hasOpenWatchers) {
-    return {
-      goalStatus: "completed",
-      workflowStatus: "completed"
-    };
+  if (task.toolCapabilities.includes("schedule")) {
+    return "schedule";
+  }
+
+  if (task.toolCapabilities.includes("update")) {
+    return "update";
+  }
+
+  if (task.toolCapabilities.includes("create")) {
+    return "create";
+  }
+
+  if (task.toolCapabilities.includes("draft")) {
+    return "draft";
+  }
+
+  return "artifact-only";
+}
+
+function inferApprovalImpact(task: Task, actionType: ApprovalPreview["actionType"]): ApprovalPreview["impact"] {
+  const affectedSystems = new Set<string>();
+
+  if (task.assignedAgent === "communications" || task.toolCapabilities.includes("send")) {
+    affectedSystems.add("email");
+  }
+
+  if (task.assignedAgent === "calendar" || task.toolCapabilities.includes("schedule")) {
+    affectedSystems.add("calendar");
+  }
+
+  if (task.toolCapabilities.includes("create") || task.toolCapabilities.includes("update")) {
+    affectedSystems.add("workspace");
   }
 
   return {
-    goalStatus: "running",
-    workflowStatus: "running"
+    affectedPeople: actionType === "send" ? ["external recipients"] : [],
+    affectedSystems: [...affectedSystems],
+    permissions: task.toolCapabilities,
+    rollback: actionType === "delete" ? "not_supported" : actionType === "draft" || actionType === "artifact-only" ? "supported" : "manual"
+  };
+}
+
+function inferActionIntentFromArtifacts(task: Task, artifacts: Artifact[]): ActionIntent {
+  for (const artifact of artifacts) {
+    const candidate = artifact.metadata.actionIntent ?? artifact.metadata.executionIntent;
+    const parsed = ActionIntentSchema.safeParse(candidate);
+
+    if (parsed.success) {
+      return parsed.data;
+    }
+  }
+
+  if (task.toolCapabilities.includes("create")) {
+    return ActionIntentSchema.parse({
+      type: "create_note",
+      title: task.title,
+      content: artifacts.map((artifact) => artifact.content).join("\n\n").trim() || task.summary
+    });
+  }
+
+  return ActionIntentSchema.parse({
+    type: "manual_review",
+    actionType: inferApprovalActionType(task),
+    summary: task.summary,
+    reason: "No typed execution payload was produced for this approval. Manual review is required before any external side effect.",
+    artifactIds: artifacts.map((artifact) => artifact.id)
+  });
+}
+
+function actionTypeForApproval(task: Task, actionIntent: ActionIntent): ApprovalPreview["actionType"] {
+  switch (actionIntent.type) {
+    case "send_message":
+      return "send";
+    case "schedule_event":
+      return "schedule";
+    case "create_note":
+      return "create";
+    case "manual_review":
+      return actionIntent.actionType;
+    default:
+      return inferApprovalActionType(task);
+  }
+}
+
+function buildApprovalPreview(task: Task, actionIntent: ActionIntent | null): ApprovalPreview {
+  const resolvedActionIntent =
+    actionIntent ??
+    ActionIntentSchema.parse({
+      type: "manual_review",
+      actionType: inferApprovalActionType(task),
+      summary: task.summary,
+      reason: "No typed execution payload is available yet for this approval.",
+      artifactIds: []
+    });
+  const actionType = actionTypeForApproval(task, resolvedActionIntent);
+  const target =
+    resolvedActionIntent.type === "send_message"
+      ? resolvedActionIntent.to
+      : resolvedActionIntent.type === "schedule_event"
+        ? "Calendar commitment"
+        : resolvedActionIntent.type === "create_note"
+          ? resolvedActionIntent.title
+          : actionType === "send"
+            ? "External communication"
+            : actionType === "schedule"
+              ? "Calendar commitment"
+              : actionType === "create"
+                ? "New workspace artifact"
+                : actionType === "update"
+                  ? "Existing workspace state"
+                  : actionType === "delete"
+                    ? "Existing record"
+                    : actionType === "draft"
+                      ? "Draft artifact"
+                      : task.title;
+  const summary =
+    resolvedActionIntent.type === "send_message"
+      ? `Draft ${resolvedActionIntent.mode === "send" ? "and send" : "an"} email to ${resolvedActionIntent.to}: ${resolvedActionIntent.subject}`
+      : resolvedActionIntent.type === "schedule_event"
+        ? `Schedule "${resolvedActionIntent.summary}" from ${resolvedActionIntent.start} to ${resolvedActionIntent.end}`
+        : resolvedActionIntent.type === "create_note"
+          ? `Create note "${resolvedActionIntent.title}"`
+          : resolvedActionIntent.summary;
+  const changes =
+    resolvedActionIntent.type === "send_message"
+      ? [
+          {
+            label: "Recipient",
+            before: "Pending user review",
+            after: resolvedActionIntent.to
+          },
+          {
+            label: "Subject",
+            before: "Pending user review",
+            after: resolvedActionIntent.subject
+          }
+        ]
+      : resolvedActionIntent.type === "schedule_event"
+        ? [
+            {
+              label: "Scheduled window",
+              before: "Pending user review",
+              after: `${resolvedActionIntent.start} -> ${resolvedActionIntent.end}`
+            }
+          ]
+        : resolvedActionIntent.type === "create_note"
+          ? [
+              {
+                label: "Note title",
+                before: "Pending user review",
+                after: resolvedActionIntent.title
+              }
+            ]
+          : [
+              {
+                label: "Requested action",
+                before: "Pending user review",
+                after: resolvedActionIntent.summary
+              }
+            ];
+
+  return {
+    actionType,
+    summary,
+    target,
+    changes,
+    impact: inferApprovalImpact(task, actionType)
   };
 }
 
 export async function processUserRequest(params: {
   userId: string;
+  workspaceId?: string | null;
   request: string;
   memories: MemoryRecord[];
   integrations: IntegrationAccount[];
   agentDefinition?: AgentDefinition;
+  resolveAgentMetrics?: (agentIdOrName: string) => Promise<AgentMetrics | null>;
+  governance?: WorkspaceGovernance | null;
 }): Promise<GoalBundle> {
   const request = normalizeRequest(params.request);
 
@@ -355,7 +511,8 @@ export async function processUserRequest(params: {
   const scenario = await detectScenario(request);
   const catalog = scenarioCatalog[scenario];
   const goalId = crypto.randomUUID();
-  const workflow = createWorkflowState(goalId, scenario);
+  const workspaceId = params.workspaceId ?? null;
+  const workflow = createWorkflowState(goalId, scenario, workspaceId);
   const createdAt = nowIso();
   const logs: ActionLog[] = [];
   const tasks: Task[] = [];
@@ -373,6 +530,7 @@ export async function processUserRequest(params: {
   const goal = GoalSchema.parse({
     id: goalId,
     userId: params.userId,
+    workspaceId,
     workflowId: workflow.id,
     title: catalog.title,
     request,
@@ -396,7 +554,8 @@ export async function processUserRequest(params: {
     message: `Created goal "${goal.title}" from the user request.`,
     details: {
       intent: goal.intent,
-      status: goal.status
+      status: goal.status,
+      workspaceId
     }
   });
   appendLog({
@@ -421,11 +580,14 @@ export async function processUserRequest(params: {
         ...requestCapabilities.filter((capability) => plannedTask.capabilities.includes(capability))
       ])
     );
+    const scorecard = await params.resolveAgentMetrics?.(plannedTask.assignedAgent);
     const decision = evaluateTaskPolicy({
       capabilities,
       confidence: plannedTask.confidence,
       title: plannedTask.title,
-      memories: params.memories
+      memories: params.memories,
+      scorecard,
+      governance: params.governance
     });
     const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
     const task = createTask({
@@ -446,9 +608,23 @@ export async function processUserRequest(params: {
       ...task,
       artifactIds: agentResult.artifacts.map((artifact) => artifact.id)
     });
+    const actionIntent = decision.requiresApproval ? inferActionIntentFromArtifacts(nextTask, agentResult.artifacts) : null;
 
     tasks.push(nextTask);
     artifacts.push(...agentResult.artifacts);
+    appendLog({
+      goalId,
+      taskId: nextTask.id,
+      workflowId: workflow.id,
+      actor: "workflow",
+      kind: "task.created",
+      message: `Created task "${nextTask.title}" in state "${nextTask.state}".`,
+      details: {
+        assignedAgent: nextTask.assignedAgent,
+        state: nextTask.state,
+        requiresApproval: nextTask.requiresApproval
+      }
+    });
     appendLog({
       goalId,
       taskId: nextTask.id,
@@ -467,6 +643,7 @@ export async function processUserRequest(params: {
       message: agentResult.summary,
       details: {
         confidence: agentResult.confidence,
+        executionMode: agentResult.executionMode,
         nextSteps: agentResult.nextSteps
       }
     });
@@ -482,6 +659,8 @@ export async function processUserRequest(params: {
         riskClass: decision.riskClass,
         decision: "pending",
         requestedAction: nextTask.summary,
+        actionIntent,
+        preview: buildApprovalPreview(nextTask, actionIntent),
         createdAt: approvalCreatedAt,
         expiryAt: new Date(Date.now() + APPROVAL_EXPIRY_MS).toISOString(),
         respondedAt: null
@@ -497,7 +676,9 @@ export async function processUserRequest(params: {
         message: `Queued approval for "${nextTask.title}".`,
         details: {
           approvalId: approval.id,
-          requestedAction: approval.requestedAction
+          requestedAction: approval.requestedAction,
+          actionIntent: approval.actionIntent,
+          preview: approval.preview
         }
       });
     }
@@ -519,7 +700,7 @@ export async function processUserRequest(params: {
     });
   }
 
-  const statuses = recomputeStatuses(tasks, approvals, watchers);
+  const statuses = recomputeWorkflowStatuses(tasks, approvals, watchers);
 
   return GoalBundleSchema.parse({
     goal: {
@@ -545,6 +726,8 @@ export function respondToApproval(params: {
   bundle: GoalBundle;
   approvalId: string;
   decision: Exclude<ApprovalDecision, "pending">;
+  scope?: ApprovalDecisionScope;
+  rationale?: string | null;
 }): GoalBundle {
   const bundle = GoalBundleSchema.parse(params.bundle);
   const approval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
@@ -562,23 +745,73 @@ export function respondToApproval(params: {
   }
 
   const respondedAt = nowIso();
+  const normalizedScope = params.scope ?? "once";
+  const normalizedRationale = params.rationale?.trim() ? params.rationale.trim().slice(0, 1000) : null;
+  const nextHistoryRecord: ApprovalDecisionRecord = {
+    decision: params.decision,
+    scope: normalizedScope,
+    rationale: normalizedRationale,
+    actor: "user",
+    createdAt: respondedAt
+  };
   const approvals = bundle.approvals.map((candidate) =>
     candidate.id === params.approvalId
       ? ApprovalRequestSchema.parse({
           ...candidate,
           decision: params.decision,
+          decisionScope: normalizedScope,
+          decisionRationale: normalizedRationale,
+          history: [...candidate.history, nextHistoryRecord],
           respondedAt
         })
       : candidate
   );
+  let taskTransitionLog: ActionLog | null = null;
   const tasks = bundle.tasks.map((task) => {
     if (task.id !== approval.taskId) {
       return task;
     }
 
-    return params.decision === "approved" ? transitionTaskState(task, "completed") : transitionTaskState(task, "blocked");
+    const nextTask = params.decision === "approved" ? transitionTaskState(task, "queued") : transitionTaskState(task, "blocked");
+    taskTransitionLog = ActionLogSchema.parse(
+      createActionLog({
+        goalId: bundle.goal.id,
+        taskId: approval.taskId,
+        workflowId: bundle.workflow.id,
+        actor: "workflow",
+        kind: "task.state_changed",
+        message: `Moved "${task.title}" from "${task.state}" to "${nextTask.state}" after approval resolution.`,
+        details: {
+          from: task.state,
+          to: nextTask.state,
+          approvalId: approval.id,
+          decision: params.decision,
+          scope: normalizedScope
+        },
+        prevLog: bundle.actionLogs.at(-1) ?? null
+      })
+    );
+    return nextTask;
   });
-  const statuses = recomputeStatuses(tasks, approvals, bundle.watchers);
+  const statuses = recomputeWorkflowStatuses(tasks, approvals, bundle.watchers);
+  const transitionLog = taskTransitionLog;
+  const approvalResponseLog = ActionLogSchema.parse(
+    createActionLog({
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      workflowId: bundle.workflow.id,
+      actor: "user",
+      kind: "approval.responded",
+      message: `${params.decision === "approved" ? "Approved" : "Rejected"} "${approval.title}".`,
+      details: {
+        approvalId: approval.id,
+        decision: params.decision,
+        scope: normalizedScope,
+        rationale: normalizedRationale
+      },
+      prevLog: transitionLog ?? bundle.actionLogs.at(-1) ?? null
+    })
+  );
 
   return GoalBundleSchema.parse({
     ...bundle,
@@ -597,21 +830,8 @@ export function respondToApproval(params: {
     approvals,
     actionLogs: [
       ...bundle.actionLogs,
-      ActionLogSchema.parse(
-        createActionLog({
-          goalId: bundle.goal.id,
-          taskId: approval.taskId,
-          workflowId: bundle.workflow.id,
-          actor: "user",
-          kind: "approval.responded",
-          message: `${params.decision === "approved" ? "Approved" : "Rejected"} "${approval.title}".`,
-          details: {
-            approvalId: approval.id,
-            decision: params.decision
-          },
-          prevLog: bundle.actionLogs.at(-1) ?? null
-        })
-      )
+      ...(transitionLog ? [transitionLog] : []),
+      approvalResponseLog
     ]
   });
 }
