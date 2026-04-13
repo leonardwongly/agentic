@@ -143,7 +143,7 @@ Security controls were implemented early with in-memory defaults.
 ## Phase 2: Tenant-Safe Boundaries
 
 Priority: P0
-Status: Planned
+Status: In progress
 Goal: remove hidden single-user assumptions from core execution paths.
 
 ### Finding 2.1: User-facing flows still depend on implicit `SYSTEM_USER_ID` defaults
@@ -173,6 +173,16 @@ The codebase evolved from a single-user MVP.
 - route scope tests
 - cross-workspace denial tests
 - audit attribution regression checks
+
+**Implementation status**
+- Shared `ActorContext` schemas and helpers are done in code.
+- Authenticated write routes for approvals, workspaces, and governance now derive actor context at the boundary.
+- Approval history and evidence records now persist structured actor context alongside the legacy actor label.
+- Repository approval responses and workspace mutations now accept explicit actor context instead of implicit authenticated user defaults.
+- Remaining follow-up:
+  - expand actor-context coverage across the rest of the authenticated write surface
+  - remove remaining lower-level single-user assumptions outside the bounded Phase 2 slice
+  - add broader cross-workspace denial and audit-attribution regression coverage as more write paths migrate
 
 ---
 
@@ -373,5 +383,10 @@ No phase is considered complete until:
 
 - Phase 1.1 complete
 - Phase 1.2 complete
-- Phase 1.3 next most important unresolved item
-- Phase 2 is the next major structural milestone after shared-state hardening
+- Phase 1.3 complete for the shared-state implementation milestone; multi-node concurrency and TTL-focused tests remain follow-up hardening
+- Phase 2 is now in progress
+- Current Phase 2 slice complete:
+  - actor context schema/helpers
+  - actor propagation for approval responses
+  - actor propagation for workspace and governance mutations
+  - structured actor attribution in approval history and evidence records

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createHumanActorContext } from "@agentic/contracts";
 import { captureExecutionOutcomeSignals, executeApprovedTasks, captureMemoriesFromBundle, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
 import {
   verifySlackSignature,
@@ -114,7 +115,7 @@ export async function POST(request: Request) {
         return await repository.respondToApproval({
           approvalId,
           decision,
-          userId: actorUserId,
+          actor: createHumanActorContext(actorUserId),
           scope: "once",
           rationale: null
         });

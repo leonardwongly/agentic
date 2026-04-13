@@ -9,6 +9,7 @@ import {
   WorkspaceSchema,
   WorkspaceSelectionSchema,
   briefingTypeValues,
+  createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
@@ -16,6 +17,8 @@ import { generateBriefing, processUserRequest } from "@agentic/orchestrator";
 import { createMemoryRecord } from "@agentic/memory";
 
 describe("repository", () => {
+  const systemActor = createSystemActorContext(SYSTEM_USER_ID);
+
   async function createGoalForUser(
     repository: ReturnType<typeof createRepository>,
     userId: string,
@@ -48,7 +51,7 @@ describe("repository", () => {
     const updatedBundle = await repository.respondToApproval({
       approvalId: approval!.id,
       decision,
-      userId: SYSTEM_USER_ID,
+      actor: systemActor,
       scope: decision === "approved" ? "similar_24h" : "once",
       rationale:
         decision === "approved"
@@ -95,7 +98,8 @@ describe("repository", () => {
       resultingGoalStatus: updatedBundle.goal.status,
       actionLogIds: appendedLogIds,
       artifactIds: approval!.actionIntent?.artifactIds ?? [],
-      memoryIds: []
+      memoryIds: [],
+      actorContext: systemActor
     });
     expect(evidence.sourceSummary).toContain(approval!.title);
     expect(new Date(evidence.respondedAt).toString()).not.toBe("Invalid Date");
@@ -136,7 +140,7 @@ describe("repository", () => {
     const approvedBundle = await repository.respondToApproval({
       approvalId: approval.id,
       decision: "approved",
-      userId: SYSTEM_USER_ID,
+      actor: systemActor,
       scope: "similar_24h",
       rationale: "The next few outbound replies can follow the same pattern."
     });
@@ -146,7 +150,7 @@ describe("repository", () => {
       repository.respondToApproval({
         approvalId: approval.id,
         decision: "rejected",
-        userId: SYSTEM_USER_ID
+        actor: systemActor
       })
     ).rejects.toThrow(/already been handled/);
 
@@ -158,7 +162,8 @@ describe("repository", () => {
     expect(approvedApproval?.history.at(-1)).toMatchObject({
       decision: "approved",
       scope: "similar_24h",
-      rationale: "The next few outbound replies can follow the same pattern."
+      rationale: "The next few outbound replies can follow the same pattern.",
+      actorContext: systemActor
     });
   });
 
@@ -180,7 +185,7 @@ describe("repository", () => {
     await repository.respondToApproval({
       approvalId: approval!.id,
       decision: "approved",
-      userId: SYSTEM_USER_ID,
+      actor: systemActor,
       scope: "similar_24h",
       rationale: "This exact external reply pattern is safe for the next day."
     });
@@ -203,7 +208,8 @@ describe("repository", () => {
     expect(persistedApproval?.history.at(-1)).toMatchObject({
       decision: "approved",
       scope: "similar_24h",
-      rationale: "This exact external reply pattern is safe for the next day."
+      rationale: "This exact external reply pattern is safe for the next day.",
+      actorContext: systemActor
     });
   });
 
@@ -637,7 +643,7 @@ describe("repository", () => {
       updatedAt: timestamp
     });
 
-    await repository.saveWorkspace(sharedWorkspace, SYSTEM_USER_ID);
+    await repository.saveWorkspace(sharedWorkspace, systemActor);
     await repository.saveWorkspaceMember(
       WorkspaceMemberSchema.parse({
         id: "workspace-member-owner",
@@ -647,7 +653,7 @@ describe("repository", () => {
         joinedAt: timestamp,
         updatedAt: timestamp
       }),
-      SYSTEM_USER_ID
+      systemActor
     );
     await repository.saveWorkspaceMember(
       WorkspaceMemberSchema.parse({
@@ -658,7 +664,7 @@ describe("repository", () => {
         joinedAt: timestamp,
         updatedAt: timestamp
       }),
-      SYSTEM_USER_ID
+      systemActor
     );
     await repository.saveWorkspaceGovernance(
       WorkspaceGovernanceSchema.parse({
@@ -673,7 +679,7 @@ describe("repository", () => {
         createdAt: timestamp,
         updatedAt: timestamp
       }),
-      SYSTEM_USER_ID
+      systemActor
     );
     await repository.saveWorkspaceSelection(
       WorkspaceSelectionSchema.parse({
@@ -1433,7 +1439,7 @@ describe("repository", () => {
       updatedAt: timestamp
     });
 
-    await repository.saveWorkspace(workspace, SYSTEM_USER_ID);
+    await repository.saveWorkspace(workspace, systemActor);
     await repository.saveWorkspaceMember(
       WorkspaceMemberSchema.parse({
         id: "workspace-member-governed-owner",
@@ -1443,7 +1449,7 @@ describe("repository", () => {
         joinedAt: timestamp,
         updatedAt: timestamp
       }),
-      SYSTEM_USER_ID
+      systemActor
     );
 
     const governance = await repository.saveWorkspaceGovernance(
@@ -1459,7 +1465,7 @@ describe("repository", () => {
         createdAt: timestamp,
         updatedAt: timestamp
       }),
-      SYSTEM_USER_ID
+      systemActor
     );
     await repository.saveWorkspaceSelection(
       WorkspaceSelectionSchema.parse({

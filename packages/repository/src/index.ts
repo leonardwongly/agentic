@@ -8,6 +8,7 @@ import {
   ActionIntentSchema,
   AgentDefinitionSchema,
   AgentMetricsSchema,
+  ActorContextSchema,
   AutopilotEventSchema,
   AutopilotSettingsSchema,
   type ApprovalDecision,
@@ -50,6 +51,7 @@ import {
   type ActionLog,
   type AgentDefinition,
   type AgentMetrics,
+  type ActorContext,
   type ApprovalRequest,
   type Artifact,
   type BriefingHistoryItem,
@@ -259,19 +261,19 @@ export type AgenticRepository = {
   backend: "file" | "postgres";
   seedDefaults(userId?: string): Promise<void>;
   listWorkspaces(userId?: string): Promise<Workspace[]>;
-  saveWorkspace(workspace: Workspace, actorUserId?: string): Promise<Workspace>;
+  saveWorkspace(workspace: Workspace, actor: ActorContext): Promise<Workspace>;
   listWorkspaceMembers(workspaceId: string, userId?: string): Promise<WorkspaceMember[]>;
-  saveWorkspaceMember(member: WorkspaceMember, actorUserId?: string): Promise<WorkspaceMember>;
+  saveWorkspaceMember(member: WorkspaceMember, actor: ActorContext): Promise<WorkspaceMember>;
   getWorkspaceSelection(userId?: string): Promise<WorkspaceSelection | null>;
   saveWorkspaceSelection(selection: WorkspaceSelection): Promise<WorkspaceSelection>;
   getWorkspaceGovernance(workspaceId: string, userId?: string): Promise<WorkspaceGovernance | null>;
-  saveWorkspaceGovernance(governance: WorkspaceGovernance, actorUserId?: string): Promise<WorkspaceGovernance>;
+  saveWorkspaceGovernance(governance: WorkspaceGovernance, actor: ActorContext): Promise<WorkspaceGovernance>;
   exportWorkspaceAudit(workspaceId: string, userId?: string): Promise<WorkspaceAuditExport>;
   saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle>;
   respondToApproval(params: {
     approvalId: string;
     decision: Exclude<ApprovalDecision, "pending">;
-    userId?: string;
+    actor: ActorContext;
     scope?: ApprovalDecisionScope;
     rationale?: string | null;
   }): Promise<GoalBundle>;
@@ -1733,6 +1735,19 @@ function defaultWorkspaceGovernance(workspaceId: string, updatedBy: string): Wor
   });
 }
 
+function parseActorContext(actor: ActorContext): ActorContext {
+  return ActorContextSchema.parse(actor);
+}
+
+function subjectUserIdForActor(actor: ActorContext): string {
+  return parseActorContext(actor).subjectUserId;
+}
+
+function governanceUpdatedByForActor(actor: ActorContext): string {
+  const parsed = parseActorContext(actor);
+  return parsed.initiator.userId ?? parsed.subjectUserId;
+}
+
 function workspaceIdsForUser(store: RuntimeStore, userId: string): Set<string> {
   return new Set(
     store.workspaceMembers
@@ -1942,7 +1957,7 @@ function buildPendingAutopilotEvent(params: {
 }
 
 function buildApprovalEvidenceRecord(params: {
-  userId: string;
+  actor: ActorContext;
   previousBundle: GoalBundle;
   updatedBundle: GoalBundle;
   originalApproval: ApprovalRequest;
@@ -1975,7 +1990,7 @@ function buildApprovalEvidenceRecord(params: {
 
   return EvidenceRecordSchema.parse({
     id: crypto.randomUUID(),
-    userId: params.userId,
+    userId: subjectUserIdForActor(params.actor),
     goalId: params.updatedBundle.goal.id,
     taskId: params.originalApproval.taskId,
     approvalId: params.originalApproval.id,
@@ -1995,6 +2010,7 @@ function buildApprovalEvidenceRecord(params: {
     actionLogIds,
     artifactIds,
     memoryIds: [],
+    actorContext: parseActorContext(params.actor),
     createdAt: updatedApproval.respondedAt,
     updatedAt: updatedApproval.respondedAt
   });
@@ -2358,10 +2374,11 @@ class FileRepository implements AgenticRepository {
     return listWorkspacesForUserFromStore(store, userId);
   }
 
-  async saveWorkspace(workspace: Workspace, actorUserId = SYSTEM_USER_ID): Promise<Workspace> {
+  async saveWorkspace(workspace: Workspace, actor: ActorContext): Promise<Workspace> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const validated = WorkspaceSchema.parse(workspace);
+      const actorUserId = subjectUserIdForActor(actor);
       const existing = store.workspaces.find((candidate) => candidate.id === validated.id) ?? null;
       const duplicateSlug = store.workspaces.find(
         (candidate) => candidate.slug === validated.slug && candidate.id !== validated.id
@@ -2389,7 +2406,7 @@ class FileRepository implements AgenticRepository {
       if (!store.workspaceGovernance.some((governance) => governance.workspaceId === validated.id)) {
         store.workspaceGovernance = upsertByKey(
           store.workspaceGovernance,
-          defaultWorkspaceGovernance(validated.id, actorUserId),
+          defaultWorkspaceGovernance(validated.id, governanceUpdatedByForActor(actor)),
           (governance) => governance.workspaceId
         );
       }
@@ -2405,10 +2422,11 @@ class FileRepository implements AgenticRepository {
     return listWorkspaceMembersForWorkspaceFromStore(store, workspaceId);
   }
 
-  async saveWorkspaceMember(member: WorkspaceMember, actorUserId = SYSTEM_USER_ID): Promise<WorkspaceMember> {
+  async saveWorkspaceMember(member: WorkspaceMember, actor: ActorContext): Promise<WorkspaceMember> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const validated = WorkspaceMemberSchema.parse(member);
+      const actorUserId = subjectUserIdForActor(actor);
       const workspace = assertWorkspaceExistsInStore(store, validated.workspaceId);
       assertWorkspaceOwner(store, validated.workspaceId, actorUserId);
 
@@ -2451,11 +2469,12 @@ class FileRepository implements AgenticRepository {
 
   async saveWorkspaceGovernance(
     governance: WorkspaceGovernance,
-    actorUserId = SYSTEM_USER_ID
+    actor: ActorContext
   ): Promise<WorkspaceGovernance> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const validated = WorkspaceGovernanceSchema.parse(governance);
+      const actorUserId = subjectUserIdForActor(actor);
       assertWorkspaceOwner(store, validated.workspaceId, actorUserId);
       store.workspaceGovernance = upsertByKey(store.workspaceGovernance, validated, (item) => item.workspaceId);
       await this.writeStore(store);
@@ -2498,12 +2517,13 @@ class FileRepository implements AgenticRepository {
   async respondToApproval(params: {
     approvalId: string;
     decision: Exclude<ApprovalDecision, "pending">;
-    userId?: string;
+    actor: ActorContext;
     scope?: ApprovalDecisionScope;
     rationale?: string | null;
   }): Promise<GoalBundle> {
     return this.withMutationLock(async () => {
-      const userId = params.userId ?? SYSTEM_USER_ID;
+      const actor = parseActorContext(params.actor);
+      const userId = subjectUserIdForActor(actor);
       const store = await this.readStore();
       const goalIds = goalIdsForUser(store, userId);
       const approval = store.approvals.find(
@@ -2538,11 +2558,12 @@ class FileRepository implements AgenticRepository {
         bundle,
         approvalId: params.approvalId,
         decision: params.decision,
+        actor,
         scope: params.scope,
         rationale: params.rationale
       });
       const evidenceRecord = buildApprovalEvidenceRecord({
-        userId,
+        actor,
         previousBundle: bundle,
         updatedBundle,
         originalApproval
@@ -4656,8 +4677,9 @@ class PostgresRepository implements AgenticRepository {
     }
   }
 
-  async saveWorkspace(workspace: Workspace, actorUserId = SYSTEM_USER_ID): Promise<Workspace> {
+  async saveWorkspace(workspace: Workspace, actor: ActorContext): Promise<Workspace> {
     const validated = WorkspaceSchema.parse(workspace);
+    const actorUserId = subjectUserIdForActor(actor);
 
     await this.withTransaction(async (client) => {
       const duplicateSlugResult = await client.query(
@@ -4697,7 +4719,10 @@ class PostgresRepository implements AgenticRepository {
       const governance = await this.getWorkspaceGovernanceWithClient(client, validated.id);
 
       if (!governance) {
-        await this.saveWorkspaceGovernanceWithClient(client, defaultWorkspaceGovernance(validated.id, actorUserId));
+        await this.saveWorkspaceGovernanceWithClient(
+          client,
+          defaultWorkspaceGovernance(validated.id, governanceUpdatedByForActor(actor))
+        );
       }
     });
 
@@ -4717,8 +4742,9 @@ class PostgresRepository implements AgenticRepository {
     }
   }
 
-  async saveWorkspaceMember(member: WorkspaceMember, actorUserId = SYSTEM_USER_ID): Promise<WorkspaceMember> {
+  async saveWorkspaceMember(member: WorkspaceMember, actor: ActorContext): Promise<WorkspaceMember> {
     const validated = WorkspaceMemberSchema.parse(member);
+    const actorUserId = subjectUserIdForActor(actor);
 
     await this.withTransaction(async (client) => {
       const workspace = await this.getWorkspaceByIdWithClient(client, validated.workspaceId);
@@ -4786,9 +4812,10 @@ class PostgresRepository implements AgenticRepository {
 
   async saveWorkspaceGovernance(
     governance: WorkspaceGovernance,
-    actorUserId = SYSTEM_USER_ID
+    actor: ActorContext
   ): Promise<WorkspaceGovernance> {
     const validated = WorkspaceGovernanceSchema.parse(governance);
+    const actorUserId = subjectUserIdForActor(actor);
 
     await this.withTransaction(async (client) => {
       await this.assertWorkspaceOwnerWithClient(client, validated.workspaceId, actorUserId);
@@ -4859,11 +4886,12 @@ class PostgresRepository implements AgenticRepository {
   async respondToApproval(params: {
     approvalId: string;
     decision: Exclude<ApprovalDecision, "pending">;
-    userId?: string;
+    actor: ActorContext;
     scope?: ApprovalDecisionScope;
     rationale?: string | null;
   }): Promise<GoalBundle> {
-    const userId = params.userId ?? SYSTEM_USER_ID;
+    const actor = parseActorContext(params.actor);
+    const userId = subjectUserIdForActor(actor);
 
     return this.withTransaction(async (client) => {
       const approvalResult = await client.query(
@@ -4912,11 +4940,12 @@ class PostgresRepository implements AgenticRepository {
         bundle,
         approvalId: params.approvalId,
         decision: params.decision,
+        actor,
         scope: params.scope,
         rationale: params.rationale
       });
       const evidenceRecord = buildApprovalEvidenceRecord({
-        userId,
+        actor,
         previousBundle: bundle,
         updatedBundle,
         originalApproval

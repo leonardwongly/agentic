@@ -1,5 +1,5 @@
 import type { EvidenceRecord } from "@agentic/contracts";
-import { SYSTEM_USER_ID, WatcherSchema, briefingTypeValues } from "@agentic/contracts";
+import { SYSTEM_USER_ID, WatcherSchema, briefingTypeValues, createSystemActorContext, type ActorContext } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { ApprovalMutationError, type AgenticRepository, type DashboardData } from "@agentic/repository";
@@ -372,7 +372,7 @@ describe("route user scoping", () => {
       integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
     });
     const approval = bundle.approvals[0];
-    const approvalCalls: Array<string | undefined> = [];
+    const approvalCalls: ActorContext[] = [];
     const dashboardCalls: Array<string | undefined> = [];
     const resolvedDecisions: string[] = [];
     const resolvedScopes: Array<string | undefined> = [];
@@ -392,8 +392,8 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        respondToApproval: async ({ userId, decision, scope, rationale }) => {
-          approvalCalls.push(userId);
+        respondToApproval: async ({ actor, decision, scope, rationale }) => {
+          approvalCalls.push(actor);
           resolvedDecisions.push(decision);
           resolvedScopes.push(scope);
           resolvedRationales.push(rationale);
@@ -413,6 +413,7 @@ describe("route user scoping", () => {
                         scope: scope ?? "once",
                         rationale: rationale ?? null,
                         actor: SYSTEM_USER_ID,
+                        actorContext: createSystemActorContext(SYSTEM_USER_ID),
                         createdAt: "2024-01-01T00:00:00.000Z"
                       }
                     ],
@@ -445,6 +446,7 @@ describe("route user scoping", () => {
             actionLogIds: [],
             artifactIds: [],
             memoryIds: [],
+            actorContext: createSystemActorContext(SYSTEM_USER_ID),
             createdAt: "2024-01-01T00:00:00.000Z",
             updatedAt: "2024-01-01T00:00:00.000Z"
           }
@@ -477,7 +479,7 @@ describe("route user scoping", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(approvalCalls).toEqual([SYSTEM_USER_ID]);
+    expect(approvalCalls).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
     expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
     expect(resolvedDecisions).toEqual(["approved"]);
     expect(resolvedScopes).toEqual(["similar_24h"]);
@@ -709,8 +711,8 @@ describe("route user scoping", () => {
     const selectionCalls: Array<string | undefined> = [];
     const memberCalls: Array<string | undefined> = [];
     const governanceCalls: Array<string | undefined> = [];
-    const savedWorkspaceActors: Array<string | undefined> = [];
-    const savedMemberActors: Array<string | undefined> = [];
+    const savedWorkspaceActors: ActorContext[] = [];
+    const savedMemberActors: ActorContext[] = [];
     const dashboardCalls: Array<string | undefined> = [];
 
     Reflect.set(
@@ -733,12 +735,12 @@ describe("route user scoping", () => {
           governanceCalls.push(userId);
           return buildDashboardData().workspaceGovernance;
         },
-        saveWorkspace: async (workspace, actorUserId) => {
-          savedWorkspaceActors.push(actorUserId);
+        saveWorkspace: async (workspace, actor) => {
+          savedWorkspaceActors.push(actor);
           return workspace;
         },
-        saveWorkspaceMember: async (member, actorUserId) => {
-          savedMemberActors.push(actorUserId);
+        saveWorkspaceMember: async (member, actor) => {
+          savedMemberActors.push(actor);
           return member;
         },
         getDashboardData: async (userId) => {
@@ -762,14 +764,14 @@ describe("route user scoping", () => {
     expect(selectionCalls).toEqual([]);
     expect(memberCalls).toEqual([]);
     expect(governanceCalls).toEqual([]);
-    expect(savedWorkspaceActors).toEqual([SYSTEM_USER_ID]);
-    expect(savedMemberActors).toEqual([SYSTEM_USER_ID]);
+    expect(savedWorkspaceActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
+    expect(savedMemberActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
     expect(dashboardCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID]);
   });
 
   it("passes the system user explicitly when updating governance and exporting audits", async () => {
     const governanceCalls: Array<string | undefined> = [];
-    const savedGovernanceActors: Array<string | undefined> = [];
+    const savedGovernanceActors: ActorContext[] = [];
     const auditCalls: Array<{ workspaceId: string; userId: string | undefined }> = [];
     const dashboardCalls: Array<string | undefined> = [];
 
@@ -781,8 +783,8 @@ describe("route user scoping", () => {
           governanceCalls.push(userId);
           return buildDashboardData().workspaceGovernance;
         },
-        saveWorkspaceGovernance: async (governance, actorUserId) => {
-          savedGovernanceActors.push(actorUserId);
+        saveWorkspaceGovernance: async (governance, actor) => {
+          savedGovernanceActors.push(actor);
           return governance;
         },
         exportWorkspaceAudit: async (workspaceId, userId) => {
@@ -815,7 +817,7 @@ describe("route user scoping", () => {
     expect(postResponse.status).toBe(200);
     expect(auditResponse.status).toBe(200);
     expect(governanceCalls).toEqual([SYSTEM_USER_ID]);
-    expect(savedGovernanceActors).toEqual([SYSTEM_USER_ID]);
+    expect(savedGovernanceActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
     expect(dashboardCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID, SYSTEM_USER_ID, SYSTEM_USER_ID]);
     expect(auditCalls).toEqual([
       {

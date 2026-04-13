@@ -2,6 +2,7 @@ import {
   APPROVAL_EXPIRY_MS,
   ActionLogSchema,
   ActionIntentSchema,
+  type ActorContext,
   type ApprovalDecisionRecord,
   type ApprovalDecisionScope,
   type ApprovalPreview,
@@ -726,6 +727,7 @@ export function respondToApproval(params: {
   bundle: GoalBundle;
   approvalId: string;
   decision: Exclude<ApprovalDecision, "pending">;
+  actor: ActorContext;
   scope?: ApprovalDecisionScope;
   rationale?: string | null;
 }): GoalBundle {
@@ -747,11 +749,13 @@ export function respondToApproval(params: {
   const respondedAt = nowIso();
   const normalizedScope = params.scope ?? "once";
   const normalizedRationale = params.rationale?.trim() ? params.rationale.trim().slice(0, 1000) : null;
+  const actorLabel = params.actor.executor.userId ?? params.actor.executor.label;
   const nextHistoryRecord: ApprovalDecisionRecord = {
     decision: params.decision,
     scope: normalizedScope,
     rationale: normalizedRationale,
-    actor: "user",
+    actor: actorLabel,
+    actorContext: params.actor,
     createdAt: respondedAt
   };
   const approvals = bundle.approvals.map((candidate) =>
@@ -786,7 +790,8 @@ export function respondToApproval(params: {
           to: nextTask.state,
           approvalId: approval.id,
           decision: params.decision,
-          scope: normalizedScope
+          scope: normalizedScope,
+          actorContext: params.actor
         },
         prevLog: bundle.actionLogs.at(-1) ?? null
       })
@@ -800,14 +805,15 @@ export function respondToApproval(params: {
       goalId: bundle.goal.id,
       taskId: approval.taskId,
       workflowId: bundle.workflow.id,
-      actor: "user",
+      actor: actorLabel,
       kind: "approval.responded",
       message: `${params.decision === "approved" ? "Approved" : "Rejected"} "${approval.title}".`,
       details: {
         approvalId: approval.id,
         decision: params.decision,
         scope: normalizedScope,
-        rationale: normalizedRationale
+        rationale: normalizedRationale,
+        actorContext: params.actor
       },
       prevLog: transitionLog ?? bundle.actionLogs.at(-1) ?? null
     })

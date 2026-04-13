@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { WorkspaceGovernanceSchema, WorkspaceMemberSchema, WorkspaceSchema, WorkspaceSelectionSchema, WorkspaceRoleSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
 import { getSeededRepository } from "../../../lib/server";
@@ -72,6 +73,7 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
+    const actor = createActorContextFromPrincipal(principal);
     const repository = await getSeededRepository();
     const body = await parseJsonBody(request, WorkspaceActionSchema);
 
@@ -114,10 +116,10 @@ export async function POST(request: Request) {
         updatedAt: timestamp
       });
 
-      await repository.saveWorkspace(workspace, principal.userId);
-      await repository.saveWorkspaceMember(membership, principal.userId);
+      await repository.saveWorkspace(workspace, actor);
+      await repository.saveWorkspaceMember(membership, actor);
       await repository.saveWorkspaceSelection(selection);
-      await repository.saveWorkspaceGovernance(governance, principal.userId);
+      await repository.saveWorkspaceGovernance(governance, actor);
 
       return await buildWorkspaceResponse(repository, principal.userId);
     }
@@ -151,7 +153,7 @@ export async function POST(request: Request) {
         joinedAt: nowIso(),
         updatedAt: nowIso()
       }),
-      principal.userId
+      actor
     );
 
     return await buildWorkspaceResponse(repository, principal.userId);

@@ -136,6 +136,10 @@ The first concrete local adapter is a notes provider that reads and writes Markd
 
 - API routes are protected by a session cookie created through `/api/session`.
 - Authenticated route handlers are scoped to the signed-in principal rather than a global user fallback.
+- Authenticated write routes now derive an explicit actor context:
+  - session-authenticated requests are recorded as human-initiated and human-executed
+  - access-key automation paths are recorded as system-initiated and system-executed
+  - approval history and evidence records persist that actor context for downstream audit and governance flows
 - Session revocation, login throttling, and unlock throttling default to bounded in-memory stores for local development and tests.
 - Production automatically upgrades those controls to shared Postgres-backed state when `DATABASE_URL` is configured.
 - `AGENTIC_SHARED_AUTH_STATE=true` opts development and test into the shared Postgres-backed auth-state path.

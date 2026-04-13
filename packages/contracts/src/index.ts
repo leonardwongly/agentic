@@ -59,6 +59,7 @@ export const autopilotEventStatusValues = ["pending", "simulated", "notified", "
 export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
 export const workspaceApprovalModeValues = ["always_review", "risk_based"] as const;
+export const actorKindValues = ["human", "system"] as const;
 export const agentNameValues = [
   "communications",
   "calendar",
@@ -95,6 +96,7 @@ export const AutopilotEventStatusSchema = z.enum(autopilotEventStatusValues);
 export const EvidenceRecordSourceKindSchema = z.enum(evidenceRecordSourceKindValues);
 export const WorkspaceRoleSchema = z.enum(workspaceRoleValues);
 export const WorkspaceApprovalModeSchema = z.enum(workspaceApprovalModeValues);
+export const ActorKindSchema = z.enum(actorKindValues);
 export const AgentNameSchema = z.enum(agentNameValues);
 export const OperatorProductStatusSchema = z.enum(operatorProductStatusValues);
 export const OperatorProductReadinessSchema = z.enum(operatorProductReadinessValues);
@@ -298,6 +300,7 @@ export const ApprovalDecisionRecordSchema = z.object({
   scope: ApprovalDecisionScopeSchema,
   rationale: z.string().max(1000).nullable().default(null),
   actor: z.string().min(1),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   createdAt: z.string().datetime()
 });
 
@@ -599,6 +602,19 @@ export const ActionLogSchema = z.object({
   prevHash: z.string().nullable().default(null)
 });
 
+export const ActorIdentitySchema = z.object({
+  kind: ActorKindSchema,
+  userId: z.string().min(1).nullable().default(null),
+  label: z.string().min(1).max(120)
+});
+
+export const ActorContextSchema = z.object({
+  subjectUserId: z.string().min(1),
+  initiator: ActorIdentitySchema,
+  executor: ActorIdentitySchema,
+  sessionId: z.string().min(1).nullable().default(null)
+});
+
 export const EvidenceRecordSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
@@ -621,6 +637,7 @@ export const EvidenceRecordSchema = z.object({
   actionLogIds: z.array(z.string().min(1)).default([]),
   artifactIds: z.array(z.string().min(1)).default([]),
   memoryIds: z.array(z.string().min(1)).default([]),
+  actorContext: ActorContextSchema.nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -1193,6 +1210,9 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 export type WorkspaceMember = z.infer<typeof WorkspaceMemberSchema>;
 export type WorkspaceSelection = z.infer<typeof WorkspaceSelectionSchema>;
 export type WorkspaceGovernance = z.infer<typeof WorkspaceGovernanceSchema>;
+export type ActorKind = z.infer<typeof ActorKindSchema>;
+export type ActorIdentity = z.infer<typeof ActorIdentitySchema>;
+export type ActorContext = z.infer<typeof ActorContextSchema>;
 export type BriefingScheduleEntry = z.infer<typeof BriefingScheduleEntrySchema>;
 export type BriefingPreferences = z.infer<typeof BriefingPreferencesSchema>;
 export type BriefingHistoryItem = z.infer<typeof BriefingHistoryItemSchema>;
@@ -1242,6 +1262,85 @@ export type WorkflowExecutionState = z.infer<typeof WorkflowExecutionStateSchema
 export type AgentExport = z.infer<typeof AgentExportSchema>;
 
 export const SYSTEM_USER_ID = "user-primary";
+
+export function buildHumanActorIdentity(userId: string, label = userId): ActorIdentity {
+  return ActorIdentitySchema.parse({
+    kind: "human",
+    userId,
+    label
+  });
+}
+
+export function buildSystemActorIdentity(options?: {
+  userId?: string | null;
+  label?: string;
+}): ActorIdentity {
+  return ActorIdentitySchema.parse({
+    kind: "system",
+    userId: options?.userId ?? SYSTEM_USER_ID,
+    label: options?.label ?? "system"
+  });
+}
+
+export function createActorContext(params: {
+  subjectUserId: string;
+  initiator: ActorIdentity;
+  executor?: ActorIdentity;
+  sessionId?: string | null;
+}): ActorContext {
+  return ActorContextSchema.parse({
+    subjectUserId: params.subjectUserId,
+    initiator: params.initiator,
+    executor: params.executor ?? params.initiator,
+    sessionId: params.sessionId ?? null
+  });
+}
+
+export function createHumanActorContext(subjectUserId: string, sessionId: string | null = null): ActorContext {
+  const actor = buildHumanActorIdentity(subjectUserId);
+
+  return createActorContext({
+    subjectUserId,
+    initiator: actor,
+    executor: actor,
+    sessionId
+  });
+}
+
+export function createSystemActorContext(subjectUserId = SYSTEM_USER_ID, sessionId: string | null = null): ActorContext {
+  const actor = buildSystemActorIdentity({
+    userId: subjectUserId
+  });
+
+  return createActorContext({
+    subjectUserId,
+    initiator: actor,
+    executor: actor,
+    sessionId
+  });
+}
+
+export function withSystemExecutor(
+  actorContext: ActorContext,
+  options?: {
+    userId?: string | null;
+    label?: string;
+  }
+): ActorContext {
+  return createActorContext({
+    subjectUserId: actorContext.subjectUserId,
+    initiator: actorContext.initiator,
+    executor: buildSystemActorIdentity({
+      userId: options?.userId,
+      label: options?.label
+    }),
+    sessionId: actorContext.sessionId
+  });
+}
+
+export function actorIdentityLabel(actor: ActorIdentity): string {
+  return actor.userId ?? actor.label;
+}
 
 export function nowIso(): string {
   return new Date().toISOString();

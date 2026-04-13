@@ -1,4 +1,4 @@
-import { SYSTEM_USER_ID, briefingTypeValues } from "@agentic/contracts";
+import { SYSTEM_USER_ID, briefingTypeValues, createHumanActorContext, type ActorContext } from "@agentic/contracts";
 import { ApprovalMutationError, type AgenticRepository } from "@agentic/repository";
 import { vi } from "vitest";
 import { buildSlackApprovalToken } from "../apps/web/lib/slack-approvals";
@@ -297,7 +297,7 @@ describe("slack webhook route", () => {
     const approvalCalls: Array<{
       approvalId: string;
       decision: string;
-      userId: string;
+      actor: ActorContext;
       scope?: string;
       rationale?: string | null;
     }> = [];
@@ -393,14 +393,14 @@ describe("slack webhook route", () => {
           approvalCalls.push({
             approvalId: input.approvalId,
             decision: input.decision,
-            userId: input.userId,
+            actor: input.actor,
             scope: input.scope,
             rationale: input.rationale
           });
           return {
             goal: {
               id: "goal-1",
-              userId: input.userId,
+              userId: input.actor.subjectUserId,
               request: "Review my inbox",
               title: "Review inbox",
               explanation: "Review inbox and draft responses.",
@@ -460,7 +460,8 @@ describe("slack webhook route", () => {
                     decision: input.decision,
                     scope: input.scope ?? "once",
                     rationale: input.rationale ?? null,
-                    actor: input.userId,
+                    actor: input.actor.executor.userId ?? input.actor.executor.label,
+                    actorContext: input.actor,
                     createdAt: "2024-01-01T00:00:00.000Z"
                   }
                 ],
@@ -498,7 +499,7 @@ describe("slack webhook route", () => {
       {
         approvalId: "approval-safe",
         decision: "approved",
-        userId: "user-slack",
+        actor: createHumanActorContext("user-slack"),
         scope: "once",
         rationale: null
       }

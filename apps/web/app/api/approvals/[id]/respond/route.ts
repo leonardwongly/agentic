@@ -4,6 +4,7 @@ import { isGmailReady, isCalendarReady, isSlackReady, sendNotification, createDr
 import type { GoalBundle } from "@agentic/contracts";
 import { ApprovalMutationError, type AgenticRepository } from "@agentic/repository";
 import { requireApiSession } from "../../../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../../lib/api-errors";
 import { persistCapturedMemories } from "../../../../../lib/persist-captured-memories";
@@ -75,6 +76,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
+    const actor = createActorContextFromPrincipal(principal);
     const { id } = await context.params;
     const approvalId = ApprovalIdSchema.parse(id);
     const body = await parseJsonBody(request, ApprovalResponseSchema);
@@ -84,7 +86,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         return await repository.respondToApproval({
           approvalId,
           decision: body.decision,
-          userId: principal.userId,
+          actor,
           scope: body.scope,
           rationale: body.rationale ?? null
         });

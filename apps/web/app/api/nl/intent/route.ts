@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { BriefingTypeSchema, RiskClassSchema } from "@agentic/contracts";
+import { BriefingTypeSchema, RiskClassSchema, type ActorContext } from "@agentic/contracts";
 import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, generateBriefing, processUserRequest, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
 import { isCalendarReady, isGmailReady, createDraft, createEvent, createLocalNote, listRecentEmails, listUpcomingEvents, sendDraft, updateEvent } from "@agentic/integrations";
 import { requireApiSession } from "../../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { buildNlCapabilitySummary } from "../../../../lib/nl-capabilities";
 import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
@@ -175,7 +176,7 @@ async function summaryIntent(userId: string, intent: z.infer<typeof NLSummaryInt
   };
 }
 
-async function approveAllR2(userId: string) {
+async function approveAllR2(userId: string, actor: ActorContext) {
   const { repository } = await resolveActiveWorkspaceContext(userId);
   const pendingApprovals = (await repository.listApprovals(userId)).filter(
     (approval) => approval.decision === "pending" && approval.riskClass === "R2"
@@ -196,7 +197,7 @@ async function approveAllR2(userId: string) {
       let updatedBundle = await repository.respondToApproval({
         approvalId: approval.id,
         decision: "approved",
-        userId,
+        actor,
         scope: "once"
       });
 
@@ -344,11 +345,15 @@ async function createBriefingFromIntent(userId: string, intent: z.infer<typeof N
   };
 }
 
-async function commandIntent(userId: string, intent: z.infer<typeof NLApproveCommandSchema> | z.infer<typeof NLRejectCommandSchema> | z.infer<typeof NLCreateGoalCommandSchema> | z.infer<typeof NLBriefingCommandSchema>) {
+async function commandIntent(
+  userId: string,
+  actor: ActorContext,
+  intent: z.infer<typeof NLApproveCommandSchema> | z.infer<typeof NLRejectCommandSchema> | z.infer<typeof NLCreateGoalCommandSchema> | z.infer<typeof NLBriefingCommandSchema>
+) {
   switch (intent.action) {
     case "approve":
       if (intent.params.all === true && intent.params.riskClass === "R2") {
-        return approveAllR2(userId);
+        return approveAllR2(userId, actor);
       }
 
       {
@@ -377,7 +382,7 @@ async function commandIntent(userId: string, intent: z.infer<typeof NLApproveCom
   }
 }
 
-async function executeIntent(userId: string, intent: NLIntentRequest) {
+async function executeIntent(userId: string, actor: ActorContext, intent: NLIntentRequest) {
   if (intent.type === "query") {
     return queryIntent(userId, intent);
   }
@@ -386,14 +391,15 @@ async function executeIntent(userId: string, intent: NLIntentRequest) {
     return summaryIntent(userId, intent);
   }
 
-  return commandIntent(userId, intent);
+  return commandIntent(userId, actor, intent);
 }
 
 export async function POST(request: Request) {
   try {
     const principal = await requireApiSession(request);
+    const actor = createActorContextFromPrincipal(principal);
     const intent = await parseJsonBody(request, NLIntentRequestSchema);
-    const result = await executeIntent(principal.userId, intent);
+    const result = await executeIntent(principal.userId, actor, intent);
 
     return authenticatedJson(result);
   } catch (error) {

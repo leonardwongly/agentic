@@ -1,4 +1,4 @@
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { SYSTEM_USER_ID, createHumanActorContext } from "@agentic/contracts";
 import { generateBriefing, generateMorningBriefing, respondToApproval, processUserRequest } from "@agentic/orchestrator";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord } from "@agentic/memory";
@@ -68,6 +68,7 @@ describe("orchestrator", () => {
       bundle,
       approvalId: approval.id,
       decision: "approved",
+      actor: createHumanActorContext(SYSTEM_USER_ID),
       scope: "similar_24h",
       rationale: "Safe for the next batch of comparable replies."
     });
@@ -82,7 +83,8 @@ describe("orchestrator", () => {
     expect(decisionRecord).toMatchObject({
       decision: "approved",
       scope: "similar_24h",
-      rationale: "Safe for the next batch of comparable replies."
+      rationale: "Safe for the next batch of comparable replies.",
+      actorContext: createHumanActorContext(SYSTEM_USER_ID)
     });
     expect(updatedTask?.state).toBe("queued");
     expect(
@@ -90,14 +92,16 @@ describe("orchestrator", () => {
         (log) =>
           log.kind === "task.state_changed" &&
           log.details?.scope === "similar_24h" &&
-          log.details?.decision === "approved"
+          log.details?.decision === "approved" &&
+          log.details?.actorContext?.subjectUserId === SYSTEM_USER_ID
       )
     ).toBe(true);
     expect(updated.actionLogs.at(-1)).toMatchObject({
       kind: "approval.responded",
       details: {
         scope: "similar_24h",
-        rationale: "Safe for the next batch of comparable replies."
+        rationale: "Safe for the next batch of comparable replies.",
+        actorContext: createHumanActorContext(SYSTEM_USER_ID)
       }
     });
   });
@@ -120,7 +124,8 @@ describe("orchestrator", () => {
           )
         },
         approvalId: approval.id,
-        decision: "approved"
+        decision: "approved",
+        actor: createHumanActorContext(SYSTEM_USER_ID)
       })
     ).toThrow(/has expired/);
   });

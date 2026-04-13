@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { WorkspaceGovernanceSchema } from "@agentic/contracts";
 import { requireApiSession } from "../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
 import { getSeededRepository } from "../../../lib/server";
@@ -47,6 +48,7 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
+    const actor = createActorContextFromPrincipal(principal);
     const { repository, activeWorkspace } = await resolveWorkspaceContext(principal.userId);
     const body = await parseJsonBody(request, GovernanceUpdateSchema);
     const current =
@@ -71,7 +73,7 @@ export async function POST(request: Request) {
       updatedAt: new Date().toISOString()
     });
 
-    await repository.saveWorkspaceGovernance(updated, principal.userId);
+    await repository.saveWorkspaceGovernance(updated, actor);
 
     return authenticatedJson({
       governance: updated,
