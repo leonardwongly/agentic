@@ -1,15 +1,7 @@
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
-import { getAuthSessionStateStore, type SessionRateLimitEntry } from "./auth-session-store";
-
-// ---------------------------------------------------------------------------
-// Rate limiting for the session endpoint
-// ---------------------------------------------------------------------------
-
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute sliding window
-const RATE_LIMIT_MAX_ATTEMPTS = 10; // attempts before lockout
-const RATE_LIMIT_LOCKOUT_MS = 5 * 60_000; // 5 minute lockout
+import { getAuthSessionStateStore } from "./auth-session-store";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const SESSION_TOKEN_VERSION = 1 as const;
@@ -29,53 +21,25 @@ export type AuthPrincipal = {
   expiresAt: string | null;
 };
 
-export function checkSessionRateLimit(key: string): { allowed: boolean; retryAfterMs: number } {
-  const store = getAuthSessionStateStore();
-  const now = Date.now();
-  const entry: SessionRateLimitEntry = store.getRateLimitEntry(key) ?? { attempts: 0, windowStart: now, lockedUntil: null };
-
-  if (entry.lockedUntil !== null) {
-    if (now < entry.lockedUntil) {
-      return { allowed: false, retryAfterMs: entry.lockedUntil - now };
-    }
-    // lockout expired — reset
-    entry.attempts = 0;
-    entry.windowStart = now;
-    entry.lockedUntil = null;
-  }
-
-  if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    entry.attempts = 0;
-    entry.windowStart = now;
-  }
-
-  entry.attempts += 1;
-  store.setRateLimitEntry(key, entry);
-
-  if (entry.attempts > RATE_LIMIT_MAX_ATTEMPTS) {
-    entry.lockedUntil = now + RATE_LIMIT_LOCKOUT_MS;
-    store.setRateLimitEntry(key, entry);
-    return { allowed: false, retryAfterMs: RATE_LIMIT_LOCKOUT_MS };
-  }
-
-  return { allowed: true, retryAfterMs: 0 };
+export async function checkSessionRateLimit(key: string): Promise<{ allowed: boolean; retryAfterMs: number }> {
+  return getAuthSessionStateStore().checkRateLimit(key);
 }
 
-export function recordSessionSuccess(key: string): void {
-  getAuthSessionStateStore().deleteRateLimitEntry(key);
+export async function recordSessionSuccess(key: string): Promise<void> {
+  await getAuthSessionStateStore().clearRateLimit(key);
 }
 
-export function revokeSessionToken(token: string): void {
-  const session = parseAuthorizedSessionToken(token);
+export async function revokeSessionToken(token: string): Promise<void> {
+  const session = await parseAuthorizedSessionToken(token);
 
   if (!session) {
     return;
   }
 
-  getAuthSessionStateStore().revokeSession(session.sessionId, Date.parse(session.expiresAt));
+  await getAuthSessionStateStore().revokeSession(session.sessionId, Date.parse(session.expiresAt));
 }
 
-export function isSessionTokenRevoked(sessionId: string): boolean {
+export async function isSessionTokenRevoked(sessionId: string): Promise<boolean> {
   return getAuthSessionStateStore().isSessionRevoked(sessionId);
 }
 
@@ -232,7 +196,7 @@ export function buildSessionToken(userId = SYSTEM_USER_ID): string {
   return `${encodedPayload}.${signature}`;
 }
 
-export function parseAuthorizedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): SessionTokenPayload | null {
+function parseSignedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): SessionTokenPayload | null {
   const token = candidate?.trim();
 
   if (!token) {
@@ -267,15 +231,28 @@ export function parseAuthorizedSessionToken(candidate: string | null | undefined
     return null;
   }
 
-  if (isSessionTokenRevoked(payload.sessionId)) {
+  return payload;
+}
+
+export async function parseAuthorizedSessionToken(
+  candidate: string | null | undefined,
+  userId = SYSTEM_USER_ID
+): Promise<SessionTokenPayload | null> {
+  const payload = parseSignedSessionToken(candidate, userId);
+
+  if (!payload) {
+    return null;
+  }
+
+  if (await isSessionTokenRevoked(payload.sessionId)) {
     return null;
   }
 
   return payload;
 }
 
-export function isAuthorizedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): boolean {
-  return parseAuthorizedSessionToken(candidate, userId) !== null;
+export async function isAuthorizedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): Promise<boolean> {
+  return (await parseAuthorizedSessionToken(candidate, userId)) !== null;
 }
 
 export function createSessionCookie(userId = SYSTEM_USER_ID) {
@@ -308,10 +285,10 @@ export function clearSessionCookie() {
 
 export async function hasActiveSession() {
   const cookieStore = await cookies();
-  return parseAuthorizedSessionToken(cookieStore.get(AGENTIC_SESSION_COOKIE)?.value) !== null;
+  return (await parseAuthorizedSessionToken(cookieStore.get(AGENTIC_SESSION_COOKIE)?.value)) !== null;
 }
 
-export function resolveApiPrincipal(request: Request): AuthPrincipal | null {
+export async function resolveApiPrincipal(request: Request): Promise<AuthPrincipal | null> {
   const headerKey = request.headers.get(AGENTIC_ACCESS_KEY_HEADER);
 
   if (verifyAccessKey(headerKey)) {
@@ -324,7 +301,7 @@ export function resolveApiPrincipal(request: Request): AuthPrincipal | null {
   }
 
   const sessionToken = readCookieValue(request.headers.get("cookie"), AGENTIC_SESSION_COOKIE);
-  const session = parseAuthorizedSessionToken(sessionToken);
+  const session = await parseAuthorizedSessionToken(sessionToken);
 
   if (!session) {
     return null;
@@ -340,7 +317,7 @@ export function resolveApiPrincipal(request: Request): AuthPrincipal | null {
 
 export async function requireApiSession(request?: Request): Promise<AuthPrincipal> {
   if (request) {
-    const principal = resolveApiPrincipal(request);
+    const principal = await resolveApiPrincipal(request);
 
     if (principal) {
       return principal;
@@ -350,7 +327,7 @@ export async function requireApiSession(request?: Request): Promise<AuthPrincipa
   }
 
   const cookieStore = await cookies();
-  const session = parseAuthorizedSessionToken(cookieStore.get(AGENTIC_SESSION_COOKIE)?.value);
+  const session = await parseAuthorizedSessionToken(cookieStore.get(AGENTIC_SESSION_COOKIE)?.value);
 
   if (session) {
     return {

@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     validateAuthRuntimeState();
 
     const rateLimitKey = request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "unknown";
-    const rateLimit = checkSessionRateLimit(rateLimitKey);
+    const rateLimit = await checkSessionRateLimit(rateLimitKey);
 
     if (!rateLimit.allowed) {
       return NextResponse.json(
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       return authenticatedError(503, "AGENTIC_ACCESS_KEY is not configured.");
     }
 
-    const rateLimitStatus = getSessionUnlockRateLimitStatus(request);
+    const rateLimitStatus = await getSessionUnlockRateLimitStatus(request);
 
     if (rateLimitStatus.throttled) {
       return authenticatedJson(
@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     const body = await parseJsonBody(request, SessionRequestSchema);
 
     if (!verifyAccessKey(body.accessKey)) {
-      const failureStatus = recordFailedSessionUnlockAttempt(request);
+      const failureStatus = await recordFailedSessionUnlockAttempt(request);
 
       if (failureStatus.throttled) {
         return authenticatedJson(
@@ -78,8 +78,8 @@ export async function POST(request: Request) {
       return authenticatedError(401, "The supplied access key was rejected.");
     }
 
-    clearFailedSessionUnlockAttempts(request);
-    recordSessionSuccess(rateLimitKey);
+    await clearFailedSessionUnlockAttempts(request);
+    await recordSessionSuccess(rateLimitKey);
 
     const response = authenticatedJson({
       ok: true
@@ -101,7 +101,7 @@ export async function DELETE(request: Request) {
     ?.slice(AGENTIC_SESSION_COOKIE.length + 1);
 
   if (existingToken) {
-    revokeSessionToken(existingToken);
+    await revokeSessionToken(existingToken);
   }
 
   const response = authenticatedJson({ ok: true });

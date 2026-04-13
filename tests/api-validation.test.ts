@@ -56,13 +56,13 @@ describe("api request validation", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
-    resetSessionUnlockRateLimit();
+    await resetSessionUnlockRateLimit();
   });
 
   it.each([

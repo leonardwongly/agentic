@@ -75,6 +75,14 @@ export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
 
 When enabled in production, Agentic fails closed if session revocation, session rate limiting, and unlock throttling are still backed by process-local memory. This is the recommended mode for multi-instance deployments.
 
+Optional development or test opt-in for the shared auth-state backend:
+
+```bash
+export AGENTIC_SHARED_AUTH_STATE=true
+```
+
+With `DATABASE_URL` configured, production automatically uses the Postgres-backed auth-state tables. Development and test stay on bounded in-memory auth state unless you opt in explicitly with `AGENTIC_SHARED_AUTH_STATE=true`.
+
 4. Start the web app:
 
 ```bash
@@ -117,6 +125,8 @@ npm run build
 
 - If `DATABASE_URL` is set, the app uses the Postgres-backed repository.
 - Otherwise it falls back to a file-backed runtime store at `.agentic/runtime-store.json` so the app stays runnable before the database is provisioned outside production. Production requires `DATABASE_URL`.
+- In production, `DATABASE_URL` also enables Postgres-backed auth session rate limiting, session revocation, and session unlock throttling.
+- In development and test, those auth-state controls stay in-memory by default so local runs do not silently depend on Postgres. Set `AGENTIC_SHARED_AUTH_STATE=true` when you want to exercise the shared backend outside production.
 - `AGENTIC_RUNTIME_STORE_PATH` overrides the file-backed store path when you need isolated local or test storage.
 - `AGENTIC_NOTES_PATH` overrides the local notes directory used by the filesystem-backed notes adapter.
 
@@ -127,7 +137,9 @@ The first concrete local adapter is a notes provider that reads and writes Markd
 - API routes are protected by a session cookie created through `/api/session`.
 - Authenticated route handlers are scoped to the signed-in principal rather than a global user fallback.
 - Session revocation, login throttling, and unlock throttling default to bounded in-memory stores for local development and tests.
-- Production can be configured to fail closed with `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` until shared auth-state stores are wired in.
+- Production automatically upgrades those controls to shared Postgres-backed state when `DATABASE_URL` is configured.
+- `AGENTIC_SHARED_AUTH_STATE=true` opts development and test into the shared Postgres-backed auth-state path.
+- `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` makes production fail closed if shared auth-state infrastructure is still unavailable.
 - External actions stay behind governance and approval checks unless a connector has earned a higher readiness tier.
 - Approval and execution evidence is persisted so operator-visible state matches what actually ran.
 

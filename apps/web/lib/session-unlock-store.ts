@@ -1,3 +1,6 @@
+import { createPostgresSessionUnlockStateStore } from "./shared-auth-state-db";
+import { shouldUseSharedAuthState } from "./shared-auth-state-config";
+
 const UNLOCK_WINDOW_MS = 10 * 60 * 1000;
 const UNLOCK_BLOCK_MS = 15 * 60 * 1000;
 const MAX_FAILED_UNLOCK_ATTEMPTS = 5;
@@ -11,25 +14,41 @@ export type UnlockAttemptRecord = {
   failures: number;
 };
 
+export type UnlockRateLimitStatus = {
+  retryAfterSeconds: number;
+  throttled: boolean;
+};
+
 export type SessionUnlockStateStore = {
   scope: "process-local" | "shared";
-  getRecord(key: string, now?: number): UnlockAttemptRecord | null;
-  recordFailure(key: string, now?: number): UnlockAttemptRecord;
-  clear(key: string): void;
-  reset(): void;
+  getStatus(key: string, now?: number): Promise<UnlockRateLimitStatus>;
+  recordFailure(key: string, now?: number): Promise<UnlockRateLimitStatus>;
+  clear(key: string): Promise<void>;
+  reset(): Promise<void>;
 };
 
 class InMemorySessionUnlockStateStore implements SessionUnlockStateStore {
   readonly scope = "process-local" as const;
   private readonly attempts = new Map<string, UnlockAttemptRecord>();
 
-  getRecord(key: string, now = Date.now()): UnlockAttemptRecord | null {
+  async getStatus(key: string, now = Date.now()): Promise<UnlockRateLimitStatus> {
     this.cleanup(now);
     const record = this.attempts.get(key);
-    return record ? { ...record } : null;
+
+    if (!record || record.blockedUntil <= now) {
+      return {
+        throttled: false,
+        retryAfterSeconds: 0
+      };
+    }
+
+    return {
+      throttled: true,
+      retryAfterSeconds: Math.max(1, Math.ceil((record.blockedUntil - now) / 1000))
+    };
   }
 
-  recordFailure(key: string, now = Date.now()): UnlockAttemptRecord {
+  async recordFailure(key: string, now = Date.now()): Promise<UnlockRateLimitStatus> {
     this.cleanup(now);
 
     const existing = this.attempts.get(key);
@@ -41,7 +60,10 @@ class InMemorySessionUnlockStateStore implements SessionUnlockStateStore {
       };
 
       this.attempts.set(key, blockedRecord);
-      return { ...blockedRecord };
+      return {
+        throttled: true,
+        retryAfterSeconds: Math.max(1, Math.ceil((blockedRecord.blockedUntil - now) / 1000))
+      };
     }
 
     const shouldResetWindow = !existing || now - existing.firstFailureAt > UNLOCK_WINDOW_MS;
@@ -64,14 +86,25 @@ class InMemorySessionUnlockStateStore implements SessionUnlockStateStore {
     }
 
     this.attempts.set(key, nextRecord);
-    return { ...nextRecord };
+
+    if (nextRecord.blockedUntil > now) {
+      return {
+        throttled: true,
+        retryAfterSeconds: Math.max(1, Math.ceil((nextRecord.blockedUntil - now) / 1000))
+      };
+    }
+
+    return {
+      throttled: false,
+      retryAfterSeconds: 0
+    };
   }
 
-  clear(key: string): void {
+  async clear(key: string): Promise<void> {
     this.attempts.delete(key);
   }
 
-  reset(): void {
+  async reset(): Promise<void> {
     this.attempts.clear();
   }
 
@@ -103,6 +136,10 @@ declare global {
 }
 
 function createDefaultSessionUnlockStateStore(): SessionUnlockStateStore {
+  if (shouldUseSharedAuthState()) {
+    return createPostgresSessionUnlockStateStore();
+  }
+
   return new InMemorySessionUnlockStateStore();
 }
 

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, jsonb, real, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, jsonb, real, integer, index } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
@@ -7,6 +7,46 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull()
 });
+
+export const authSessionRateLimits = pgTable(
+  "auth_session_rate_limits",
+  {
+    key: text("key").primaryKey(),
+    attempts: integer("attempts").notNull(),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    updatedAtIdx: index("auth_session_rate_limits_updated_at_idx").on(table.updatedAt)
+  })
+);
+
+export const authRevokedSessions = pgTable(
+  "auth_revoked_sessions",
+  {
+    sessionId: text("session_id").primaryKey(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    expiresAtIdx: index("auth_revoked_sessions_expires_at_idx").on(table.expiresAt)
+  })
+);
+
+export const sessionUnlockAttempts = pgTable(
+  "session_unlock_attempts",
+  {
+    key: text("key").primaryKey(),
+    failures: integer("failures").notNull(),
+    firstFailureAt: timestamp("first_failure_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    blockedUntil: timestamp("blocked_until", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    lastSeenAtIdx: index("session_unlock_attempts_last_seen_at_idx").on(table.lastSeenAt)
+  })
+);
 
 export const workflows = pgTable("workflows", {
   id: text("id").primaryKey(),

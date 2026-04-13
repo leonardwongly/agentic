@@ -16,8 +16,7 @@ import { resetAuthSessionStateStoreForTesting, setAuthSessionStateStoreForTestin
 import {
   clearFailedSessionUnlockAttempts,
   getSessionUnlockRateLimitStatus,
-  recordFailedSessionUnlockAttempt,
-  resetSessionUnlockRateLimit
+  recordFailedSessionUnlockAttempt
 } from "../apps/web/lib/session-unlock-rate-limit";
 import {
   resetSessionUnlockStateStoreForTesting,
@@ -34,18 +33,21 @@ describe("auth helpers", () => {
   const originalKey = process.env.AGENTIC_ACCESS_KEY;
   const originalNodeEnv = process.env.NODE_ENV;
   const originalRequireSharedAuthState = process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalSharedAuthState = process.env.AGENTIC_SHARED_AUTH_STATE;
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalKey;
     process.env.NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
-    resetSessionUnlockRateLimit();
+    process.env.DATABASE_URL = originalDatabaseUrl;
+    process.env.AGENTIC_SHARED_AUTH_STATE = originalSharedAuthState;
     resetAuthRuntimeStateWarningsForTesting();
     resetSessionUnlockStateStoreForTesting();
     resetAuthSessionStateStoreForTesting();
   });
 
-  it("verifies a configured access key and derived session token", () => {
+  it("verifies a configured access key and derived session token", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
     process.env.NODE_ENV = "test";
 
@@ -53,14 +55,14 @@ describe("auth helpers", () => {
     expect(verifyAccessKey("wrong-key")).toBe(false);
 
     const token = buildSessionToken();
-    expect(isAuthorizedSessionToken(token)).toBe(true);
-    expect(isAuthorizedSessionToken("not-a-token")).toBe(false);
-    expect(parseAuthorizedSessionToken(token)).toMatchObject({
+    await expect(isAuthorizedSessionToken(token)).resolves.toBe(true);
+    await expect(isAuthorizedSessionToken("not-a-token")).resolves.toBe(false);
+    await expect(parseAuthorizedSessionToken(token)).resolves.toMatchObject({
       userId: "user-primary"
     });
   });
 
-  it("issues distinct signed session tokens and honors revocation", () => {
+  it("issues distinct signed session tokens and honors revocation", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
     process.env.NODE_ENV = "test";
 
@@ -68,36 +70,37 @@ describe("auth helpers", () => {
     const secondToken = buildSessionToken();
 
     expect(firstToken).not.toBe(secondToken);
-    expect(isAuthorizedSessionToken(firstToken)).toBe(true);
+    await expect(isAuthorizedSessionToken(firstToken)).resolves.toBe(true);
 
-    revokeSessionToken(firstToken);
+    await revokeSessionToken(firstToken);
 
-    expect(isAuthorizedSessionToken(firstToken)).toBe(false);
-    expect(isAuthorizedSessionToken(secondToken)).toBe(true);
+    await expect(isAuthorizedSessionToken(firstToken)).resolves.toBe(false);
+    await expect(isAuthorizedSessionToken(secondToken)).resolves.toBe(true);
   });
 
-  it("supports swapping in a shared auth session state store boundary", () => {
+  it("supports swapping in a shared auth session state store boundary", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
     process.env.NODE_ENV = "test";
 
-    const rateLimitEntries = new Map<string, { attempts: number; windowStart: number; lockedUntil: number | null }>();
+    const rateLimitAttempts = new Map<string, number>();
     const revokedSessionIds = new Map<string, number>();
     const store: AuthSessionStateStore = {
       scope: "shared",
-      getRateLimitEntry(key) {
-        const entry = rateLimitEntries.get(key);
-        return entry ? { ...entry } : null;
+      async checkRateLimit(key) {
+        const nextAttempts = (rateLimitAttempts.get(key) ?? 0) + 1;
+        rateLimitAttempts.set(key, nextAttempts);
+        return {
+          allowed: nextAttempts <= 10,
+          retryAfterMs: nextAttempts <= 10 ? 0 : 300_000
+        };
       },
-      setRateLimitEntry(key, entry) {
-        rateLimitEntries.set(key, { ...entry });
+      async clearRateLimit(key) {
+        rateLimitAttempts.delete(key);
       },
-      deleteRateLimitEntry(key) {
-        rateLimitEntries.delete(key);
-      },
-      revokeSession(sessionId, expiresAtMs) {
+      async revokeSession(sessionId, expiresAtMs) {
         revokedSessionIds.set(sessionId, expiresAtMs);
       },
-      isSessionRevoked(sessionId, now = Date.now()) {
+      async isSessionRevoked(sessionId, now = Date.now()) {
         for (const [revokedId, expiresAtMs] of revokedSessionIds.entries()) {
           if (expiresAtMs <= now) {
             revokedSessionIds.delete(revokedId);
@@ -106,8 +109,8 @@ describe("auth helpers", () => {
 
         return revokedSessionIds.has(sessionId);
       },
-      reset() {
-        rateLimitEntries.clear();
+      async reset() {
+        rateLimitAttempts.clear();
         revokedSessionIds.clear();
       }
     };
@@ -115,22 +118,24 @@ describe("auth helpers", () => {
     setAuthSessionStateStoreForTesting(store);
 
     const token = buildSessionToken();
-    const session = parseAuthorizedSessionToken(token);
+    const session = await parseAuthorizedSessionToken(token);
 
     expect(session).not.toBeNull();
 
     for (let index = 0; index < 10; index += 1) {
-      expect(checkSessionRateLimit("198.51.100.25").allowed).toBe(true);
+      await expect(checkSessionRateLimit("198.51.100.25")).resolves.toMatchObject({
+        allowed: true
+      });
     }
 
-    expect(checkSessionRateLimit("198.51.100.25")).toMatchObject({
+    await expect(checkSessionRateLimit("198.51.100.25")).resolves.toMatchObject({
       allowed: false
     });
 
-    revokeSessionToken(token);
+    await revokeSessionToken(token);
 
     expect(revokedSessionIds.has(session!.sessionId)).toBe(true);
-    expect(isAuthorizedSessionToken(token)).toBe(false);
+    await expect(isAuthorizedSessionToken(token)).resolves.toBe(false);
   });
 
   it("reports missing configuration in production without the development fallback", () => {
@@ -215,7 +220,7 @@ describe("auth helpers", () => {
     expect(cookie.options.maxAge).toBe(0);
   });
 
-  it("throttles repeated failed unlock attempts for the same client", () => {
+  it("throttles repeated failed unlock attempts for the same client", async () => {
     const request = new Request("http://localhost/api/session", {
       method: "POST",
       headers: {
@@ -225,48 +230,55 @@ describe("auth helpers", () => {
     });
 
     for (let index = 0; index < 4; index += 1) {
-      expect(recordFailedSessionUnlockAttempt(request, 1_000 + index).throttled).toBe(false);
+      await expect(recordFailedSessionUnlockAttempt(request, 1_000 + index)).resolves.toMatchObject({
+        throttled: false
+      });
     }
 
-    const throttled = recordFailedSessionUnlockAttempt(request, 1_100);
+    const throttled = await recordFailedSessionUnlockAttempt(request, 1_100);
 
     expect(throttled.throttled).toBe(true);
     expect(throttled.retryAfterSeconds).toBeGreaterThan(0);
-    expect(getSessionUnlockRateLimitStatus(request, 1_101).throttled).toBe(true);
+    await expect(getSessionUnlockRateLimitStatus(request, 1_101)).resolves.toMatchObject({
+      throttled: true
+    });
   });
 
-  it("supports swapping in a shared session unlock state store boundary", () => {
+  it("supports swapping in a shared session unlock state store boundary", async () => {
     const expectedKey = "203.0.113.19";
     const seenKeys: string[] = [];
-    let storedRecord: {
-      blockedUntil: number;
-      firstFailureAt: number;
-      lastSeenAt: number;
-      failures: number;
-    } | null = null;
+    let throttledUntil: number | null = null;
 
     const store: SessionUnlockStateStore = {
       scope: "shared",
-      getRecord(key) {
+      async getStatus(key, now = Date.now()) {
         seenKeys.push(`get:${key}`);
-        return storedRecord ? { ...storedRecord } : null;
-      },
-      recordFailure(key, now = Date.now()) {
-        seenKeys.push(`record:${key}`);
-        storedRecord = {
-          blockedUntil: now + 60_000,
-          firstFailureAt: now,
-          lastSeenAt: now,
-          failures: 5
+        if (throttledUntil === null || throttledUntil <= now) {
+          return {
+            throttled: false,
+            retryAfterSeconds: 0
+          };
+        }
+
+        return {
+          throttled: true,
+          retryAfterSeconds: Math.max(1, Math.ceil((throttledUntil - now) / 1000))
         };
-        return { ...storedRecord };
       },
-      clear(key) {
+      async recordFailure(key, now = Date.now()) {
+        seenKeys.push(`record:${key}`);
+        throttledUntil = now + 60_000;
+        return {
+          throttled: true,
+          retryAfterSeconds: 60
+        };
+      },
+      async clear(key) {
         seenKeys.push(`clear:${key}`);
-        storedRecord = null;
+        throttledUntil = null;
       },
-      reset() {
-        storedRecord = null;
+      async reset() {
+        throttledUntil = null;
       }
     };
 
@@ -279,20 +291,22 @@ describe("auth helpers", () => {
       }
     });
 
-    expect(getSessionUnlockRateLimitStatus(request, 10_000)).toEqual({
+    await expect(getSessionUnlockRateLimitStatus(request, 10_000)).resolves.toEqual({
       throttled: false,
       retryAfterSeconds: 0
     });
 
-    const throttled = recordFailedSessionUnlockAttempt(request, 10_100);
+    const throttled = await recordFailedSessionUnlockAttempt(request, 10_100);
 
     expect(throttled.throttled).toBe(true);
     expect(throttled.retryAfterSeconds).toBeGreaterThan(0);
-    expect(getSessionUnlockRateLimitStatus(request, 10_101).throttled).toBe(true);
+    await expect(getSessionUnlockRateLimitStatus(request, 10_101)).resolves.toMatchObject({
+      throttled: true
+    });
 
-    clearFailedSessionUnlockAttempts(request);
+    await clearFailedSessionUnlockAttempts(request);
 
-    expect(getSessionUnlockRateLimitStatus(request, 10_102)).toEqual({
+    await expect(getSessionUnlockRateLimitStatus(request, 10_102)).resolves.toEqual({
       throttled: false,
       retryAfterSeconds: 0
     });
@@ -305,7 +319,7 @@ describe("auth helpers", () => {
     ]);
   });
 
-  it("clears the failed unlock window after a successful session creation", () => {
+  it("clears the failed unlock window after a successful session creation", async () => {
     const request = new Request("http://localhost/api/session", {
       method: "POST",
       headers: {
@@ -314,13 +328,17 @@ describe("auth helpers", () => {
     });
 
     for (let index = 0; index < 4; index += 1) {
-      recordFailedSessionUnlockAttempt(request, 5_000 + index);
+      await recordFailedSessionUnlockAttempt(request, 5_000 + index);
     }
 
-    clearFailedSessionUnlockAttempts(request);
+    await clearFailedSessionUnlockAttempts(request);
 
-    expect(getSessionUnlockRateLimitStatus(request, 5_100).throttled).toBe(false);
-    expect(recordFailedSessionUnlockAttempt(request, 5_101).throttled).toBe(false);
+    await expect(getSessionUnlockRateLimitStatus(request, 5_100)).resolves.toMatchObject({
+      throttled: false
+    });
+    await expect(recordFailedSessionUnlockAttempt(request, 5_101)).resolves.toMatchObject({
+      throttled: false
+    });
   });
 
   it("reports process-local auth runtime state by default", () => {
@@ -349,32 +367,32 @@ describe("auth helpers", () => {
 
     const authStore: AuthSessionStateStore = {
       scope: "shared",
-      getRateLimitEntry() {
-        return null;
+      async checkRateLimit() {
+        return { allowed: true, retryAfterMs: 0 };
       },
-      setRateLimitEntry() {},
-      deleteRateLimitEntry() {},
-      revokeSession() {},
-      isSessionRevoked() {
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
         return false;
       },
-      reset() {}
+      async reset() {}
     };
     const unlockStore: SessionUnlockStateStore = {
       scope: "shared",
-      getRecord() {
-        return null;
-      },
-      recordFailure(_key, now = Date.now()) {
+      async getStatus() {
         return {
-          blockedUntil: now + 1_000,
-          firstFailureAt: now,
-          lastSeenAt: now,
-          failures: 1
+          throttled: false,
+          retryAfterSeconds: 0
         };
       },
-      clear() {},
-      reset() {}
+      async recordFailure(_key, now = Date.now()) {
+        return {
+          throttled: true,
+          retryAfterSeconds: Math.max(1, Math.ceil((now + 1_000 - now) / 1000))
+        };
+      },
+      async clear() {},
+      async reset() {}
     };
 
     setAuthSessionStateStoreForTesting(authStore);
@@ -382,5 +400,20 @@ describe("auth helpers", () => {
 
     expect(() => validateAuthRuntimeState()).not.toThrow();
     expect(getAuthRuntimeStateStatus().sharedStateConfigured).toBe(true);
+  });
+
+  it("defaults to shared auth runtime state when DATABASE_URL is configured", () => {
+    process.env.NODE_ENV = "test";
+    process.env.DATABASE_URL = "postgres://agentic:agentic@localhost:5432/agentic";
+    process.env.AGENTIC_SHARED_AUTH_STATE = "true";
+
+    resetSessionUnlockStateStoreForTesting();
+    resetAuthSessionStateStoreForTesting();
+
+    expect(getAuthRuntimeStateStatus()).toMatchObject({
+      sessionStateScope: "shared",
+      unlockStateScope: "shared",
+      sharedStateConfigured: true
+    });
   });
 });

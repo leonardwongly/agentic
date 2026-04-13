@@ -1,17 +1,24 @@
+import { createPostgresAuthSessionStateStore } from "./shared-auth-state-db";
+import { shouldUseSharedAuthState } from "./shared-auth-state-config";
+
 export type SessionRateLimitEntry = {
   attempts: number;
   windowStart: number;
   lockedUntil: number | null;
 };
 
+export type SessionRateLimitStatus = {
+  allowed: boolean;
+  retryAfterMs: number;
+};
+
 export type AuthSessionStateStore = {
   scope: "process-local" | "shared";
-  getRateLimitEntry(key: string): SessionRateLimitEntry | null;
-  setRateLimitEntry(key: string, entry: SessionRateLimitEntry): void;
-  deleteRateLimitEntry(key: string): void;
-  revokeSession(sessionId: string, expiresAtMs: number): void;
-  isSessionRevoked(sessionId: string, now?: number): boolean;
-  reset(): void;
+  checkRateLimit(key: string, now?: number): Promise<SessionRateLimitStatus>;
+  clearRateLimit(key: string): Promise<void>;
+  revokeSession(sessionId: string, expiresAtMs: number): Promise<void>;
+  isSessionRevoked(sessionId: string, now?: number): Promise<boolean>;
+  reset(): Promise<void>;
 };
 
 type StoredRateLimitEntry = {
@@ -27,37 +34,66 @@ class InMemoryAuthSessionStateStore implements AuthSessionStateStore {
   private readonly rateLimits = new Map<string, StoredRateLimitEntry>();
   private readonly revokedSessionIds = new Map<string, number>();
 
-  getRateLimitEntry(key: string): SessionRateLimitEntry | null {
-    this.cleanupRateLimits();
-    const stored = this.rateLimits.get(key);
-    return stored ? { ...stored.entry } : null;
-  }
+  async checkRateLimit(key: string, now = Date.now()): Promise<SessionRateLimitStatus> {
+    this.cleanupRateLimits(now);
+    const entry: SessionRateLimitEntry = this.rateLimits.get(key)?.entry ?? {
+      attempts: 0,
+      windowStart: now,
+      lockedUntil: null
+    };
 
-  setRateLimitEntry(key: string, entry: SessionRateLimitEntry): void {
-    this.cleanupRateLimits();
+    if (entry.lockedUntil !== null) {
+      if (now < entry.lockedUntil) {
+        return { allowed: false, retryAfterMs: entry.lockedUntil - now };
+      }
+
+      entry.attempts = 0;
+      entry.windowStart = now;
+      entry.lockedUntil = null;
+    }
+
+    if (now - entry.windowStart > 60_000) {
+      entry.attempts = 0;
+      entry.windowStart = now;
+    }
+
+    entry.attempts += 1;
     this.rateLimits.set(key, {
       entry: { ...entry },
-      touchedAt: Date.now()
+      touchedAt: now
     });
-
     this.trimRateLimits();
+
+    if (entry.attempts > 10) {
+      entry.lockedUntil = now + 5 * 60_000;
+      this.rateLimits.set(key, {
+        entry: { ...entry },
+        touchedAt: now
+      });
+      return {
+        allowed: false,
+        retryAfterMs: 5 * 60_000
+      };
+    }
+
+    return { allowed: true, retryAfterMs: 0 };
   }
 
-  deleteRateLimitEntry(key: string): void {
+  async clearRateLimit(key: string): Promise<void> {
     this.rateLimits.delete(key);
   }
 
-  revokeSession(sessionId: string, expiresAtMs: number): void {
+  async revokeSession(sessionId: string, expiresAtMs: number): Promise<void> {
     this.cleanupRevokedSessions();
     this.revokedSessionIds.set(sessionId, expiresAtMs);
   }
 
-  isSessionRevoked(sessionId: string, now = Date.now()): boolean {
+  async isSessionRevoked(sessionId: string, now = Date.now()): Promise<boolean> {
     this.cleanupRevokedSessions(now);
     return this.revokedSessionIds.has(sessionId);
   }
 
-  reset(): void {
+  async reset(): Promise<void> {
     this.rateLimits.clear();
     this.revokedSessionIds.clear();
   }
@@ -98,6 +134,10 @@ declare global {
 }
 
 function createDefaultAuthSessionStateStore(): AuthSessionStateStore {
+  if (shouldUseSharedAuthState()) {
+    return createPostgresAuthSessionStateStore();
+  }
+
   return new InMemoryAuthSessionStateStore();
 }
 

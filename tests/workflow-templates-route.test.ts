@@ -41,11 +41,11 @@ describe("workflow templates routes", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
-    resetSessionUnlockRateLimit();
+    await resetSessionUnlockRateLimit();
   });
 
   it("persists workflow templates across repository reloads and supports CRUD", async () => {

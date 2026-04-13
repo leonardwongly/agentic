@@ -121,7 +121,7 @@ Security controls were implemented early with in-memory defaults.
 
 **Actions**
 1. Introduce a shared-state interface contract for revocation and unlock throttling.
-2. Implement a Redis-backed adapter.
+2. Implement a shared backend adapter with atomic updates for revocation, login throttling, and unlock throttling.
 3. Keep the in-memory version for test and local development only.
 4. Add production diagnostics so deployments can flag process-local mode immediately and optionally fail closed.
 
@@ -132,9 +132,11 @@ Security controls were implemented early with in-memory defaults.
 - fallback remains available in test mode only
 
 **Implementation status**
-- Shared-state boundary for unlock throttling is done in code.
+- Shared-state boundaries for auth rate limiting, session revocation, and unlock throttling are done in code.
+- Postgres-backed shared auth-state storage is done in code.
 - Production diagnostics and strict fail-closed configuration are done in code.
-- Shared backend adapter remains planned next.
+- Development and test remain process-local by default unless `AGENTIC_SHARED_AUTH_STATE=true`.
+- Multi-node concurrency and TTL-focused contract tests remain a follow-up hardening item.
 
 ---
 

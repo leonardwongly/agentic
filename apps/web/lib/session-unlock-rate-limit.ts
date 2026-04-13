@@ -1,9 +1,4 @@
-import { getSessionUnlockStateStore } from "./session-unlock-store";
-
-type UnlockRateLimitStatus = {
-  retryAfterSeconds: number;
-  throttled: boolean;
-};
+import { getSessionUnlockStateStore, type UnlockRateLimitStatus } from "./session-unlock-store";
 
 function parseForwardedFor(header: string | null): string | null {
   if (!header) {
@@ -27,43 +22,18 @@ function getClientIdentifier(request: Request): string {
   return forwardedFor ?? realIp ?? connectingIp ?? `ua:${userAgent || "unknown"}`;
 }
 
-function buildStatus(blockedUntil: number, now: number): UnlockRateLimitStatus {
-  return {
-    throttled: blockedUntil > now,
-    retryAfterSeconds: Math.max(1, Math.ceil((blockedUntil - now) / 1000))
-  };
+export async function getSessionUnlockRateLimitStatus(request: Request, now = Date.now()): Promise<UnlockRateLimitStatus> {
+  return getSessionUnlockStateStore().getStatus(getClientIdentifier(request), now);
 }
 
-export function getSessionUnlockRateLimitStatus(request: Request, now = Date.now()): UnlockRateLimitStatus {
-  const record = getSessionUnlockStateStore().getRecord(getClientIdentifier(request), now);
-
-  if (!record || record.blockedUntil <= now) {
-    return {
-      throttled: false,
-      retryAfterSeconds: 0
-    };
-  }
-
-  return buildStatus(record.blockedUntil, now);
+export async function recordFailedSessionUnlockAttempt(request: Request, now = Date.now()): Promise<UnlockRateLimitStatus> {
+  return getSessionUnlockStateStore().recordFailure(getClientIdentifier(request), now);
 }
 
-export function recordFailedSessionUnlockAttempt(request: Request, now = Date.now()): UnlockRateLimitStatus {
-  const nextRecord = getSessionUnlockStateStore().recordFailure(getClientIdentifier(request), now);
-
-  if (nextRecord.blockedUntil > now) {
-    return buildStatus(nextRecord.blockedUntil, now);
-  }
-
-  return {
-    throttled: false,
-    retryAfterSeconds: 0
-  };
+export async function clearFailedSessionUnlockAttempts(request: Request) {
+  await getSessionUnlockStateStore().clear(getClientIdentifier(request));
 }
 
-export function clearFailedSessionUnlockAttempts(request: Request) {
-  getSessionUnlockStateStore().clear(getClientIdentifier(request));
-}
-
-export function resetSessionUnlockRateLimit() {
-  getSessionUnlockStateStore().reset();
+export async function resetSessionUnlockRateLimit() {
+  await getSessionUnlockStateStore().reset();
 }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { formatValidationError, isContentTypeError } from "./api-errors";
 import { isAuthError } from "./auth";
 import { AuthRuntimeStateConfigurationError } from "./auth-runtime-state";
+import { SharedAuthStateStoreError } from "./shared-auth-state-db";
 
 export const AUTHENTICATED_API_CACHE_CONTROL = "private, no-store, max-age=0, must-revalidate";
 
@@ -68,6 +69,10 @@ export function handleApiError(error: unknown, fallbackMessage: string) {
   }
 
   if (error instanceof AuthRuntimeStateConfigurationError) {
+    return authenticatedError(503, error.message);
+  }
+
+  if (error instanceof SharedAuthStateStoreError) {
     return authenticatedError(503, error.message);
   }
 
