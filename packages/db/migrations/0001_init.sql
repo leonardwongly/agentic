@@ -35,6 +35,23 @@ create index if not exists auth_session_rate_limits_updated_at_idx
 create index if not exists session_unlock_attempts_last_seen_at_idx
   on session_unlock_attempts (last_seen_at);
 
+create table if not exists telegram_approval_actions (
+  action_id text primary key,
+  approval_id text not null,
+  goal_id text not null,
+  workspace_id text,
+  decision text not null,
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+  created_at timestamptz not null
+);
+
+create index if not exists telegram_approval_actions_approval_id_idx
+  on telegram_approval_actions (approval_id);
+
+create index if not exists telegram_approval_actions_expires_at_idx
+  on telegram_approval_actions (expires_at);
+
 create table if not exists workflows (
   id text primary key,
   goal_id text not null,

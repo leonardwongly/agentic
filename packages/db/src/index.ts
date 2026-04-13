@@ -48,6 +48,24 @@ export const sessionUnlockAttempts = pgTable(
   })
 );
 
+export const telegramApprovalActions = pgTable(
+  "telegram_approval_actions",
+  {
+    actionId: text("action_id").primaryKey(),
+    approvalId: text("approval_id").notNull(),
+    goalId: text("goal_id").notNull(),
+    workspaceId: text("workspace_id"),
+    decision: text("decision").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    approvalIdIdx: index("telegram_approval_actions_approval_id_idx").on(table.approvalId),
+    expiresAtIdx: index("telegram_approval_actions_expires_at_idx").on(table.expiresAt)
+  })
+);
+
 export const workflows = pgTable("workflows", {
   id: text("id").primaryKey(),
   goalId: text("goal_id").notNull(),

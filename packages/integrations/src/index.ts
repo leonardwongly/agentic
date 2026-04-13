@@ -3,6 +3,7 @@ import { defaultLocalNotesBasePath, ensureLocalNotesDirectory, seedLocalNotes } 
 import { isGmailReady } from "./gmail";
 import { isCalendarReady } from "./google-calendar";
 import { isSlackReady } from "./slack";
+import { isTelegramReady } from "./telegram";
 
 export type IntegrationTemplate = {
   key: string;
@@ -57,6 +58,14 @@ export const integrationTemplates: IntegrationTemplate[] = [
     system: "messaging",
     status: isSlackReady() ? "ready" : "disabled",
     scopes: ["chat.write", "chat.update"],
+    capabilities: ["read", "send"]
+  },
+  {
+    key: "telegram",
+    name: "Telegram Adapter",
+    system: "messaging",
+    status: isTelegramReady() ? "ready" : "disabled",
+    scopes: ["messages.send", "callbacks.read"],
     capabilities: ["read", "send"]
   }
 ];
@@ -199,3 +208,4 @@ export * from "./gmail";
 export * from "./google-calendar";
 export * from "./readiness";
 export * from "./slack";
+export * from "./telegram";

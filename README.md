@@ -83,6 +83,17 @@ export AGENTIC_SHARED_AUTH_STATE=true
 
 With `DATABASE_URL` configured, production automatically uses the Postgres-backed auth-state tables. Development and test stay on bounded in-memory auth state unless you opt in explicitly with `AGENTIC_SHARED_AUTH_STATE=true`.
 
+Optional Telegram approval integration:
+
+```bash
+export TELEGRAM_BOT_TOKEN=123456:replace-with-your-bot-token
+export TELEGRAM_WEBHOOK_SECRET=replace-with-a-long-random-webhook-secret
+export TELEGRAM_DEFAULT_CHAT_ID=-1001234567890
+export TELEGRAM_USER_MAP=123456789:user-id,-1001234567890/123456789:user-id
+```
+
+Telegram approval buttons use short server-stored action IDs rather than signed inline payloads so they fit the Telegram `callback_data` size limit. In production, those action records are stored in Postgres when `DATABASE_URL` is configured. `TELEGRAM_USER_MAP` supports either a global mapping of `telegramUserId:userId` or a chat-scoped mapping of `chatId/telegramUserId:userId`.
+
 4. Start the web app:
 
 ```bash
@@ -146,6 +157,8 @@ The first concrete local adapter is a notes provider that reads and writes Markd
 - `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` makes production fail closed if shared auth-state infrastructure is still unavailable.
 - External actions stay behind governance and approval checks unless a connector has earned a higher readiness tier.
 - Approval and execution evidence is persisted so operator-visible state matches what actually ran.
+- Telegram approval callbacks require the `x-telegram-bot-api-secret-token` header to match `TELEGRAM_WEBHOOK_SECRET`.
+- Telegram approval actions are one-time, expiry-bound, and actor-mapped before they can mutate approval state.
 
 ## Documents And Specs
 
