@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { formatValidationError, isContentTypeError } from "./api-errors";
 import { isAuthError } from "./auth";
+import { AuthRuntimeStateConfigurationError } from "./auth-runtime-state";
 
 export const AUTHENTICATED_API_CACHE_CONTROL = "private, no-store, max-age=0, must-revalidate";
 
@@ -64,6 +65,10 @@ export async function parseJsonBody<T>(request: Request, schema: z.ZodType<T>): 
 export function handleApiError(error: unknown, fallbackMessage: string) {
   if (isAuthError(error)) {
     return authenticatedError(401, error.message);
+  }
+
+  if (error instanceof AuthRuntimeStateConfigurationError) {
+    return authenticatedError(503, error.message);
   }
 
   if (error instanceof z.ZodError) {

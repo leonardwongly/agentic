@@ -11,8 +11,23 @@ type ApprovalDetailPanelProps = {
   isPending?: boolean;
 };
 
+const rollbackLabels: Record<ApprovalRequest["preview"]["impact"]["rollback"], string> = {
+  supported: "Supported",
+  manual: "Manual",
+  not_supported: "Not supported"
+};
+
+const riskAssessmentCopy: Record<ApprovalRequest["riskClass"], string> = {
+  R1: "Low risk. This action would normally auto-run but was escalated by policy or context.",
+  R2: "Moderate risk. User confirmation is required before execution.",
+  R3: "High risk. This action can create significant external effects and needs careful review.",
+  R4: "Critical risk. This action needs admin-level approval because it may be irreversible or highly sensitive."
+};
+
 export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject, isPending }: ApprovalDetailPanelProps) {
   const relatedTask = relatedGoal?.tasks.find((t) => t.id === approval.taskId);
+  const impact = approval.preview.impact;
+  const goalConfidence = relatedGoal ? `${Math.round(relatedGoal.goal.confidence * 100)}%` : null;
 
   return (
     <div className="detail-panel">
@@ -69,14 +84,31 @@ export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject
 
       {approval.explanation ? (
         <div className="detail-section">
-          <h4>Why This Needs Review</h4>
-          <div className="detail-list-item">
-            <p className="detail-list-summary">{approval.explanation.requestReason}</p>
-            <div className="detail-list-meta">
-              <span>{approval.explanation.impactSummary}</span>
-              {approval.explanation.decisionSummary ? <span>{approval.explanation.decisionSummary}</span> : null}
-            </div>
+          <h4>Why This Needs Approval</h4>
+          <div className="detail-field">
+            <label>Policy rationale</label>
+            <div className="detail-value">{approval.rationale}</div>
           </div>
+          <div className="detail-field">
+            <label>Review trigger</label>
+            <div className="detail-value">{approval.explanation.requestReason}</div>
+          </div>
+          <div className="detail-field">
+            <label>Impact summary</label>
+            <div className="detail-value">{approval.explanation.impactSummary}</div>
+          </div>
+          {approval.explanation.decisionSummary ? (
+            <div className="detail-field">
+              <label>Decision guidance</label>
+              <div className="detail-value">{approval.explanation.decisionSummary}</div>
+            </div>
+          ) : null}
+          {goalConfidence ? (
+            <div className="detail-field">
+              <label>Goal confidence</label>
+              <div className="detail-value">{goalConfidence}</div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -134,6 +166,32 @@ export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject
 
       <div className="detail-section">
         <h4>Risk Assessment</h4>
+        <div className="detail-field">
+          <label>Risk posture</label>
+          <div className="detail-value">{riskAssessmentCopy[approval.riskClass]}</div>
+        </div>
+        <div className="detail-field">
+          <label>Rollback</label>
+          <div className="detail-value">{rollbackLabels[impact.rollback]}</div>
+        </div>
+        {impact.permissions.length > 0 ? (
+          <div className="detail-field">
+            <label>Required permissions</label>
+            <div className="detail-value">{impact.permissions.join(", ")}</div>
+          </div>
+        ) : null}
+        {impact.affectedPeople.length > 0 ? (
+          <div className="detail-field">
+            <label>Affected people</label>
+            <div className="detail-value">{impact.affectedPeople.join(", ")}</div>
+          </div>
+        ) : null}
+        {impact.affectedSystems.length > 0 ? (
+          <div className="detail-field">
+            <label>Affected systems</label>
+            <div className="detail-value">{impact.affectedSystems.join(", ")}</div>
+          </div>
+        ) : null}
         <div className="risk-explanation">
           {approval.riskClass === "R1" && (
             <p>This action is <strong>low risk</strong> and normally executes automatically. It was flagged for review due to policy rules.</p>

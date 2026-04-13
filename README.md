@@ -67,6 +67,14 @@ export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
 
 In local development only, the app falls back to `agentic-local-dev-key` if `AGENTIC_ACCESS_KEY` is not set. Production should always use an explicit secret.
 
+Optional production hardening:
+
+```bash
+export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
+```
+
+When enabled in production, Agentic fails closed if session revocation, session rate limiting, and unlock throttling are still backed by process-local memory. This is the recommended mode for multi-instance deployments.
+
 4. Start the web app:
 
 ```bash
@@ -108,7 +116,7 @@ npm run build
 ## Persistence And Local Storage
 
 - If `DATABASE_URL` is set, the app uses the Postgres-backed repository.
-- Otherwise it falls back to a file-backed runtime store at `.agentic/runtime-store.json` so the app stays runnable before the database is provisioned.
+- Otherwise it falls back to a file-backed runtime store at `.agentic/runtime-store.json` so the app stays runnable before the database is provisioned outside production. Production requires `DATABASE_URL`.
 - `AGENTIC_RUNTIME_STORE_PATH` overrides the file-backed store path when you need isolated local or test storage.
 - `AGENTIC_NOTES_PATH` overrides the local notes directory used by the filesystem-backed notes adapter.
 
@@ -118,6 +126,8 @@ The first concrete local adapter is a notes provider that reads and writes Markd
 
 - API routes are protected by a session cookie created through `/api/session`.
 - Authenticated route handlers are scoped to the signed-in principal rather than a global user fallback.
+- Session revocation, login throttling, and unlock throttling default to bounded in-memory stores for local development and tests.
+- Production can be configured to fail closed with `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` until shared auth-state stores are wired in.
 - External actions stay behind governance and approval checks unless a connector has earned a higher readiness tier.
 - Approval and execution evidence is persisted so operator-visible state matches what actually ran.
 

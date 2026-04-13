@@ -1,29 +1,9 @@
-const UNLOCK_WINDOW_MS = 10 * 60 * 1000;
-const UNLOCK_BLOCK_MS = 15 * 60 * 1000;
-const MAX_FAILED_UNLOCK_ATTEMPTS = 5;
-const MAX_TRACKED_CLIENTS = 512;
-const STALE_ENTRY_TTL_MS = Math.max(UNLOCK_WINDOW_MS, UNLOCK_BLOCK_MS) * 2;
-
-type UnlockAttemptRecord = {
-  blockedUntil: number;
-  firstFailureAt: number;
-  lastSeenAt: number;
-  failures: number;
-};
+import { getSessionUnlockStateStore } from "./session-unlock-store";
 
 type UnlockRateLimitStatus = {
   retryAfterSeconds: number;
   throttled: boolean;
 };
-
-declare global {
-  var __agenticSessionUnlockAttempts: Map<string, UnlockAttemptRecord> | undefined;
-}
-
-function getUnlockAttemptStore(): Map<string, UnlockAttemptRecord> {
-  globalThis.__agenticSessionUnlockAttempts ??= new Map<string, UnlockAttemptRecord>();
-  return globalThis.__agenticSessionUnlockAttempts;
-}
 
 function parseForwardedFor(header: string | null): string | null {
   if (!header) {
@@ -47,41 +27,15 @@ function getClientIdentifier(request: Request): string {
   return forwardedFor ?? realIp ?? connectingIp ?? `ua:${userAgent || "unknown"}`;
 }
 
-function cleanupUnlockAttemptStore(store: Map<string, UnlockAttemptRecord>, now: number) {
-  for (const [key, record] of store.entries()) {
-    const expired = record.blockedUntil <= now && now - record.lastSeenAt > STALE_ENTRY_TTL_MS;
-
-    if (expired) {
-      store.delete(key);
-    }
-  }
-
-  if (store.size <= MAX_TRACKED_CLIENTS) {
-    return;
-  }
-
-  const overflow = [...store.entries()]
-    .sort((left, right) => left[1].lastSeenAt - right[1].lastSeenAt)
-    .slice(0, store.size - MAX_TRACKED_CLIENTS);
-
-  for (const [key] of overflow) {
-    store.delete(key);
-  }
-}
-
-function buildStatus(record: UnlockAttemptRecord, now: number): UnlockRateLimitStatus {
+function buildStatus(blockedUntil: number, now: number): UnlockRateLimitStatus {
   return {
-    throttled: record.blockedUntil > now,
-    retryAfterSeconds: Math.max(1, Math.ceil((record.blockedUntil - now) / 1000))
+    throttled: blockedUntil > now,
+    retryAfterSeconds: Math.max(1, Math.ceil((blockedUntil - now) / 1000))
   };
 }
 
 export function getSessionUnlockRateLimitStatus(request: Request, now = Date.now()): UnlockRateLimitStatus {
-  const store = getUnlockAttemptStore();
-
-  cleanupUnlockAttemptStore(store, now);
-
-  const record = store.get(getClientIdentifier(request));
+  const record = getSessionUnlockStateStore().getRecord(getClientIdentifier(request), now);
 
   if (!record || record.blockedUntil <= now) {
     return {
@@ -90,44 +44,14 @@ export function getSessionUnlockRateLimitStatus(request: Request, now = Date.now
     };
   }
 
-  return buildStatus(record, now);
+  return buildStatus(record.blockedUntil, now);
 }
 
 export function recordFailedSessionUnlockAttempt(request: Request, now = Date.now()): UnlockRateLimitStatus {
-  const store = getUnlockAttemptStore();
-  const key = getClientIdentifier(request);
-  const existing = store.get(key);
-
-  cleanupUnlockAttemptStore(store, now);
-
-  if (existing && existing.blockedUntil > now) {
-    existing.lastSeenAt = now;
-    return buildStatus(existing, now);
-  }
-
-  const shouldResetWindow = !existing || now - existing.firstFailureAt > UNLOCK_WINDOW_MS;
-  const nextRecord: UnlockAttemptRecord = shouldResetWindow
-    ? {
-        blockedUntil: 0,
-        firstFailureAt: now,
-        lastSeenAt: now,
-        failures: 1
-      }
-    : {
-        blockedUntil: 0,
-        firstFailureAt: existing.firstFailureAt,
-        lastSeenAt: now,
-        failures: existing.failures + 1
-      };
-
-  if (nextRecord.failures >= MAX_FAILED_UNLOCK_ATTEMPTS) {
-    nextRecord.blockedUntil = now + UNLOCK_BLOCK_MS;
-  }
-
-  store.set(key, nextRecord);
+  const nextRecord = getSessionUnlockStateStore().recordFailure(getClientIdentifier(request), now);
 
   if (nextRecord.blockedUntil > now) {
-    return buildStatus(nextRecord, now);
+    return buildStatus(nextRecord.blockedUntil, now);
   }
 
   return {
@@ -137,9 +61,9 @@ export function recordFailedSessionUnlockAttempt(request: Request, now = Date.no
 }
 
 export function clearFailedSessionUnlockAttempts(request: Request) {
-  getUnlockAttemptStore().delete(getClientIdentifier(request));
+  getSessionUnlockStateStore().clear(getClientIdentifier(request));
 }
 
 export function resetSessionUnlockRateLimit() {
-  getUnlockAttemptStore().clear();
+  getSessionUnlockStateStore().reset();
 }

@@ -19,15 +19,29 @@ import {
   recordFailedSessionUnlockAttempt,
   resetSessionUnlockRateLimit
 } from "../apps/web/lib/session-unlock-rate-limit";
+import {
+  resetSessionUnlockStateStoreForTesting,
+  setSessionUnlockStateStoreForTesting,
+  type SessionUnlockStateStore
+} from "../apps/web/lib/session-unlock-store";
+import {
+  getAuthRuntimeStateStatus,
+  resetAuthRuntimeStateWarningsForTesting,
+  validateAuthRuntimeState
+} from "../apps/web/lib/auth-runtime-state";
 
 describe("auth helpers", () => {
   const originalKey = process.env.AGENTIC_ACCESS_KEY;
   const originalNodeEnv = process.env.NODE_ENV;
+  const originalRequireSharedAuthState = process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalKey;
     process.env.NODE_ENV = originalNodeEnv;
+    process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
     resetSessionUnlockRateLimit();
+    resetAuthRuntimeStateWarningsForTesting();
+    resetSessionUnlockStateStoreForTesting();
     resetAuthSessionStateStoreForTesting();
   });
 
@@ -69,6 +83,7 @@ describe("auth helpers", () => {
     const rateLimitEntries = new Map<string, { attempts: number; windowStart: number; lockedUntil: number | null }>();
     const revokedSessionIds = new Map<string, number>();
     const store: AuthSessionStateStore = {
+      scope: "shared",
       getRateLimitEntry(key) {
         const entry = rateLimitEntries.get(key);
         return entry ? { ...entry } : null;
@@ -220,6 +235,76 @@ describe("auth helpers", () => {
     expect(getSessionUnlockRateLimitStatus(request, 1_101).throttled).toBe(true);
   });
 
+  it("supports swapping in a shared session unlock state store boundary", () => {
+    const expectedKey = "203.0.113.19";
+    const seenKeys: string[] = [];
+    let storedRecord: {
+      blockedUntil: number;
+      firstFailureAt: number;
+      lastSeenAt: number;
+      failures: number;
+    } | null = null;
+
+    const store: SessionUnlockStateStore = {
+      scope: "shared",
+      getRecord(key) {
+        seenKeys.push(`get:${key}`);
+        return storedRecord ? { ...storedRecord } : null;
+      },
+      recordFailure(key, now = Date.now()) {
+        seenKeys.push(`record:${key}`);
+        storedRecord = {
+          blockedUntil: now + 60_000,
+          firstFailureAt: now,
+          lastSeenAt: now,
+          failures: 5
+        };
+        return { ...storedRecord };
+      },
+      clear(key) {
+        seenKeys.push(`clear:${key}`);
+        storedRecord = null;
+      },
+      reset() {
+        storedRecord = null;
+      }
+    };
+
+    setSessionUnlockStateStoreForTesting(store);
+
+    const request = new Request("http://localhost/api/session", {
+      method: "POST",
+      headers: {
+        "x-forwarded-for": expectedKey
+      }
+    });
+
+    expect(getSessionUnlockRateLimitStatus(request, 10_000)).toEqual({
+      throttled: false,
+      retryAfterSeconds: 0
+    });
+
+    const throttled = recordFailedSessionUnlockAttempt(request, 10_100);
+
+    expect(throttled.throttled).toBe(true);
+    expect(throttled.retryAfterSeconds).toBeGreaterThan(0);
+    expect(getSessionUnlockRateLimitStatus(request, 10_101).throttled).toBe(true);
+
+    clearFailedSessionUnlockAttempts(request);
+
+    expect(getSessionUnlockRateLimitStatus(request, 10_102)).toEqual({
+      throttled: false,
+      retryAfterSeconds: 0
+    });
+    expect(seenKeys).toEqual([
+      `get:${expectedKey}`,
+      `record:${expectedKey}`,
+      `get:${expectedKey}`,
+      `clear:${expectedKey}`,
+      `get:${expectedKey}`
+    ]);
+  });
+
   it("clears the failed unlock window after a successful session creation", () => {
     const request = new Request("http://localhost/api/session", {
       method: "POST",
@@ -236,5 +321,66 @@ describe("auth helpers", () => {
 
     expect(getSessionUnlockRateLimitStatus(request, 5_100).throttled).toBe(false);
     expect(recordFailedSessionUnlockAttempt(request, 5_101).throttled).toBe(false);
+  });
+
+  it("reports process-local auth runtime state by default", () => {
+    process.env.NODE_ENV = "test";
+    delete process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
+
+    expect(getAuthRuntimeStateStatus()).toMatchObject({
+      production: false,
+      requiresSharedState: false,
+      sessionStateScope: "process-local",
+      unlockStateScope: "process-local",
+      sharedStateConfigured: false
+    });
+  });
+
+  it("rejects strict production mode when auth runtime state is still process-local", () => {
+    process.env.NODE_ENV = "production";
+    process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = "true";
+
+    expect(() => validateAuthRuntimeState()).toThrow(/Shared auth state is not configured for production/);
+  });
+
+  it("accepts strict production mode when shared auth runtime state is configured", () => {
+    process.env.NODE_ENV = "production";
+    process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = "true";
+
+    const authStore: AuthSessionStateStore = {
+      scope: "shared",
+      getRateLimitEntry() {
+        return null;
+      },
+      setRateLimitEntry() {},
+      deleteRateLimitEntry() {},
+      revokeSession() {},
+      isSessionRevoked() {
+        return false;
+      },
+      reset() {}
+    };
+    const unlockStore: SessionUnlockStateStore = {
+      scope: "shared",
+      getRecord() {
+        return null;
+      },
+      recordFailure(_key, now = Date.now()) {
+        return {
+          blockedUntil: now + 1_000,
+          firstFailureAt: now,
+          lastSeenAt: now,
+          failures: 1
+        };
+      },
+      clear() {},
+      reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(authStore);
+    setSessionUnlockStateStoreForTesting(unlockStore);
+
+    expect(() => validateAuthRuntimeState()).not.toThrow();
+    expect(getAuthRuntimeStateStatus().sharedStateConfigured).toBe(true);
   });
 });

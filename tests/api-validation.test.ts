@@ -42,9 +42,13 @@ function buildJsonRequest(url: string, body: unknown, authenticated = true): Req
 describe("api request validation", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalRequireSharedAuthState = process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
 
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
+    process.env.NODE_ENV = "test";
+    delete process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
       await mkdtemp(path.join(os.tmpdir(), "agentic-api-validation-")),
       "runtime-store.json"
@@ -54,6 +58,8 @@ describe("api request validation", () => {
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
+    process.env.NODE_ENV = originalNodeEnv;
+    process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     resetSessionUnlockRateLimit();
@@ -440,6 +446,26 @@ describe("api request validation", () => {
     );
 
     expect(response.status).toBe(200);
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects session creation when production requires shared auth state but only process-local stores are configured", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = "true";
+
+    const response = await sessionRoute(
+      buildJsonRequest(
+        "http://localhost/api/session",
+        {
+          accessKey: "test-access-key"
+        },
+        false
+      )
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(503);
+    expect(payload.error).toContain("Shared auth state is not configured for production.");
     expectNoStoreHeaders(response);
   });
 

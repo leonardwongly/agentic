@@ -5803,5 +5803,11 @@ export function createRepository(options?: { storePath?: string; databaseUrl?: s
     return new PostgresRepository(databaseUrl);
   }
 
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "DATABASE_URL must be configured in production. The file-backed repository is development-only."
+    );
+  }
+
   return new FileRepository(options?.storePath);
 }

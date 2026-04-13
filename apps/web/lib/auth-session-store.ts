@@ -5,6 +5,7 @@ export type SessionRateLimitEntry = {
 };
 
 export type AuthSessionStateStore = {
+  scope: "process-local" | "shared";
   getRateLimitEntry(key: string): SessionRateLimitEntry | null;
   setRateLimitEntry(key: string, entry: SessionRateLimitEntry): void;
   deleteRateLimitEntry(key: string): void;
@@ -22,6 +23,7 @@ const STALE_RATE_LIMIT_ENTRY_TTL_MS = 10 * 60_000;
 const MAX_TRACKED_RATE_LIMIT_ENTRIES = 2_048;
 
 class InMemoryAuthSessionStateStore implements AuthSessionStateStore {
+  readonly scope = "process-local" as const;
   private readonly rateLimits = new Map<string, StoredRateLimitEntry>();
   private readonly revokedSessionIds = new Map<string, number>();
 

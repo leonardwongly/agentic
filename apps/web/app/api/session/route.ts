@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { AGENTIC_SESSION_COOKIE, checkSessionRateLimit, clearSessionCookie, createSessionCookie, getAuthMode, recordSessionSuccess, revokeSessionToken, verifyAccessKey } from "../../../lib/auth";
 import { authenticatedError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
+import { validateAuthRuntimeState } from "../../../lib/auth-runtime-state";
 import {
   clearFailedSessionUnlockAttempts,
   getSessionUnlockRateLimitStatus,
@@ -18,6 +19,7 @@ const SessionRequestSchema = z
 export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
+    validateAuthRuntimeState();
 
     const rateLimitKey = request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "unknown";
     const rateLimit = checkSessionRateLimit(rateLimitKey);

@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { prepareDefaultIntegrations } from "@agentic/integrations";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository, type SelfImprovementRepository } from "@agentic/self-improvement-memory";
+import { validateAuthRuntimeState } from "./auth-runtime-state";
 
 const execFileAsync = promisify(execFile);
 const DOCS_BUILD_TIMEOUT_MS = 60_000;
@@ -19,6 +20,7 @@ declare global {
 
 export function getRepository() {
   if (!global.__agenticRepository) {
+    validateAuthRuntimeState();
     global.__agenticRepository = createRepository();
   }
 
@@ -33,6 +35,7 @@ export async function getSeededRepository() {
 
 export function getSelfImprovementRepository(): SelfImprovementRepository {
   if (!global.__agenticSelfImprovementRepository) {
+    validateAuthRuntimeState();
     global.__agenticSelfImprovementRepository = createSelfImprovementRepository();
   }
 
