@@ -1,0 +1,6 @@
+{
+  "name": "@agentic/worker-runtime",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts"
+}

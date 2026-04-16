@@ -17,6 +17,7 @@ function tokenize(input: string): string[] {
 }
 
 export function createMemoryRecord(params: {
+  id?: string;
   userId: string;
   category: string;
   memoryType: MemoryType;
@@ -28,11 +29,14 @@ export function createMemoryRecord(params: {
   actorContext?: ActorContext | null;
   reviewAt?: string | null;
   expiryAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }): MemoryRecord {
-  const timestamp = nowIso();
+  const createdAt = params.createdAt ?? nowIso();
+  const updatedAt = params.updatedAt ?? createdAt;
 
   return MemoryRecordSchema.parse({
-    id: crypto.randomUUID(),
+    id: params.id ?? crypto.randomUUID(),
     userId: params.userId,
     category: params.category,
     memoryType: params.memoryType,
@@ -44,8 +48,8 @@ export function createMemoryRecord(params: {
     actorContext: params.actorContext ?? null,
     reviewAt: params.reviewAt ?? null,
     expiryAt: params.expiryAt ?? null,
-    createdAt: timestamp,
-    updatedAt: timestamp
+    createdAt,
+    updatedAt
   });
 }
 

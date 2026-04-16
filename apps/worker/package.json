@@ -1,0 +1,9 @@
+{
+  "name": "@agentic/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --project tsconfig.json --noEmit",
+    "start": "node --import tsx ./src/index.ts"
+  }
+}

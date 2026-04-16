@@ -585,6 +585,8 @@ export const AutopilotEventSchema = z.object({
 export const GoalCreateJobPayloadSchema = z
   .object({
     type: z.literal("goal_create"),
+    goalId: z.string().min(1),
+    workflowId: z.string().min(1),
     request: z.string().trim().min(1).max(20_000),
     workspaceId: z.string().min(1).nullable().default(null),
     agentId: z.string().min(1).nullable().default(null),

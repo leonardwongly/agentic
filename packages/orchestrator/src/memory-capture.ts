@@ -1,4 +1,5 @@
-import { nowIso, type ActorContext, type GoalBundle, type MemoryRecord, type Task } from "@agentic/contracts";
+import crypto from "node:crypto";
+import { type ActorContext, type GoalBundle, type MemoryRecord, type Task } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
 import { type EpisodeRecord, EpisodeRecordSchema } from "@agentic/self-improvement-memory";
 import type { ExecutionResult } from "./execution-dispatch";
@@ -19,6 +20,14 @@ function taskOutcome(task: Task): "success" | "partial" | "failure" {
   return "partial";
 }
 
+function buildDeterministicId(...parts: Array<string | null | undefined>): string {
+  return crypto
+    .createHash("sha256")
+    .update(parts.map((part) => part ?? "").join("|"))
+    .digest("hex")
+    .slice(0, 32);
+}
+
 function extractCapabilityMemory(bundle: GoalBundle, userId: string, actorContext: ActorContext | null): MemoryRecord | null {
   const capabilities = new Set(bundle.tasks.flatMap((t) => t.toolCapabilities));
   if (capabilities.size === 0) return null;
@@ -27,6 +36,7 @@ function extractCapabilityMemory(bundle: GoalBundle, userId: string, actorContex
   const content = `Goal "${bundle.goal.title}" used capabilities [${[...capabilities].join(", ")}] via agents [${agents.join(", ")}]. Scenario intent: ${bundle.goal.intent}.`;
 
   return createMemoryRecord({
+    id: buildDeterministicId("memory", bundle.goal.id, "capabilities"),
     userId,
     category: "working-style",
     memoryType: "observed",
@@ -34,7 +44,9 @@ function extractCapabilityMemory(bundle: GoalBundle, userId: string, actorContex
     confidence: 0.72,
     source: "auto-capture",
     permissions: ["orchestrator", "workflow", "knowledge"],
-    actorContext
+    actorContext,
+    createdAt: bundle.goal.updatedAt,
+    updatedAt: bundle.goal.updatedAt
   });
 }
 
@@ -55,6 +67,7 @@ function extractOutcomeMemory(bundle: GoalBundle, userId: string, actorContext: 
   if (riskClasses.length > 0) parts.push(`Risk classes involved: ${riskClasses.join(", ")}.`);
 
   return createMemoryRecord({
+    id: buildDeterministicId("memory", bundle.goal.id, "outcome"),
     userId,
     category: "projects",
     memoryType: "observed",
@@ -62,7 +75,9 @@ function extractOutcomeMemory(bundle: GoalBundle, userId: string, actorContext: 
     confidence: 0.78,
     source: "auto-capture",
     permissions: ["orchestrator", "workflow", "knowledge"],
-    actorContext
+    actorContext,
+    createdAt: bundle.goal.updatedAt,
+    updatedAt: bundle.goal.updatedAt
   });
 }
 
@@ -82,6 +97,17 @@ function extractPreferenceSignals(bundle: GoalBundle, userId: string, actorConte
       : `User rejected "${task.title}" (${task.riskClass}) — indicates this action type needs different handling or shouldn't be proposed.${scopeClause}${rationaleClause}`;
 
     memories.push(createMemoryRecord({
+      id: buildDeterministicId(
+        "memory",
+        bundle.goal.id,
+        "approval-signal",
+        task.title,
+        task.summary,
+        task.assignedAgent,
+        approval.decision,
+        approval.decisionScope ?? "",
+        approval.decisionRationale ?? ""
+      ),
       userId,
       category: "preferences",
       memoryType: "observed",
@@ -89,7 +115,9 @@ function extractPreferenceSignals(bundle: GoalBundle, userId: string, actorConte
       confidence: approval.decision === "approved" ? 0.75 : 0.82,
       source: "auto-capture",
       permissions: ["orchestrator", "workflow", "knowledge", "communications"],
-      actorContext
+      actorContext,
+      createdAt: approval.respondedAt ?? task.updatedAt,
+      updatedAt: approval.respondedAt ?? task.updatedAt
     }));
   }
 
@@ -123,8 +151,15 @@ function buildEpisodes(bundle: GoalBundle): EpisodeRecord[] {
     }
 
     return EpisodeRecordSchema.parse({
-      id: crypto.randomUUID(),
-      timestamp: nowIso(),
+      id: buildDeterministicId(
+        "episode",
+        bundle.goal.id,
+        task.title,
+        task.summary,
+        task.assignedAgent,
+        task.riskClass
+      ),
+      timestamp: task.updatedAt,
       skill: task.assignedAgent,
       task: task.title,
       outcome,
@@ -165,6 +200,7 @@ function extractExecutionOutcomeMemory(
     .join(", ");
 
   return createMemoryRecord({
+    id: buildDeterministicId("memory", bundle.goal.id, "execution-outcome", actionSummary),
     userId,
     category: "projects",
     memoryType: "observed",
@@ -172,7 +208,9 @@ function extractExecutionOutcomeMemory(
     confidence: failureCount > 0 ? 0.9 : 0.82,
     source: "auto-capture",
     permissions: ["orchestrator", "workflow", "knowledge", "communications"],
-    actorContext
+    actorContext,
+    createdAt: results[results.length - 1]?.timestamp,
+    updatedAt: results[results.length - 1]?.timestamp
   });
 }
 
@@ -189,6 +227,14 @@ function extractExecutionFailureMemories(
     const taskLabel = task?.title ?? result.taskId;
 
     return [createMemoryRecord({
+      id: buildDeterministicId(
+        "memory",
+        bundle.goal.id,
+        "execution-failure",
+        result.taskId,
+        result.action,
+        result.timestamp
+      ),
       userId,
       category: "preferences",
       memoryType: "observed",
@@ -196,7 +242,9 @@ function extractExecutionFailureMemories(
       confidence: 0.92,
       source: "auto-capture",
       permissions: ["orchestrator", "workflow", "knowledge", "communications"],
-      actorContext
+      actorContext,
+      createdAt: result.timestamp,
+      updatedAt: result.timestamp
     })];
   });
 }
@@ -212,7 +260,7 @@ function buildExecutionEpisodes(bundle: GoalBundle, results: ExecutionResult[]):
     ];
 
     return EpisodeRecordSchema.parse({
-      id: crypto.randomUUID(),
+      id: buildDeterministicId("episode", bundle.goal.id, "execution", result.taskId, result.action, result.timestamp),
       timestamp: result.timestamp,
       skill: task?.assignedAgent ?? "execution-engine",
       task: `Execute approved task "${taskTitle}"`,

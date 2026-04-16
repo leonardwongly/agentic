@@ -11,10 +11,11 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @agentic/web",
-    "build": "npm run build -w @agentic/web",
+    "build": "npm run build -w @agentic/web && npm run build -w @agentic/worker",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "worker:start": "npm run start -w @agentic/worker",
     "docs:render": "node scripts/render-docs.mjs",
     "docs:validate": "node scripts/validate-docs.mjs",
     "docs:build": "npm run docs:render && npm run docs:validate"
@@ -38,6 +39,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^6.0.1",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^4.0.2"
   }

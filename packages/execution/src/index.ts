@@ -97,17 +97,31 @@ export type JobRetryPolicy = {
   maxDelayMs: number;
 };
 
+export type JobHandler = (job: JobRecord) => Promise<void>;
+
+export type JobHandlerMap = Partial<Record<JobKind, JobHandler>>;
+
+export type ProcessNextDurableJobResult = {
+  claimedJob: JobRecord | null;
+  finalJob: JobRecord | null;
+};
+
 const defaultRetryPolicy: JobRetryPolicy = {
   baseDelayMs: 1_000,
   factor: 2,
   maxDelayMs: 5 * 60_000
 };
 
-export function createWorkflowState(goalId: string, currentStep = "intake", workspaceId: string | null = null): WorkflowState {
+export function createWorkflowState(
+  goalId: string,
+  currentStep = "intake",
+  workspaceId: string | null = null,
+  workflowId?: string
+): WorkflowState {
   const timestamp = nowIso();
 
   return WorkflowStateSchema.parse({
-    id: crypto.randomUUID(),
+    id: workflowId ?? crypto.randomUUID(),
     goalId,
     workspaceId,
     status: "running",
@@ -282,6 +296,46 @@ export function createDurableJobQueue(
   };
 }
 
+export async function processNextDurableJob(params: {
+  queue: DurableJobQueue;
+  handlers: JobHandlerMap;
+  claim?: ClaimNextJobParams;
+}): Promise<ProcessNextDurableJobResult> {
+  const job = await params.queue.claimNext(params.claim);
+
+  if (!job) {
+    return {
+      claimedJob: null,
+      finalJob: null
+    };
+  }
+
+  const handler = params.handlers[job.kind];
+
+  if (!handler) {
+    return {
+      claimedJob: job,
+      finalJob: await params.queue.fail({
+        job,
+        error: new Error(`No handler registered for durable job kind "${job.kind}".`)
+      })
+    };
+  }
+
+  try {
+    await handler(job);
+    return {
+      claimedJob: job,
+      finalJob: await params.queue.acknowledge({ jobId: job.id })
+    };
+  } catch (error) {
+    return {
+      claimedJob: job,
+      finalJob: await params.queue.fail({ job, error: coerceJobFailure(error) })
+    };
+  }
+}
+
 export function transitionTaskState(task: Task, state: TaskState): Task {
   const nextState = TaskStateSchema.parse(state);
 
@@ -337,4 +391,12 @@ function normalizeJobError(error: string | Error): string {
   const message = typeof error === "string" ? error : error.message;
   const normalized = message.trim();
   return (normalized.length > 0 ? normalized : "Job execution failed.").slice(0, 1000);
+}
+
+function coerceJobFailure(error: unknown): string | Error {
+  if (typeof error === "string" || error instanceof Error) {
+    return error;
+  }
+
+  return new Error("Job execution failed.");
 }

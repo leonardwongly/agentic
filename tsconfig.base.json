@@ -50,6 +50,9 @@
       "@agentic/repository": [
         "packages/repository/src/index.ts"
       ],
+      "@agentic/worker-runtime": [
+        "packages/worker-runtime/src/index.ts"
+      ],
       "@agentic/self-improvement-memory": [
         "packages/self-improvement-memory/src/index.ts"
       ]

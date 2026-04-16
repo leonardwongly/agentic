@@ -115,6 +115,8 @@ describe("repository", () => {
     idempotencyKey?: string | null;
     availableAt?: string;
     maxAttempts?: number;
+    goalId?: string;
+    workflowId?: string;
   }) {
     return createJobRecord({
       userId: params.userId,
@@ -124,6 +126,8 @@ describe("repository", () => {
       maxAttempts: params.maxAttempts,
       payload: {
         type: "goal_create",
+        goalId: params.goalId ?? crypto.randomUUID(),
+        workflowId: params.workflowId ?? crypto.randomUUID(),
         request: params.request ?? "Draft a durable execution plan.",
         workspaceId: null,
         agentId: null,
@@ -455,6 +459,50 @@ describe("repository", () => {
     expect(nextClaim?.attemptCount).toBe(1);
   });
 
+  it("replaces an existing goal bundle snapshot instead of retaining stale child records in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const goalId = `goal-fixed-${Date.now()}`;
+    const workflowId = `workflow-fixed-${Date.now()}`;
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const firstBundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Draft a weekly planning workflow.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID),
+      goalId,
+      workflowId
+    });
+
+    await repository.saveGoalBundle(firstBundle);
+
+    const replacementBundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Prepare travel readiness coordination.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID),
+      goalId,
+      workflowId
+    });
+
+    await repository.saveGoalBundle(replacementBundle);
+
+    const reloaded = await repository.getGoalBundle(goalId);
+
+    expect(reloaded).not.toBeNull();
+    expect(reloaded?.tasks.map((task) => task.id)).toEqual(replacementBundle.tasks.map((task) => task.id));
+    expect(reloaded?.artifacts.map((artifact) => artifact.id)).toEqual(replacementBundle.artifacts.map((artifact) => artifact.id));
+    expect(reloaded?.approvals.map((approval) => approval.id)).toEqual(replacementBundle.approvals.map((approval) => approval.id));
+    expect(reloaded?.watchers.map((watcher) => watcher.id)).toEqual(replacementBundle.watchers.map((watcher) => watcher.id));
+    expect(reloaded?.actionLogs.map((log) => log.id)).toEqual(replacementBundle.actionLogs.map((log) => log.id));
+    expect(reloaded?.tasks.some((task) => firstBundle.tasks.some((candidate) => candidate.id === task.id))).toBe(false);
+  });
+
   it("persists retry and dead-letter transitions through the durable queue in the file-backed store", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -482,6 +530,48 @@ describe("repository", () => {
 
     expect(reloaded?.goal.id).toBe(bundle.goal.id);
     expect(dashboard.goals.some((goalBundle) => goalBundle.goal.id === bundle.goal.id)).toBe(true);
+  });
+
+  postgresIt("replaces an existing goal bundle snapshot in Postgres without leaving stale child records", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+    const goalId = `goal-fixed-postgres-${Date.now()}`;
+    const workflowId = `workflow-fixed-postgres-${Date.now()}`;
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const firstBundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Draft a weekly planning workflow.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID),
+      goalId,
+      workflowId
+    });
+
+    await repository.saveGoalBundle(firstBundle);
+
+    const replacementBundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Prepare travel readiness coordination.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID),
+      goalId,
+      workflowId
+    });
+
+    await repository.saveGoalBundle(replacementBundle);
+
+    const reloaded = await repository.getGoalBundle(goalId);
+
+    expect(reloaded).not.toBeNull();
+    expect(reloaded?.tasks.map((task) => task.id)).toEqual(replacementBundle.tasks.map((task) => task.id));
+    expect(reloaded?.artifacts.map((artifact) => artifact.id)).toEqual(replacementBundle.artifacts.map((artifact) => artifact.id));
+    expect(reloaded?.approvals.map((approval) => approval.id)).toEqual(replacementBundle.approvals.map((approval) => approval.id));
+    expect(reloaded?.watchers.map((watcher) => watcher.id)).toEqual(replacementBundle.watchers.map((watcher) => watcher.id));
+    expect(reloaded?.actionLogs.map((log) => log.id)).toEqual(replacementBundle.actionLogs.map((log) => log.id));
+    expect(reloaded?.tasks.some((task) => firstBundle.tasks.some((candidate) => candidate.id === task.id))).toBe(false);
   });
 
   postgresIt("captures durable evidence records for approval responses in Postgres when DATABASE_URL is configured", async () => {

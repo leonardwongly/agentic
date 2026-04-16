@@ -5,6 +5,7 @@ import {
   createJobRecord,
   createTask,
   isJobClaimable,
+  processNextDurableJob,
   recomputeWorkflowStatuses,
   transitionTaskState
 } from "@agentic/execution";
@@ -94,6 +95,8 @@ describe("execution", () => {
       kind: "goal_create",
       payload: {
         type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
         request: "Plan next week around focus blocks.",
         workspaceId: null,
         agentId: null,
@@ -114,6 +117,8 @@ describe("execution", () => {
       kind: "goal_create",
       payload: {
         type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
         request: "Draft a customer update.",
         workspaceId: null,
         agentId: null,
@@ -206,5 +211,71 @@ describe("execution", () => {
     expect(deadLettered.status).toBe("dead_letter");
     expect(deadLettered.deadLetteredAt).toBe("2026-04-16T00:05:00.000Z");
     expect(recordedCalls.map((call) => call.type)).toEqual(["retry", "dead_letter"]);
+  });
+
+  it("processes the next claimed durable job through the registered handler and acknowledges it", async () => {
+    const job = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Prepare my weekly operating plan.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      }
+    });
+    const handledIds: string[] = [];
+    const queue = createDurableJobQueue(
+      {
+        enqueueJob: async (candidate) => candidate,
+        claimNextJob: async () =>
+          JobRecordSchema.parse({
+            ...job,
+            status: "running",
+            attemptCount: 1,
+            claimedBy: "worker-1",
+            claimedAt: "2026-04-16T00:00:00.000Z",
+            lastAttemptAt: "2026-04-16T00:00:00.000Z",
+            leaseExpiresAt: "2026-04-16T00:00:30.000Z",
+            updatedAt: "2026-04-16T00:00:00.000Z"
+          }),
+        completeJob: async ({ jobId, runnerId, completedAt }) =>
+          JobRecordSchema.parse({
+            ...job,
+            id: jobId,
+            status: "completed",
+            attemptCount: 1,
+            claimedBy: runnerId,
+            claimedAt: "2026-04-16T00:00:00.000Z",
+            lastAttemptAt: "2026-04-16T00:00:00.000Z",
+            leaseExpiresAt: null,
+            completedAt,
+            updatedAt: completedAt
+          }),
+        retryJob: async () => {
+          throw new Error("retryJob should not be called for a successful handler");
+        },
+        deadLetterJob: async () => {
+          throw new Error("deadLetterJob should not be called for a successful handler");
+        }
+      },
+      { runnerId: "worker-1" }
+    );
+
+    const result = await processNextDurableJob({
+      queue,
+      handlers: {
+        goal_create: async (claimedJob) => {
+          handledIds.push(claimedJob.id);
+        }
+      }
+    });
+
+    expect(handledIds).toEqual([job.id]);
+    expect(result.claimedJob?.id).toBe(job.id);
+    expect(result.finalJob?.status).toBe("completed");
   });
 });

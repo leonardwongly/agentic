@@ -129,4 +129,43 @@ describe("captureMemoriesFromBundle", () => {
     expect(captured.memories.every((memory) => memory.actorContext?.subjectUserId === "user-1")).toBe(true);
     expect(captured.episodes).toHaveLength(2);
   });
+
+  it("uses deterministic ids so repeated capture stays idempotent across retries", () => {
+    const actorContext = createHumanActorContext("user-1", "session-1");
+    const firstCapture = captureMemoriesFromBundle(buildBundle(), "user-1", actorContext);
+    const secondCapture = captureMemoriesFromBundle(buildBundle(), "user-1", actorContext);
+
+    expect(secondCapture.memories.map((memory) => memory.id)).toEqual(firstCapture.memories.map((memory) => memory.id));
+    expect(secondCapture.episodes.map((episode) => episode.id)).toEqual(firstCapture.episodes.map((episode) => episode.id));
+    expect(secondCapture.memories.map((memory) => memory.createdAt)).toEqual(firstCapture.memories.map((memory) => memory.createdAt));
+    expect(secondCapture.episodes.map((episode) => episode.timestamp)).toEqual(firstCapture.episodes.map((episode) => episode.timestamp));
+  });
+});
+
+describe("captureExecutionOutcomeSignals", () => {
+  it("uses deterministic ids for repeated execution outcome capture", () => {
+    const results = [
+      {
+        taskId: "task-1",
+        success: true,
+        action: "send_message",
+        detail: "Draft created (id: draft-1) for vip@example.com.",
+        timestamp: "2024-01-01T00:01:00.000Z",
+        kind: "execution.completed" as const
+      },
+      {
+        taskId: "task-2",
+        success: false,
+        action: "create_note",
+        detail: "Execution failed: disk quota exceeded while writing note content.",
+        timestamp: "2024-01-01T00:02:00.000Z",
+        kind: "execution.failed" as const
+      }
+    ];
+    const firstCapture = captureExecutionOutcomeSignals(buildBundle(), "user-1", results);
+    const secondCapture = captureExecutionOutcomeSignals(buildBundle(), "user-1", results);
+
+    expect(secondCapture.memories.map((memory) => memory.id)).toEqual(firstCapture.memories.map((memory) => memory.id));
+    expect(secondCapture.episodes.map((episode) => episode.id)).toEqual(firstCapture.episodes.map((episode) => episode.id));
+  });
 });

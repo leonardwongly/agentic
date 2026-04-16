@@ -2,12 +2,17 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID, createHumanActorContext, createSystemActorContext } from "@agentic/contracts";
-import { createRepository } from "@agentic/repository";
+import { createJobRecord } from "@agentic/execution";
 import { processUserRequest } from "@agentic/orchestrator";
+import { createRepository } from "@agentic/repository";
+import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
+import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { GET as goalRoute } from "../apps/web/app/api/goals/[id]/route";
+import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
+import { POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
 import { POST as goalRefineRoute } from "../apps/web/app/api/goals/[id]/refine/route";
 
 describe("goal route", () => {
@@ -30,6 +35,28 @@ describe("goal route", () => {
     return bundle;
   }
 
+  async function processQueuedGoalJobs(maxJobs = 1) {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const selfImprovementRepository = createSelfImprovementRepository({
+      baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-goal-route-memory-"))
+    });
+
+    await Promise.all([
+      repository.seedDefaults(SYSTEM_USER_ID),
+      selfImprovementRepository.seed()
+    ]);
+
+    return runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-goal-route-test",
+      maxJobs,
+      pollIntervalMs: 50
+    });
+  }
+
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
@@ -37,12 +64,164 @@ describe("goal route", () => {
       "runtime-store.json"
     );
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
   });
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
+  });
+
+  it("queues goal creation, exposes a pollable status route, and completes through the worker runtime", async () => {
+    const createResponse = await goalsCreateRoute(
+      new Request("http://localhost/api/goals", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          request: "Plan my week around focus time and approvals."
+        })
+      })
+    );
+    const createPayload = (await createResponse.json()) as {
+      job: {
+        id: string;
+        kind: string;
+        status: string;
+        goalId: string;
+      };
+      statusUrl: string;
+    };
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    expect(createResponse.status).toBe(202);
+    expect(createPayload.job.kind).toBe("goal_create");
+    expect(createPayload.job.status).toBe("queued");
+    expect(createPayload.statusUrl).toBe(`/api/goals/jobs/${createPayload.job.id}`);
+    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+
+    const queuedStatusResponse = await goalJobRoute(
+      new Request(`http://localhost${createPayload.statusUrl}`, {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: createPayload.job.id })
+      }
+    );
+    const queuedStatusPayload = (await queuedStatusResponse.json()) as {
+      job: { id: string; status: string; goalId: string };
+      result: null;
+      error: null;
+    };
+
+    expect(queuedStatusResponse.status).toBe(202);
+    expect(queuedStatusPayload.job.id).toBe(createPayload.job.id);
+    expect(queuedStatusPayload.job.status).toBe("queued");
+    expect(queuedStatusPayload.result).toBeNull();
+    expect(queuedStatusPayload.error).toBeNull();
+
+    const workerResult = await processQueuedGoalJobs();
+    const completedStatusResponse = await goalJobRoute(
+      new Request(`http://localhost${createPayload.statusUrl}`, {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: createPayload.job.id })
+      }
+    );
+    const completedStatusPayload = (await completedStatusResponse.json()) as {
+      job: { id: string; status: string; goalId: string };
+      result: {
+        goalId: string;
+        taskCount: number;
+        completedTaskCount: number;
+      };
+      error: null;
+    };
+
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(completedStatusResponse.status).toBe(200);
+    expect(completedStatusPayload.job.id).toBe(createPayload.job.id);
+    expect(completedStatusPayload.job.status).toBe("completed");
+    expect(completedStatusPayload.result.goalId).toBe(createPayload.job.goalId);
+    expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.error).toBeNull();
+    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
+  });
+
+  it("deduplicates retried goal submissions when the same idempotency key is reused", async () => {
+    const idempotencyKey = "goal-create-retry-1";
+    const buildRequest = () =>
+      new Request("http://localhost/api/goals", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "x-idempotency-key": idempotencyKey
+        },
+        body: JSON.stringify({
+          request: "Prepare a durable weekly planning workflow."
+        })
+      });
+
+    const firstResponse = await goalsCreateRoute(buildRequest());
+    const secondResponse = await goalsCreateRoute(buildRequest());
+    const firstPayload = (await firstResponse.json()) as {
+      job: { id: string; goalId: string; status: string };
+      statusUrl: string;
+    };
+    const secondPayload = (await secondResponse.json()) as {
+      job: { id: string; goalId: string; status: string };
+      statusUrl: string;
+    };
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(202);
+    expect(secondPayload.job.id).toBe(firstPayload.job.id);
+    expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
+    expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
+    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+  });
+
+  it("rejects malformed goal idempotency keys", async () => {
+    const response = await goalsCreateRoute(
+      new Request("http://localhost/api/goals", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "x-idempotency-key": "bad key"
+        },
+        body: JSON.stringify({
+          request: "Prepare a durable weekly planning workflow."
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("x-idempotency-key");
   });
 
   it("returns 404 for a goal owned by another user", async () => {
@@ -107,6 +286,109 @@ describe("goal route", () => {
 
     expect(response.status).toBe(404);
     expect(payload.error).toContain(`Goal ${secondaryBundle.goal.id} was not found.`);
+  });
+
+  it("returns 404 for a goal job owned by another user", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults("user-secondary");
+    const job = await repository.enqueueJob(createJobRecord({
+      userId: "user-secondary",
+      kind: "goal_create",
+      payload: {
+        type: "goal_create",
+        goalId: "goal-other-user",
+        workflowId: "workflow-other-user",
+        request: "Keep another user's queued work private.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      },
+      actorContext: createSystemActorContext("user-secondary")
+    }));
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await goalJobRoute(
+      new Request(`http://localhost/api/goals/jobs/${job.id}`, {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: job.id })
+      }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(404);
+    expect(payload.error).toContain(`Goal job ${job.id} was not found.`);
+  });
+
+  it("returns a sanitized dead-letter failure message from the goal job status route", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const queued = await repository.enqueueJob(createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "goal_create",
+      payload: {
+        type: "goal_create",
+        goalId: "goal-dead-letter",
+        workflowId: "workflow-dead-letter",
+        request: "Simulate a poisoned durable goal job.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      },
+      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+    }));
+    const claimed = await repository.claimNextJob({
+      userId: SYSTEM_USER_ID,
+      runnerId: "worker-dead-letter-test",
+      leaseMs: 1_000,
+      now: "2026-04-16T10:00:00.000Z"
+    });
+
+    expect(claimed?.id).toBe(queued.id);
+
+    await repository.deadLetterJob({
+      jobId: queued.id,
+      runnerId: "worker-dead-letter-test",
+      deadLetteredAt: "2026-04-16T10:01:00.000Z",
+      error: "Connector token SECRET=top-secret-value expired."
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await goalJobRoute(
+      new Request(`http://localhost/api/goals/jobs/${queued.id}`, {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: queued.id })
+      }
+    );
+    const payload = (await response.json()) as {
+      job: { id: string; status: string };
+      result: null;
+      error: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.job.id).toBe(queued.id);
+    expect(payload.job.status).toBe("dead_letter");
+    expect(payload.result).toBeNull();
+    expect(payload.error).toBe("Goal creation failed. Retry the request or inspect worker logs.");
+    expect(payload.error).not.toContain("SECRET");
   });
 
   it("stamps access-key actor context onto goal refinement logs", async () => {

@@ -126,6 +126,38 @@ type OperatorProductPayload = {
   templates: GoalTemplate[];
 };
 
+type GoalCreateApiResponse = {
+  job: {
+    id: string;
+    kind: "goal_create";
+    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
+    goalId: string;
+    attemptCount: number;
+    maxAttempts: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+  statusUrl: string;
+};
+
+type GoalJobStatusApiResponse = {
+  job: GoalCreateApiResponse["job"];
+  result: {
+    goalId: string;
+    goalStatus: "planned" | "running" | "waiting" | "completed";
+    taskCount: number;
+    completedTaskCount: number;
+    pendingApprovalCount: number;
+    artifactCount: number;
+    watcherCount: number;
+    requiresReview: boolean;
+  } | null;
+  error: string | null;
+};
+
+const GOAL_JOB_POLL_INTERVAL_MS = 500;
+const GOAL_JOB_POLL_TIMEOUT_MS = 60_000;
+
 function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt"> {
   return {
     approvalMode: governance?.approvalMode ?? "risk_based",
@@ -173,6 +205,10 @@ async function readJson<T>(response: Response): Promise<T> {
   }
 
   return payload;
+}
+
+async function waitForDelay(ms: number): Promise<void> {
+  await new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 const commitmentInboxSections: Array<{
@@ -531,6 +567,87 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       setIsPending(false);
     }
   }, [statsBar]);
+
+  const loadDashboardSnapshot = useCallback(async () => {
+    return readJson<{ dashboard: DashboardData }>(
+      await fetch("/api/goals", {
+        cache: "no-store"
+      })
+    );
+  }, []);
+
+  const pollGoalJobUntilSettled = useCallback(async (statusUrl: string) => {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
+      const payload = await readJson<GoalJobStatusApiResponse>(
+        await fetch(statusUrl, {
+          cache: "no-store"
+        })
+      );
+
+      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
+        return payload;
+      }
+
+      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
+    }
+
+    return null;
+  }, []);
+
+  const submitGoalRequest = useCallback(async (nextRequest: string, agentId?: string) => {
+    setIsPending(true);
+
+    try {
+      const idempotencyKey =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const queued = await readJson<GoalCreateApiResponse>(
+        await fetch("/api/goals", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-idempotency-key": idempotencyKey
+          },
+          body: JSON.stringify({
+            request: nextRequest,
+            agentId: agentId || undefined
+          })
+        })
+      );
+      const settled = await pollGoalJobUntilSettled(queued.statusUrl);
+
+      if (!settled) {
+        const timeoutMessage = "Goal queued and still processing. Refresh in a moment for the final bundle.";
+        setSubmitState({ kind: "success", message: timeoutMessage });
+        toast.success(timeoutMessage);
+        return;
+      }
+
+      if (settled.job.status === "dead_letter") {
+        throw new Error(settled.error ?? "Goal creation failed.");
+      }
+
+      const payload = await loadDashboardSnapshot();
+      startTransition(() => {
+        setData(payload.dashboard);
+        setSubmitState({ kind: "success", message: "Created a new goal bundle." });
+        toast.success("Created a new goal bundle.");
+        statsBar.updateSync();
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unexpected request failure.";
+      setSubmitState({
+        kind: "error",
+        message: errorMessage
+      });
+      toast.error("Action failed", errorMessage);
+    } finally {
+      setIsPending(false);
+    }
+  }, [loadDashboardSnapshot, pollGoalJobUntilSettled, statsBar]);
 
   const loadCommitmentInbox = useCallback(async (
     bucket: CommitmentInboxBucket,
@@ -925,20 +1042,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
     // Track goal prefix for smart defaults
     smartDefaults.recordGoalPrefix(nextRequest);
-
-    await refreshDashboard(
-      fetch("/api/goals", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({ 
-          request: nextRequest,
-          agentId: selectedAgentId || undefined
-        })
-      }),
-      "Created a new goal bundle."
-    );
+    await submitGoalRequest(nextRequest, selectedAgentId);
     setRequest("");
     setSelectedAgentId(undefined); // Reset agent selection
     
@@ -2950,14 +3054,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       <CommandPalette
         onCreateGoal={async (req) => {
           setRequest(req);
-          await refreshDashboard(
-            fetch("/api/goals", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ request: req })
-            }),
-            "Created a new goal bundle."
-          );
+          await submitGoalRequest(req);
           setRequest("");
         }}
         onFocusRequestComposer={focusRequestComposer}

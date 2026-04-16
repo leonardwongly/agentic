@@ -242,10 +242,17 @@ Early implementation favored directness over distributed runtime guarantees.
 - The database schema now includes a `jobs` table and supporting indexes for claim scans, lease recovery, and user-scoped idempotency enforcement.
 - Execution utilities now expose a reusable durable queue abstraction with bounded exponential backoff and a normalized retry/dead-letter contract for worker runtimes.
 - Repository and execution regression coverage now verifies duplicate-submit denial, lease expiry reclaim ordering, worker ownership checks, retry scheduling, and dead-letter persistence across both repository backends.
+- A dedicated `apps/worker` process now runs the durable queue independently from the web server, with typed dispatch for goal and autopilot job families plus graceful shutdown semantics.
+- `POST /api/goals` now validates and enqueues goal-create work, returns `202 Accepted` with stable job metadata, and removes inline orchestration from the request path.
+- Goal polling now flows through `/api/goals/jobs/[id]`, which exposes queued/running/retrying/completed/dead-letter states with sanitized failure output and a client-safe result summary.
+- Goal orchestration, goal-bundle persistence, and worker-owned side effects now execute from `@agentic/worker-runtime`, keeping tenant/actor context explicit and server-derived through the job boundary.
+- Goal-create retries now reuse persisted goal IDs plus deterministic memory/episode IDs so duplicate worker execution stays bounded and side-effect failures surface through retry/dead-letter job state instead of being silently swallowed.
+- Dashboard goal submission now follows the async contract by polling job status and refreshing from persisted state instead of depending on an inline request-path rebuild.
+- Regression coverage now exercises async enqueue/execution/completion, duplicate-submit reuse, cross-user access denial, sanitized dead-letter responses, deterministic side-effect idempotency, and visible worker failure handling after core persistence.
 
 **Remaining follow-up**
-- move goal creation and autopilot execution off request paths and onto worker handlers
-- add worker runtime/dispatch, idempotent side-effect guards, and recovery-oriented status APIs
+- move autopilot execution off request paths and onto worker handlers
+- add replay/outbox tooling and deeper recovery workflows for external connector side effects
 
 ---
 

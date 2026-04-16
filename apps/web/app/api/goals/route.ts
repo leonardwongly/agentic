@@ -1,10 +1,12 @@
 import { z } from "zod";
-import { processUserRequest, captureMemoriesFromBundle } from "@agentic/orchestrator";
+import { enqueueGoalCreateJob } from "@agentic/worker-runtime";
 import { requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
-import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
+import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
-import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../lib/server";
+import { getSeededRepository } from "../../../lib/server";
+
+const GOAL_IDEMPOTENCY_KEY_HEADER = "x-idempotency-key";
 
 const GoalRequestSchema = z
   .object({
@@ -16,15 +18,25 @@ const GoalRequestSchema = z
 async function resolveActiveWorkspaceContext(userId: string) {
   const repository = await getSeededRepository();
   const dashboard = await repository.getDashboardData(userId);
-  const workspaceId = dashboard.activeWorkspace?.id ?? null;
 
   return {
     repository,
-    workspaceId,
-    workspaceGovernance: workspaceId
-      ? dashboard.workspaceGovernance ?? await repository.getWorkspaceGovernance(workspaceId, userId)
-      : null
+    workspaceId: dashboard.activeWorkspace?.id ?? null
   };
+}
+
+function parseGoalIdempotencyKey(request: Request): string | null {
+  const candidate = request.headers.get(GOAL_IDEMPOTENCY_KEY_HEADER)?.trim() ?? "";
+
+  if (!candidate) {
+    return null;
+  }
+
+  if (!/^[A-Za-z0-9:_-]{1,200}$/u.test(candidate)) {
+    throw new ApiRouteError(400, `${GOAL_IDEMPOTENCY_KEY_HEADER} must be 1-200 URL-safe characters.`);
+  }
+
+  return candidate;
 }
 
 export async function GET(request: Request) {
@@ -46,58 +58,32 @@ export async function POST(request: Request) {
     const principal = await requireApiSession(request);
     const actorContext = createActorContextFromPrincipal(principal);
     const body = await parseJsonBody(request, GoalRequestSchema);
-    const { repository, workspaceId, workspaceGovernance } = await resolveActiveWorkspaceContext(principal.userId);
-    const [memories, integrations] = await Promise.all([
-      repository.listMemory(principal.userId),
-      repository.listIntegrations(principal.userId)
-    ]);
-    
-    // Fetch agent definition if agentId is provided
-    let agentDefinition = undefined;
-    if (body.agentId) {
-      try {
-        const agent = await repository.getAgent(body.agentId, principal.userId);
-        agentDefinition = agent ?? undefined; // Convert null to undefined
-      } catch {
-        console.warn(`[goals] Agent ${body.agentId} not found, proceeding without override`);
-      }
-    }
-    
-    const bundle = await processUserRequest({
+    const { repository, workspaceId } = await resolveActiveWorkspaceContext(principal.userId);
+    const job = await enqueueGoalCreateJob({
+      repository,
       userId: principal.userId,
       request: body.request,
       workspaceId,
-      governance: workspaceGovernance,
-      memories,
-      integrations,
-      agentDefinition,
-      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", principal.userId)
+      agentId: body.agentId ?? null,
+      actorContext,
+      idempotencyKey: parseGoalIdempotencyKey(request)
     });
-
-    await repository.saveGoalBundle(bundle);
-
-    if (bundle.goal.status === "completed") {
-      try {
-        const captured = captureMemoriesFromBundle(bundle, principal.userId, actorContext);
-        const selfImprovement = await getSeededSelfImprovementRepository();
-
-        await Promise.all([
-          ...captured.memories.map((memory) => repository.saveMemory(memory)),
-          ...captured.episodes.map((episode) => selfImprovement.appendEpisode(episode))
-        ]);
-
-        console.log(
-          `[auto-capture] Goal "${bundle.goal.id}" completed — persisted ${captured.memories.length} memory record(s) and ${captured.episodes.length} episode(s).`
-        );
-      } catch (captureError) {
-        console.error("[auto-capture] Failed to persist captured memories after goal creation:", captureError);
-      }
-    }
-
-    return authenticatedJson({
-      bundle,
-      dashboard: await repository.getDashboardData(principal.userId)
-    });
+    return authenticatedJson(
+      {
+        job: {
+          id: job.id,
+          kind: job.kind,
+          status: job.status,
+          goalId: job.payload.goalId,
+          attemptCount: job.attemptCount,
+          maxAttempts: job.maxAttempts,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt
+        },
+        statusUrl: `/api/goals/jobs/${job.id}`
+      },
+      { status: 202 }
+    );
   } catch (error) {
     return handleApiError(error, "Failed to create goal.");
   }

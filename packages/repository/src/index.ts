@@ -1704,9 +1704,15 @@ function bundleFromStore(store: RuntimeStore, goalId: string): GoalBundle | null
 
 function mergeGoalBundleIntoStore(store: RuntimeStore, bundle: GoalBundle): GoalBundle {
   const validated = GoalBundleSchema.parse(bundle);
+  const goalId = validated.goal.id;
 
   store.goals = upsertById(store.goals, validated.goal);
   store.workflows = upsertById(store.workflows, validated.workflow);
+  store.tasks = store.tasks.filter((task) => task.goalId !== goalId);
+  store.artifacts = store.artifacts.filter((artifact) => artifact.goalId !== goalId);
+  store.approvals = store.approvals.filter((approval) => approval.goalId !== goalId);
+  store.watchers = store.watchers.filter((watcher) => watcher.goalId !== goalId);
+  store.actionLogs = store.actionLogs.filter((log) => log.goalId !== goalId);
 
   for (const task of validated.tasks) {
     store.tasks = upsertById(store.tasks, task);
@@ -4789,6 +4795,12 @@ class PostgresRepository implements AgenticRepository {
         validated.goal.updatedAt
       ]
     );
+
+    await client.query("delete from action_logs where goal_id = $1", [validated.goal.id]);
+    await client.query("delete from approval_requests where goal_id = $1", [validated.goal.id]);
+    await client.query("delete from artifacts where goal_id = $1", [validated.goal.id]);
+    await client.query("delete from watchers where goal_id = $1", [validated.goal.id]);
+    await client.query("delete from tasks where goal_id = $1", [validated.goal.id]);
 
     for (const task of validated.tasks) {
       await client.query(

@@ -495,6 +495,8 @@ export async function processUserRequest(params: {
   agentDefinition?: AgentDefinition;
   resolveAgentMetrics?: (agentIdOrName: string) => Promise<AgentMetrics | null>;
   governance?: WorkspaceGovernance | null;
+  goalId?: string;
+  workflowId?: string;
 }): Promise<GoalBundle> {
   const request = normalizeRequest(params.request);
 
@@ -511,9 +513,9 @@ export async function processUserRequest(params: {
   });
   const scenario = await detectScenario(request);
   const catalog = scenarioCatalog[scenario];
-  const goalId = crypto.randomUUID();
+  const goalId = params.goalId ?? crypto.randomUUID();
   const workspaceId = params.workspaceId ?? null;
-  const workflow = createWorkflowState(goalId, scenario, workspaceId);
+  const workflow = createWorkflowState(goalId, scenario, workspaceId, params.workflowId);
   const createdAt = nowIso();
   const logs: ActionLog[] = [];
   const tasks: Task[] = [];

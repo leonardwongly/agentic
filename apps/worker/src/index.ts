@@ -1,0 +1,67 @@
+import { prepareDefaultIntegrations } from "@agentic/integrations";
+import { createRepository } from "@agentic/repository";
+import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
+import { runWorkerRuntime } from "@agentic/worker-runtime";
+
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const value = process.env[name]?.trim();
+
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer when configured.`);
+  }
+
+  return parsed;
+}
+
+async function main() {
+  const repository = createRepository();
+  const selfImprovementRepository = createSelfImprovementRepository();
+  const controller = new AbortController();
+  const runnerId = process.env.AGENTIC_WORKER_RUNNER_ID?.trim() || `worker-${process.pid}`;
+  const pollIntervalMs = parsePositiveIntEnv("AGENTIC_WORKER_POLL_INTERVAL_MS", 1_000);
+  const leaseMs = parsePositiveIntEnv("AGENTIC_WORKER_LEASE_MS", 30_000);
+
+  const shutdown = (signal: string) => {
+    if (controller.signal.aborted) {
+      return;
+    }
+
+    console.info(`[worker] Received ${signal}; draining and stopping worker loop.`);
+    controller.abort();
+  };
+
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  await Promise.all([
+    repository.seedDefaults(),
+    prepareDefaultIntegrations(),
+    selfImprovementRepository.seed()
+  ]);
+
+  console.info(`[worker] Starting durable worker ${runnerId}.`);
+
+  const result = await runWorkerRuntime({
+    repository,
+    selfImprovementRepository,
+    runnerId,
+    pollIntervalMs,
+    leaseMs,
+    signal: controller.signal
+  });
+
+  console.info(
+    `[worker] Worker ${runnerId} stopped after processing ${result.processedCount} job(s); reason=${result.stopReason}.`
+  );
+}
+
+main().catch((error) => {
+  console.error("[worker] Fatal worker startup failure.", error);
+  process.exitCode = 1;
+});
