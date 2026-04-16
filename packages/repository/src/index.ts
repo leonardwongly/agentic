@@ -34,6 +34,9 @@ import {
   GoalSchema,
   GoalTemplateSchema,
   IntegrationAccountSchema,
+  JobKindSchema,
+  JobRecordSchema,
+  JobStatusSchema,
   MemoryRecordSchema,
   OperatorProductSchema,
   OperatorProductSelectionSchema,
@@ -69,6 +72,9 @@ import {
   type GoalBundle,
   type GoalTemplate,
   type IntegrationAccount,
+  type JobKind,
+  type JobRecord,
+  type JobStatus,
   type MemoryRecord,
   type NowQueue,
   type OperatorProduct,
@@ -128,6 +134,7 @@ const RuntimeStoreSchema = z.object({
   workflowTemplates: z.array(WorkflowCanvasTemplateSchema).default([]),
   autopilotSettings: z.array(AutopilotSettingsSchema).default([]),
   autopilotEvents: z.array(AutopilotEventSchema).default([]),
+  jobs: z.array(JobRecordSchema).default([]),
   agents: z.array(AgentDefinitionSchema).default([]),
   agentMetrics: z.array(AgentMetricsSchema).default([]),
   briefingPreferences: z.array(BriefingPreferencesSchema).default([]),
@@ -238,6 +245,16 @@ export type AutopilotEventClaim =
       event: AutopilotEvent;
     };
 
+export class JobMutationError extends Error {
+  constructor(
+    public readonly code: "not_found" | "not_running" | "not_owner",
+    message: string
+  ) {
+    super(message);
+    this.name = "JobMutationError";
+  }
+}
+
 export class ApprovalMutationError extends Error {
   constructor(
     public readonly code: "not_found" | "already_handled" | "expired",
@@ -314,6 +331,37 @@ export type AgenticRepository = {
     debounceMinutes: number;
   }): Promise<AutopilotEventClaim>;
   saveAutopilotEvent(event: AutopilotEvent): Promise<AutopilotEvent>;
+  listJobs(params?: {
+    userId?: string;
+    kinds?: JobKind[];
+    statuses?: JobStatus[];
+  }): Promise<JobRecord[]>;
+  getJob(jobId: string, userId?: string): Promise<JobRecord | null>;
+  enqueueJob(job: JobRecord): Promise<JobRecord>;
+  claimNextJob(params: {
+    userId?: string;
+    kinds?: JobKind[];
+    runnerId: string;
+    leaseMs: number;
+    now?: string;
+  }): Promise<JobRecord | null>;
+  completeJob(params: {
+    jobId: string;
+    runnerId: string;
+    completedAt?: string;
+  }): Promise<JobRecord>;
+  retryJob(params: {
+    jobId: string;
+    runnerId: string;
+    availableAt: string;
+    error: string;
+  }): Promise<JobRecord>;
+  deadLetterJob(params: {
+    jobId: string;
+    runnerId: string;
+    deadLetteredAt?: string;
+    error: string;
+  }): Promise<JobRecord>;
   listMemory(userId?: string): Promise<MemoryRecord[]>;
   saveMemory(record: MemoryRecord): Promise<MemoryRecord>;
   saveEvidenceRecord(record: EvidenceRecord): Promise<EvidenceRecord>;
@@ -380,6 +428,7 @@ function createEmptyStore(): RuntimeStore {
     workflowTemplates: [],
     autopilotSettings: [],
     autopilotEvents: [],
+    jobs: [],
     agents: [],
     agentMetrics: [],
     briefingPreferences: [],
@@ -1961,6 +2010,54 @@ function buildPendingAutopilotEvent(params: {
   });
 }
 
+function sortJobsForClaim(items: JobRecord[]): JobRecord[] {
+  return [...items].sort((left, right) => {
+    const availableOrder = left.availableAt.localeCompare(right.availableAt);
+    if (availableOrder !== 0) {
+      return availableOrder;
+    }
+
+    return left.createdAt.localeCompare(right.createdAt);
+  });
+}
+
+function isJobClaimable(job: JobRecord, now: number): boolean {
+  if (job.status === "queued" || job.status === "retrying") {
+    return Date.parse(job.availableAt) <= now;
+  }
+
+  if (job.status === "running" && job.leaseExpiresAt) {
+    return Date.parse(job.leaseExpiresAt) <= now;
+  }
+
+  return false;
+}
+
+function claimJobRecord(job: JobRecord, runnerId: string, leaseMs: number, claimedAt: string): JobRecord {
+  return JobRecordSchema.parse({
+    ...job,
+    status: "running",
+    attemptCount: job.attemptCount + 1,
+    claimedBy: runnerId,
+    claimedAt,
+    lastAttemptAt: claimedAt,
+    leaseExpiresAt: new Date(Date.parse(claimedAt) + leaseMs).toISOString(),
+    completedAt: null,
+    deadLetteredAt: null,
+    updatedAt: claimedAt
+  });
+}
+
+function assertRunningJobOwner(job: JobRecord, runnerId: string): void {
+  if (job.status !== "running") {
+    throw new JobMutationError("not_running", `Job ${job.id} is not currently running.`);
+  }
+
+  if (job.claimedBy !== runnerId) {
+    throw new JobMutationError("not_owner", `Job ${job.id} is claimed by another worker.`);
+  }
+}
+
 function buildApprovalEvidenceRecord(params: {
   actor: ActorContext;
   previousBundle: GoalBundle;
@@ -2849,6 +2946,191 @@ class FileRepository implements AgenticRepository {
       store.autopilotEvents = upsertById(store.autopilotEvents, validated);
       await this.writeStore(store);
       return AutopilotEventSchema.parse(clone(validated));
+    });
+  }
+
+  async listJobs(params?: {
+    userId?: string;
+    kinds?: JobKind[];
+    statuses?: JobStatus[];
+  }): Promise<JobRecord[]> {
+    const store = await this.readStore();
+    const kinds = params?.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
+    const statuses = params?.statuses?.map((status) => JobStatusSchema.parse(status)) ?? [];
+
+    return sortByCreatedDesc(
+      store.jobs.filter((job) => {
+        if (params?.userId && job.userId !== params.userId) {
+          return false;
+        }
+
+        if (kinds.length > 0 && !kinds.includes(job.kind)) {
+          return false;
+        }
+
+        if (statuses.length > 0 && !statuses.includes(job.status)) {
+          return false;
+        }
+
+        return true;
+      })
+    ).map((job) => JobRecordSchema.parse(clone(job)));
+  }
+
+  async getJob(jobId: string, userId = SYSTEM_USER_ID): Promise<JobRecord | null> {
+    const store = await this.readStore();
+    const job = store.jobs.find((candidate) => candidate.id === jobId && candidate.userId === userId);
+    return job ? JobRecordSchema.parse(clone(job)) : null;
+  }
+
+  async enqueueJob(job: JobRecord): Promise<JobRecord> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const validated = JobRecordSchema.parse(job);
+      const trimmedKey = validated.idempotencyKey?.trim() || null;
+
+      if (trimmedKey) {
+        const existing = store.jobs.find(
+          (candidate) => candidate.userId === validated.userId && candidate.idempotencyKey === trimmedKey
+        );
+
+        if (existing) {
+          return JobRecordSchema.parse(clone(existing));
+        }
+      }
+
+      store.jobs = upsertById(store.jobs, {
+        ...validated,
+        idempotencyKey: trimmedKey
+      });
+      await this.writeStore(store);
+      return JobRecordSchema.parse(clone(validated));
+    });
+  }
+
+  async claimNextJob(params: {
+    userId?: string;
+    kinds?: JobKind[];
+    runnerId: string;
+    leaseMs: number;
+    now?: string;
+  }): Promise<JobRecord | null> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const claimedAt = params.now ?? nowIso();
+      const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
+      const claimable = sortJobsForClaim(
+        store.jobs.filter((job) => {
+          if (params.userId && job.userId !== params.userId) {
+            return false;
+          }
+
+          if (kinds.length > 0 && !kinds.includes(job.kind)) {
+            return false;
+          }
+
+          return isJobClaimable(job, Date.parse(claimedAt));
+        })
+      )[0];
+
+      if (!claimable) {
+        return null;
+      }
+
+      const claimed = claimJobRecord(claimable, params.runnerId, params.leaseMs, claimedAt);
+      store.jobs = upsertById(store.jobs, claimed);
+      await this.writeStore(store);
+      return JobRecordSchema.parse(clone(claimed));
+    });
+  }
+
+  async completeJob(params: {
+    jobId: string;
+    runnerId: string;
+    completedAt?: string;
+  }): Promise<JobRecord> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const existing = store.jobs.find((job) => job.id === params.jobId);
+
+      if (!existing) {
+        throw new JobMutationError("not_found", `Job ${params.jobId} does not exist.`);
+      }
+
+      assertRunningJobOwner(existing, params.runnerId);
+      const completedAt = params.completedAt ?? nowIso();
+      const completed = JobRecordSchema.parse({
+        ...existing,
+        status: "completed",
+        leaseExpiresAt: null,
+        completedAt,
+        updatedAt: completedAt
+      });
+      store.jobs = upsertById(store.jobs, completed);
+      await this.writeStore(store);
+      return JobRecordSchema.parse(clone(completed));
+    });
+  }
+
+  async retryJob(params: {
+    jobId: string;
+    runnerId: string;
+    availableAt: string;
+    error: string;
+  }): Promise<JobRecord> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const existing = store.jobs.find((job) => job.id === params.jobId);
+
+      if (!existing) {
+        throw new JobMutationError("not_found", `Job ${params.jobId} does not exist.`);
+      }
+
+      assertRunningJobOwner(existing, params.runnerId);
+      const updatedAt = nowIso();
+      const retried = JobRecordSchema.parse({
+        ...existing,
+        status: "retrying",
+        claimedBy: null,
+        claimedAt: null,
+        leaseExpiresAt: null,
+        availableAt: params.availableAt,
+        lastError: params.error.trim().slice(0, 1000),
+        updatedAt
+      });
+      store.jobs = upsertById(store.jobs, retried);
+      await this.writeStore(store);
+      return JobRecordSchema.parse(clone(retried));
+    });
+  }
+
+  async deadLetterJob(params: {
+    jobId: string;
+    runnerId: string;
+    deadLetteredAt?: string;
+    error: string;
+  }): Promise<JobRecord> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const existing = store.jobs.find((job) => job.id === params.jobId);
+
+      if (!existing) {
+        throw new JobMutationError("not_found", `Job ${params.jobId} does not exist.`);
+      }
+
+      assertRunningJobOwner(existing, params.runnerId);
+      const deadLetteredAt = params.deadLetteredAt ?? nowIso();
+      const deadLettered = JobRecordSchema.parse({
+        ...existing,
+        status: "dead_letter",
+        leaseExpiresAt: null,
+        deadLetteredAt,
+        lastError: params.error.trim().slice(0, 1000),
+        updatedAt: deadLetteredAt
+      });
+      store.jobs = upsertById(store.jobs, deadLettered);
+      await this.writeStore(store);
+      return JobRecordSchema.parse(clone(deadLettered));
     });
   }
 
@@ -3831,6 +4113,63 @@ class PostgresRepository implements AgenticRepository {
     );
   }
 
+  private async saveJobWithClient(client: PoolClient, job: JobRecord): Promise<void> {
+    const validated = JobRecordSchema.parse(job);
+    await client.query(
+      `
+        insert into jobs (
+          id, user_id, kind, status, idempotency_key, payload, actor_context, max_attempts, attempt_count,
+          claimed_by, last_attempt_at, claimed_at, lease_expires_at, available_at, completed_at, dead_lettered_at,
+          last_error, created_at, updated_at
+        )
+        values (
+          $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9,
+          $10, $11, $12, $13, $14, $15, $16,
+          $17, $18, $19
+        )
+        on conflict (id) do update
+        set user_id = excluded.user_id,
+            kind = excluded.kind,
+            status = excluded.status,
+            idempotency_key = excluded.idempotency_key,
+            payload = excluded.payload,
+            actor_context = excluded.actor_context,
+            max_attempts = excluded.max_attempts,
+            attempt_count = excluded.attempt_count,
+            claimed_by = excluded.claimed_by,
+            last_attempt_at = excluded.last_attempt_at,
+            claimed_at = excluded.claimed_at,
+            lease_expires_at = excluded.lease_expires_at,
+            available_at = excluded.available_at,
+            completed_at = excluded.completed_at,
+            dead_lettered_at = excluded.dead_lettered_at,
+            last_error = excluded.last_error,
+            updated_at = excluded.updated_at
+      `,
+      [
+        validated.id,
+        validated.userId,
+        validated.kind,
+        validated.status,
+        validated.idempotencyKey,
+        JSON.stringify(validated.payload),
+        JSON.stringify(validated.actorContext),
+        validated.maxAttempts,
+        validated.attemptCount,
+        validated.claimedBy,
+        validated.lastAttemptAt,
+        validated.claimedAt,
+        validated.leaseExpiresAt,
+        validated.availableAt,
+        validated.completedAt,
+        validated.deadLetteredAt,
+        validated.lastError,
+        validated.createdAt,
+        validated.updatedAt
+      ]
+    );
+  }
+
   private mapTemplateRow(row: Record<string, unknown>): GoalTemplate {
     return GoalTemplateSchema.parse({
       id: row.id,
@@ -3877,6 +4216,30 @@ class PostgresRepository implements AgenticRepository {
       processedAt: row.processed_at ? new Date(row.processed_at as string | number | Date).toISOString() : null,
       resultGoalId: typeof row.result_goal_id === "string" ? row.result_goal_id : null,
       error: typeof row.error === "string" ? row.error : null
+    });
+  }
+
+  private mapJobRow(row: Record<string, unknown>): JobRecord {
+    return JobRecordSchema.parse({
+      id: row.id,
+      userId: row.user_id,
+      kind: row.kind,
+      status: row.status,
+      idempotencyKey: typeof row.idempotency_key === "string" ? row.idempotency_key : null,
+      payload: row.payload,
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      maxAttempts: row.max_attempts,
+      attemptCount: row.attempt_count,
+      claimedBy: typeof row.claimed_by === "string" ? row.claimed_by : null,
+      lastAttemptAt: row.last_attempt_at ? new Date(row.last_attempt_at as string | number | Date).toISOString() : null,
+      claimedAt: row.claimed_at ? new Date(row.claimed_at as string | number | Date).toISOString() : null,
+      leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at as string | number | Date).toISOString() : null,
+      availableAt: new Date(row.available_at as string | number | Date).toISOString(),
+      completedAt: row.completed_at ? new Date(row.completed_at as string | number | Date).toISOString() : null,
+      deadLetteredAt: row.dead_lettered_at ? new Date(row.dead_lettered_at as string | number | Date).toISOString() : null,
+      lastError: typeof row.last_error === "string" ? row.last_error : null,
+      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+      updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
   }
 
@@ -5452,6 +5815,221 @@ class PostgresRepository implements AgenticRepository {
     const validated = AutopilotEventSchema.parse(event);
     await this.withTransaction((client) => this.saveAutopilotEventWithClient(client, validated));
     return AutopilotEventSchema.parse(clone(validated));
+  }
+
+  async listJobs(params?: {
+    userId?: string;
+    kinds?: JobKind[];
+    statuses?: JobStatus[];
+  }): Promise<JobRecord[]> {
+    await this.ready;
+    const values: unknown[] = [];
+    const predicates: string[] = [];
+
+    if (params?.userId) {
+      values.push(params.userId);
+      predicates.push(`user_id = $${values.length}`);
+    }
+
+    if (params?.kinds?.length) {
+      values.push(params.kinds.map((kind) => JobKindSchema.parse(kind)));
+      predicates.push(`kind = any($${values.length}::text[])`);
+    }
+
+    if (params?.statuses?.length) {
+      values.push(params.statuses.map((status) => JobStatusSchema.parse(status)));
+      predicates.push(`status = any($${values.length}::text[])`);
+    }
+
+    const whereClause = predicates.length > 0 ? `where ${predicates.join(" and ")}` : "";
+    const result = await this.pool.query(
+      `
+        select *
+        from jobs
+        ${whereClause}
+        order by created_at desc
+      `,
+      values
+    );
+
+    return result.rows.map((row) => this.mapJobRow(row));
+  }
+
+  async getJob(jobId: string, userId = SYSTEM_USER_ID): Promise<JobRecord | null> {
+    await this.ready;
+    const result = await this.pool.query("select * from jobs where id = $1 and user_id = $2 limit 1", [jobId, userId]);
+    return result.rows[0] ? this.mapJobRow(result.rows[0]) : null;
+  }
+
+  async enqueueJob(job: JobRecord): Promise<JobRecord> {
+    const validated = JobRecordSchema.parse(job);
+    const trimmedKey = validated.idempotencyKey?.trim() || null;
+
+    return this.withTransaction(async (client) => {
+      if (trimmedKey) {
+        await client.query("select pg_advisory_xact_lock(hashtext($1))", [`job:${validated.userId}:${trimmedKey}`]);
+        const existing = await client.query(
+          `
+            select *
+            from jobs
+            where user_id = $1 and idempotency_key = $2
+            limit 1
+          `,
+          [validated.userId, trimmedKey]
+        );
+
+        if (existing.rows[0]) {
+          return this.mapJobRow(existing.rows[0]);
+        }
+      }
+
+      await this.saveJobWithClient(client, {
+        ...validated,
+        idempotencyKey: trimmedKey
+      });
+      return JobRecordSchema.parse(
+        clone({
+          ...validated,
+          idempotencyKey: trimmedKey
+        })
+      );
+    });
+  }
+
+  async claimNextJob(params: {
+    userId?: string;
+    kinds?: JobKind[];
+    runnerId: string;
+    leaseMs: number;
+    now?: string;
+  }): Promise<JobRecord | null> {
+    return this.withTransaction(async (client) => {
+      const claimedAt = params.now ?? nowIso();
+      const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
+      const values: unknown[] = [claimedAt];
+      const predicates = [
+        `(
+          (status in ('queued', 'retrying') and available_at <= $1)
+          or (status = 'running' and lease_expires_at is not null and lease_expires_at <= $1)
+        )`
+      ];
+
+      if (params.userId) {
+        values.push(params.userId);
+        predicates.push(`user_id = $${values.length}`);
+      }
+
+      if (kinds.length > 0) {
+        values.push(kinds);
+        predicates.push(`kind = any($${values.length}::text[])`);
+      }
+
+      const result = await client.query(
+        `
+          select *
+          from jobs
+          where ${predicates.join(" and ")}
+          order by available_at asc, created_at asc
+          limit 1
+          for update skip locked
+        `,
+        values
+      );
+
+      if (!result.rows[0]) {
+        return null;
+      }
+
+      const claimed = claimJobRecord(this.mapJobRow(result.rows[0]), params.runnerId, params.leaseMs, claimedAt);
+      await this.saveJobWithClient(client, claimed);
+      return JobRecordSchema.parse(clone(claimed));
+    });
+  }
+
+  async completeJob(params: {
+    jobId: string;
+    runnerId: string;
+    completedAt?: string;
+  }): Promise<JobRecord> {
+    return this.withTransaction(async (client) => {
+      const result = await client.query("select * from jobs where id = $1 limit 1 for update", [params.jobId]);
+
+      if (!result.rows[0]) {
+        throw new JobMutationError("not_found", `Job ${params.jobId} does not exist.`);
+      }
+
+      const existing = this.mapJobRow(result.rows[0]);
+      assertRunningJobOwner(existing, params.runnerId);
+      const completedAt = params.completedAt ?? nowIso();
+      const completed = JobRecordSchema.parse({
+        ...existing,
+        status: "completed",
+        leaseExpiresAt: null,
+        completedAt,
+        updatedAt: completedAt
+      });
+      await this.saveJobWithClient(client, completed);
+      return JobRecordSchema.parse(clone(completed));
+    });
+  }
+
+  async retryJob(params: {
+    jobId: string;
+    runnerId: string;
+    availableAt: string;
+    error: string;
+  }): Promise<JobRecord> {
+    return this.withTransaction(async (client) => {
+      const result = await client.query("select * from jobs where id = $1 limit 1 for update", [params.jobId]);
+
+      if (!result.rows[0]) {
+        throw new JobMutationError("not_found", `Job ${params.jobId} does not exist.`);
+      }
+
+      const existing = this.mapJobRow(result.rows[0]);
+      assertRunningJobOwner(existing, params.runnerId);
+      const retried = JobRecordSchema.parse({
+        ...existing,
+        status: "retrying",
+        claimedBy: null,
+        claimedAt: null,
+        leaseExpiresAt: null,
+        availableAt: params.availableAt,
+        lastError: params.error.trim().slice(0, 1000),
+        updatedAt: nowIso()
+      });
+      await this.saveJobWithClient(client, retried);
+      return JobRecordSchema.parse(clone(retried));
+    });
+  }
+
+  async deadLetterJob(params: {
+    jobId: string;
+    runnerId: string;
+    deadLetteredAt?: string;
+    error: string;
+  }): Promise<JobRecord> {
+    return this.withTransaction(async (client) => {
+      const result = await client.query("select * from jobs where id = $1 limit 1 for update", [params.jobId]);
+
+      if (!result.rows[0]) {
+        throw new JobMutationError("not_found", `Job ${params.jobId} does not exist.`);
+      }
+
+      const existing = this.mapJobRow(result.rows[0]);
+      assertRunningJobOwner(existing, params.runnerId);
+      const deadLetteredAt = params.deadLetteredAt ?? nowIso();
+      const deadLettered = JobRecordSchema.parse({
+        ...existing,
+        status: "dead_letter",
+        leaseExpiresAt: null,
+        deadLetteredAt,
+        lastError: params.error.trim().slice(0, 1000),
+        updatedAt: deadLetteredAt
+      });
+      await this.saveJobWithClient(client, deadLettered);
+      return JobRecordSchema.parse(clone(deadLettered));
+    });
   }
 
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {

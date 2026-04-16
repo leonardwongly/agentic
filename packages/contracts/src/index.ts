@@ -56,6 +56,8 @@ export const briefingFocusValues = ["balanced", "urgent", "deep"] as const;
 export const autopilotModeValues = ["notify_only", "draft_goal", "auto_run"] as const;
 export const autopilotEventKindValues = ["watcher_triggered", "template_due", "briefing_due"] as const;
 export const autopilotEventStatusValues = ["pending", "simulated", "notified", "executed", "debounced", "ignored", "failed"] as const;
+export const jobKindValues = ["goal_create", "autopilot_process"] as const;
+export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
 export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
 export const workspaceApprovalModeValues = ["always_review", "risk_based"] as const;
@@ -93,6 +95,8 @@ export const BriefingFocusSchema = z.enum(briefingFocusValues);
 export const AutopilotModeSchema = z.enum(autopilotModeValues);
 export const AutopilotEventKindSchema = z.enum(autopilotEventKindValues);
 export const AutopilotEventStatusSchema = z.enum(autopilotEventStatusValues);
+export const JobKindSchema = z.enum(jobKindValues);
+export const JobStatusSchema = z.enum(jobStatusValues);
 export const EvidenceRecordSourceKindSchema = z.enum(evidenceRecordSourceKindValues);
 export const WorkspaceRoleSchema = z.enum(workspaceRoleValues);
 export const WorkspaceApprovalModeSchema = z.enum(workspaceApprovalModeValues);
@@ -577,6 +581,114 @@ export const AutopilotEventSchema = z.object({
   resultGoalId: z.string().min(1).nullable().default(null),
   error: z.string().max(1000).nullable().default(null)
 });
+
+export const GoalCreateJobPayloadSchema = z
+  .object({
+    type: z.literal("goal_create"),
+    request: z.string().trim().min(1).max(20_000),
+    workspaceId: z.string().min(1).nullable().default(null),
+    agentId: z.string().min(1).nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
+export const AutopilotProcessJobPayloadSchema = z
+  .object({
+    type: z.literal("autopilot_process"),
+    autopilotEventId: z.string().min(1),
+    kind: AutopilotEventKindSchema,
+    sourceId: z.string().min(1),
+    mode: AutopilotModeSchema,
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
+export const JobPayloadSchema = z.discriminatedUnion("type", [
+  GoalCreateJobPayloadSchema,
+  AutopilotProcessJobPayloadSchema
+]);
+
+export const JobRecordSchema = z
+  .object({
+    id: z.string().min(1),
+    userId: z.string().min(1),
+    kind: JobKindSchema,
+    status: JobStatusSchema,
+    idempotencyKey: z.string().min(1).max(200).nullable().default(null),
+    payload: JobPayloadSchema,
+    actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+    maxAttempts: z.number().int().min(1).max(25),
+    attemptCount: z.number().int().min(0).max(25),
+    claimedBy: z.string().min(1).max(120).nullable().default(null),
+    lastAttemptAt: z.string().datetime().nullable().default(null),
+    claimedAt: z.string().datetime().nullable().default(null),
+    leaseExpiresAt: z.string().datetime().nullable().default(null),
+    availableAt: z.string().datetime(),
+    completedAt: z.string().datetime().nullable().default(null),
+    deadLetteredAt: z.string().datetime().nullable().default(null),
+    lastError: z.string().max(1000).nullable().default(null),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime()
+  })
+  .superRefine((value, context) => {
+    if (value.kind === "goal_create" && value.payload.type !== "goal_create") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'Goal-create jobs must carry a "goal_create" payload.'
+      });
+    }
+
+    if (value.kind === "autopilot_process" && value.payload.type !== "autopilot_process") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'Autopilot jobs must carry an "autopilot_process" payload.'
+      });
+    }
+
+    if (value.status === "running") {
+      if (!value.claimedBy) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["claimedBy"],
+          message: "Running jobs must record the claiming worker."
+        });
+      }
+
+      if (!value.claimedAt) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["claimedAt"],
+          message: "Running jobs must record when the lease started."
+        });
+      }
+
+      if (!value.leaseExpiresAt) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["leaseExpiresAt"],
+          message: "Running jobs must record a lease expiry."
+        });
+      }
+    }
+
+    if (value.status === "completed" && !value.completedAt) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["completedAt"],
+        message: "Completed jobs must record when they finished."
+      });
+    }
+
+    if (value.status === "dead_letter" && !value.deadLetteredAt) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["deadLetteredAt"],
+        message: "Dead-lettered jobs must record when they were abandoned."
+      });
+    }
+  });
 
 export const watcherFrequencyValues = ["realtime", "5min", "15min", "hourly", "daily"] as const;
 export const WatcherFrequencySchema = z.enum(watcherFrequencyValues);
@@ -1190,6 +1302,8 @@ export type BriefingFocus = z.infer<typeof BriefingFocusSchema>;
 export type AutopilotMode = z.infer<typeof AutopilotModeSchema>;
 export type AutopilotEventKind = z.infer<typeof AutopilotEventKindSchema>;
 export type AutopilotEventStatus = z.infer<typeof AutopilotEventStatusSchema>;
+export type JobKind = z.infer<typeof JobKindSchema>;
+export type JobStatus = z.infer<typeof JobStatusSchema>;
 export type EvidenceRecordSourceKind = z.infer<typeof EvidenceRecordSourceKindSchema>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRoleSchema>;
 export type WorkspaceApprovalMode = z.infer<typeof WorkspaceApprovalModeSchema>;
@@ -1237,6 +1351,10 @@ export type BriefingPreferences = z.infer<typeof BriefingPreferencesSchema>;
 export type BriefingHistoryItem = z.infer<typeof BriefingHistoryItemSchema>;
 export type AutopilotSettings = z.infer<typeof AutopilotSettingsSchema>;
 export type AutopilotEvent = z.infer<typeof AutopilotEventSchema>;
+export type GoalCreateJobPayload = z.infer<typeof GoalCreateJobPayloadSchema>;
+export type AutopilotProcessJobPayload = z.infer<typeof AutopilotProcessJobPayloadSchema>;
+export type JobPayload = z.infer<typeof JobPayloadSchema>;
+export type JobRecord = z.infer<typeof JobRecordSchema>;
 export type WatcherFrequency = z.infer<typeof WatcherFrequencySchema>;
 export type Watcher = z.infer<typeof WatcherSchema>;
 export type ActionLog = z.infer<typeof ActionLogSchema>;

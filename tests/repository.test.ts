@@ -16,6 +16,7 @@ import {
 } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createRepository } from "@agentic/repository";
+import { createDurableJobQueue, createJobRecord } from "@agentic/execution";
 import { generateBriefing, processUserRequest } from "@agentic/orchestrator";
 import { createMemoryRecord } from "@agentic/memory";
 
@@ -106,6 +107,95 @@ describe("repository", () => {
     });
     expect(evidence.sourceSummary).toContain(approval!.title);
     expect(new Date(evidence.respondedAt).toString()).not.toBe("Invalid Date");
+  }
+
+  function createGoalCreateJob(params: {
+    userId: string;
+    request?: string;
+    idempotencyKey?: string | null;
+    availableAt?: string;
+    maxAttempts?: number;
+  }) {
+    return createJobRecord({
+      userId: params.userId,
+      kind: "goal_create",
+      idempotencyKey: params.idempotencyKey,
+      availableAt: params.availableAt,
+      maxAttempts: params.maxAttempts,
+      payload: {
+        type: "goal_create",
+        request: params.request ?? "Draft a durable execution plan.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      }
+    });
+  }
+
+  async function expectDurableQueueLifecycle(repository: ReturnType<typeof createRepository>, userId: string) {
+    const queue = createDurableJobQueue(repository, {
+      runnerId: `worker-${userId}`,
+      leaseMs: 1_000,
+      retryPolicy: {
+        baseDelayMs: 250,
+        maxDelayMs: 250
+      }
+    });
+    const queued = await queue.enqueue(
+      createGoalCreateJob({
+        userId,
+        request: `Queue lifecycle validation for ${userId}.`,
+        maxAttempts: 2,
+        availableAt: "2026-04-16T03:00:00.000Z"
+      })
+    );
+    const firstClaim = await queue.claimNext({
+      userId,
+      now: "2026-04-16T03:00:00.000Z"
+    });
+
+    expect(firstClaim).not.toBeNull();
+    expect(firstClaim?.id).toBe(queued.id);
+    expect(firstClaim?.attemptCount).toBe(1);
+
+    const retried = await queue.fail({
+      job: firstClaim!,
+      error: new Error("temporary upstream failure"),
+      now: "2026-04-16T03:00:00.000Z"
+    });
+    const hiddenUntilRetry = await queue.claimNext({
+      userId,
+      now: "2026-04-16T03:00:00.200Z"
+    });
+    const secondClaim = await queue.claimNext({
+      userId,
+      now: "2026-04-16T03:00:00.250Z"
+    });
+
+    expect(retried.status).toBe("retrying");
+    expect(retried.availableAt).toBe("2026-04-16T03:00:00.250Z");
+    expect(hiddenUntilRetry).toBeNull();
+    expect(secondClaim).not.toBeNull();
+    expect(secondClaim?.id).toBe(queued.id);
+    expect(secondClaim?.attemptCount).toBe(2);
+
+    const deadLettered = await queue.fail({
+      job: secondClaim!,
+      error: "permanent upstream failure",
+      now: "2026-04-16T03:05:00.000Z"
+    });
+    const persisted = await repository.getJob(queued.id, userId);
+
+    expect(deadLettered.status).toBe("dead_letter");
+    expect(deadLettered.deadLetteredAt).toBe("2026-04-16T03:05:00.000Z");
+    expect(deadLettered.lastError).toContain("permanent upstream failure");
+    expect(persisted).not.toBeNull();
+    expect(persisted).toMatchObject({
+      id: queued.id,
+      status: "dead_letter",
+      attemptCount: 2,
+      deadLetteredAt: "2026-04-16T03:05:00.000Z"
+    });
   }
 
   it("persists a goal bundle to the file-backed store", async () => {
@@ -234,6 +324,147 @@ describe("repository", () => {
     expect(persisted.evidenceRecords?.map((record) => record.decision).sort()).toEqual(["approved", "rejected"]);
   });
 
+  it("deduplicates user-scoped job idempotency keys and enforces runner ownership in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const primaryUserId = `jobs-primary-${Date.now()}`;
+    const secondaryUserId = `jobs-secondary-${Date.now()}`;
+    const first = createGoalCreateJob({
+      userId: primaryUserId,
+      request: "Create a durable goal.",
+      idempotencyKey: " goal:dedupe ",
+      availableAt: "2026-04-16T02:00:00.000Z"
+    });
+    const duplicate = createGoalCreateJob({
+      userId: primaryUserId,
+      request: "Duplicate durable goal.",
+      idempotencyKey: "goal:dedupe",
+      availableAt: "2026-04-16T02:00:00.000Z"
+    });
+    const otherUser = createGoalCreateJob({
+      userId: secondaryUserId,
+      request: "Same key but different user.",
+      idempotencyKey: "goal:dedupe",
+      availableAt: "2026-04-16T02:00:00.000Z"
+    });
+
+    const savedFirst = await repository.enqueueJob(first);
+    const savedDuplicate = await repository.enqueueJob(duplicate);
+    const savedOtherUser = await repository.enqueueJob(otherUser);
+    const claimed = await repository.claimNextJob({
+      userId: primaryUserId,
+      runnerId: "worker-a",
+      leaseMs: 30_000,
+      now: "2026-04-16T02:00:00.000Z"
+    });
+
+    expect(savedDuplicate.id).toBe(savedFirst.id);
+    expect(savedOtherUser.id).not.toBe(savedFirst.id);
+    expect((await repository.listJobs({ userId: primaryUserId }))).toHaveLength(1);
+    expect(claimed).not.toBeNull();
+    await expect(
+      repository.completeJob({
+        jobId: claimed!.id,
+        runnerId: "worker-b",
+        completedAt: "2026-04-16T02:00:05.000Z"
+      })
+    ).rejects.toThrow(/claimed by another worker/);
+
+    const completed = await repository.completeJob({
+      jobId: claimed!.id,
+      runnerId: "worker-a",
+      completedAt: "2026-04-16T02:00:05.000Z"
+    });
+
+    expect(completed).toMatchObject({
+      id: savedFirst.id,
+      status: "completed",
+      completedAt: "2026-04-16T02:00:05.000Z"
+    });
+  });
+
+  it("reclaims expired job leases ahead of later work in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const userId = `jobs-lease-${Date.now()}`;
+    const dueNow = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId,
+        request: "Process the earliest durable job.",
+        availableAt: "2026-04-16T00:00:00.000Z"
+      })
+    );
+
+    await repository.enqueueJob(
+      createGoalCreateJob({
+        userId,
+        request: "Process the later durable job.",
+        availableAt: "2026-04-16T00:01:00.000Z"
+      })
+    );
+
+    const firstClaim = await repository.claimNextJob({
+      userId,
+      runnerId: "worker-a",
+      leaseMs: 1_000,
+      now: "2026-04-16T00:00:00.000Z"
+    });
+    const hiddenWhileLeased = await repository.claimNextJob({
+      userId,
+      runnerId: "worker-b",
+      leaseMs: 1_000,
+      now: "2026-04-16T00:00:00.500Z"
+    });
+    const reclaimed = await repository.claimNextJob({
+      userId,
+      runnerId: "worker-c",
+      leaseMs: 1_000,
+      now: "2026-04-16T00:01:30.000Z"
+    });
+
+    expect(firstClaim?.id).toBe(dueNow.id);
+    expect(hiddenWhileLeased).toBeNull();
+    expect(reclaimed).not.toBeNull();
+    expect(reclaimed).toMatchObject({
+      id: dueNow.id,
+      claimedBy: "worker-c",
+      attemptCount: 2
+    });
+
+    await repository.completeJob({
+      jobId: reclaimed!.id,
+      runnerId: "worker-c",
+      completedAt: "2026-04-16T00:01:31.000Z"
+    });
+
+    const nextClaim = await repository.claimNextJob({
+      userId,
+      runnerId: "worker-d",
+      leaseMs: 1_000,
+      now: "2026-04-16T00:01:31.000Z"
+    });
+
+    expect(nextClaim).not.toBeNull();
+    expect(nextClaim?.id).not.toBe(dueNow.id);
+    expect(nextClaim?.attemptCount).toBe(1);
+  });
+
+  it("persists retry and dead-letter transitions through the durable queue in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await expectDurableQueueLifecycle(repository, `jobs-queue-${Date.now()}`);
+  });
+
   const databaseUrl = process.env.DATABASE_URL;
   const postgresIt = databaseUrl ? it : it.skip;
 
@@ -331,6 +562,83 @@ describe("repository", () => {
       id: agent.id
     });
     expect(deleted).toBeNull();
+  });
+
+  postgresIt("deduplicates job idempotency keys and persists durable queue transitions in Postgres when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+    const userId = `jobs-postgres-${Date.now()}`;
+    const duplicateKey = `goal:${Date.now()}`;
+    const first = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId,
+        request: "Persist the first durable job.",
+        idempotencyKey: duplicateKey
+      })
+    );
+    const duplicate = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId,
+        request: "Attempt the same durable job again.",
+        idempotencyKey: ` ${duplicateKey} `
+      })
+    );
+
+    expect(duplicate.id).toBe(first.id);
+    expect(await repository.listJobs({ userId })).toHaveLength(1);
+
+    await expectDurableQueueLifecycle(repository, `${userId}-queue`);
+  });
+
+  postgresIt("reclaims expired job leases ahead of later work in Postgres when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+    const userId = `jobs-postgres-lease-${Date.now()}`;
+    const dueNow = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId,
+        request: "Process the earliest durable Postgres job.",
+        availableAt: "2026-04-16T00:00:00.000Z"
+      })
+    );
+
+    await repository.enqueueJob(
+      createGoalCreateJob({
+        userId,
+        request: "Process the later durable Postgres job.",
+        availableAt: "2026-04-16T00:01:00.000Z"
+      })
+    );
+
+    const firstClaim = await repository.claimNextJob({
+      userId,
+      runnerId: "worker-a",
+      leaseMs: 1_000,
+      now: "2026-04-16T00:00:00.000Z"
+    });
+    const hiddenWhileLeased = await repository.claimNextJob({
+      userId,
+      runnerId: "worker-b",
+      leaseMs: 1_000,
+      now: "2026-04-16T00:00:00.500Z"
+    });
+    const reclaimed = await repository.claimNextJob({
+      userId,
+      runnerId: "worker-c",
+      leaseMs: 1_000,
+      now: "2026-04-16T00:01:30.000Z"
+    });
+
+    expect(firstClaim?.id).toBe(dueNow.id);
+    expect(hiddenWhileLeased).toBeNull();
+    expect(reclaimed).not.toBeNull();
+    expect(reclaimed).toMatchObject({
+      id: dueNow.id,
+      claimedBy: "worker-c",
+      attemptCount: 2
+    });
   });
 
   it("derives agent scorecards from persisted goal execution history", async () => {

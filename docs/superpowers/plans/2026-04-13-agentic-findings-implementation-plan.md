@@ -203,7 +203,7 @@ The codebase evolved from a single-user MVP.
 ## Phase 3: Async Workflow Hardening
 
 Priority: P1
-Status: Planned
+Status: In progress
 Goal: move external side effects and long-running work out of request-path logic.
 
 ### Finding 3.1: Workflow execution is too synchronous for internet-scale reliability
@@ -235,6 +235,17 @@ Early implementation favored directness over distributed runtime guarantees.
 - duplicate-submit negative tests
 - queue lag and replay simulations
 - regression coverage for approval response flows
+
+**Implementation update**
+- Durable job contracts now define explicit job kinds, payload schemas, lifecycle states, lease metadata, retry metadata, and validation guards for running/completed/dead-letter invariants.
+- File-backed and Postgres repositories now persist durable jobs with user-scoped idempotency keys, atomic claim semantics, worker ownership enforcement, lease expiry reclaim, retry scheduling, and dead-letter transitions.
+- The database schema now includes a `jobs` table and supporting indexes for claim scans, lease recovery, and user-scoped idempotency enforcement.
+- Execution utilities now expose a reusable durable queue abstraction with bounded exponential backoff and a normalized retry/dead-letter contract for worker runtimes.
+- Repository and execution regression coverage now verifies duplicate-submit denial, lease expiry reclaim ordering, worker ownership checks, retry scheduling, and dead-letter persistence across both repository backends.
+
+**Remaining follow-up**
+- move goal creation and autopilot execution off request paths and onto worker handlers
+- add worker runtime/dispatch, idempotent side-effect guards, and recovery-oriented status APIs
 
 ---
 

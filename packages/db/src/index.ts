@@ -328,6 +328,36 @@ export const autopilotEvents = pgTable("autopilot_events", {
   error: text("error")
 });
 
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    kind: text("kind").notNull(),
+    status: text("status").notNull(),
+    idempotencyKey: text("idempotency_key"),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+    maxAttempts: integer("max_attempts").notNull(),
+    attemptCount: integer("attempt_count").notNull(),
+    claimedBy: text("claimed_by"),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    availableAt: timestamp("available_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    deadLetteredAt: timestamp("dead_lettered_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    userStatusAvailableAtIdx: index("jobs_user_status_available_at_idx").on(table.userId, table.status, table.availableAt),
+    kindStatusAvailableAtIdx: index("jobs_kind_status_available_at_idx").on(table.kind, table.status, table.availableAt),
+    leaseExpiresAtIdx: index("jobs_lease_expires_at_idx").on(table.leaseExpiresAt)
+  })
+);
+
 export const integrationAccounts = pgTable("integration_accounts", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull(),

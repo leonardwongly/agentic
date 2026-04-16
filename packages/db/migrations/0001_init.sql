@@ -281,6 +281,41 @@ create unique index if not exists autopilot_events_user_idempotency_idx
   on autopilot_events (user_id, idempotency_key)
   where idempotency_key is not null;
 
+create table if not exists jobs (
+  id text primary key,
+  user_id text not null,
+  kind text not null,
+  status text not null,
+  idempotency_key text,
+  payload jsonb not null default '{}'::jsonb,
+  actor_context jsonb,
+  max_attempts integer not null,
+  attempt_count integer not null default 0,
+  claimed_by text,
+  last_attempt_at timestamptz,
+  claimed_at timestamptz,
+  lease_expires_at timestamptz,
+  available_at timestamptz not null,
+  completed_at timestamptz,
+  dead_lettered_at timestamptz,
+  last_error text,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create unique index if not exists jobs_user_idempotency_idx
+  on jobs (user_id, idempotency_key)
+  where idempotency_key is not null;
+
+create index if not exists jobs_user_status_available_at_idx
+  on jobs (user_id, status, available_at);
+
+create index if not exists jobs_kind_status_available_at_idx
+  on jobs (kind, status, available_at);
+
+create index if not exists jobs_lease_expires_at_idx
+  on jobs (lease_expires_at);
+
 create table if not exists action_logs (
   id text primary key,
   goal_id text not null,
