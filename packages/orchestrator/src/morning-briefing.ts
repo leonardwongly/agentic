@@ -225,14 +225,16 @@ export async function generateBriefing(params: {
   pendingApprovals: ApprovalRequest[];
   activeWatchers: Watcher[];
   preferences?: Pick<BriefingPreferences, "focus" | "timezone">;
+  goalId?: string;
+  workflowId?: string;
   resolveAgentMetrics?: (agentIdOrName: string) => Promise<AgentMetrics | null>;
 }): Promise<GoalBundle> {
   const definition = briefingCatalog[params.type];
   const dateLabel = formatBriefingDate(defaultTimezone(params.preferences));
   const focus = defaultFocus(params.preferences);
-  const goalId = crypto.randomUUID();
+  const goalId = params.goalId ?? crypto.randomUUID();
   const workspaceId = params.workspaceId ?? null;
-  const workflow = createWorkflowState(goalId, `briefing:${params.type}`, workspaceId);
+  const workflow = createWorkflowState(goalId, `briefing:${params.type}`, workspaceId, params.workflowId);
   const createdAt = nowIso();
   const logs: ActionLog[] = [];
   const tasks: Task[] = [];

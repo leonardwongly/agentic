@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   GoalBundleSchema,
   SYSTEM_USER_ID,
+  WatcherSchema,
   createSystemActorContext
 } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
@@ -11,7 +12,9 @@ import * as orchestrator from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { EpisodeRecordSchema, createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import {
+  enqueueAutopilotProcessJob,
   enqueueGoalCreateJob,
+  executeAutopilotProcessJob,
   executeGoalCreateJob,
   runWorkerRuntime
 } from "@agentic/worker-runtime";
@@ -91,6 +94,57 @@ describe("worker runtime", () => {
       watchers: [],
       actionLogs: []
     });
+  }
+
+  async function createWatcherAutopilotFixture() {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const sourceBundle = await orchestrator.processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Watch the VIP inbox and prepare a response when a thread becomes urgent.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+
+    await repository.saveGoalBundle(sourceBundle);
+
+    const watcher = WatcherSchema.parse({
+      id: "watcher-worker-runtime-autopilot",
+      goalId: sourceBundle.goal.id,
+      targetEntity: "vip-inbox",
+      condition: "a VIP thread becomes urgent",
+      frequency: "hourly",
+      triggerAction: "prepare the next response plan",
+      sourceSystems: ["email"],
+      status: "active",
+      expiryAt: null,
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    await repository.saveWatcher(watcher);
+
+    const claimed = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "watcher_triggered",
+      sourceId: watcher.id,
+      idempotencyKey: "worker-runtime-autopilot-1",
+      mode: "draft_goal",
+      summary: "Watcher triggered for a VIP inbox escalation.",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      debounceMinutes: 15
+    });
+
+    if (claimed.outcome !== "claimed") {
+      throw new Error(`Expected claimed autopilot event, received ${claimed.outcome}.`);
+    }
+
+    return {
+      repository,
+      selfImprovementRepository,
+      sourceBundle,
+      watcher,
+      event: claimed.event
+    };
   }
 
   it("processes queued goal jobs through the worker loop and persists completion state", async () => {
@@ -257,5 +311,118 @@ describe("worker runtime", () => {
     });
     expect(persistedJob?.lastError).toContain("episode store unavailable");
     expect(episodes).toHaveLength(0);
+  });
+
+  it("keeps autopilot watcher execution idempotent across repeated worker attempts", async () => {
+    const { repository, selfImprovementRepository, event } = await createWatcherAutopilotFixture();
+    const job = await enqueueAutopilotProcessJob({
+      repository,
+      autopilotEvent: event
+    });
+
+    await executeAutopilotProcessJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterFirstAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const eventAfterFirstAttempt = (await repository.listAutopilotEvents(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === event.id
+    );
+
+    await executeAutopilotProcessJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterSecondAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const eventAfterSecondAttempt = (await repository.listAutopilotEvents(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === event.id
+    );
+
+    expect(goalsAfterFirstAttempt).toHaveLength(2);
+    expect(goalsAfterSecondAttempt).toHaveLength(2);
+    expect(goalsAfterSecondAttempt.map((bundle) => bundle.goal.id).sort()).toEqual(
+      goalsAfterFirstAttempt.map((bundle) => bundle.goal.id).sort()
+    );
+    expect(eventAfterFirstAttempt).toMatchObject({
+      id: event.id,
+      status: "executed",
+      resultGoalId: `autopilot-goal-${event.id}`
+    });
+    expect(eventAfterSecondAttempt).toMatchObject({
+      id: event.id,
+      status: "executed",
+      resultGoalId: `autopilot-goal-${event.id}`
+    });
+  });
+
+  it("records sanitized dead-letter recovery details when autopilot execution exhausts retries", async () => {
+    const { repository, selfImprovementRepository, event } = await createWatcherAutopilotFixture();
+    const failingJob = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "autopilot_process",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      maxAttempts: 1,
+      payload: {
+        type: "autopilot_process",
+        autopilotEventId: event.id,
+        kind: event.kind,
+        sourceId: event.sourceId,
+        mode: event.mode,
+        metadata: {}
+      }
+    });
+    const originalSaveGoalBundle = repository.saveGoalBundle.bind(repository);
+
+    repository.saveGoalBundle = async () => {
+      throw new Error("Synthetic autopilot persistence failure with secret-like content");
+    };
+
+    await repository.enqueueJob(failingJob);
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-autopilot-dead-letter-test",
+      maxJobs: 1,
+      pollIntervalMs: 10,
+      claim: {
+        userId: SYSTEM_USER_ID,
+        kinds: ["autopilot_process"]
+      }
+    });
+
+    repository.saveGoalBundle = originalSaveGoalBundle;
+
+    const persistedJob = await repository.getJob(failingJob.id, SYSTEM_USER_ID);
+    const persistedEvent = (await repository.listAutopilotEvents(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === event.id
+    );
+
+    expect(result).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(persistedJob).toMatchObject({
+      id: failingJob.id,
+      status: "dead_letter",
+      attemptCount: 1
+    });
+    expect(persistedJob?.lastError).toContain("Synthetic autopilot persistence failure");
+    expect(persistedEvent).toMatchObject({
+      id: event.id,
+      status: "failed",
+      error: "Autopilot execution failed."
+    });
+    expect(persistedEvent?.details.failureStage).toBe("execution");
+    expect(persistedEvent?.details.requiresReview).toBe(true);
+    expect(persistedEvent?.details.recoveryAction).toBe("review_event_error");
+    expect(persistedEvent?.details.jobStatus).toBe("dead_letter");
+    expect(persistedEvent?.details.jobId).toBe(failingJob.id);
+    expect(persistedEvent?.details.nextRetryAt).toBeNull();
+    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
   });
 });

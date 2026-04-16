@@ -11,6 +11,8 @@ import {
 } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
+import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
+import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -66,6 +68,31 @@ describe("autopilot events route", () => {
     return { repository, bundle };
   }
 
+  async function runAutopilotWorker(repository = createRepository({ storePath: process.env.AGENTIC_RUNTIME_STORE_PATH })) {
+    const selfImprovementRepository = createSelfImprovementRepository({
+      baseDir: path.join(path.dirname(process.env.AGENTIC_RUNTIME_STORE_PATH!), "self-improvement")
+    });
+
+    await selfImprovementRepository.seed();
+
+    return runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "autopilot-route-test-worker",
+      maxJobs: 1,
+      pollIntervalMs: 10,
+      claim: {
+        userId: SYSTEM_USER_ID,
+        kinds: ["autopilot_process"]
+      }
+    });
+  }
+
+  async function getAutopilotEvent(repository: ReturnType<typeof createRepository>, eventId: string, userId = SYSTEM_USER_ID) {
+    const events = await repository.listAutopilotEvents(userId);
+    return events.find((event) => event.id === eventId) ?? null;
+  }
+
   it("simulates watcher-triggered events without persisting execution state", async () => {
     const { repository, bundle } = await createGoalForUser("Track priority inbox changes.");
     const watcher = WatcherSchema.parse({
@@ -109,7 +136,7 @@ describe("autopilot events route", () => {
     await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
   });
 
-  it("executes watcher-triggered events and prevents duplicate idempotency claims", async () => {
+  it("queues watcher-triggered events, reuses the same durable job for duplicates, and completes execution in the worker", async () => {
     const { repository, bundle } = await createGoalForUser("Watch my inbound queue for VIP customer issues.");
     const watcher = WatcherSchema.parse({
       id: "watcher-autopilot-duplicate",
@@ -142,22 +169,12 @@ describe("autopilot events route", () => {
         status: string;
         resultGoalId: string | null;
         actorContext: unknown;
-        details: {
-          taskCount: number;
-          pendingApprovalCount: number;
-          artifactCount: number;
-          actionLogCount: number;
-          requiresReview: boolean;
-          recoveryAction: string;
-          processingLatencyMs: number;
-        };
       };
-      bundle: {
-        tasks: Array<{ id: string }>;
-        approvals: Array<{ decision: string }>;
-        artifacts: Array<{ id: string }>;
-        actionLogs: Array<{ id: string }>;
+      job: {
+        id: string;
+        status: string;
       };
+      queued: boolean;
     };
 
     const secondResponse = await autopilotEventsRoute(
@@ -176,36 +193,56 @@ describe("autopilot events route", () => {
         resultGoalId: string | null;
         actorContext: unknown;
       };
+      job: {
+        id: string;
+        status: string;
+      };
+      queued: boolean;
     };
+    const queuedJobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["autopilot_process"]
+    });
+    const workerResult = await runAutopilotWorker(repository);
+    const completedEvent = await getAutopilotEvent(repository, firstPayload.event.id);
     const persistedEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const completedJob = await repository.getJob(firstPayload.job.id, SYSTEM_USER_ID);
 
-    expect(firstResponse.status).toBe(200);
-    expect(firstPayload.event.status).toBe("executed");
-    expect(firstPayload.event.resultGoalId).toBeTruthy();
+    expect(firstResponse.status).toBe(202);
+    expect(firstPayload.queued).toBe(true);
+    expect(firstPayload.event.status).toBe("pending");
+    expect(firstPayload.event.resultGoalId).toBeNull();
     expect(firstPayload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
-    expect(firstPayload.event.details.taskCount).toBe(firstPayload.bundle.tasks.length);
-    expect(firstPayload.event.details.pendingApprovalCount).toBe(
-      firstPayload.bundle.approvals.filter((approval) => approval.decision === "pending").length
-    );
-    expect(firstPayload.event.details.artifactCount).toBe(firstPayload.bundle.artifacts.length);
-    expect(firstPayload.event.details.actionLogCount).toBe(firstPayload.bundle.actionLogs.length);
-    expect(firstPayload.event.details.requiresReview).toBe(
-      firstPayload.event.details.pendingApprovalCount > 0
-    );
-    expect(firstPayload.event.details.recoveryAction).toBe(
-      firstPayload.event.details.pendingApprovalCount > 0 ? "review_approvals" : "none"
-    );
-    expect(firstPayload.event.details.processingLatencyMs).toBeGreaterThanOrEqual(0);
-    expect(secondResponse.status).toBe(200);
+    expect(firstPayload.job.status).toBe("queued");
+    expect(secondResponse.status).toBe(202);
+    expect(secondPayload.queued).toBe(true);
     expect(secondPayload.duplicate).toBe(true);
     expect(secondPayload.event.id).toBe(firstPayload.event.id);
     expect(secondPayload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(secondPayload.job.id).toBe(firstPayload.job.id);
+    expect(queuedJobs).toHaveLength(1);
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(completedEvent?.status).toBe("executed");
+    expect(completedEvent?.resultGoalId).toBeTruthy();
+    expect(completedEvent?.details.taskCount).toBeGreaterThan(0);
+    expect(completedEvent?.details.jobId).toBe(firstPayload.job.id);
+    expect(completedEvent?.details.jobStatus).toBe("completed");
+    expect(completedEvent?.details.processingLatencyMs).toBeGreaterThanOrEqual(0);
+    expect(completedJob).toMatchObject({
+      id: firstPayload.job.id,
+      status: "completed",
+      attemptCount: 1
+    });
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(2);
     expect(persistedEvents).toHaveLength(1);
     expect(persistedEvents[0]?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(persistedEvents[0]?.status).toBe("executed");
   });
 
-  it("captures recovery context when watcher-triggered execution fails after claiming the event", async () => {
+  it("captures sanitized recovery context when worker execution fails after the event is queued", async () => {
     const { repository, bundle } = await createGoalForUser("Watch my inbound queue for VIP customer issues.");
     const watcher = WatcherSchema.parse({
       id: "watcher-autopilot-failure",
@@ -223,9 +260,6 @@ describe("autopilot events route", () => {
 
     await repository.saveWatcher(watcher);
     const originalSaveGoalBundle = repository.saveGoalBundle.bind(repository);
-    repository.saveGoalBundle = async () => {
-      throw new Error("Synthetic autopilot execution failure");
-    };
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     const response = await autopilotEventsRoute(
@@ -237,36 +271,44 @@ describe("autopilot events route", () => {
       })
     );
     const payload = (await response.json()) as {
-      error: string;
       event: {
+        id: string;
         status: string;
-        error: string | null;
         actorContext: unknown;
-        details: {
-          failureStage: string;
-          requiresReview: boolean;
-          recoveryAction: string;
-          processingLatencyMs: number;
-        };
       };
-      dashboard: {
-        autopilotEvents: Array<{ status: string }>;
+      job: {
+        id: string;
       };
+      queued: boolean;
     };
+    repository.saveGoalBundle = async () => {
+      throw new Error("Synthetic autopilot execution failure");
+    };
+    const workerResult = await runAutopilotWorker(repository);
+    const failedEvent = await getAutopilotEvent(repository, payload.event.id);
+    const failedJob = await repository.getJob(payload.job.id, SYSTEM_USER_ID);
     const autopilotEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
 
     repository.saveGoalBundle = originalSaveGoalBundle;
 
-    expect(response.status).toBe(500);
-    expect(payload.error).toBe("Autopilot execution failed.");
-    expect(payload.event.status).toBe("failed");
-    expect(payload.event.error).toBe("Autopilot execution failed.");
+    expect(response.status).toBe(202);
+    expect(payload.queued).toBe(true);
+    expect(payload.event.status).toBe("pending");
     expect(payload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
-    expect(payload.event.details.failureStage).toBe("execution");
-    expect(payload.event.details.requiresReview).toBe(true);
-    expect(payload.event.details.recoveryAction).toBe("review_event_error");
-    expect(payload.event.details.processingLatencyMs).toBeGreaterThanOrEqual(0);
-    expect(payload.dashboard.autopilotEvents.some((event) => event.status === "failed")).toBe(true);
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(failedEvent?.status).toBe("failed");
+    expect(failedEvent?.error).toBe("Autopilot execution failed.");
+    expect(failedEvent?.details.failureStage).toBe("execution");
+    expect(failedEvent?.details.requiresReview).toBe(true);
+    expect(failedEvent?.details.recoveryAction).toBe("worker_retry_scheduled");
+    expect(failedEvent?.details.jobStatus).toBe("retrying");
+    expect(failedEvent?.details.jobId).toBe(payload.job.id);
+    expect(failedEvent?.details.nextRetryAt).toBeTruthy();
+    expect(failedEvent?.details.processingLatencyMs).toBeGreaterThanOrEqual(0);
+    expect(failedJob?.status).toBe("retrying");
     expect(autopilotEvents).toHaveLength(1);
     expect(autopilotEvents[0]?.status).toBe("failed");
     expect(autopilotEvents[0]?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
@@ -409,15 +451,22 @@ describe("autopilot events route", () => {
         actorContext: unknown;
       };
     };
+    const workerResult = await runAutopilotWorker(repository);
     const persistedEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
 
-    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(200);
     expect(secondPayload.debounced).toBe(true);
     expect(secondPayload.event.status).toBe("debounced");
     expect(secondPayload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(2);
     expect(persistedEvents).toHaveLength(2);
+    expect(persistedEvents.some((event) => event.status === "executed")).toBe(true);
+    expect(persistedEvents.some((event) => event.status === "debounced")).toBe(true);
     expect(persistedEvents.every((event) => event.actorContext?.subjectUserId === SYSTEM_USER_ID)).toBe(true);
   });
 
@@ -457,7 +506,11 @@ describe("autopilot events route", () => {
     });
 
     let response: Response;
-    let payload: { event: { actorContext: unknown; resultGoalId: string | null } };
+    let payload: {
+      event: { id: string; actorContext: unknown; resultGoalId: string | null };
+      job: { id: string };
+      queued: boolean;
+    };
     try {
       response = await autopilotEventsRoute(
         new Request("http://localhost/api/autopilot/events", {
@@ -472,21 +525,47 @@ describe("autopilot events route", () => {
           })
         })
       );
-      payload = (await response.json()) as { event: { actorContext: unknown; resultGoalId: string | null } };
+      payload = (await response.json()) as {
+        event: { id: string; actorContext: unknown; resultGoalId: string | null };
+        job: { id: string };
+        queued: boolean;
+      };
     } finally {
       requireApiSessionSpy.mockRestore();
     }
 
+    const selfImprovementRepository = createSelfImprovementRepository({
+      baseDir: path.join(path.dirname(process.env.AGENTIC_RUNTIME_STORE_PATH!), "self-improvement")
+    });
+    await selfImprovementRepository.seed();
+    const workerResult = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "autopilot-route-template-session-worker",
+      maxJobs: 1,
+      pollIntervalMs: 10,
+      claim: {
+        userId: secondaryUserId,
+        kinds: ["autopilot_process"]
+      }
+    });
     const events = await repository.listAutopilotEvents(secondaryUserId);
     const updatedTemplate = (await repository.listTemplates(secondaryUserId)).find(
       (template) => template.id === "template-session-run"
     );
 
-    expect(response.status).toBe(200);
-    expect(payload.event.resultGoalId).toBeTruthy();
+    expect(response.status).toBe(202);
+    expect(payload.queued).toBe(true);
+    expect(payload.event.resultGoalId).toBeNull();
     expect(payload.event.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
     expect(events).toHaveLength(1);
     expect(events[0]?.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
+    expect(events[0]?.status).toBe("executed");
+    expect(events[0]?.resultGoalId).toBeTruthy();
     expect(updatedTemplate?.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
   });
 
@@ -526,17 +605,31 @@ describe("autopilot events route", () => {
     );
     const payload = (await response.json()) as {
       event: {
+        id: string;
         status: string;
         resultGoalId: string | null;
       };
+      job: {
+        id: string;
+      };
+      queued: boolean;
     };
+    const workerResult = await runAutopilotWorker(repository);
     const updatedTemplate = (await repository.listTemplates(SYSTEM_USER_ID)).find(
       (template) => template.id === "template-autopilot-run"
     );
+    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
 
-    expect(response.status).toBe(200);
-    expect(payload.event.status).toBe("executed");
-    expect(payload.event.resultGoalId).toBeTruthy();
+    expect(response.status).toBe(202);
+    expect(payload.queued).toBe(true);
+    expect(payload.event.status).toBe("pending");
+    expect(payload.event.resultGoalId).toBeNull();
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(events[0]?.status).toBe("executed");
+    expect(events[0]?.resultGoalId).toBeTruthy();
     expect(updatedTemplate?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(updatedTemplate?.schedule.lastRunAt).toBeTruthy();
     expect(updatedTemplate?.schedule.nextRunAt).toBeTruthy();
@@ -560,18 +653,30 @@ describe("autopilot events route", () => {
     );
     const payload = (await response.json()) as {
       event: {
+        id: string;
         status: string;
         resultGoalId: string | null;
       };
-      dashboard: {
-        briefingHistory: Array<{ goalId: string }>;
+      job: {
+        id: string;
       };
+      queued: boolean;
     };
+    const workerResult = await runAutopilotWorker(repository);
+    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
 
-    expect(response.status).toBe(200);
-    expect(payload.event.status).toBe("executed");
-    expect(payload.event.resultGoalId).toBeTruthy();
-    expect(payload.dashboard.briefingHistory.some((entry) => entry.goalId === payload.event.resultGoalId)).toBe(true);
+    expect(response.status).toBe(202);
+    expect(payload.queued).toBe(true);
+    expect(payload.event.status).toBe("pending");
+    expect(payload.event.resultGoalId).toBeNull();
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(events[0]?.status).toBe("executed");
+    expect(events[0]?.resultGoalId).toBeTruthy();
+    expect(dashboard.briefingHistory.some((entry) => entry.goalId === events[0]?.resultGoalId)).toBe(true);
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
   });
 });

@@ -5,28 +5,18 @@ import {
   AutopilotEventSchema,
   AutopilotModeSchema,
   BriefingTypeSchema,
-  GoalTemplateSchema,
   nowIso,
   type AutopilotEvent,
   type ActorContext,
   type AutopilotMode,
-  type BriefingType,
-  type GoalBundle,
-  type GoalTemplate,
-  type Watcher
+  type BriefingType
 } from "@agentic/contracts";
-import {
-  captureMemoriesFromBundle,
-  computeNextRun,
-  generateBriefing,
-  interpolateTemplate,
-  processUserRequest
-} from "@agentic/orchestrator";
+import { enqueueAutopilotProcessJob } from "@agentic/worker-runtime";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
-import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../lib/server";
+import { getSeededRepository } from "../../../../lib/server";
 import type { AgenticRepository } from "@agentic/repository";
 
 const TriggerAutopilotEventSchema = z
@@ -69,25 +59,6 @@ function buildPendingEvent(params: {
   });
 }
 
-function buildWatcherAutopilotRequest(watcher: Watcher): string {
-  return [
-    `Watcher "${watcher.targetEntity}" triggered.`,
-    `Condition: ${watcher.condition}.`,
-    `Required response: ${watcher.triggerAction}.`,
-    watcher.sourceSystems.length > 0 ? `Source systems: ${watcher.sourceSystems.join(", ")}.` : ""
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function sanitizeAutopilotError(error: unknown): string {
-  if (error instanceof ApiRouteError) {
-    return error.message;
-  }
-
-  return "Autopilot execution failed.";
-}
-
 function measureProcessingLatencyMs(createdAt: string, processedAt: string): number {
   const createdMs = Date.parse(createdAt);
   const processedMs = Date.parse(processedAt);
@@ -99,89 +70,13 @@ function measureProcessingLatencyMs(createdAt: string, processedAt: string): num
   return Math.max(0, processedMs - createdMs);
 }
 
-function summarizeExecutionOutcome(bundle: GoalBundle, createdAt: string, processedAt: string): Record<string, unknown> {
-  const pendingApprovalCount = bundle.approvals.filter((approval) => approval.decision === "pending").length;
-  const approvedApprovalCount = bundle.approvals.filter((approval) => approval.decision === "approved").length;
-  const rejectedApprovalCount = bundle.approvals.filter((approval) => approval.decision === "rejected").length;
-  const completedTaskCount = bundle.tasks.filter((task) => task.state === "completed").length;
-  const failedTaskCount = bundle.tasks.filter((task) => task.state === "failed").length;
-  const blockedTaskCount = bundle.tasks.filter((task) => task.state === "blocked").length;
-  const waitingTaskCount = bundle.tasks.filter((task) => task.state === "waiting").length;
-  const requiresReview = pendingApprovalCount > 0 || failedTaskCount > 0 || blockedTaskCount > 0;
-  const recoveryAction =
-    pendingApprovalCount > 0
-      ? "review_approvals"
-      : failedTaskCount > 0 || blockedTaskCount > 0
-        ? "inspect_failed_tasks"
-        : "none";
-  const tasksNeedingRecovery = failedTaskCount + blockedTaskCount;
-  const resultSummary =
-    pendingApprovalCount > 0
-      ? `${pendingApprovalCount} approval${pendingApprovalCount === 1 ? "" : "s"} pending review.`
-      : tasksNeedingRecovery > 0
-        ? `${tasksNeedingRecovery} task${tasksNeedingRecovery === 1 ? "" : "s"} need recovery.`
-        : `${completedTaskCount}/${bundle.tasks.length} tasks completed without additional review.`;
-
+function summarizeEnqueueFailure(createdAt: string, processedAt: string): Record<string, unknown> {
   return {
-    goalStatus: bundle.goal.status,
-    taskCount: bundle.tasks.length,
-    completedTaskCount,
-    failedTaskCount,
-    blockedTaskCount,
-    waitingTaskCount,
-    pendingApprovalCount,
-    approvedApprovalCount,
-    rejectedApprovalCount,
-    artifactCount: bundle.artifacts.length,
-    actionLogCount: bundle.actionLogs.length,
-    requiresReview,
-    recoveryAction,
-    resultSummary,
-    processingLatencyMs: measureProcessingLatencyMs(createdAt, processedAt)
-  };
-}
-
-function summarizeExecutionFailure(createdAt: string, processedAt: string): Record<string, unknown> {
-  return {
-    failureStage: "execution",
+    failureStage: "enqueue",
     requiresReview: true,
-    recoveryAction: "review_event_error",
+    recoveryAction: "requeue_event",
+    jobStatus: "enqueue_failed",
     processingLatencyMs: measureProcessingLatencyMs(createdAt, processedAt)
-  };
-}
-
-async function persistCapturedMemories(
-  repository: AgenticRepository,
-  bundle: GoalBundle,
-  userId: string,
-  actorContext: ActorContext
-) {
-  if (bundle.goal.status !== "completed") {
-    return;
-  }
-
-  try {
-    const captured = captureMemoriesFromBundle(bundle, userId, actorContext);
-    const selfImprovement = await getSeededSelfImprovementRepository();
-
-    await Promise.all([
-      ...captured.memories.map((memory) => repository.saveMemory(memory)),
-      ...captured.episodes.map((episode) => selfImprovement.appendEpisode(episode))
-    ]);
-  } catch (error) {
-    console.error("[autopilot] Failed to persist captured memories after execution:", error);
-  }
-}
-
-async function resolveDashboardWorkspaceContext(repository: AgenticRepository, userId: string) {
-  const dashboard = await repository.getDashboardData(userId);
-  const workspaceId = dashboard.activeWorkspace?.id ?? null;
-
-  return {
-    workspaceId,
-    workspaceGovernance: workspaceId
-      ? dashboard.workspaceGovernance ?? await repository.getWorkspaceGovernance(workspaceId, userId)
-      : null
   };
 }
 
@@ -236,104 +131,52 @@ async function resolveBriefingSource(sourceId: string, userId: string) {
   return { repository, type, preferences };
 }
 
-async function executeWatcherEvent(
+async function findAutopilotProcessJob(
   repository: AgenticRepository,
-  watcher: Watcher,
-  goal: GoalBundle,
   userId: string,
-  actorContext: ActorContext
-): Promise<GoalBundle> {
-  const [memories, integrations] = await Promise.all([
-    repository.listMemory(userId),
-    repository.listIntegrations(userId)
-  ]);
-  const governance = goal.goal.workspaceId ? await repository.getWorkspaceGovernance(goal.goal.workspaceId, userId) : null;
-  const bundle = await processUserRequest({
+  autopilotEventId: string
+) {
+  const jobs = await repository.listJobs({
     userId,
-    workspaceId: goal.goal.workspaceId,
-    governance,
-    request: buildWatcherAutopilotRequest(watcher),
-    memories,
-    integrations,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
+    kinds: ["autopilot_process"]
   });
 
-  await repository.saveGoalBundle(bundle);
-  await persistCapturedMemories(repository, bundle, userId, actorContext);
-  return bundle;
-}
-
-async function executeTemplateEvent(
-  repository: AgenticRepository,
-  template: GoalTemplate,
-  userId: string,
-  actorContext: ActorContext
-): Promise<GoalBundle> {
-  const [memories, integrations] = await Promise.all([
-    repository.listMemory(userId),
-    repository.listIntegrations(userId)
-  ]);
-  const { workspaceId, workspaceGovernance } = await resolveDashboardWorkspaceContext(repository, userId);
-  const bundle = await processUserRequest({
-    userId,
-    workspaceId,
-    governance: workspaceGovernance,
-    request: interpolateTemplate(template),
-    memories,
-    integrations,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
-  });
-
-  await repository.saveGoalBundle(bundle);
-  await repository.saveTemplate(
-    GoalTemplateSchema.parse({
-      ...template,
-      schedule: {
-        ...template.schedule,
-        lastRunAt: nowIso(),
-        nextRunAt:
-          template.schedule.enabled && template.schedule.cron
-            ? computeNextRun(template.schedule.cron, template.schedule.timezone)
-            : null
-      },
-      actorContext,
-      updatedAt: nowIso()
-    })
+  return (
+    jobs.find(
+      (job) => job.payload.type === "autopilot_process" && job.payload.autopilotEventId === autopilotEventId
+    ) ?? null
   );
-  await persistCapturedMemories(repository, bundle, userId, actorContext);
-  return bundle;
 }
 
-async function executeBriefingEvent(
-  repository: AgenticRepository,
-  type: BriefingType,
-  userId: string,
-  actorContext: ActorContext
-): Promise<GoalBundle> {
-  const [preferences, memories, integrations, approvals, watchers] = await Promise.all([
-    repository.getBriefingPreferences(userId),
-    repository.listMemory(userId),
-    repository.listIntegrations(userId),
-    repository.listApprovals(userId),
-    repository.listWatchers({ userId })
-  ]);
-  const { workspaceId, workspaceGovernance } = await resolveDashboardWorkspaceContext(repository, userId);
-  const bundle = await generateBriefing({
-    type,
-    userId,
-    workspaceId,
-    governance: workspaceGovernance,
-    preferences,
-    memories,
-    integrations,
-    pendingApprovals: approvals.filter((approval) => approval.decision === "pending"),
-    activeWatchers: watchers.filter((watcher) => watcher.status === "active"),
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
-  });
+function shouldEnsureAutopilotJob(event: AutopilotEvent): boolean {
+  if (event.status === "pending") {
+    return true;
+  }
 
-  await repository.saveGoalBundle(bundle);
-  await persistCapturedMemories(repository, bundle, userId, actorContext);
-  return bundle;
+  if (event.status !== "failed") {
+    return false;
+  }
+
+  return typeof event.details.jobId !== "string";
+}
+
+async function ensureAutopilotProcessJob(repository: AgenticRepository, event: AutopilotEvent) {
+  const existing = await findAutopilotProcessJob(repository, event.userId, event.id);
+
+  if (existing) {
+    return {
+      job: existing,
+      created: false
+    };
+  }
+
+  return {
+    job: await enqueueAutopilotProcessJob({
+      repository,
+      autopilotEvent: event
+    }),
+    created: true
+  };
 }
 
 export async function POST(request: Request) {
@@ -463,6 +306,47 @@ export async function POST(request: Request) {
     });
 
     if (claim.outcome === "duplicate" || claim.outcome === "debounced") {
+      if (claim.outcome === "duplicate" && shouldEnsureAutopilotJob(claim.event)) {
+        try {
+          const { job } = await ensureAutopilotProcessJob(repository, claim.event);
+
+          return authenticatedJson(
+            {
+              event: claim.event,
+              job,
+              duplicate: true,
+              queued: true,
+              debounced: false,
+              dashboard: await repository.getDashboardData(principal.userId)
+            },
+            { status: 202 }
+          );
+        } catch {
+          const processedAt = nowIso();
+          const failedEvent = await repository.saveAutopilotEvent({
+            ...claim.event,
+            status: "failed",
+            processedAt,
+            details: {
+              ...claim.event.details,
+              ...summarizeEnqueueFailure(claim.event.createdAt, processedAt)
+            },
+            error: "Autopilot execution failed."
+          });
+
+          return authenticatedJson(
+            {
+              event: failedEvent,
+              duplicate: true,
+              queued: false,
+              error: failedEvent.error,
+              dashboard: await repository.getDashboardData(principal.userId)
+            },
+            { status: 500 }
+          );
+        }
+      }
+
       return authenticatedJson({
         event: claim.event,
         duplicate: claim.outcome === "duplicate",
@@ -494,39 +378,18 @@ export async function POST(request: Request) {
     }
 
     try {
-      let bundle: GoalBundle;
+      const { job } = await ensureAutopilotProcessJob(repository, claim.event);
 
-      if (body.kind === "watcher_triggered") {
-        const { watcher, goal } = await resolveWatcherSource(body.sourceId, principal.userId);
-        bundle = await executeWatcherEvent(repository, watcher, goal, principal.userId, actorContext);
-      } else if (body.kind === "template_due") {
-        const { template } = await resolveTemplateSource(body.sourceId, principal.userId);
-        bundle = await executeTemplateEvent(repository, template, principal.userId, actorContext);
-      } else {
-        const { type } = await resolveBriefingSource(body.sourceId, principal.userId);
-        bundle = await executeBriefingEvent(repository, type, principal.userId, actorContext);
-      }
-
-      const processedAt = nowIso();
-      const event = await repository.saveAutopilotEvent(
-        AutopilotEventSchema.parse({
-          ...claim.event,
-          status: "executed",
-          processedAt,
-          resultGoalId: bundle.goal.id,
-          details: {
-            ...claim.event.details,
-            ...summarizeExecutionOutcome(bundle, claim.event.createdAt, processedAt)
-          }
-        })
+      return authenticatedJson(
+        {
+          event: claim.event,
+          job,
+          queued: true,
+          dashboard: await repository.getDashboardData(principal.userId)
+        },
+        { status: 202 }
       );
-
-      return authenticatedJson({
-        event,
-        bundle,
-        dashboard: await repository.getDashboardData(principal.userId)
-      });
-    } catch (error) {
+    } catch {
       const processedAt = nowIso();
       const failedEvent = await repository.saveAutopilotEvent(
         AutopilotEventSchema.parse({
@@ -535,9 +398,9 @@ export async function POST(request: Request) {
           processedAt,
           details: {
             ...claim.event.details,
-            ...summarizeExecutionFailure(claim.event.createdAt, processedAt)
+            ...summarizeEnqueueFailure(claim.event.createdAt, processedAt)
           },
-          error: sanitizeAutopilotError(error)
+          error: "Autopilot execution failed."
         })
       );
 
@@ -547,7 +410,7 @@ export async function POST(request: Request) {
           error: failedEvent.error,
           dashboard: await repository.getDashboardData(principal.userId)
         },
-        { status: error instanceof ApiRouteError ? error.status : 500 }
+        { status: 500 }
       );
     }
   } catch (error) {
