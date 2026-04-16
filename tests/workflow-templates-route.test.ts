@@ -1,9 +1,12 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SYSTEM_USER_ID, createHumanActorContext, createSystemActorContext } from "@agentic/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { vi } from "vitest";
 import { DELETE, GET as getWorkflowTemplateRoute, PUT } from "../apps/web/app/api/workflow-templates/[id]/route";
 import { GET as listWorkflowTemplatesRoute, POST as createWorkflowTemplateRoute } from "../apps/web/app/api/workflow-templates/route";
+import * as authModule from "../apps/web/lib/auth";
 import { resetSessionUnlockRateLimit } from "../apps/web/lib/session-unlock-rate-limit";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { expectNoStoreHeaders } from "./route-test-helpers";
@@ -73,11 +76,12 @@ describe("workflow templates routes", () => {
       })
     );
     const createdPayload = (await createResponse.json()) as {
-      template: { id: string; name: string; description: string };
+      template: { id: string; name: string; description: string; actorContext: unknown };
     };
 
     expect(createResponse.status).toBe(201);
     expect(createdPayload.template.name).toBe("Daily triage");
+    expect(createdPayload.template.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expectNoStoreHeaders(createResponse);
 
     const listResponse = await listWorkflowTemplatesRoute(buildAuthorizedGetRequest("http://localhost/api/workflow-templates"));
@@ -118,10 +122,11 @@ describe("workflow templates routes", () => {
       { params: Promise.resolve({ id: createdPayload.template.id }) }
     );
     const updatePayload = (await updateResponse.json()) as {
-      template: { description: string };
+      template: { description: string; actorContext: unknown };
     };
 
     expect(updatePayload.template.description).toBe("Review only urgent and blocked signals before noon.");
+    expect(updatePayload.template.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
 
     const deleteResponse = await DELETE(
       buildAuthorizedJsonRequest(`http://localhost/api/workflow-templates/${createdPayload.template.id}`, "DELETE"),
@@ -149,5 +154,55 @@ describe("workflow templates routes", () => {
     expect(response.status).toBe(404);
     expect(payload.error).toContain("not found");
     expectNoStoreHeaders(response);
+  });
+
+  it("stamps the human actor when a session principal creates a workflow template", async () => {
+    const secondaryUserId = "user-secondary";
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: secondaryUserId,
+      sessionId: "session-secondary",
+      expiresAt: "2026-12-31T00:00:00.000Z"
+    });
+
+    let response: Response;
+    let payload: { template: { actorContext: unknown } };
+    try {
+      response = await createWorkflowTemplateRoute(
+        new Request("http://localhost/api/workflow-templates", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            name: "Private daily triage",
+            description: "Review only my own urgent signals.",
+            nodes: [
+              {
+                id: "trigger-1",
+                type: "trigger",
+                label: "Manual start",
+                icon: "play",
+                position: { x: 0, y: 0 },
+                config: {}
+              }
+            ],
+            edges: [],
+            triggers: [
+              {
+                type: "manual",
+                config: {}
+              }
+            ]
+          })
+        })
+      );
+      payload = (await response.json()) as { template: { actorContext: unknown } };
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+
+    expect(response.status).toBe(201);
+    expect(payload.template.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
   });
 });

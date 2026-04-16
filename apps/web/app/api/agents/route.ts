@@ -8,6 +8,7 @@ import {
   nowIso
 } from "@agentic/contracts";
 import { requireApiSession } from "../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { getSeededRepository } from "../../../lib/server";
 
@@ -59,6 +60,7 @@ export async function POST(request: Request) {
     const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, CreateAgentSchema);
     const repository = await getSeededRepository();
+    const actorContext = createActorContextFromPrincipal(principal);
 
     const now = nowIso();
     const agent = AgentDefinitionSchema.parse({
@@ -87,6 +89,7 @@ export async function POST(request: Request) {
       maxRiskClass: body.maxRiskClass ?? "R2",
       integrationPermissions: [],
       memoryPermissions: [],
+      actorContext,
       isBuiltIn: false,
       parentAgentId: body.parentAgentId ?? null,
       version: 1,

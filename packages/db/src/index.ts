@@ -119,6 +119,7 @@ export const memoryRecords = pgTable("memory_records", {
   source: text("source").notNull(),
   sensitivity: text("sensitivity").notNull(),
   permissions: jsonb("permissions").$type<string[]>().notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   reviewAt: timestamp("review_at", { withTimezone: true }),
   expiryAt: timestamp("expiry_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
@@ -164,6 +165,7 @@ export const commitments = pgTable("commitments", {
   goalId: text("goal_id"),
   approvalId: text("approval_id"),
   dueAt: timestamp("due_at", { withTimezone: true }),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   confidence: real("confidence").notNull(),
   evidence: jsonb("evidence").$type<Array<Record<string, unknown>>>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
@@ -193,6 +195,7 @@ export const workspaceMembers = pgTable("workspace_members", {
 export const workspaceSelections = pgTable("workspace_selections", {
   userId: text("user_id").primaryKey(),
   workspaceId: text("workspace_id").notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   selectedAt: timestamp("selected_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -215,6 +218,7 @@ export const briefingPreferences = pgTable("briefing_preferences", {
   timezone: text("timezone").notNull(),
   focus: text("focus").notNull(),
   schedules: jsonb("schedules").$type<Array<Record<string, unknown>>>().notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -267,6 +271,7 @@ export const watchers = pgTable("watchers", {
   sourceSystems: jsonb("source_systems").$type<string[]>().notNull(),
   status: text("status").notNull(),
   expiryAt: timestamp("expiry_at", { withTimezone: true }),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -279,6 +284,7 @@ export const goalTemplates = pgTable("goal_templates", {
   request: text("request").notNull(),
   parameters: jsonb("parameters").$type<Record<string, string>>().notNull(),
   schedule: jsonb("schedule").$type<Record<string, unknown>>().notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -291,6 +297,7 @@ export const workflowTemplates = pgTable("workflow_templates", {
   nodes: jsonb("nodes").$type<Array<Record<string, unknown>>>().notNull(),
   edges: jsonb("edges").$type<Array<Record<string, unknown>>>().notNull(),
   triggers: jsonb("triggers").$type<Array<Record<string, unknown>>>().notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -299,6 +306,7 @@ export const autopilotSettings = pgTable("autopilot_settings", {
   userId: text("user_id").primaryKey(),
   mode: text("mode").notNull(),
   debounceMinutes: integer("debounce_minutes").notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -313,6 +321,7 @@ export const autopilotEvents = pgTable("autopilot_events", {
   summary: text("summary").notNull(),
   status: text("status").notNull(),
   details: jsonb("details").$type<Record<string, unknown>>().notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   processedAt: timestamp("processed_at", { withTimezone: true }),
   resultGoalId: text("result_goal_id"),
@@ -328,6 +337,7 @@ export const integrationAccounts = pgTable("integration_accounts", {
   scopes: jsonb("scopes").$type<string[]>().notNull(),
   capabilities: jsonb("capabilities").$type<string[]>().notNull(),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -361,6 +371,7 @@ export const agentDefinitions = pgTable("agent_definitions", {
   maxRiskClass: text("max_risk_class").notNull(),
   integrationPermissions: jsonb("integration_permissions").$type<string[]>().notNull(),
   memoryPermissions: jsonb("memory_permissions").$type<string[]>().notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   isBuiltIn: boolean("is_built_in").notNull(),
   parentAgentId: text("parent_agent_id"),
   version: integer("version").notNull(),
@@ -421,6 +432,7 @@ export const operatorProducts = pgTable("operator_products", {
 export const operatorProductSelections = pgTable("operator_product_selections", {
   userId: text("user_id").primaryKey(),
   operatorProductId: text("operator_product_id").notNull(),
+  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   selectedAt: timestamp("selected_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { requireApiSession } from "../../../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../../lib/api-response";
 import { buildGoalShareUrl, createGoalShareCreatedLog, createGoalShareToken, getGoalShareExpiry } from "../../../../../lib/share";
 import { getSeededRepository } from "../../../../../lib/server";
@@ -15,6 +16,7 @@ type RouteContext = {
 export async function POST(request: Request, context: RouteContext) {
   try {
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const { id } = await context.params;
     const goalId = GoalIdSchema.parse(id);
     const repository = await getSeededRepository();
@@ -26,7 +28,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     const expiresAt = getGoalShareExpiry();
     const token = createGoalShareToken(goalId, expiresAt);
-    const shareLog = createGoalShareCreatedLog(bundle, token, expiresAt);
+    const shareLog = createGoalShareCreatedLog(bundle, token, expiresAt, actorContext);
 
     await repository.saveGoalBundle({
       ...bundle,

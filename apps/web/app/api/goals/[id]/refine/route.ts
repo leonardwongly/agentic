@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { refineGoal } from "@agentic/orchestrator";
 import { requireApiSession } from "../../../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
 import { getSeededRepository } from "../../../../../lib/server";
 
@@ -21,6 +22,7 @@ type RouteContext = {
 export async function POST(request: Request, context: RouteContext) {
   try {
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const { id } = await context.params;
     const goalId = GoalIdSchema.parse(id);
     const body = await parseJsonBody(request, RefinementBodySchema);
@@ -40,8 +42,9 @@ export async function POST(request: Request, context: RouteContext) {
       bundle,
       refinement: body.message,
       memories,
+      actorContext,
       governance,
-      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
+      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", principal.userId)
     });
 
     await repository.saveGoalBundle(updatedBundle);

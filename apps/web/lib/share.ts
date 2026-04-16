@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { createActionLog } from "@agentic/observability";
-import type { GoalBundle } from "@agentic/contracts";
+import type { ActorContext, GoalBundle } from "@agentic/contracts";
 import { getServerSigningSecret } from "./auth";
 
 const GOAL_SHARE_TOKEN_VERSION = 1;
@@ -121,7 +121,12 @@ export function fingerprintGoalShareToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex").slice(0, 12);
 }
 
-export function createGoalShareCreatedLog(bundle: GoalBundle, token: string, expiresAt: string) {
+export function createGoalShareCreatedLog(
+  bundle: GoalBundle,
+  token: string,
+  expiresAt: string,
+  actorContext: ActorContext | null = null
+) {
   return createActionLog({
     goalId: bundle.goal.id,
     taskId: null,
@@ -131,7 +136,8 @@ export function createGoalShareCreatedLog(bundle: GoalBundle, token: string, exp
     message: `Created a public share link for "${bundle.goal.title}".`,
     details: {
       expiresAt,
-      tokenFingerprint: fingerprintGoalShareToken(token)
+      tokenFingerprint: fingerprintGoalShareToken(token),
+      actorContext
     }
   });
 }

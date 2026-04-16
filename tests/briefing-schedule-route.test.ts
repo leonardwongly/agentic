@@ -1,7 +1,8 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { briefingTypeValues } from "@agentic/contracts";
+import { SYSTEM_USER_ID, briefingTypeValues, createSystemActorContext } from "@agentic/contracts";
+import { createRepository } from "@agentic/repository";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { GET as briefingScheduleGetRoute, POST as briefingSchedulePostRoute } from "../apps/web/app/api/briefing/schedule/route";
 
@@ -41,6 +42,13 @@ describe("briefing schedule route", () => {
   });
 
   it("persists updated briefing preferences and returns refreshed dashboard data", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
     const response = await briefingSchedulePostRoute(
       new Request("http://localhost/api/briefing/schedule", {
         method: "POST",
@@ -62,7 +70,12 @@ describe("briefing schedule route", () => {
       })
     );
     const payload = (await response.json()) as {
-      preferences: { timezone: string; focus: string; schedules: Array<{ type: string; enabled: boolean; time: string }> };
+      preferences: {
+        timezone: string;
+        focus: string;
+        schedules: Array<{ type: string; enabled: boolean; time: string }>;
+        actorContext: unknown;
+      };
       dashboard: { briefingPreferences: { timezone: string; focus: string } };
     };
 
@@ -71,6 +84,7 @@ describe("briefing schedule route", () => {
       timezone: "America/Los_Angeles",
       focus: "deep"
     });
+    expect(payload.preferences.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.preferences.schedules.find((schedule) => schedule.type === "midday")).toMatchObject({
       enabled: true,
       time: "12:15"
@@ -79,6 +93,12 @@ describe("briefing schedule route", () => {
       timezone: "America/Los_Angeles",
       focus: "deep"
     });
+
+    const reloadedRepository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const persisted = await reloadedRepository.getBriefingPreferences(SYSTEM_USER_ID);
+    expect(persisted.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
   });
 
   it("rejects incomplete schedule payloads", async () => {

@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, WatcherSchema, nowIso } from "@agentic/contracts";
+import { SYSTEM_USER_ID, WatcherSchema, createHumanActorContext, createSystemActorContext, nowIso } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { vi } from "vitest";
@@ -112,6 +112,95 @@ describe("watchers route", () => {
 
     expect(response.status).toBe(404);
     expect(payload.error).toContain(`Goal ${secondaryBundle.goal.id} was not found.`);
+  });
+
+  it("stamps the system actor when creating a watcher with an access key", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Watch my inbox for urgent replies.");
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await watchersRoute(
+      new Request("http://localhost/api/watchers", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          goalId: bundle.goal.id,
+          targetEntity: "priority-inbox",
+          condition: "an urgent reply arrives",
+          frequency: "hourly",
+          triggerAction: "draft a response"
+        })
+      })
+    );
+    const payload = (await response.json()) as {
+      watcher: { id: string; actorContext: unknown };
+    };
+    const savedWatcher = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find(
+      (watcher) => watcher.id === payload.watcher.id
+    );
+
+    expect(response.status).toBe(200);
+    expect(payload.watcher.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(savedWatcher?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+  });
+
+  it("stamps the human actor when creating a watcher from a session principal", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const secondaryUserId = "user-secondary";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(secondaryUserId);
+
+    const bundle = await createGoalForUser(repository, secondaryUserId, "Watch my own inbox for escalation risk.");
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: secondaryUserId,
+      sessionId: "session-secondary",
+      expiresAt: "2026-12-31T00:00:00.000Z"
+    });
+
+    let response: Response;
+    let payload: { watcher: { id: string; actorContext: unknown } };
+    try {
+      response = await watchersRoute(
+        new Request("http://localhost/api/watchers", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            goalId: bundle.goal.id,
+            targetEntity: "priority-inbox",
+            condition: "an urgent reply arrives",
+            frequency: "hourly",
+            triggerAction: "draft a response"
+          })
+        })
+      );
+      payload = (await response.json()) as { watcher: { id: string; actorContext: unknown } };
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+
+    const savedWatcher = (await repository.listWatchers({ userId: secondaryUserId })).find(
+      (watcher) => watcher.id === payload.watcher.id
+    );
+
+    expect(response.status).toBe(200);
+    expect(payload.watcher.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
+    expect(savedWatcher?.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
   });
 
   it("lists only watchers for the authenticated user's goals", async () => {
@@ -284,15 +373,20 @@ describe("watchers route", () => {
       params: Promise.resolve({ id: watcher.id })
     });
     const payload = (await response.json()) as {
-      watcher: { id: string; status: string };
+      watcher: { id: string; status: string; actorContext: unknown };
       dashboard: { watchers: Array<{ id: string; status: string }> };
     };
+    const savedWatcher = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find(
+      (candidate) => candidate.id === watcher.id
+    );
 
     expect(response.status).toBe(200);
     expect(payload.watcher).toMatchObject({
       id: watcher.id,
       status: "paused"
     });
+    expect(payload.watcher.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(savedWatcher?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.dashboard.watchers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

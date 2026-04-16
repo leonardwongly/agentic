@@ -194,6 +194,7 @@ export const MemoryRecordSchema = z.object({
   source: z.string().min(1),
   sensitivity: z.string().min(1),
   permissions: z.array(AgentNameSchema).default([]),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   // Agent-scoped memories
   agentId: z.string().nullable().default(null),
   agentScope: z.enum(["global", "agent-only", "agent-preferred"]).default("global"),
@@ -380,6 +381,7 @@ export const CommitmentSchema = z.object({
   goalId: z.string().min(1).nullable().default(null),
   approvalId: z.string().min(1).nullable().default(null),
   dueAt: z.string().datetime().nullable().default(null),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   urgency: CommitmentUrgencySchema.default("later"),
   riskClass: RiskClassSchema.nullable().default(null),
   confidence: z.number().min(0).max(1),
@@ -480,6 +482,7 @@ export const WorkspaceMemberSchema = z.object({
 export const WorkspaceSelectionSchema = z.object({
   userId: z.string().min(1),
   workspaceId: z.string().min(1),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   selectedAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -508,6 +511,7 @@ export const BriefingPreferencesSchema = z.object({
   timezone: z.string().min(1),
   focus: BriefingFocusSchema,
   schedules: z.array(BriefingScheduleEntrySchema).length(briefingTypeValues.length),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 }).superRefine((value, context) => {
@@ -552,6 +556,7 @@ export const AutopilotSettingsSchema = z.object({
   userId: z.string().min(1),
   mode: AutopilotModeSchema,
   debounceMinutes: z.number().int().min(1).max(24 * 60),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -566,6 +571,7 @@ export const AutopilotEventSchema = z.object({
   summary: z.string().min(1).max(500),
   status: AutopilotEventStatusSchema,
   details: z.record(z.string(), z.unknown()).default({}),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   createdAt: z.string().datetime(),
   processedAt: z.string().datetime().nullable().default(null),
   resultGoalId: z.string().min(1).nullable().default(null),
@@ -585,6 +591,7 @@ export const WatcherSchema = z.object({
   sourceSystems: z.array(z.string()).default([]),
   status: z.enum(["active", "paused", "expired"]).default("active"),
   expiryAt: z.string().datetime().nullable().default(null),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -651,6 +658,7 @@ export const IntegrationAccountSchema = z.object({
   scopes: z.array(z.string()).default([]),
   capabilities: z.array(CapabilitySchema).default([]),
   metadata: z.record(z.string(), z.unknown()).default({}),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -672,6 +680,7 @@ export const GoalTemplateSchema = z.object({
   description: z.string().max(500).default(""),
   request: z.string().min(1).max(2_000),
   parameters: z.record(z.string(), z.string()).default({}),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   schedule: z.object({
     enabled: z.boolean().default(false),
     cron: z.string().max(100).default(""),
@@ -717,6 +726,7 @@ export const WorkflowCanvasTemplateSchema = z.object({
   nodes: z.array(WorkflowCanvasNodeSchema).max(100).default([]),
   edges: z.array(WorkflowCanvasEdgeSchema).max(200).default([]),
   triggers: z.array(WorkflowCanvasTriggerSchema).max(50).default([]),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -724,6 +734,7 @@ export const WorkflowCanvasTemplateSchema = z.object({
 export const WorkflowCanvasTemplateCreateSchema = WorkflowCanvasTemplateSchema.omit({
   id: true,
   userId: true,
+  actorContext: true,
   createdAt: true,
   updatedAt: true
 }).strict();
@@ -837,6 +848,7 @@ export const AgentDefinitionSchema = z.object({
   maxRiskClass: RiskClassSchema.default("R2"),
   integrationPermissions: z.array(AgentIntegrationPermissionSchema).default([]),
   memoryPermissions: z.array(AgentMemoryPermissionSchema).default([]),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
 
   // Lineage & Metadata
   isBuiltIn: z.boolean().default(false),
@@ -940,6 +952,7 @@ export const OperatorProductSchema = z.object({
 export const OperatorProductSelectionSchema = z.object({
   userId: z.string().min(1),
   operatorProductId: z.string().min(1),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   selectedAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -1140,7 +1153,13 @@ export const WorkflowExecutionStateSchema = z.object({
 export const AgentExportSchema = z.object({
   version: z.literal(1),
   exportedAt: z.string().datetime(),
-  agent: AgentDefinitionSchema.omit({ userId: true, isBuiltIn: true, createdAt: true, updatedAt: true }),
+  agent: AgentDefinitionSchema.omit({
+    userId: true,
+    isBuiltIn: true,
+    createdAt: true,
+    updatedAt: true,
+    actorContext: true
+  }),
   metadata: z.object({
     exportedBy: z.string().max(100).optional(),
     sourceVersion: z.string().max(20).optional(),

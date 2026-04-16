@@ -4,6 +4,7 @@ import {
   WorkflowCanvasTemplateUpdateSchema,
   nowIso
 } from "@agentic/contracts";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
@@ -32,6 +33,7 @@ export async function GET(request: Request, { params }: { params: Params }) {
 export async function PUT(request: Request, { params }: { params: Params }) {
   try {
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const { id } = await params;
     const templateId = TemplateIdSchema.parse(id);
     const repository = await getSeededRepository();
@@ -45,6 +47,7 @@ export async function PUT(request: Request, { params }: { params: Params }) {
     const updated = WorkflowCanvasTemplateSchema.parse({
       ...template,
       ...body,
+      actorContext,
       updatedAt: nowIso()
     });
 

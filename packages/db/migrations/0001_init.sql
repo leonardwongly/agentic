@@ -108,6 +108,7 @@ create table if not exists memory_records (
   source text not null,
   sensitivity text not null,
   permissions jsonb not null default '[]'::jsonb,
+  actor_context jsonb,
   review_at timestamptz,
   expiry_at timestamptz,
   created_at timestamptz not null,
@@ -160,6 +161,7 @@ create table if not exists commitments (
   goal_id text,
   approval_id text,
   due_at timestamptz,
+  actor_context jsonb,
   confidence real not null,
   evidence jsonb not null default '[]'::jsonb,
   created_at timestamptz not null,
@@ -195,6 +197,7 @@ create unique index if not exists workspace_members_workspace_user_idx
 create table if not exists workspace_selections (
   user_id text primary key,
   workspace_id text not null,
+  actor_context jsonb,
   selected_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -217,6 +220,7 @@ create table if not exists briefing_preferences (
   timezone text not null,
   focus text not null,
   schedules jsonb not null default '[]'::jsonb,
+  actor_context jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -229,6 +233,7 @@ create table if not exists goal_templates (
   request text not null,
   parameters jsonb not null default '{}'::jsonb,
   schedule jsonb not null default '{}'::jsonb,
+  actor_context jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -241,6 +246,7 @@ create table if not exists workflow_templates (
   nodes jsonb not null default '[]'::jsonb,
   edges jsonb not null default '[]'::jsonb,
   triggers jsonb not null default '[]'::jsonb,
+  actor_context jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -249,6 +255,7 @@ create table if not exists autopilot_settings (
   user_id text primary key,
   mode text not null,
   debounce_minutes integer not null,
+  actor_context jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -263,6 +270,7 @@ create table if not exists autopilot_events (
   summary text not null,
   status text not null,
   details jsonb not null default '{}'::jsonb,
+  actor_context jsonb,
   created_at timestamptz not null,
   processed_at timestamptz,
   result_goal_id text,
@@ -321,9 +329,21 @@ create table if not exists watchers (
   source_systems jsonb not null default '[]'::jsonb,
   status text not null,
   expiry_at timestamptz,
+  actor_context jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
+
+alter table goal_templates add column if not exists actor_context jsonb;
+alter table workflow_templates add column if not exists actor_context jsonb;
+alter table autopilot_settings add column if not exists actor_context jsonb;
+alter table autopilot_events add column if not exists actor_context jsonb;
+alter table watchers add column if not exists actor_context jsonb;
+alter table workspace_selections add column if not exists actor_context jsonb;
+alter table memory_records add column if not exists actor_context jsonb;
+alter table commitments add column if not exists actor_context jsonb;
+alter table briefing_preferences add column if not exists actor_context jsonb;
+alter table agent_definitions add column if not exists actor_context jsonb;
 
 create table if not exists integration_accounts (
   id text primary key,
@@ -334,9 +354,11 @@ create table if not exists integration_accounts (
   scopes jsonb not null default '[]'::jsonb,
   capabilities jsonb not null default '[]'::jsonb,
   metadata jsonb not null default '{}'::jsonb,
+  actor_context jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
+alter table integration_accounts add column if not exists actor_context jsonb;
 
 create table if not exists artifacts (
   id text primary key,
@@ -367,6 +389,7 @@ create table if not exists agent_definitions (
   max_risk_class text not null,
   integration_permissions jsonb not null default '[]'::jsonb,
   memory_permissions jsonb not null default '[]'::jsonb,
+  actor_context jsonb,
   is_built_in boolean not null default false,
   parent_agent_id text,
   version integer not null,
@@ -434,6 +457,8 @@ create unique index if not exists operator_products_user_slug_idx
 create table if not exists operator_product_selections (
   user_id text primary key,
   operator_product_id text not null,
+  actor_context jsonb,
   selected_at timestamptz not null,
   updated_at timestamptz not null
 );
+alter table operator_product_selections add column if not exists actor_context jsonb;

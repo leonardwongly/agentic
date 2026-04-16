@@ -3,6 +3,7 @@ import { createMemoryRecord } from "@agentic/memory";
 import { requireApiSession } from "../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { getSeededRepository } from "../../../lib/server";
 
 const CreateMemorySchema = z
@@ -31,6 +32,7 @@ export async function POST(request: Request) {
     const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, CreateMemorySchema);
     const repository = await getSeededRepository();
+    const actorContext = createActorContextFromPrincipal(principal);
     const record = createMemoryRecord({
       userId: principal.userId,
       category: body.category,
@@ -39,7 +41,8 @@ export async function POST(request: Request) {
       confidence: body.memoryType === "confirmed" ? 0.92 : 0.78,
       source: "ui",
       sensitivity: "internal",
-      permissions: ["orchestrator", "knowledge", "workflow"]
+      permissions: ["orchestrator", "knowledge", "workflow"],
+      actorContext
     });
 
     await repository.saveMemory(record);

@@ -3,6 +3,7 @@ import { WatcherFrequencySchema, WatcherSchema, nowIso } from "@agentic/contract
 import { requireApiSession } from "../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { getSeededRepository } from "../../../lib/server";
 
 const CreateWatcherSchema = z
@@ -32,6 +33,7 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const body = await parseJsonBody(request, CreateWatcherSchema);
     const repository = await getSeededRepository();
     const goal = await repository.getGoalBundleForUser(body.goalId, principal.userId);
@@ -50,6 +52,7 @@ export async function POST(request: Request) {
       sourceSystems: body.sourceSystems ?? [],
       status: "active",
       expiryAt: null,
+      actorContext,
       createdAt: nowIso(),
       updatedAt: nowIso()
     });

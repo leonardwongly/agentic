@@ -4,6 +4,7 @@ import {
   WorkflowCanvasTemplateSchema,
   nowIso
 } from "@agentic/contracts";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { requireApiSession } from "../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { getSeededRepository } from "../../../lib/server";
@@ -23,6 +24,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const repository = await getSeededRepository();
     const body = await parseJsonBody(request, WorkflowCanvasTemplateCreateSchema);
     const timestamp = nowIso();
@@ -30,6 +32,7 @@ export async function POST(request: Request) {
       id: `workflow-${crypto.randomUUID()}`,
       userId: principal.userId,
       ...body,
+      actorContext,
       createdAt: timestamp,
       updatedAt: timestamp
     });

@@ -1,4 +1,11 @@
-import { MemoryRecordSchema, nowIso, type AgentName, type MemoryRecord, type MemoryType } from "@agentic/contracts";
+import {
+  MemoryRecordSchema,
+  nowIso,
+  type ActorContext,
+  type AgentName,
+  type MemoryRecord,
+  type MemoryType
+} from "@agentic/contracts";
 
 export type MemoryFreshness = "fresh" | "review_due" | "expired" | "low_confidence";
 
@@ -18,6 +25,7 @@ export function createMemoryRecord(params: {
   source: string;
   sensitivity?: string;
   permissions?: AgentName[];
+  actorContext?: ActorContext | null;
   reviewAt?: string | null;
   expiryAt?: string | null;
 }): MemoryRecord {
@@ -33,6 +41,7 @@ export function createMemoryRecord(params: {
     source: params.source,
     sensitivity: params.sensitivity ?? "internal",
     permissions: params.permissions ?? ["orchestrator", "workflow", "knowledge"],
+    actorContext: params.actorContext ?? null,
     reviewAt: params.reviewAt ?? null,
     expiryAt: params.expiryAt ?? null,
     createdAt: timestamp,

@@ -3,6 +3,7 @@ import { WatcherSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { getSeededRepository } from "../../../../lib/server";
 
 const WatcherIdSchema = z.string().trim().min(1).max(200);
@@ -17,6 +18,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const { id } = await context.params;
     const watcherId = WatcherIdSchema.parse(id);
     const body = await parseJsonBody(request, UpdateWatcherSchema);
@@ -31,6 +33,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const updated = WatcherSchema.parse({
       ...existing,
       status: body.action === "pause" ? "paused" : "active",
+      actorContext,
       updatedAt: nowIso()
     });
 

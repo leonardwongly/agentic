@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AgentDefinitionSchema, AgentExportSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
 
@@ -22,6 +23,7 @@ export async function POST(request: Request) {
     const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, ImportAgentSchema);
     const repository = await getSeededRepository();
+    const actorContext = createActorContextFromPrincipal(principal);
 
     const imported = body.exportData.agent;
     const now = nowIso();
@@ -35,6 +37,7 @@ export async function POST(request: Request) {
       parentAgentId: imported.id,
       version: 1,
       status: "draft",
+      actorContext,
       createdAt: now,
       updatedAt: now
     });

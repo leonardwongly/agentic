@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -159,7 +159,7 @@ describe("commitments route", () => {
       params: Promise.resolve({ id: commitment!.id })
     });
     const payload = (await response.json()) as {
-      commitment: { id: string; status: string };
+      commitment: { id: string; status: string; actorContext: unknown };
       dashboard: { commitments: Array<{ id: string; status: string }> };
     };
 
@@ -168,6 +168,7 @@ describe("commitments route", () => {
       id: commitment!.id,
       status: "completed"
     });
+    expect(payload.commitment.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.dashboard.commitments).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -176,6 +177,14 @@ describe("commitments route", () => {
         })
       ])
     );
+
+    const reloadedRepository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const persisted = (await reloadedRepository.listCommitments(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === commitment!.id
+    );
+    expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
   });
 
   it("reopens a completed commitment by dropping the persisted override", async () => {

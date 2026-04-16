@@ -233,18 +233,20 @@ async function approveAllR2(userId: string, actor: ActorContext) {
       if (executionResults.length > 0) {
         await persistCapturedMemories({
           repository,
-          captured: captureExecutionOutcomeSignals(updatedBundle, userId, executionResults),
+          captured: captureExecutionOutcomeSignals(updatedBundle, userId, executionResults, actor),
           goalId: updatedBundle.goal.id,
-          label: "nl-intent-execution-capture"
+          label: "nl-intent-execution-capture",
+          actorContext: actor
         });
       }
 
       if (updatedBundle.goal.status === "completed") {
         await persistCapturedMemories({
           repository,
-          captured: captureMemoriesFromBundle(updatedBundle, userId),
+          captured: captureMemoriesFromBundle(updatedBundle, userId, actor),
           goalId: updatedBundle.goal.id,
-          label: "nl-intent-auto-capture"
+          label: "nl-intent-auto-capture",
+          actorContext: actor
         });
       }
 
@@ -264,7 +266,7 @@ async function approveAllR2(userId: string, actor: ActorContext) {
   };
 }
 
-async function createGoalFromIntent(userId: string, intent: z.infer<typeof NLCreateGoalCommandSchema>) {
+async function createGoalFromIntent(userId: string, actor: ActorContext, intent: z.infer<typeof NLCreateGoalCommandSchema>) {
   const { repository, workspaceId, workspaceGovernance } = await resolveActiveWorkspaceContext(userId);
   const [memories, integrations] = await Promise.all([
     repository.listMemory(userId),
@@ -277,7 +279,7 @@ async function createGoalFromIntent(userId: string, intent: z.infer<typeof NLCre
     governance: workspaceGovernance,
     memories,
     integrations,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
   });
 
   await repository.saveGoalBundle(bundle);
@@ -285,9 +287,10 @@ async function createGoalFromIntent(userId: string, intent: z.infer<typeof NLCre
   if (bundle.goal.status === "completed") {
     await persistCapturedMemories({
       repository,
-      captured: captureMemoriesFromBundle(bundle, userId),
+      captured: captureMemoriesFromBundle(bundle, userId, actor),
       goalId: bundle.goal.id,
-      label: "nl-intent-auto-capture"
+      label: "nl-intent-auto-capture",
+      actorContext: actor
     });
   }
 
@@ -301,7 +304,7 @@ async function createGoalFromIntent(userId: string, intent: z.infer<typeof NLCre
   };
 }
 
-async function createBriefingFromIntent(userId: string, intent: z.infer<typeof NLBriefingCommandSchema>) {
+async function createBriefingFromIntent(userId: string, actor: ActorContext, intent: z.infer<typeof NLBriefingCommandSchema>) {
   const { repository, workspaceId, workspaceGovernance } = await resolveActiveWorkspaceContext(userId);
   const [preferences, memories, integrations, allApprovals, watchers] = await Promise.all([
     repository.getBriefingPreferences(userId),
@@ -321,7 +324,7 @@ async function createBriefingFromIntent(userId: string, intent: z.infer<typeof N
     pendingApprovals: allApprovals.filter((approval) => approval.decision === "pending"),
     activeWatchers: watchers.filter((watcher) => watcher.status === "active"),
     preferences,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
   });
 
   await repository.saveGoalBundle(bundle);
@@ -329,9 +332,10 @@ async function createBriefingFromIntent(userId: string, intent: z.infer<typeof N
   if (bundle.goal.status === "completed") {
     await persistCapturedMemories({
       repository,
-      captured: captureMemoriesFromBundle(bundle, userId),
+      captured: captureMemoriesFromBundle(bundle, userId, actor),
       goalId: bundle.goal.id,
-      label: "nl-intent-auto-capture"
+      label: "nl-intent-auto-capture",
+      actorContext: actor
     });
   }
 
@@ -373,9 +377,9 @@ async function commandIntent(
       }
 
     case "create-goal":
-      return createGoalFromIntent(userId, intent);
+      return createGoalFromIntent(userId, actor, intent);
     case "briefing":
-      return createBriefingFromIntent(userId, intent);
+      return createBriefingFromIntent(userId, actor, intent);
     case "reject":
     default:
       throw new ApiRouteError(400, "Reject commands require selecting an approval in the approvals queue.");

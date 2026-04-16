@@ -1,5 +1,14 @@
 import type { EvidenceRecord } from "@agentic/contracts";
-import { SYSTEM_USER_ID, WatcherSchema, briefingTypeValues, createSystemActorContext, type ActorContext } from "@agentic/contracts";
+import {
+  AgentDefinitionSchema,
+  AgentMetricsSchema,
+  SYSTEM_USER_ID,
+  WatcherSchema,
+  briefingTypeValues,
+  createSystemActorContext,
+  nowIso,
+  type ActorContext
+} from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { ApprovalMutationError, type AgenticRepository, type DashboardData } from "@agentic/repository";
@@ -8,18 +17,23 @@ import type { SelfImprovementRepository } from "@agentic/self-improvement-memory
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { GET as integrationsRouteGet, POST as integrationsRoutePost } from "../apps/web/app/api/integrations/route";
 import { POST as approvalResponseRoute } from "../apps/web/app/api/approvals/[id]/respond/route";
+import { POST as briefingSchedulePostRoute } from "../apps/web/app/api/briefing/schedule/route";
 import { PATCH as commitmentUpdateRoute } from "../apps/web/app/api/commitments/[id]/route";
 import { GET as governanceRouteGet, POST as governanceRoutePost } from "../apps/web/app/api/governance/route";
 import { GET as governanceAuditRouteGet } from "../apps/web/app/api/governance/audit/route";
 import { PATCH as memoryUpdateRoute } from "../apps/web/app/api/memory/[id]/route";
+import { POST as operatorProductsRoutePost } from "../apps/web/app/api/operator-products/route";
 import { PATCH as watcherUpdateRoute } from "../apps/web/app/api/watchers/[id]/route";
 import { GET as workspacesRouteGet, POST as workspacesRoutePost } from "../apps/web/app/api/workspaces/route";
+import { GET as getAgentMetricsRoute } from "../apps/web/app/api/agents/[id]/metrics/route";
+import { DELETE as deleteAgentRoute, GET as getAgentRoute, PUT as updateAgentRoute } from "../apps/web/app/api/agents/[id]/route";
 
 function buildAutopilotSettings() {
   return {
     userId: SYSTEM_USER_ID,
     mode: "notify_only" as const,
     debounceMinutes: 15,
+    actorContext: null,
     createdAt: "2024-01-01T00:00:00.000Z",
     updatedAt: "2024-01-01T00:00:00.000Z"
   };
@@ -165,6 +179,45 @@ function buildDashboardData(): DashboardData {
   };
 }
 
+function buildAgentDefinition() {
+  const timestamp = nowIso();
+
+  return AgentDefinitionSchema.parse({
+    id: "agent-private-ops",
+    userId: SYSTEM_USER_ID,
+    name: "private-ops",
+    displayName: "Private Ops",
+    description: "Handles private operational workflows.",
+    icon: "ops",
+    category: "custom",
+    tags: ["ops"],
+    systemPrompt: "Review operational signals and prepare the next action plan.",
+    promptVariables: [],
+    artifactType: "summary",
+    behaviorConfig: {
+      temperature: 0.4,
+      maxTokens: 1200,
+      topP: 1,
+      frequencyPenalty: 0,
+      presencePenalty: 0,
+      responseStyle: "balanced",
+      formality: "professional"
+    },
+    allowedCapabilities: ["read", "search"],
+    blockedCapabilities: [],
+    maxRiskClass: "R2",
+    integrationPermissions: [],
+    memoryPermissions: [],
+    actorContext: null,
+    isBuiltIn: false,
+    parentAgentId: null,
+    version: 1,
+    status: "active",
+    createdAt: timestamp,
+    updatedAt: timestamp
+  });
+}
+
 function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRepository {
   return {
     backend: "file",
@@ -300,6 +353,7 @@ describe("route user scoping", () => {
     const listIntegrationsCalls: Array<string | undefined> = [];
     const dashboardCalls: Array<string | undefined> = [];
     const updatedStatuses: string[] = [];
+    const savedAccounts: Array<{ actorContext: ActorContext | null; status: string; userId: string }> = [];
 
     Reflect.set(
       globalThis,
@@ -311,6 +365,11 @@ describe("route user scoping", () => {
         },
         upsertIntegration: async (account) => {
           updatedStatuses.push(account.status);
+          savedAccounts.push({
+            actorContext: account.actorContext ?? null,
+            status: account.status,
+            userId: account.userId
+          });
           return account;
         },
         getDashboardData: async (userId) => {
@@ -335,6 +394,13 @@ describe("route user scoping", () => {
     expect(listIntegrationsCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID]);
     expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
     expect(updatedStatuses).toEqual(["disabled"]);
+    expect(savedAccounts).toEqual([
+      {
+        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        status: "disabled",
+        userId: SYSTEM_USER_ID
+      }
+    ]);
     expect(listPayload.integrations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -348,6 +414,7 @@ describe("route user scoping", () => {
     expect(updatePayload.integration).toEqual(
       expect.objectContaining({
         id: integration.id,
+        actorContext: createSystemActorContext(SYSTEM_USER_ID),
         readiness: expect.objectContaining({
           tier: "experimental"
         })
@@ -530,7 +597,12 @@ describe("route user scoping", () => {
     });
     const listMemoryCalls: Array<string | undefined> = [];
     const dashboardCalls: Array<string | undefined> = [];
-    const savedMemories: Array<{ id: string; memoryType: string; confidence: number }> = [];
+    const savedMemories: Array<{
+      id: string;
+      memoryType: string;
+      confidence: number;
+      actorContext: ActorContext | null;
+    }> = [];
 
     Reflect.set(
       globalThis,
@@ -544,7 +616,8 @@ describe("route user scoping", () => {
           savedMemories.push({
             id: record.id,
             memoryType: record.memoryType,
-            confidence: record.confidence
+            confidence: record.confidence,
+            actorContext: record.actorContext
           });
           return record;
         },
@@ -571,7 +644,8 @@ describe("route user scoping", () => {
       {
         id: memory.id,
         memoryType: "confirmed",
-        confidence: 0.92
+        confidence: 0.92,
+        actorContext: createSystemActorContext(SYSTEM_USER_ID)
       }
     ]);
   });
@@ -593,6 +667,7 @@ describe("route user scoping", () => {
     const listWatcherCalls: Array<string | undefined> = [];
     const dashboardCalls: Array<string | undefined> = [];
     const savedStatuses: string[] = [];
+    const savedActors: Array<ActorContext | null> = [];
 
     Reflect.set(
       globalThis,
@@ -604,6 +679,7 @@ describe("route user scoping", () => {
         },
         saveWatcher: async (candidate) => {
           savedStatuses.push(candidate.status);
+          savedActors.push(candidate.actorContext);
           return candidate;
         },
         getDashboardData: async (userId) => {
@@ -626,6 +702,74 @@ describe("route user scoping", () => {
     expect(listWatcherCalls).toEqual([SYSTEM_USER_ID]);
     expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
     expect(savedStatuses).toEqual(["paused"]);
+    expect(savedActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
+  });
+
+  it("passes the system user explicitly when selecting operator products", async () => {
+    const selectionCalls: Array<{
+      userId: string;
+      operatorProductId: string;
+      actorContext: ActorContext | null;
+      selectedAt: string;
+    }> = [];
+    const dashboardCalls: Array<string | undefined> = [];
+
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        listOperatorProducts: async (userId) => [
+          {
+            id: "operator-product-custom",
+            userId,
+            slug: "custom-operator",
+            name: "Custom Operator",
+            tagline: "Custom operator",
+            description: "Custom operator for regression coverage.",
+            icon: "ops",
+            recommendedAgentIds: [],
+            recommendedTemplateIds: [],
+            recommendedIntegrations: [],
+            kpis: [],
+            onboardingSteps: [],
+            isBuiltIn: false,
+            status: "active",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z"
+          }
+        ],
+        getOperatorProductSelection: async () => null,
+        saveOperatorProductSelection: async (selection) => {
+          selectionCalls.push({
+            userId: selection.userId,
+            operatorProductId: selection.operatorProductId,
+            actorContext: selection.actorContext,
+            selectedAt: selection.selectedAt
+          });
+          return selection;
+        },
+        getDashboardData: async (userId) => {
+          dashboardCalls.push(userId);
+          return buildDashboardData();
+        }
+      })
+    );
+
+    const response = await operatorProductsRoutePost(
+      buildAuthorizedJsonRequest("http://localhost/api/operator-products", {
+        operatorProductId: "operator-product-custom"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(selectionCalls).toHaveLength(1);
+    expect(selectionCalls[0]).toMatchObject({
+      userId: SYSTEM_USER_ID,
+      operatorProductId: "operator-product-custom",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+    });
+    expect(new Date(selectionCalls[0]!.selectedAt).toString()).not.toBe("Invalid Date");
+    expect(dashboardCalls).toEqual([]);
   });
 
   it("passes the system user explicitly when updating commitments", async () => {
@@ -653,7 +797,7 @@ describe("route user scoping", () => {
     };
     const commitmentCalls: Array<{ id: string; userId: string | undefined }> = [];
     const dashboardCalls: Array<string | undefined> = [];
-    const savedStatuses: string[] = [];
+    const savedCommitments: Array<{ status: string; actorContext: ActorContext | null }> = [];
     const deletedCalls: Array<{ id: string; userId: string | undefined }> = [];
 
     Reflect.set(
@@ -665,7 +809,10 @@ describe("route user scoping", () => {
           return commitment;
         },
         saveCommitment: async (candidate) => {
-          savedStatuses.push(candidate.status);
+          savedCommitments.push({
+            status: candidate.status,
+            actorContext: candidate.actorContext
+          });
           return candidate;
         },
         deleteCommitment: async (id, userId) => {
@@ -701,9 +848,186 @@ describe("route user scoping", () => {
       { id: commitment.id, userId: SYSTEM_USER_ID },
       { id: commitment.id, userId: SYSTEM_USER_ID }
     ]);
-    expect(savedStatuses).toEqual(["completed"]);
+    expect(savedCommitments).toEqual([
+      {
+        status: "completed",
+        actorContext: createSystemActorContext(SYSTEM_USER_ID)
+      }
+    ]);
     expect(deletedCalls).toEqual([{ id: commitment.id, userId: SYSTEM_USER_ID }]);
     expect(dashboardCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID]);
+  });
+
+  it("passes the system user explicitly when reading, updating, deleting, and measuring agents", async () => {
+    const agent = buildAgentDefinition();
+    const getAgentCalls: Array<{ id: string; userId: string | undefined }> = [];
+    const metricsCalls: Array<{ id: string; period: string; userId: string | undefined }> = [];
+    const savedAgents: Array<{ version: number; actorContext: ActorContext | null; displayName: string }> = [];
+    const deletedCalls: Array<{ id: string; userId: string | undefined }> = [];
+    const dashboardCalls: Array<string | undefined> = [];
+
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        getAgent: async (id, userId) => {
+          getAgentCalls.push({ id, userId });
+          return agent;
+        },
+        saveAgent: async (candidate) => {
+          savedAgents.push({
+            version: candidate.version,
+            actorContext: candidate.actorContext,
+            displayName: candidate.displayName
+          });
+          return candidate;
+        },
+        deleteAgent: async (id, userId) => {
+          deletedCalls.push({ id, userId });
+        },
+        getAgentMetrics: async (id, period, userId) => {
+          metricsCalls.push({ id, period, userId });
+          return AgentMetricsSchema.parse({
+            agentId: id,
+            period,
+            periodStart: "2024-01-01T00:00:00.000Z",
+            periodEnd: "2024-01-08T00:00:00.000Z",
+            tasksTotal: 1,
+            tasksCompleted: 1,
+            tasksFailed: 0,
+            tasksBlocked: 0,
+            approvalsRequested: 0,
+            approvalsApproved: 0,
+            approvalsRejected: 0,
+            averageConfidence: 0.9,
+            averageExecutionTimeMs: 125,
+            artifactsProduced: 1,
+            artifactsByType: { summary: 1 },
+            errorCount: 0,
+            lastErrorAt: null,
+            lastErrorMessage: null,
+            feedbackCount: 0,
+            userCorrectionCount: 0,
+            postApprovalFailureCount: 0,
+            averageRating: null,
+            successRate: 1,
+            approvalRate: 0,
+            correctionRate: 0,
+            postApprovalFailureRate: 0,
+            updatedAt: "2024-01-08T00:00:00.000Z"
+          });
+        },
+        getDashboardData: async (userId) => {
+          dashboardCalls.push(userId);
+          return buildDashboardData();
+        }
+      })
+    );
+
+    const detailResponse = await getAgentRoute(buildAuthorizedGetRequest(`http://localhost/api/agents/${agent.id}`), {
+      params: Promise.resolve({ id: agent.id })
+    });
+    const updateResponse = await updateAgentRoute(
+      new Request(`http://localhost/api/agents/${agent.id}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          displayName: "Private Ops Updated"
+        })
+      }),
+      {
+        params: Promise.resolve({ id: agent.id })
+      }
+    );
+    const metricsResponse = await getAgentMetricsRoute(
+      buildAuthorizedGetRequest(`http://localhost/api/agents/${agent.id}/metrics?period=week`),
+      {
+        params: Promise.resolve({ id: agent.id })
+      }
+    );
+    const deleteResponse = await deleteAgentRoute(
+      new Request(`http://localhost/api/agents/${agent.id}`, {
+        method: "DELETE",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: agent.id })
+      }
+    );
+
+    expect(detailResponse.status).toBe(200);
+    expect(updateResponse.status).toBe(200);
+    expect(metricsResponse.status).toBe(200);
+    expect(deleteResponse.status).toBe(200);
+    expect(getAgentCalls).toEqual([
+      { id: agent.id, userId: SYSTEM_USER_ID },
+      { id: agent.id, userId: SYSTEM_USER_ID },
+      { id: agent.id, userId: SYSTEM_USER_ID },
+      { id: agent.id, userId: SYSTEM_USER_ID }
+    ]);
+    expect(savedAgents).toEqual([
+      {
+        version: 2,
+        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        displayName: "Private Ops Updated"
+      }
+    ]);
+    expect(metricsCalls).toEqual([
+      {
+        id: agent.id,
+        period: "week",
+        userId: SYSTEM_USER_ID
+      }
+    ]);
+    expect(deletedCalls).toEqual([{ id: agent.id, userId: SYSTEM_USER_ID }]);
+    expect(dashboardCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID]);
+  });
+
+  it("passes the system user explicitly when updating briefing preferences", async () => {
+    const preferencesCalls: Array<string | undefined> = [];
+    const dashboardCalls: Array<string | undefined> = [];
+    const savedActors: Array<ActorContext | null> = [];
+
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        getBriefingPreferences: async (userId) => {
+          preferencesCalls.push(userId);
+          return buildDashboardData().briefingPreferences;
+        },
+        saveBriefingPreferences: async (preferences) => {
+          savedActors.push(preferences.actorContext);
+          return preferences;
+        },
+        getDashboardData: async (userId) => {
+          dashboardCalls.push(userId);
+          return buildDashboardData();
+        }
+      })
+    );
+
+    const response = await briefingSchedulePostRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/briefing/schedule", {
+        timezone: "America/Los_Angeles",
+        focus: "deep",
+        schedules: briefingTypeValues.map((type, index) => ({
+          type,
+          enabled: true,
+          time: `${String(8 + index).padStart(2, "0")}:15`
+        }))
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(preferencesCalls).toEqual([SYSTEM_USER_ID]);
+    expect(savedActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
+    expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
   });
 
   it("passes the system user explicitly when listing and mutating workspaces", async () => {
@@ -767,6 +1091,45 @@ describe("route user scoping", () => {
     expect(savedWorkspaceActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
     expect(savedMemberActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
     expect(dashboardCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID]);
+  });
+
+  it("stamps the system actor on workspace selection updates", async () => {
+    const selectionCalls: Array<{
+      userId: string;
+      workspaceId: string;
+      actorContext: ActorContext | null;
+    }> = [];
+
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        saveWorkspaceSelection: async (selection) => {
+          selectionCalls.push({
+            userId: selection.userId,
+            workspaceId: selection.workspaceId,
+            actorContext: selection.actorContext
+          });
+          return selection;
+        }
+      })
+    );
+
+    const response = await workspacesRoutePost(
+      buildAuthorizedJsonRequest("http://localhost/api/workspaces", {
+        action: "select",
+        workspaceId: "workspace-personal-system-user"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(selectionCalls).toEqual([
+      {
+        userId: SYSTEM_USER_ID,
+        workspaceId: "workspace-personal-system-user",
+        actorContext: createSystemActorContext(SYSTEM_USER_ID)
+      }
+    ]);
   });
 
   it("passes the system user explicitly when updating governance and exporting audits", async () => {

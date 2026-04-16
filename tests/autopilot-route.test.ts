@@ -5,6 +5,8 @@ import {
   GoalTemplateSchema,
   SYSTEM_USER_ID,
   WatcherSchema,
+  createHumanActorContext,
+  createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
@@ -95,12 +97,14 @@ describe("autopilot events route", () => {
       simulated: boolean;
       event: {
         status: string;
+        actorContext: unknown;
       };
     };
 
     expect(response.status).toBe(200);
     expect(payload.simulated).toBe(true);
     expect(payload.event.status).toBe("simulated");
+    expect(payload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
     await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
   });
@@ -137,6 +141,7 @@ describe("autopilot events route", () => {
         id: string;
         status: string;
         resultGoalId: string | null;
+        actorContext: unknown;
         details: {
           taskCount: number;
           pendingApprovalCount: number;
@@ -169,12 +174,15 @@ describe("autopilot events route", () => {
         id: string;
         status: string;
         resultGoalId: string | null;
+        actorContext: unknown;
       };
     };
+    const persistedEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
 
     expect(firstResponse.status).toBe(200);
     expect(firstPayload.event.status).toBe("executed");
     expect(firstPayload.event.resultGoalId).toBeTruthy();
+    expect(firstPayload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(firstPayload.event.details.taskCount).toBe(firstPayload.bundle.tasks.length);
     expect(firstPayload.event.details.pendingApprovalCount).toBe(
       firstPayload.bundle.approvals.filter((approval) => approval.decision === "pending").length
@@ -191,8 +199,10 @@ describe("autopilot events route", () => {
     expect(secondResponse.status).toBe(200);
     expect(secondPayload.duplicate).toBe(true);
     expect(secondPayload.event.id).toBe(firstPayload.event.id);
+    expect(secondPayload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(2);
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(1);
+    expect(persistedEvents).toHaveLength(1);
+    expect(persistedEvents[0]?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
   });
 
   it("captures recovery context when watcher-triggered execution fails after claiming the event", async () => {
@@ -231,6 +241,7 @@ describe("autopilot events route", () => {
       event: {
         status: string;
         error: string | null;
+        actorContext: unknown;
         details: {
           failureStage: string;
           requiresReview: boolean;
@@ -250,6 +261,7 @@ describe("autopilot events route", () => {
     expect(payload.error).toBe("Autopilot execution failed.");
     expect(payload.event.status).toBe("failed");
     expect(payload.event.error).toBe("Autopilot execution failed.");
+    expect(payload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.event.details.failureStage).toBe("execution");
     expect(payload.event.details.requiresReview).toBe(true);
     expect(payload.event.details.recoveryAction).toBe("review_event_error");
@@ -257,6 +269,7 @@ describe("autopilot events route", () => {
     expect(payload.dashboard.autopilotEvents.some((event) => event.status === "failed")).toBe(true);
     expect(autopilotEvents).toHaveLength(1);
     expect(autopilotEvents[0]?.status).toBe("failed");
+    expect(autopilotEvents[0]?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
   });
 
@@ -393,15 +406,88 @@ describe("autopilot events route", () => {
       debounced?: boolean;
       event: {
         status: string;
+        actorContext: unknown;
       };
     };
+    const persistedEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
 
     expect(firstResponse.status).toBe(200);
     expect(secondResponse.status).toBe(200);
     expect(secondPayload.debounced).toBe(true);
     expect(secondPayload.event.status).toBe("debounced");
+    expect(secondPayload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(2);
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(2);
+    expect(persistedEvents).toHaveLength(2);
+    expect(persistedEvents.every((event) => event.actorContext?.subjectUserId === SYSTEM_USER_ID)).toBe(true);
+  });
+
+  it("stamps the human actor when a session principal executes a template-triggered event", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const secondaryUserId = "user-secondary";
+
+    await repository.seedDefaults(secondaryUserId);
+    await repository.saveTemplate(
+      GoalTemplateSchema.parse({
+        id: "template-session-run",
+        userId: secondaryUserId,
+        name: "Session scheduled review",
+        description: "Generate a private review workflow.",
+        request: "Review my inbox and prepare a private response plan.",
+        parameters: {},
+        schedule: {
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastRunAt: null,
+          nextRunAt: null
+        },
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: secondaryUserId,
+      sessionId: "session-secondary",
+      expiresAt: "2026-12-31T00:00:00.000Z"
+    });
+
+    let response: Response;
+    let payload: { event: { actorContext: unknown; resultGoalId: string | null } };
+    try {
+      response = await autopilotEventsRoute(
+        new Request("http://localhost/api/autopilot/events", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            kind: "template_due",
+            sourceId: "template-session-run",
+            mode: "draft_goal"
+          })
+        })
+      );
+      payload = (await response.json()) as { event: { actorContext: unknown; resultGoalId: string | null } };
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+
+    const events = await repository.listAutopilotEvents(secondaryUserId);
+    const updatedTemplate = (await repository.listTemplates(secondaryUserId)).find(
+      (template) => template.id === "template-session-run"
+    );
+
+    expect(response.status).toBe(200);
+    expect(payload.event.resultGoalId).toBeTruthy();
+    expect(payload.event.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
+    expect(events).toHaveLength(1);
+    expect(events[0]?.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
+    expect(updatedTemplate?.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
   });
 
   it("executes scheduled templates and advances their schedule window", async () => {
@@ -451,6 +537,7 @@ describe("autopilot events route", () => {
     expect(response.status).toBe(200);
     expect(payload.event.status).toBe("executed");
     expect(payload.event.resultGoalId).toBeTruthy();
+    expect(updatedTemplate?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(updatedTemplate?.schedule.lastRunAt).toBeTruthy();
     expect(updatedTemplate?.schedule.nextRunAt).toBeTruthy();
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);

@@ -11,9 +11,9 @@ export async function GET(request: Request, { params }: RouteParams) {
     const { id } = await params;
     const repository = await getSeededRepository();
 
-    const agent = await repository.getAgent(id);
+    const agent = await repository.getAgent(id, principal.userId);
 
-    if (!agent || (!agent.isBuiltIn && agent.userId !== principal.userId)) {
+    if (!agent) {
       return authenticatedJson({ error: "Agent not found" }, { status: 404 });
     }
 

@@ -12,16 +12,16 @@ export async function GET(request: Request, { params }: RouteParams) {
     const principal = await requireApiSession(request);
     const { id } = await params;
     const repository = await getSeededRepository();
-    const agent = await repository.getAgent(id);
+    const agent = await repository.getAgent(id, principal.userId);
 
-    if (!agent || (!agent.isBuiltIn && agent.userId !== principal.userId)) {
+    if (!agent) {
       return authenticatedJson({ error: "Agent not found" }, { status: 404 });
     }
 
     const url = new URL(request.url);
     const period = periodSchema.parse(url.searchParams.get("period") ?? "all");
 
-    const metrics = await repository.getAgentMetrics(id, period);
+    const metrics = await repository.getAgentMetrics(id, period, principal.userId);
 
     return authenticatedJson({
       agentId: id,

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { describeIntegrationReadiness } from "@agentic/integrations";
 import { IntegrationAccountSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
 import { getSeededRepository } from "../../../lib/server";
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const body = await parseJsonBody(request, UpdateIntegrationSchema);
     const repository = await getSeededRepository();
     const existing = (await repository.listIntegrations(principal.userId)).find((integration) => integration.id === body.id);
@@ -47,6 +49,7 @@ export async function POST(request: Request) {
     const integration = IntegrationAccountSchema.parse({
       ...existing,
       status: body.status,
+      actorContext,
       updatedAt: nowIso()
     });
 

@@ -502,6 +502,199 @@ describe("telegram webhook route", () => {
     });
   });
 
+  it("stamps mapped Telegram actor context onto execution outcome memories", async () => {
+    const actions = await createTelegramApprovalActions({
+      approvalId: "approval-safe",
+      goalId: "goal-1",
+      workspaceId: "workspace-personal-system-user",
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+    const savedMemories: Array<{ actorContext?: ActorContext | null; category: string; content: string }> = [];
+
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        getGoalBundleForUser: async (goalId, userId) =>
+          goalId === "goal-1" && userId === "user-telegram"
+            ? {
+                goal: {
+                  id: "goal-1",
+                  userId,
+                  request: "Review my inbox",
+                  title: "Review inbox",
+                  explanation: "Review inbox and draft responses.",
+                  intent: "communications-triage",
+                  status: "running",
+                  workspaceId: "workspace-personal-system-user",
+                  workflowId: "workflow-1",
+                  confidence: 0.84,
+                  createdAt: "2024-01-01T00:00:00.000Z",
+                  updatedAt: "2024-01-01T00:00:00.000Z"
+                },
+                workflow: {
+                  id: "workflow-1",
+                  goalId: "goal-1",
+                  workspaceId: "workspace-personal-system-user",
+                  status: "running",
+                  currentStep: "Awaiting approval",
+                  checkpoint: "approval-gate",
+                  createdAt: "2024-01-01T00:00:00.000Z",
+                  updatedAt: "2024-01-01T00:00:00.000Z"
+                },
+                tasks: [
+                  {
+                    id: "task-1",
+                    goalId: "goal-1",
+                    workflowId: "workflow-1",
+                    title: "Draft reply",
+                    summary: "Prepare an external response.",
+                    assignedAgent: "communications",
+                    state: "waiting",
+                    priority: "P1",
+                    riskClass: "R3",
+                    needsApproval: true,
+                    requiresApproval: true,
+                    toolCapabilities: ["send"],
+                    dependsOn: [],
+                    artifactIds: [],
+                    createdAt: "2024-01-01T00:00:00.000Z",
+                    updatedAt: "2024-01-01T00:00:00.000Z"
+                  }
+                ],
+                approvals: [
+                  {
+                    id: "approval-safe",
+                    goalId: "goal-1",
+                    taskId: "task-1",
+                    title: "Send reply",
+                    rationale: "External email send.",
+                    riskClass: "R3",
+                    decision: "pending",
+                    requestedAction: "Send the drafted reply",
+                    preview: {
+                      actionType: "send",
+                      target: "customer@example.com",
+                      summary: "Send the drafted reply to the customer.",
+                      changes: [],
+                      impact: {
+                        affectedPeople: ["customer@example.com"],
+                        affectedSystems: ["email"],
+                        permissions: ["send"],
+                        rollback: "manual"
+                      }
+                    },
+                    decisionScope: null,
+                    decisionRationale: null,
+                    history: [],
+                    createdAt: "2024-01-01T00:00:00.000Z",
+                    expiryAt: "2099-01-01T00:00:00.000Z",
+                    respondedAt: null
+                  }
+                ],
+                artifacts: [],
+                memories: [],
+                watchers: [],
+                actionLogs: []
+              }
+            : null,
+        respondToApproval: async (input) => ({
+          goal: {
+            id: "goal-1",
+            userId: input.actor.subjectUserId,
+            request: "Review my inbox",
+            title: "Review inbox",
+            explanation: "Review inbox and draft responses.",
+            intent: "communications-triage",
+            status: "running",
+            workspaceId: "workspace-personal-system-user",
+            workflowId: "workflow-1",
+            confidence: 0.84,
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z"
+          },
+          workflow: {
+            id: "workflow-1",
+            goalId: "goal-1",
+            workspaceId: "workspace-personal-system-user",
+            status: "running",
+            checkpoint: "approval-gate",
+            summary: "Waiting on approval.",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z"
+          },
+          tasks: [
+            {
+              id: "task-1",
+              goalId: "goal-1",
+              workflowId: "workflow-1",
+              title: "Draft reply",
+              summary: "Prepare an external response.",
+              assignedAgent: "communications",
+              state: "waiting",
+              priority: "P1",
+              riskClass: "R3",
+              needsApproval: true,
+              requiresApproval: true,
+              toolCapabilities: ["send"],
+              dependsOn: [],
+              artifactIds: [],
+              createdAt: "2024-01-01T00:00:00.000Z",
+              updatedAt: "2024-01-01T00:00:00.000Z"
+            }
+          ],
+          approvals: [
+            {
+              id: input.approvalId,
+              goalId: "goal-1",
+              taskId: "task-1",
+              title: "Send reply",
+              rationale: "External email send.",
+              riskClass: "R3",
+              decision: input.decision,
+              requestedAction: "Send the drafted reply",
+              preview: {},
+              decisionScope: input.scope ?? null,
+              decisionRationale: input.rationale ?? null,
+              history: [
+                {
+                  decision: input.decision,
+                  scope: input.scope ?? "once",
+                  rationale: input.rationale ?? null,
+                  actor: input.actor.executor.userId ?? input.actor.executor.label,
+                  actorContext: input.actor,
+                  createdAt: "2024-01-01T00:00:00.000Z"
+                }
+              ],
+              createdAt: "2024-01-01T00:00:00.000Z",
+              expiryAt: null,
+              respondedAt: "2024-01-01T00:00:00.000Z"
+            }
+          ],
+          artifacts: [],
+          memories: [],
+          watchers: [],
+          actionLogs: []
+        }),
+        saveGoalBundle: async (bundle) => bundle,
+        saveMemory: async (record) => {
+          savedMemories.push(record);
+          return record;
+        }
+      })
+    );
+
+    const response = await telegramWebhookRoute(buildTelegramRequest(actions.approveActionId));
+    const payload = (await response.json()) as { ok?: boolean };
+
+    expect(response.status).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(savedMemories).toHaveLength(2);
+    expect(savedMemories.every((memory) => memory.actorContext?.subjectUserId === "user-telegram")).toBe(true);
+    expect(savedMemories[0]?.content).toContain('Execution outcomes for goal "Review inbox"');
+    expect(savedMemories[1]?.content).toContain('Execution issue for "Draft reply"');
+  });
+
   it("rejects approvals from unmapped Telegram actors", async () => {
     const actions = await createTelegramApprovalActions({
       approvalId: "approval-safe",

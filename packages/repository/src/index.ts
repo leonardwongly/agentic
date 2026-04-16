@@ -47,6 +47,7 @@ import {
   WorkspaceSchema,
   WorkspaceSelectionSchema,
   clone,
+  createSystemActorContext,
   nowIso,
   type ActionLog,
   type AgentDefinition,
@@ -309,6 +310,7 @@ export type AgenticRepository = {
     mode: AutopilotMode;
     summary: string;
     details?: Record<string, unknown>;
+    actorContext?: ActorContext | null;
     debounceMinutes: number;
   }): Promise<AutopilotEventClaim>;
   saveAutopilotEvent(event: AutopilotEvent): Promise<AutopilotEvent>;
@@ -329,10 +331,10 @@ export type AgenticRepository = {
   getDashboardData(userId?: string): Promise<DashboardData>;
   // Agent Management
   listAgents(userId?: string): Promise<AgentDefinition[]>;
-  getAgent(agentId: string): Promise<AgentDefinition | null>;
+  getAgent(agentId: string, userId?: string): Promise<AgentDefinition | null>;
   saveAgent(agent: AgentDefinition): Promise<AgentDefinition>;
-  deleteAgent(agentId: string): Promise<void>;
-  getAgentMetrics(agentId: string, period?: "day" | "week" | "month" | "all"): Promise<AgentMetrics | null>;
+  deleteAgent(agentId: string, userId?: string): Promise<void>;
+  getAgentMetrics(agentId: string, period?: "day" | "week" | "month" | "all", userId?: string): Promise<AgentMetrics | null>;
   saveAgentMetrics(metrics: AgentMetrics): Promise<AgentMetrics>;
   listOperatorProducts(userId?: string): Promise<OperatorProduct[]>;
   getOperatorProductSelection(userId?: string): Promise<OperatorProductSelection | null>;
@@ -1613,6 +1615,7 @@ function defaultAutopilotSettings(userId: string): AutopilotSettings {
     userId,
     mode: "notify_only",
     debounceMinutes: 15,
+    actorContext: null,
     createdAt: timestamp,
     updatedAt: timestamp
   });
@@ -1938,6 +1941,7 @@ function buildPendingAutopilotEvent(params: {
   mode: AutopilotMode;
   summary: string;
   details?: Record<string, unknown>;
+  actorContext?: ActorContext | null;
 }): AutopilotEvent {
   return AutopilotEventSchema.parse({
     id: crypto.randomUUID(),
@@ -1949,6 +1953,7 @@ function buildPendingAutopilotEvent(params: {
     summary: params.summary,
     status: "pending",
     details: params.details ?? {},
+    actorContext: params.actorContext ?? null,
     createdAt: nowIso(),
     processedAt: null,
     resultGoalId: null,
@@ -2317,6 +2322,7 @@ class FileRepository implements AgenticRepository {
           WorkspaceSelectionSchema.parse({
             userId,
             workspaceId: personalWorkspace.id,
+            actorContext: createSystemActorContext(userId),
             selectedAt: nowIso(),
             updatedAt: nowIso()
           }),
@@ -2325,7 +2331,14 @@ class FileRepository implements AgenticRepository {
       }
 
       if (!store.integrations.some((integration) => integration.userId === userId)) {
-        store.integrations.push(...buildDefaultIntegrationAccounts(userId));
+        store.integrations.push(
+          ...buildDefaultIntegrationAccounts(userId).map((integration) =>
+            IntegrationAccountSchema.parse({
+              ...integration,
+              actorContext: createSystemActorContext(userId)
+            })
+          )
+        );
       }
 
       if (!store.memories.some((memory) => memory.userId === userId)) {
@@ -2359,6 +2372,7 @@ class FileRepository implements AgenticRepository {
           OperatorProductSelectionSchema.parse({
             userId,
             operatorProductId: defaultSelection.id,
+            actorContext: createSystemActorContext(userId),
             selectedAt: nowIso(),
             updatedAt: nowIso()
           })
@@ -2752,6 +2766,7 @@ class FileRepository implements AgenticRepository {
     mode: AutopilotMode;
     summary: string;
     details?: Record<string, unknown>;
+    actorContext?: ActorContext | null;
     debounceMinutes: number;
   }): Promise<AutopilotEventClaim> {
     return this.withMutationLock(async () => {
@@ -2790,6 +2805,7 @@ class FileRepository implements AgenticRepository {
             idempotencyKey: trimmedKey,
             mode: params.mode,
             summary: params.summary,
+            actorContext: params.actorContext,
             details: {
               ...(params.details ?? {}),
               debouncedByEventId: recent.id
@@ -2813,6 +2829,7 @@ class FileRepository implements AgenticRepository {
         idempotencyKey: trimmedKey,
         mode: params.mode,
         summary: params.summary,
+        actorContext: params.actorContext,
         details: params.details
       });
 
@@ -3030,9 +3047,9 @@ class FileRepository implements AgenticRepository {
     return agents.map((agent) => AgentDefinitionSchema.parse(clone(agent)));
   }
 
-  async getAgent(agentId: string): Promise<AgentDefinition | null> {
+  async getAgent(agentId: string, userId = SYSTEM_USER_ID): Promise<AgentDefinition | null> {
     const store = await this.readStore();
-    const agent = resolveAgentFromDefinitions(store.agents, agentId);
+    const agent = resolveAgentFromDefinitions(store.agents, agentId, userId);
     return agent ? AgentDefinitionSchema.parse(clone(agent)) : null;
   }
 
@@ -3046,27 +3063,32 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async deleteAgent(agentId: string): Promise<void> {
+  async deleteAgent(agentId: string, userId = SYSTEM_USER_ID): Promise<void> {
     await this.withMutationLock(async () => {
       const store = await this.readStore();
-      const agent = store.agents.find((a) => a.id === agentId);
+      const agent = resolveAgentFromDefinitions(store.agents, agentId, userId);
 
       if (agent?.isBuiltIn) {
         throw new Error("Cannot delete a built-in agent");
       }
 
-      store.agents = store.agents.filter((a) => a.id !== agentId);
-      store.agentMetrics = store.agentMetrics.filter((m) => m.agentId !== agentId);
+      if (!agent) {
+        return;
+      }
+
+      store.agents = store.agents.filter((a) => a.id !== agent.id);
+      store.agentMetrics = store.agentMetrics.filter((m) => m.agentId !== agent.id);
       await this.writeStore(store);
     });
   }
 
   async getAgentMetrics(
     agentId: string,
-    period: "day" | "week" | "month" | "all" = "all"
+    period: "day" | "week" | "month" | "all" = "all",
+    userId = SYSTEM_USER_ID
   ): Promise<AgentMetrics | null> {
     const store = await this.readStore();
-    const agent = resolveAgentFromDefinitions(store.agents, agentId);
+    const agent = resolveAgentFromDefinitions(store.agents, agentId, userId);
 
     if (!agent) {
       return null;
@@ -3195,9 +3217,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into memory_records (
-          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, review_at, expiry_at, created_at, updated_at
+          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, review_at, expiry_at, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
         on conflict (id) do update
         set category = excluded.category,
             memory_type = excluded.memory_type,
@@ -3206,6 +3228,7 @@ class PostgresRepository implements AgenticRepository {
             source = excluded.source,
             sensitivity = excluded.sensitivity,
             permissions = excluded.permissions,
+            actor_context = excluded.actor_context,
             review_at = excluded.review_at,
             expiry_at = excluded.expiry_at,
             updated_at = excluded.updated_at
@@ -3220,6 +3243,7 @@ class PostgresRepository implements AgenticRepository {
         memory.source,
         memory.sensitivity,
         JSON.stringify(memory.permissions),
+        JSON.stringify(memory.actorContext),
         memory.reviewAt,
         memory.expiryAt,
         memory.createdAt,
@@ -3298,9 +3322,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into integration_accounts (
-          id, user_id, name, system, status, scopes, capabilities, metadata, created_at, updated_at
+          id, user_id, name, system, status, scopes, capabilities, metadata, actor_context, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10)
+        values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11)
         on conflict (id) do update
         set user_id = excluded.user_id,
             name = excluded.name,
@@ -3309,6 +3333,7 @@ class PostgresRepository implements AgenticRepository {
             scopes = excluded.scopes,
             capabilities = excluded.capabilities,
             metadata = excluded.metadata,
+            actor_context = excluded.actor_context,
             updated_at = excluded.updated_at
       `,
       [
@@ -3320,6 +3345,7 @@ class PostgresRepository implements AgenticRepository {
         JSON.stringify(integration.scopes),
         JSON.stringify(integration.capabilities),
         JSON.stringify(integration.metadata),
+        JSON.stringify(integration.actorContext),
         integration.createdAt,
         integration.updatedAt
       ]
@@ -3345,6 +3371,7 @@ class PostgresRepository implements AgenticRepository {
       maxRiskClass: row.max_risk_class,
       integrationPermissions: Array.isArray(row.integration_permissions) ? row.integration_permissions : [],
       memoryPermissions: Array.isArray(row.memory_permissions) ? row.memory_permissions : [],
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       isBuiltIn: Boolean(row.is_built_in),
       parentAgentId: typeof row.parent_agent_id === "string" ? row.parent_agent_id : null,
       version: Number(row.version),
@@ -3379,6 +3406,7 @@ class PostgresRepository implements AgenticRepository {
     return OperatorProductSelectionSchema.parse({
       userId: row.user_id,
       operatorProductId: row.operator_product_id,
+      actorContext: (row.actor_context as Record<string, unknown> | null | undefined) ?? null,
       selectedAt: new Date(row.selected_at as string | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | Date).toISOString()
     });
@@ -3508,12 +3536,12 @@ class PostgresRepository implements AgenticRepository {
         insert into agent_definitions (
           id, user_id, name, display_name, description, icon, category, tags, system_prompt, prompt_variables,
           artifact_type, behavior_config, allowed_capabilities, blocked_capabilities, max_risk_class,
-          integration_permissions, memory_permissions, is_built_in, parent_agent_id, version, status, created_at, updated_at
+          integration_permissions, memory_permissions, actor_context, is_built_in, parent_agent_id, version, status, created_at, updated_at
         )
         values (
           $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb,
           $11, $12::jsonb, $13::jsonb, $14::jsonb, $15,
-          $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22, $23
+          $16::jsonb, $17::jsonb, $18::jsonb, $19, $20, $21, $22, $23, $24
         )
         on conflict (id) do update
         set user_id = excluded.user_id,
@@ -3532,6 +3560,7 @@ class PostgresRepository implements AgenticRepository {
             max_risk_class = excluded.max_risk_class,
             integration_permissions = excluded.integration_permissions,
             memory_permissions = excluded.memory_permissions,
+            actor_context = excluded.actor_context,
             is_built_in = excluded.is_built_in,
             parent_agent_id = excluded.parent_agent_id,
             version = excluded.version,
@@ -3556,6 +3585,7 @@ class PostgresRepository implements AgenticRepository {
         validated.maxRiskClass,
         JSON.stringify(validated.integrationPermissions),
         JSON.stringify(validated.memoryPermissions),
+        JSON.stringify(validated.actorContext),
         validated.isBuiltIn,
         validated.parentAgentId,
         validated.version,
@@ -3623,15 +3653,22 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into operator_product_selections (
-          user_id, operator_product_id, selected_at, updated_at
+          user_id, operator_product_id, actor_context, selected_at, updated_at
         )
-        values ($1, $2, $3, $4)
+        values ($1, $2, $3::jsonb, $4, $5)
         on conflict (user_id) do update
         set operator_product_id = excluded.operator_product_id,
+            actor_context = excluded.actor_context,
             selected_at = excluded.selected_at,
             updated_at = excluded.updated_at
       `,
-      [validated.userId, validated.operatorProductId, validated.selectedAt, validated.updatedAt]
+      [
+        validated.userId,
+        validated.operatorProductId,
+        JSON.stringify(validated.actorContext),
+        validated.selectedAt,
+        validated.updatedAt
+      ]
     );
   }
 
@@ -3640,13 +3677,14 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into briefing_preferences (
-          user_id, timezone, focus, schedules, created_at, updated_at
+          user_id, timezone, focus, schedules, actor_context, created_at, updated_at
         )
-        values ($1, $2, $3, $4::jsonb, $5, $6)
+        values ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)
         on conflict (user_id) do update
         set timezone = excluded.timezone,
             focus = excluded.focus,
             schedules = excluded.schedules,
+            actor_context = excluded.actor_context,
             updated_at = excluded.updated_at
       `,
       [
@@ -3654,6 +3692,7 @@ class PostgresRepository implements AgenticRepository {
         validated.timezone,
         validated.focus,
         JSON.stringify(validated.schedules),
+        JSON.stringify(validated.actorContext),
         validated.createdAt,
         validated.updatedAt
       ]
@@ -3665,9 +3704,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into goal_templates (
-          id, user_id, name, description, request, parameters, schedule, created_at, updated_at
+          id, user_id, name, description, request, parameters, schedule, actor_context, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
+        values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10)
         on conflict (id) do update
         set user_id = excluded.user_id,
             name = excluded.name,
@@ -3675,6 +3714,7 @@ class PostgresRepository implements AgenticRepository {
             request = excluded.request,
             parameters = excluded.parameters,
             schedule = excluded.schedule,
+            actor_context = excluded.actor_context,
             updated_at = excluded.updated_at
       `,
       [
@@ -3685,6 +3725,7 @@ class PostgresRepository implements AgenticRepository {
         validated.request,
         JSON.stringify(validated.parameters),
         JSON.stringify(validated.schedule),
+        JSON.stringify(validated.actorContext),
         validated.createdAt,
         validated.updatedAt
       ]
@@ -3696,9 +3737,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into workflow_templates (
-          id, user_id, name, description, nodes, edges, triggers, created_at, updated_at
+          id, user_id, name, description, nodes, edges, triggers, actor_context, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9)
+        values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10)
         on conflict (id) do update
         set user_id = excluded.user_id,
             name = excluded.name,
@@ -3706,6 +3747,7 @@ class PostgresRepository implements AgenticRepository {
             nodes = excluded.nodes,
             edges = excluded.edges,
             triggers = excluded.triggers,
+            actor_context = excluded.actor_context,
             updated_at = excluded.updated_at
       `,
       [
@@ -3716,6 +3758,7 @@ class PostgresRepository implements AgenticRepository {
         JSON.stringify(validated.nodes),
         JSON.stringify(validated.edges),
         JSON.stringify(validated.triggers),
+        JSON.stringify(validated.actorContext),
         validated.createdAt,
         validated.updatedAt
       ]
@@ -3727,15 +3770,23 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into autopilot_settings (
-          user_id, mode, debounce_minutes, created_at, updated_at
+          user_id, mode, debounce_minutes, actor_context, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5)
+        values ($1, $2, $3, $4::jsonb, $5, $6)
         on conflict (user_id) do update
         set mode = excluded.mode,
             debounce_minutes = excluded.debounce_minutes,
+            actor_context = excluded.actor_context,
             updated_at = excluded.updated_at
       `,
-      [validated.userId, validated.mode, validated.debounceMinutes, validated.createdAt, validated.updatedAt]
+      [
+        validated.userId,
+        validated.mode,
+        validated.debounceMinutes,
+        JSON.stringify(validated.actorContext),
+        validated.createdAt,
+        validated.updatedAt
+      ]
     );
   }
 
@@ -3744,9 +3795,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into autopilot_events (
-          id, user_id, kind, source_id, idempotency_key, mode, summary, status, details, created_at, processed_at, result_goal_id, error
+          id, user_id, kind, source_id, idempotency_key, mode, summary, status, details, actor_context, created_at, processed_at, result_goal_id, error
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
         on conflict (id) do update
         set user_id = excluded.user_id,
             kind = excluded.kind,
@@ -3756,6 +3807,7 @@ class PostgresRepository implements AgenticRepository {
             summary = excluded.summary,
             status = excluded.status,
             details = excluded.details,
+            actor_context = excluded.actor_context,
             processed_at = excluded.processed_at,
             result_goal_id = excluded.result_goal_id,
             error = excluded.error
@@ -3770,6 +3822,7 @@ class PostgresRepository implements AgenticRepository {
         validated.summary,
         validated.status,
         JSON.stringify(validated.details),
+        JSON.stringify(validated.actorContext),
         validated.createdAt,
         validated.processedAt,
         validated.resultGoalId,
@@ -3787,6 +3840,7 @@ class PostgresRepository implements AgenticRepository {
       request: row.request,
       parameters: row.parameters ?? {},
       schedule: row.schedule ?? {},
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -3801,6 +3855,7 @@ class PostgresRepository implements AgenticRepository {
       nodes: row.nodes ?? [],
       edges: row.edges ?? [],
       triggers: row.triggers ?? [],
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -3817,6 +3872,7 @@ class PostgresRepository implements AgenticRepository {
       summary: row.summary,
       status: row.status,
       details: row.details ?? {},
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       processedAt: row.processed_at ? new Date(row.processed_at as string | number | Date).toISOString() : null,
       resultGoalId: typeof row.result_goal_id === "string" ? row.result_goal_id : null,
@@ -3880,6 +3936,7 @@ class PostgresRepository implements AgenticRepository {
     return WorkspaceSelectionSchema.parse({
       userId: row.user_id,
       workspaceId: row.workspace_id,
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       selectedAt: new Date(row.selected_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -3960,15 +4017,22 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into workspace_selections (
-          user_id, workspace_id, selected_at, updated_at
+          user_id, workspace_id, actor_context, selected_at, updated_at
         )
-        values ($1, $2, $3, $4)
+        values ($1, $2, $3, $4, $5)
         on conflict (user_id) do update
         set workspace_id = excluded.workspace_id,
+            actor_context = excluded.actor_context,
             selected_at = excluded.selected_at,
             updated_at = excluded.updated_at
       `,
-      [validated.userId, validated.workspaceId, validated.selectedAt, validated.updatedAt]
+      [
+        validated.userId,
+        validated.workspaceId,
+        JSON.stringify(validated.actorContext),
+        validated.selectedAt,
+        validated.updatedAt
+      ]
     );
   }
 
@@ -4283,6 +4347,7 @@ class PostgresRepository implements AgenticRepository {
           sourceSystems: row.source_systems ?? [],
           status: row.status,
           expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
+          actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
           createdAt: new Date(row.created_at).toISOString(),
           updatedAt: new Date(row.updated_at).toISOString()
         })
@@ -4478,9 +4543,9 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11, $12)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -4490,6 +4555,7 @@ class PostgresRepository implements AgenticRepository {
               source_systems = excluded.source_systems,
               status = excluded.status,
               expiry_at = excluded.expiry_at,
+              actor_context = excluded.actor_context,
               updated_at = excluded.updated_at
         `,
         [
@@ -4502,6 +4568,7 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(watcher.sourceSystems),
           watcher.status,
           watcher.expiryAt,
+          JSON.stringify(watcher.actorContext),
           watcher.createdAt,
           watcher.updatedAt
         ]
@@ -4577,6 +4644,7 @@ class PostgresRepository implements AgenticRepository {
           WorkspaceSelectionSchema.parse({
             userId,
             workspaceId: personalWorkspace.id,
+            actorContext: createSystemActorContext(userId),
             selectedAt: nowIso(),
             updatedAt: nowIso()
           })
@@ -4587,7 +4655,12 @@ class PostgresRepository implements AgenticRepository {
         await this.saveMemoryWithClient(client, memory);
       }
 
-      for (const integration of buildDefaultIntegrationAccounts(userId)) {
+      for (const integration of buildDefaultIntegrationAccounts(userId).map((candidate) =>
+        IntegrationAccountSchema.parse({
+          ...candidate,
+          actorContext: createSystemActorContext(userId)
+        })
+      )) {
         await this.saveIntegrationWithClient(client, integration);
       }
 
@@ -4658,6 +4731,7 @@ class PostgresRepository implements AgenticRepository {
           OperatorProductSelectionSchema.parse({
             userId,
             operatorProductId: defaultSelection.id,
+            actorContext: createSystemActorContext(userId),
             selectedAt: nowIso(),
             updatedAt: nowIso()
           })
@@ -5118,6 +5192,7 @@ class PostgresRepository implements AgenticRepository {
           goalId: row.goal_id ?? null,
           approvalId: row.approval_id ?? null,
           dueAt: row.due_at ? new Date(row.due_at).toISOString() : null,
+          actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
           confidence: Number(row.confidence),
           evidence: row.evidence ?? [],
           createdAt: new Date(row.created_at).toISOString(),
@@ -5166,9 +5241,9 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into commitments (
-            id, user_id, title, summary, status, source_kind, source_id, goal_id, approval_id, due_at, confidence, evidence, created_at, updated_at
+            id, user_id, title, summary, status, source_kind, source_id, goal_id, approval_id, due_at, actor_context, confidence, evidence, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14, $15)
           on conflict (id) do update
           set user_id = excluded.user_id,
               title = excluded.title,
@@ -5179,6 +5254,7 @@ class PostgresRepository implements AgenticRepository {
               goal_id = excluded.goal_id,
               approval_id = excluded.approval_id,
               due_at = excluded.due_at,
+              actor_context = excluded.actor_context,
               confidence = excluded.confidence,
               evidence = excluded.evidence,
               updated_at = excluded.updated_at
@@ -5194,6 +5270,7 @@ class PostgresRepository implements AgenticRepository {
           validated.goalId,
           validated.approvalId,
           validated.dueAt,
+          JSON.stringify(validated.actorContext),
           validated.confidence,
           JSON.stringify(validated.evidence),
           validated.createdAt,
@@ -5225,6 +5302,7 @@ class PostgresRepository implements AgenticRepository {
       timezone: row.timezone,
       focus: row.focus,
       schedules: row.schedules ?? defaultBriefingSchedules(),
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       createdAt: new Date(row.created_at).toISOString(),
       updatedAt: new Date(row.updated_at).toISOString()
     });
@@ -5249,6 +5327,7 @@ class PostgresRepository implements AgenticRepository {
       userId: row.user_id,
       mode: row.mode,
       debounceMinutes: Number(row.debounce_minutes),
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       createdAt: new Date(row.created_at).toISOString(),
       updatedAt: new Date(row.updated_at).toISOString()
     });
@@ -5278,6 +5357,7 @@ class PostgresRepository implements AgenticRepository {
     mode: AutopilotMode;
     summary: string;
     details?: Record<string, unknown>;
+    actorContext?: ActorContext | null;
     debounceMinutes: number;
   }): Promise<AutopilotEventClaim> {
     const userId = params.userId ?? SYSTEM_USER_ID;
@@ -5332,6 +5412,7 @@ class PostgresRepository implements AgenticRepository {
             idempotencyKey: trimmedKey,
             mode: params.mode,
             summary: params.summary,
+            actorContext: params.actorContext,
             details: {
               ...(params.details ?? {}),
               debouncedByEventId: recent.id
@@ -5355,6 +5436,7 @@ class PostgresRepository implements AgenticRepository {
         idempotencyKey: trimmedKey,
         mode: params.mode,
         summary: params.summary,
+        actorContext: params.actorContext,
         details: params.details
       });
 
@@ -5387,6 +5469,7 @@ class PostgresRepository implements AgenticRepository {
         source: row.source,
         sensitivity: row.sensitivity,
         permissions: row.permissions ?? [],
+        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
         reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
         createdAt: new Date(row.created_at).toISOString(),
@@ -5466,6 +5549,7 @@ class PostgresRepository implements AgenticRepository {
         sourceSystems: row.source_systems ?? [],
         status: row.status,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
+        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString()
       })
@@ -5485,9 +5569,9 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11, $12)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -5497,6 +5581,7 @@ class PostgresRepository implements AgenticRepository {
               source_systems = excluded.source_systems,
               status = excluded.status,
               expiry_at = excluded.expiry_at,
+              actor_context = excluded.actor_context,
               updated_at = excluded.updated_at
         `,
         [
@@ -5509,6 +5594,7 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(validated.sourceSystems),
           validated.status,
           validated.expiryAt,
+          JSON.stringify(validated.actorContext),
           validated.createdAt,
           validated.updatedAt
         ]
@@ -5532,6 +5618,7 @@ class PostgresRepository implements AgenticRepository {
         scopes: row.scopes ?? [],
         capabilities: row.capabilities ?? [],
         metadata: row.metadata ?? {},
+        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString()
       })
@@ -5682,9 +5769,9 @@ class PostgresRepository implements AgenticRepository {
     return merged.map((agent) => AgentDefinitionSchema.parse(clone(agent)));
   }
 
-  async getAgent(agentId: string): Promise<AgentDefinition | null> {
-    const agents = await this.listAgents(SYSTEM_USER_ID);
-    const agent = resolveAgentFromDefinitions(agents, agentId, SYSTEM_USER_ID);
+  async getAgent(agentId: string, userId = SYSTEM_USER_ID): Promise<AgentDefinition | null> {
+    const agents = await this.listAgents(userId);
+    const agent = resolveAgentFromDefinitions(agents, agentId, userId);
     return agent ? AgentDefinitionSchema.parse(clone(agent)) : null;
   }
 
@@ -5694,24 +5781,29 @@ class PostgresRepository implements AgenticRepository {
     return AgentDefinitionSchema.parse(clone(validated));
   }
 
-  async deleteAgent(agentId: string): Promise<void> {
-    const agent = await this.getAgent(agentId);
+  async deleteAgent(agentId: string, userId = SYSTEM_USER_ID): Promise<void> {
+    const agent = await this.getAgent(agentId, userId);
 
     if (agent?.isBuiltIn) {
       throw new Error("Cannot delete a built-in agent");
     }
 
+    if (!agent) {
+      return;
+    }
+
     await this.withTransaction(async (client) => {
-      await client.query("delete from agent_metrics where agent_id = $1", [agentId]);
-      await client.query("delete from agent_definitions where id = $1", [agentId]);
+      await client.query("delete from agent_metrics where agent_id = $1", [agent.id]);
+      await client.query("delete from agent_definitions where id = $1", [agent.id]);
     });
   }
 
   async getAgentMetrics(
     agentId: string,
-    period: "day" | "week" | "month" | "all" = "all"
+    period: "day" | "week" | "month" | "all" = "all",
+    userId = SYSTEM_USER_ID
   ): Promise<AgentMetrics | null> {
-    const agent = await this.getAgent(agentId);
+    const agent = await this.getAgent(agentId, userId);
 
     if (!agent) {
       return null;

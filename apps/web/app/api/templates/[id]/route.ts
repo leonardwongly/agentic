@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { GoalTemplateSchema, nowIso } from "@agentic/contracts";
 import { computeNextRun } from "@agentic/orchestrator";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
@@ -44,6 +45,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const { id } = await context.params;
     const templateId = TemplateIdSchema.parse(id);
     const body = await parseJsonBody(request, PatchScheduleSchema);
@@ -68,6 +70,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         lastRunAt: existing.schedule.lastRunAt,
         nextRunAt
       },
+      actorContext,
       updatedAt: nowIso()
     });
 

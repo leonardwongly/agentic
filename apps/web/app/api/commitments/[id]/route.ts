@@ -3,6 +3,7 @@ import { CommitmentSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { getSeededRepository } from "../../../../lib/server";
 
 const CommitmentIdSchema = z.string().trim().min(1).max(200);
@@ -21,6 +22,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const commitmentId = CommitmentIdSchema.parse(id);
     const body = await parseJsonBody(request, UpdateCommitmentSchema);
     const repository = await getSeededRepository();
+    const actorContext = createActorContextFromPrincipal(principal);
     const existing = await repository.getCommitment(commitmentId, principal.userId);
 
     if (!existing) {
@@ -41,6 +43,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const updated = CommitmentSchema.parse({
       ...existing,
       status: body.action === "complete" ? "completed" : "dismissed",
+      actorContext,
       updatedAt: nowIso()
     });
 

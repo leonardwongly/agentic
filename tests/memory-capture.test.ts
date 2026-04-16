@@ -1,5 +1,5 @@
-import { type GoalBundle } from "@agentic/contracts";
-import { captureExecutionOutcomeSignals } from "@agentic/orchestrator";
+import { createHumanActorContext, type GoalBundle } from "@agentic/contracts";
+import { captureExecutionOutcomeSignals, captureMemoriesFromBundle } from "@agentic/orchestrator";
 
 function buildBundle(): GoalBundle {
   return {
@@ -65,6 +65,7 @@ describe("captureExecutionOutcomeSignals", () => {
   });
 
   it("captures a summary memory and episodes for mixed execution outcomes", () => {
+    const actorContext = createHumanActorContext("user-1", "session-1");
     const captured = captureExecutionOutcomeSignals(buildBundle(), "user-1", [
       {
         taskId: "task-1",
@@ -82,11 +83,12 @@ describe("captureExecutionOutcomeSignals", () => {
         timestamp: "2024-01-01T00:02:00.000Z",
         kind: "execution.failed"
       }
-    ]);
+    ], actorContext);
 
     expect(captured.memories).toHaveLength(2);
     expect(captured.memories[0].content).toContain("1 succeeded, 1 failed or were skipped");
     expect(captured.memories[1].content).toContain("disk quota exceeded");
+    expect(captured.memories.every((memory) => memory.actorContext?.subjectUserId === "user-1")).toBe(true);
     expect(captured.episodes).toHaveLength(2);
     expect(captured.episodes[0].outcome).toBe("success");
     expect(captured.episodes[1].outcome).toBe("failure");
@@ -115,5 +117,16 @@ describe("captureExecutionOutcomeSignals", () => {
     expect(captured.memories[1].content.length).toBeLessThan(500);
     expect(String(captured.episodes[0].metadata?.detail).length).toBeLessThanOrEqual(220);
     expect(String(captured.episodes[0].metadata?.detail)).toContain("...");
+  });
+});
+
+describe("captureMemoriesFromBundle", () => {
+  it("propagates actor attribution onto auto-captured memory records", () => {
+    const actorContext = createHumanActorContext("user-1", "session-1");
+    const captured = captureMemoriesFromBundle(buildBundle(), "user-1", actorContext);
+
+    expect(captured.memories).toHaveLength(2);
+    expect(captured.memories.every((memory) => memory.actorContext?.subjectUserId === "user-1")).toBe(true);
+    expect(captured.episodes).toHaveLength(2);
   });
 });

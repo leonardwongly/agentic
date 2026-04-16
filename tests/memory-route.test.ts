@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
 import { createRepository } from "@agentic/repository";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -68,6 +68,7 @@ describe("memory update route", () => {
         reviewAt: string | null;
         expiryAt: string | null;
         memoryType: string;
+        actorContext: unknown;
       };
       dashboard: {
         diagnostics: {
@@ -79,10 +80,17 @@ describe("memory update route", () => {
     expect(response.status).toBe(200);
     expect(payload.memory.id).toBe(expiredMemory.id);
     expect(payload.memory.memoryType).toBe("observed");
+    expect(payload.memory.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.memory.expiryAt).toBeNull();
     expect(payload.memory.reviewAt).not.toBeNull();
     expect(Date.parse(payload.memory.reviewAt ?? "")).toBeGreaterThan(before);
     expect(payload.dashboard.diagnostics.items.some((item) => item.kind === "stale_memories")).toBe(false);
+
+    const reloadedRepository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const persisted = (await reloadedRepository.listMemory(SYSTEM_USER_ID)).find((memory) => memory.id === expiredMemory.id);
+    expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
   });
 
   it("returns 404 when updating another user's memory", async () => {

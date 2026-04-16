@@ -3,6 +3,7 @@ import { BriefingTypeSchema } from "@agentic/contracts";
 import { captureMemoriesFromBundle, generateBriefing } from "@agentic/orchestrator";
 import { requireApiSession } from "../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../lib/api-response";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../lib/server";
 
 const BriefingRequestSchema = z
@@ -52,6 +53,7 @@ async function resolveActiveWorkspaceContext(userId: string) {
 export async function POST(request: Request) {
   try {
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const { repository, workspaceId, workspaceGovernance } = await resolveActiveWorkspaceContext(principal.userId);
     const body = await parseBriefingRequest(request);
 
@@ -76,14 +78,14 @@ export async function POST(request: Request) {
       pendingApprovals,
       activeWatchers,
       preferences,
-      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
+      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", principal.userId)
     });
 
     await repository.saveGoalBundle(bundle);
 
     if (bundle.goal.status === "completed") {
       try {
-        const captured = captureMemoriesFromBundle(bundle, principal.userId);
+        const captured = captureMemoriesFromBundle(bundle, principal.userId, actorContext);
         const selfImprovement = await getSeededSelfImprovementRepository();
 
         await Promise.all([

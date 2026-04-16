@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createGoalTemplate } from "@agentic/orchestrator";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { requireApiSession } from "../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { getSeededRepository } from "../../../lib/server";
@@ -35,6 +36,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const body = await parseJsonBody(request, CreateTemplateSchema);
     const repository = await getSeededRepository();
 
@@ -47,7 +49,10 @@ export async function POST(request: Request) {
       schedule: body.schedule
     });
 
-    const saved = await repository.saveTemplate(template);
+    const saved = await repository.saveTemplate({
+      ...template,
+      actorContext
+    });
 
     return authenticatedJson({
       template: saved,

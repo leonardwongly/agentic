@@ -1,10 +1,12 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, briefingTypeValues } from "@agentic/contracts";
+import { SYSTEM_USER_ID, briefingTypeValues, createHumanActorContext, createSystemActorContext } from "@agentic/contracts";
 import { createRepository, type AgenticRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
+import { vi } from "vitest";
+import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { verifyGoalShareToken } from "../apps/web/lib/share";
 import { POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/route";
@@ -299,8 +301,50 @@ describe("goal share route", () => {
       goalId: bundle.goal.id
     });
     expect(createdLog).toBeDefined();
+    expect(createdLog?.details.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(JSON.stringify(createdLog?.details ?? {})).not.toContain(decodeURIComponent(token) ?? "");
     expectNoStoreHeaders(response);
+  });
+
+  it("stamps session actor context onto share creation logs", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const secondaryUserId = "user-secondary";
+
+    await repository.seedDefaults(secondaryUserId);
+    const bundle = await createGoalForUser(repository, secondaryUserId, "Share my current planning context with a reviewer.");
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: secondaryUserId,
+      sessionId: "session-secondary",
+      expiresAt: null
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    try {
+      const response = await goalShareRoute(
+        new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+          method: "POST"
+        }),
+        {
+          params: Promise.resolve({ id: bundle.goal.id })
+        }
+      );
+      const payload = (await response.json()) as { shareUrl: string };
+      const reloadedBundle = await createRepository({
+        storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+      }).getGoalBundle(bundle.goal.id);
+      const createdLog = reloadedBundle?.actionLogs.find((log) => log.kind === "share.link_created");
+
+      expect(response.status).toBe(200);
+      expect(payload.shareUrl).toContain("/share/");
+      expect(createdLog?.details.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
+      expectNoStoreHeaders(response);
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
   });
 
   it("rejects unauthenticated goal share requests", async () => {

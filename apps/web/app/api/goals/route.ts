@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { processUserRequest, captureMemoriesFromBundle } from "@agentic/orchestrator";
 import { requireApiSession } from "../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
 import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../lib/server";
@@ -43,6 +44,7 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const body = await parseJsonBody(request, GoalRequestSchema);
     const { repository, workspaceId, workspaceGovernance } = await resolveActiveWorkspaceContext(principal.userId);
     const [memories, integrations] = await Promise.all([
@@ -54,7 +56,7 @@ export async function POST(request: Request) {
     let agentDefinition = undefined;
     if (body.agentId) {
       try {
-        const agent = await repository.getAgent(body.agentId);
+        const agent = await repository.getAgent(body.agentId, principal.userId);
         agentDefinition = agent ?? undefined; // Convert null to undefined
       } catch {
         console.warn(`[goals] Agent ${body.agentId} not found, proceeding without override`);
@@ -69,14 +71,14 @@ export async function POST(request: Request) {
       memories,
       integrations,
       agentDefinition,
-      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
+      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", principal.userId)
     });
 
     await repository.saveGoalBundle(bundle);
 
     if (bundle.goal.status === "completed") {
       try {
-        const captured = captureMemoriesFromBundle(bundle, principal.userId);
+        const captured = captureMemoriesFromBundle(bundle, principal.userId, actorContext);
         const selfImprovement = await getSeededSelfImprovementRepository();
 
         await Promise.all([

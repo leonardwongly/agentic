@@ -100,6 +100,7 @@ export async function POST(request: Request) {
       const selection = WorkspaceSelectionSchema.parse({
         userId: principal.userId,
         workspaceId: workspace.id,
+        actorContext: actor,
         selectedAt: timestamp,
         updatedAt: timestamp
       });
@@ -130,6 +131,7 @@ export async function POST(request: Request) {
         WorkspaceSelectionSchema.parse({
           userId: principal.userId,
           workspaceId: body.workspaceId,
+          actorContext: actor,
           selectedAt: timestamp,
           updatedAt: timestamp
         })

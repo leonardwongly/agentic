@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { GoalTemplateSchema, nowIso } from "@agentic/contracts";
 import { processUserRequest, captureMemoriesFromBundle, interpolateTemplate, computeNextRun } from "@agentic/orchestrator";
+import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { requireApiSession } from "../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../../lib/api-response";
 import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../../lib/server";
@@ -10,6 +11,7 @@ const TemplateIdSchema = z.string().trim().min(1).max(200);
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const { id } = await context.params;
     const templateId = TemplateIdSchema.parse(id);
     const repository = await getSeededRepository();
@@ -39,7 +41,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       governance: workspaceGovernance,
       memories,
       integrations,
-      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
+      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", principal.userId)
     });
 
     await repository.saveGoalBundle(bundle);
@@ -56,6 +58,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         lastRunAt: nowIso(),
         nextRunAt
       },
+      actorContext,
       updatedAt: nowIso()
     });
 
@@ -64,7 +67,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     // Capture memories from completed goals
     if (bundle.goal.status === "completed") {
       try {
-        const captured = captureMemoriesFromBundle(bundle, principal.userId);
+        const captured = captureMemoriesFromBundle(bundle, principal.userId, actorContext);
         const selfImprovement = await getSeededSelfImprovementRepository();
 
         await Promise.all([

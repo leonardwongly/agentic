@@ -155,6 +155,7 @@ The first concrete local adapter is a notes provider that reads and writes Markd
 - Production automatically upgrades those controls to shared Postgres-backed state when `DATABASE_URL` is configured.
 - `AGENTIC_SHARED_AUTH_STATE=true` opts development and test into the shared Postgres-backed auth-state path.
 - `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` makes production fail closed if shared auth-state infrastructure is still unavailable.
+- Login throttling and unlock throttling ignore forwarded client-IP headers by default; set `AGENTIC_TRUST_PROXY_HEADERS=true` only when the app is deployed behind a trusted proxy that overwrites those headers.
 - External actions stay behind governance and approval checks unless a connector has earned a higher readiness tier.
 - Approval and execution evidence is persisted so operator-visible state matches what actually ran.
 - Telegram approval callbacks require the `x-telegram-bot-api-secret-token` header to match `TELEGRAM_WEBHOOK_SECRET`.

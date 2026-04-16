@@ -82,6 +82,7 @@ export async function POST(request: Request) {
     if (!actorUserId) {
       return NextResponse.json({ error: "Slack actor is not authorized for approvals." }, { status: 403 });
     }
+    const actorContext = createHumanActorContext(actorUserId);
 
     const approvalId = approvalToken.approvalId;
     const actionId = action.action_id;
@@ -115,7 +116,7 @@ export async function POST(request: Request) {
         return await repository.respondToApproval({
           approvalId,
           decision,
-          actor: createHumanActorContext(actorUserId),
+          actor: actorContext,
           scope: "once",
           rationale: null
         });
@@ -179,9 +180,10 @@ export async function POST(request: Request) {
       try {
         await persistCapturedMemories({
           repository,
-          captured: captureExecutionOutcomeSignals(updatedBundle, actorUserId, executionResults),
+          captured: captureExecutionOutcomeSignals(updatedBundle, actorUserId, executionResults, actorContext),
           goalId: updatedBundle.goal.id,
-          label: "slack-execution-capture"
+          label: "slack-execution-capture",
+          actorContext
         });
       } catch (captureError) {
         console.error("[slack-webhook][execution-capture] Failed to persist execution outcome signals:", captureError);
@@ -193,9 +195,10 @@ export async function POST(request: Request) {
       try {
         await persistCapturedMemories({
           repository,
-          captured: captureMemoriesFromBundle(updatedBundle, actorUserId),
+          captured: captureMemoriesFromBundle(updatedBundle, actorUserId, actorContext),
           goalId: updatedBundle.goal.id,
-          label: "slack-webhook][auto-capture"
+          label: "slack-webhook][auto-capture",
+          actorContext
         });
       } catch (captureError) {
         console.error("[slack-webhook][auto-capture] Failed to persist captured memories:", captureError);

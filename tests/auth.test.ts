@@ -18,6 +18,7 @@ import {
   getSessionUnlockRateLimitStatus,
   recordFailedSessionUnlockAttempt
 } from "../apps/web/lib/session-unlock-rate-limit";
+import { getRequestClientIdentity } from "../apps/web/lib/request-client-identity";
 import {
   resetSessionUnlockStateStoreForTesting,
   setSessionUnlockStateStoreForTesting,
@@ -28,6 +29,10 @@ import {
   resetAuthRuntimeStateWarningsForTesting,
   validateAuthRuntimeState
 } from "../apps/web/lib/auth-runtime-state";
+import {
+  createPostgresAuthSessionStateStore,
+  createPostgresSessionUnlockStateStore
+} from "../apps/web/lib/shared-auth-state-db";
 
 describe("auth helpers", () => {
   const originalKey = process.env.AGENTIC_ACCESS_KEY;
@@ -35,6 +40,13 @@ describe("auth helpers", () => {
   const originalRequireSharedAuthState = process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
   const originalDatabaseUrl = process.env.DATABASE_URL;
   const originalSharedAuthState = process.env.AGENTIC_SHARED_AUTH_STATE;
+  const originalTrustProxyHeaders = process.env.AGENTIC_TRUST_PROXY_HEADERS;
+  const databaseUrl = process.env.DATABASE_URL;
+  const postgresIt = databaseUrl ? it : it.skip;
+
+  function uniqueSharedStateKey(prefix: string): string {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalKey;
@@ -42,6 +54,7 @@ describe("auth helpers", () => {
     process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
     process.env.DATABASE_URL = originalDatabaseUrl;
     process.env.AGENTIC_SHARED_AUTH_STATE = originalSharedAuthState;
+    process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     resetAuthRuntimeStateWarningsForTesting();
     resetSessionUnlockStateStoreForTesting();
     resetAuthSessionStateStoreForTesting();
@@ -224,7 +237,6 @@ describe("auth helpers", () => {
     const request = new Request("http://localhost/api/session", {
       method: "POST",
       headers: {
-        "x-forwarded-for": "203.0.113.10",
         "user-agent": "vitest"
       }
     });
@@ -244,8 +256,64 @@ describe("auth helpers", () => {
     });
   });
 
+  it("ignores forwarded headers by default and falls back to a bounded user-agent key", () => {
+    const request = new Request("http://localhost/api/session", {
+      method: "POST",
+      headers: {
+        "x-forwarded-for": "203.0.113.10, 198.51.100.8",
+        "x-real-ip": "198.51.100.9",
+        "cf-connecting-ip": "198.51.100.10",
+        "user-agent": "  Agentic Test Client  "
+      }
+    });
+
+    expect(getRequestClientIdentity(request)).toEqual({
+      key: "ua:agentic test client",
+      source: "user-agent-fallback"
+    });
+  });
+
+  it("uses a canonical trusted proxy IP when proxy headers are explicitly trusted", () => {
+    process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+
+    const request = new Request("http://localhost/api/session", {
+      method: "POST",
+      headers: {
+        "x-forwarded-for": "203.0.113.10, 198.51.100.8",
+        "x-real-ip": "198.51.100.9",
+        "user-agent": "Agentic Test Client"
+      }
+    });
+
+    expect(getRequestClientIdentity(request)).toEqual({
+      key: "ip:203.0.113.10",
+      source: "trusted-ip"
+    });
+  });
+
+  it("falls back to user-agent bucketing when trusted forwarded headers are malformed", () => {
+    process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+
+    const request = new Request("http://localhost/api/session", {
+      method: "POST",
+      headers: {
+        "x-forwarded-for": "not-an-ip, 203.0.113.10",
+        "x-real-ip": "also-not-an-ip",
+        "user-agent": "Agentic Test Client"
+      }
+    });
+
+    expect(getRequestClientIdentity(request)).toEqual({
+      key: "ua:agentic test client",
+      source: "user-agent-fallback"
+    });
+  });
+
   it("supports swapping in a shared session unlock state store boundary", async () => {
-    const expectedKey = "203.0.113.19";
+    process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+
+    const forwardedIp = "203.0.113.19";
+    const expectedKey = `ip:${forwardedIp}`;
     const seenKeys: string[] = [];
     let throttledUntil: number | null = null;
 
@@ -287,7 +355,7 @@ describe("auth helpers", () => {
     const request = new Request("http://localhost/api/session", {
       method: "POST",
       headers: {
-        "x-forwarded-for": expectedKey
+        "x-forwarded-for": forwardedIp
       }
     });
 
@@ -323,7 +391,7 @@ describe("auth helpers", () => {
     const request = new Request("http://localhost/api/session", {
       method: "POST",
       headers: {
-        "x-forwarded-for": "203.0.113.11"
+        "user-agent": "Agentic Test Client"
       }
     });
 
@@ -414,6 +482,99 @@ describe("auth helpers", () => {
       sessionStateScope: "shared",
       unlockStateScope: "shared",
       sharedStateConfigured: true
+    });
+  });
+
+  postgresIt("shares session revocation across Postgres store instances and expires it deterministically", async () => {
+    process.env.DATABASE_URL = databaseUrl;
+
+    const primaryStore = createPostgresAuthSessionStateStore();
+    const secondaryStore = createPostgresAuthSessionStateStore();
+    const now = Date.now();
+    const sessionId = uniqueSharedStateKey("revoked-session");
+
+    await primaryStore.revokeSession(sessionId, now + 1_000);
+
+    await expect(primaryStore.isSessionRevoked(sessionId, now + 100)).resolves.toBe(true);
+    await expect(secondaryStore.isSessionRevoked(sessionId, now + 100)).resolves.toBe(true);
+    await expect(secondaryStore.isSessionRevoked(sessionId, now + 1_001)).resolves.toBe(false);
+    await expect(primaryStore.isSessionRevoked(sessionId, now + 1_001)).resolves.toBe(false);
+  });
+
+  postgresIt("applies shared session rate limiting atomically across Postgres-backed nodes", async () => {
+    process.env.DATABASE_URL = databaseUrl;
+
+    const primaryStore = createPostgresAuthSessionStateStore();
+    const secondaryStore = createPostgresAuthSessionStateStore();
+    const key = uniqueSharedStateKey("session-rate-limit");
+    const now = Date.now();
+
+    const attempts = await Promise.all(
+      Array.from({ length: 11 }, (_, index) =>
+        (index % 2 === 0 ? primaryStore : secondaryStore).checkRateLimit(key, now)
+      )
+    );
+
+    expect(attempts.filter((result) => result.allowed)).toHaveLength(10);
+    expect(attempts.filter((result) => !result.allowed)).toHaveLength(1);
+    expect(attempts.find((result) => !result.allowed)?.retryAfterMs).toBeGreaterThan(0);
+    await expect(primaryStore.checkRateLimit(key, now + 5 * 60_000 + 1)).resolves.toMatchObject({
+      allowed: true,
+      retryAfterMs: 0
+    });
+  });
+
+  postgresIt("throttles shared session unlock attempts atomically across Postgres-backed nodes", async () => {
+    process.env.DATABASE_URL = databaseUrl;
+
+    const primaryStore = createPostgresSessionUnlockStateStore();
+    const secondaryStore = createPostgresSessionUnlockStateStore();
+    const key = uniqueSharedStateKey("unlock-throttle");
+    const now = Date.now();
+
+    const attempts = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        (index % 2 === 0 ? primaryStore : secondaryStore).recordFailure(key, now)
+      )
+    );
+
+    expect(attempts.filter((result) => !result.throttled)).toHaveLength(4);
+    expect(attempts.filter((result) => result.throttled)).toHaveLength(1);
+    await expect(secondaryStore.getStatus(key, now + 1)).resolves.toMatchObject({
+      throttled: true
+    });
+    await expect(primaryStore.getStatus(key, now + 15 * 60_000 + 1)).resolves.toEqual({
+      throttled: false,
+      retryAfterSeconds: 0
+    });
+    await expect(primaryStore.recordFailure(key, now + 15 * 60_000 + 1)).resolves.toEqual({
+      throttled: false,
+      retryAfterSeconds: 0
+    });
+  });
+
+  postgresIt("resets the shared unlock failure window after inactivity without carrying stale attempts forward", async () => {
+    process.env.DATABASE_URL = databaseUrl;
+
+    const primaryStore = createPostgresSessionUnlockStateStore();
+    const secondaryStore = createPostgresSessionUnlockStateStore();
+    const key = uniqueSharedStateKey("unlock-window");
+    const now = Date.now();
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await expect((attempt % 2 === 0 ? primaryStore : secondaryStore).recordFailure(key, now + attempt)).resolves.toEqual({
+        throttled: false,
+        retryAfterSeconds: 0
+      });
+    }
+
+    await expect(secondaryStore.recordFailure(key, now + 10 * 60_000 + 1)).resolves.toEqual({
+      throttled: false,
+      retryAfterSeconds: 0
+    });
+    await expect(primaryStore.getStatus(key, now + 10 * 60_000 + 2)).resolves.toEqual({
+      throttled: false,
+      retryAfterSeconds: 0
     });
   });
 });

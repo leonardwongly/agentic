@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { getSeededRepository } from "../../../lib/server";
 
@@ -41,6 +42,7 @@ export async function POST(request: Request) {
     const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, SelectOperatorProductSchema);
     const repository = await getSeededRepository();
+    const actorContext = createActorContextFromPrincipal(principal);
     const products = await repository.listOperatorProducts(principal.userId);
     const selectedProduct = products.find((product) => product.id === body.operatorProductId);
 
@@ -58,6 +60,7 @@ export async function POST(request: Request) {
     const selection = await repository.saveOperatorProductSelection({
       userId: principal.userId,
       operatorProductId: selectedProduct.id,
+      actorContext,
       selectedAt:
         existingSelection?.operatorProductId === selectedProduct.id ? existingSelection.selectedAt : timestamp,
       updatedAt: timestamp

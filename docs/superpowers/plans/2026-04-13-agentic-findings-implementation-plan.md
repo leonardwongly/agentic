@@ -44,7 +44,7 @@ The current findings point to a product that has strong governance and control-p
 ## Phase 1: Immediate Trust and Safety
 
 Priority: P0
-Status: Partially implemented
+Status: Implemented
 Goal: remove the most dangerous “looks fine locally, breaks at scale” paths and improve approval clarity.
 
 ### Finding 1.1: Production runtime can silently fall back to a local file store
@@ -136,14 +136,16 @@ Security controls were implemented early with in-memory defaults.
 - Postgres-backed shared auth-state storage is done in code.
 - Production diagnostics and strict fail-closed configuration are done in code.
 - Development and test remain process-local by default unless `AGENTIC_SHARED_AUTH_STATE=true`.
-- Multi-node concurrency and TTL-focused contract tests remain a follow-up hardening item.
+- Multi-node concurrency and TTL-focused contract tests are now covered in the auth regression suite for Postgres-backed shared state when `DATABASE_URL` is configured.
+- Trusted client identity for login throttling and unlock throttling is now centralized behind a default-deny proxy-header policy.
+- Deployments that rely on trusted reverse proxies must opt in with `AGENTIC_TRUST_PROXY_HEADERS=true` so canonical forwarded client IPs are used consistently.
 
 ---
 
 ## Phase 2: Tenant-Safe Boundaries
 
 Priority: P0
-Status: In progress
+Status: Implemented
 Goal: remove hidden single-user assumptions from core execution paths.
 
 ### Finding 2.1: User-facing flows still depend on implicit `SYSTEM_USER_ID` defaults
@@ -179,10 +181,22 @@ The codebase evolved from a single-user MVP.
 - Authenticated write routes for approvals, workspaces, and governance now derive actor context at the boundary.
 - Approval history and evidence records now persist structured actor context alongside the legacy actor label.
 - Repository approval responses and workspace mutations now accept explicit actor context instead of implicit authenticated user defaults.
+- Watcher mutations and autopilot settings/events now persist structured actor context end to end across both the file-backed and Postgres-backed repositories.
+- Route-level regression coverage now verifies actor attribution for watcher writes and autopilot-triggered execution, including access-key, session, failure, and debounce paths.
+- Goal-template and workflow-template create/update/run flows now persist structured actor context end to end across contracts, routes, scheduled execution, and both repository backends.
+- Route-level regression coverage now verifies actor attribution for template CRUD/run surfaces and workflow-template create/update flows for both access-key and session principals.
+- Agent definition CRUD/import/export/metrics flows now enforce explicit user scoping and persist structured actor context across contracts, routes, and both repository backends.
+- Route-level and repository regression coverage now verify agent actor attribution, user-scoped fetch/delete semantics, and metrics resolution under both access-key and session principals.
+- Operator-product selection now persists structured actor context across the authenticated route boundary, contracts, seeded defaults, and both repository backends.
+- Route-level and repository regression coverage now verify operator-product selection attribution for authenticated writes.
+- Integration status updates now persist structured actor context across contracts, authenticated route boundaries, seeded defaults, and both repository backends.
+- Route-level and repository regression coverage now verify integration actor attribution for seeded defaults and authenticated writes.
+- Goal-share creation and goal-refinement action logs now persist structured actor context for both access-key and session principals.
+- Workspace selection now persists structured actor context across contracts, authenticated route boundaries, seeded defaults, migrations, and both repository backends.
+- Route-level and repository regression coverage now verify workspace-selection attribution and cross-user denial for goal share/refine mutations.
 - Remaining follow-up:
-  - expand actor-context coverage across the rest of the authenticated write surface
-  - remove remaining lower-level single-user assumptions outside the bounded Phase 2 slice
-  - add broader cross-workspace denial and audit-attribution regression coverage as more write paths migrate
+  - add broader cross-workspace denial and audit-attribution regression coverage as new authenticated execution surfaces are introduced
+  - revisit non-repository side-effect paths if they later need tenant-scoped audit persistence
 
 ---
 

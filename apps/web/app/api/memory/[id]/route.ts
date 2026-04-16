@@ -3,6 +3,7 @@ import { MemoryRecordSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { getSeededRepository } from "../../../../lib/server";
 
 const MemoryIdSchema = z.string().trim().min(1).max(200);
@@ -30,6 +31,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const memoryId = MemoryIdSchema.parse(id);
     const body = await parseJsonBody(request, UpdateMemorySchema);
     const repository = await getSeededRepository();
+    const actorContext = createActorContextFromPrincipal(principal);
     const memories = await repository.listMemory(principal.userId);
     const existing = memories.find((record) => record.id === memoryId);
 
@@ -44,6 +46,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       confidence: body.action === "confirm" ? Math.max(existing.confidence, 0.92) : existing.confidence,
       reviewAt: new Date(now + MEMORY_REVIEW_WINDOW_MS).toISOString(),
       expiryAt: buildReviewedMemoryExpiry(existing.expiryAt, now),
+      actorContext,
       updatedAt: nowIso()
     });
 

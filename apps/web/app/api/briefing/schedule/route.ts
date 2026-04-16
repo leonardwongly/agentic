@@ -7,6 +7,7 @@ import {
 } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { getSeededRepository } from "../../../../lib/server";
 
 const BriefingPreferencesUpdateSchema = z
@@ -32,12 +33,14 @@ export async function POST(request: Request) {
   try {
     const principal = await requireApiSession(request);
     const repository = await getSeededRepository();
+    const actorContext = createActorContextFromPrincipal(principal);
     const body = await parseJsonBody(request, BriefingPreferencesUpdateSchema);
     const current = await repository.getBriefingPreferences(principal.userId);
     const updated = BriefingPreferencesSchema.parse({
       ...current,
       ...body,
       userId: principal.userId,
+      actorContext,
       updatedAt: nowIso()
     });
 

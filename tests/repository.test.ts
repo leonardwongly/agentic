@@ -2,6 +2,8 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  AgentDefinitionSchema,
+  GoalTemplateSchema,
   SYSTEM_USER_ID,
   WatcherSchema,
   WorkspaceGovernanceSchema,
@@ -12,6 +14,7 @@ import {
   createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
+import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createRepository } from "@agentic/repository";
 import { generateBriefing, processUserRequest } from "@agentic/orchestrator";
 import { createMemoryRecord } from "@agentic/memory";
@@ -259,6 +262,77 @@ describe("repository", () => {
     await expectApprovalEvidenceCapture(repository, "rejected");
   });
 
+  postgresIt("persists agent actor attribution and enforces user scoping in Postgres when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+    const secondaryUserId = "user-secondary";
+    const createdAt = nowIso();
+    const agentId = `agent-actor-${Date.now()}`;
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(secondaryUserId);
+
+    const agent = await repository.saveAgent(
+      AgentDefinitionSchema.parse({
+        id: agentId,
+        userId: SYSTEM_USER_ID,
+        name: "private-ops-postgres",
+        displayName: "Private Ops Postgres",
+        description: "Handles private operational workflows.",
+        icon: "ops",
+        category: "custom",
+        tags: ["ops"],
+        systemPrompt: "Review operational signals and propose the next action plan.",
+        promptVariables: [],
+        artifactType: "summary",
+        behaviorConfig: {
+          temperature: 0.4,
+          maxTokens: 1200,
+          topP: 1,
+          frequencyPenalty: 0,
+          presencePenalty: 0,
+          responseStyle: "balanced",
+          formality: "professional"
+        },
+        allowedCapabilities: ["read", "search"],
+        blockedCapabilities: [],
+        maxRiskClass: "R2",
+        integrationPermissions: [],
+        memoryPermissions: [],
+        actorContext: systemActor,
+        isBuiltIn: false,
+        parentAgentId: null,
+        version: 1,
+        status: "active",
+        createdAt,
+        updatedAt: createdAt
+      })
+    );
+
+    const reloadedRepository = createRepository({
+      databaseUrl
+    });
+    const visible = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+    const hidden = await reloadedRepository.getAgent(agent.id, secondaryUserId);
+
+    await reloadedRepository.deleteAgent(agent.id, secondaryUserId);
+    const stillVisible = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+
+    await reloadedRepository.deleteAgent(agent.id, SYSTEM_USER_ID);
+    const deleted = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+
+    expect(visible).toMatchObject({
+      id: agent.id,
+      actorContext: systemActor
+    });
+    expect(hidden).toBeNull();
+    expect(stillVisible).toMatchObject({
+      id: agent.id
+    });
+    expect(deleted).toBeNull();
+  });
+
   it("derives agent scorecards from persisted goal execution history", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -462,6 +536,7 @@ describe("repository", () => {
     await repository.saveOperatorProductSelection({
       userId: SYSTEM_USER_ID,
       operatorProductId: customProduct.id,
+      actorContext: systemActor,
       selectedAt: nowIso(),
       updatedAt: nowIso()
     });
@@ -469,6 +544,7 @@ describe("repository", () => {
     const persistedSelection = await repository.getOperatorProductSelection(SYSTEM_USER_ID);
 
     expect(persistedSelection?.operatorProductId).toBe(customProduct.id);
+    expect(persistedSelection?.actorContext).toEqual(systemActor);
   });
 
   it("rejects watchers that reference missing goals", async () => {
@@ -524,6 +600,7 @@ describe("repository", () => {
         sourceSystems: ["calendar"],
         status: "active",
         expiryAt: null,
+        actorContext: systemActor,
         createdAt: nowIso(),
         updatedAt: nowIso()
       })
@@ -540,6 +617,7 @@ describe("repository", () => {
         sourceSystems: ["email"],
         status: "active",
         expiryAt: null,
+        actorContext: createSystemActorContext(secondaryUserId),
         createdAt: nowIso(),
         updatedAt: nowIso()
       })
@@ -554,9 +632,11 @@ describe("repository", () => {
 
     expect(primaryWatchers.some((watcher) => watcher.id === "watcher-primary")).toBe(true);
     expect(primaryWatchers.every((watcher) => watcher.goalId === primaryBundle.goal.id)).toBe(true);
+    expect(primaryWatchers[0]?.actorContext).toEqual(systemActor);
     expect(primaryWatchers.some((watcher) => watcher.id === "watcher-secondary")).toBe(false);
     expect(primaryDashboard.watchers.some((watcher) => watcher.id === "watcher-primary")).toBe(true);
     expect(primaryDashboard.watchers.every((watcher) => watcher.goalId === primaryBundle.goal.id)).toBe(true);
+    expect(primaryDashboard.watchers[0]?.actorContext).toEqual(systemActor);
     expect(primaryDashboard.watchers.some((watcher) => watcher.id === "watcher-secondary")).toBe(false);
     expect(unauthorizedGoalLookup).toEqual([]);
   });
@@ -1000,6 +1080,7 @@ describe("repository", () => {
       ...defaults,
       mode: "auto_run",
       debounceMinutes: 45,
+      actorContext: systemActor,
       updatedAt: nowIso()
     });
 
@@ -1008,15 +1089,18 @@ describe("repository", () => {
 
     expect(updated).toMatchObject({
       mode: "auto_run",
-      debounceMinutes: 45
+      debounceMinutes: 45,
+      actorContext: systemActor
     });
     expect(reloaded).toMatchObject({
       mode: "auto_run",
-      debounceMinutes: 45
+      debounceMinutes: 45,
+      actorContext: systemActor
     });
     expect(dashboard.autopilotSettings).toMatchObject({
       mode: "auto_run",
-      debounceMinutes: 45
+      debounceMinutes: 45,
+      actorContext: systemActor
     });
   });
 
@@ -1039,6 +1123,7 @@ describe("repository", () => {
       details: {
         watcherId: "watcher-vip-thread"
       },
+      actorContext: systemActor,
       debounceMinutes: 15
     });
 
@@ -1049,6 +1134,7 @@ describe("repository", () => {
       idempotencyKey: "watcher-vip-thread-1",
       mode: "draft_goal",
       summary: "Watcher triggered for a VIP thread",
+      actorContext: systemActor,
       debounceMinutes: 15
     });
 
@@ -1058,6 +1144,7 @@ describe("repository", () => {
       sourceId: "watcher-vip-thread",
       mode: "draft_goal",
       summary: "Watcher triggered again for the same source",
+      actorContext: systemActor,
       debounceMinutes: 15
     });
 
@@ -1069,7 +1156,8 @@ describe("repository", () => {
       sourceId: "watcher-vip-thread",
       status: "pending",
       mode: "draft_goal",
-      idempotencyKey: "watcher-vip-thread-1"
+      idempotencyKey: "watcher-vip-thread-1",
+      actorContext: systemActor
     });
 
     expect(duplicateClaim).toMatchObject({
@@ -1085,7 +1173,8 @@ describe("repository", () => {
       kind: "watcher_triggered",
       sourceId: "watcher-vip-thread",
       status: "debounced",
-      mode: "draft_goal"
+      mode: "draft_goal",
+      actorContext: systemActor
     });
     expect(debouncedClaim.event.details).toMatchObject({
       debouncedByEventId: firstClaim.event.id
@@ -1094,6 +1183,7 @@ describe("repository", () => {
 
     expect(events).toHaveLength(2);
     expect(events.map((event) => event.status).sort()).toEqual(["debounced", "pending"]);
+    expect(events.every((event) => event.actorContext?.subjectUserId === systemActor.subjectUserId)).toBe(true);
   });
 
   it("derives dashboard diagnostics for expired approvals, stale memories, stuck workflows, and orphan watchers", async () => {
@@ -1557,6 +1647,7 @@ describe("repository", () => {
             }
           : schedule
       ),
+      actorContext: systemActor,
       updatedAt: nowIso()
     });
 
@@ -1572,22 +1663,333 @@ describe("repository", () => {
 
     await repository.saveGoalBundle(briefingBundle);
 
+    const reloadedRepository = createRepository({
+      storePath
+    });
     const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const reloadedPreferences = await reloadedRepository.getBriefingPreferences(SYSTEM_USER_ID);
+    const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+      briefingPreferences: Array<{ userId: string; actorContext: unknown }>;
+    };
 
     expect(dashboard.briefingPreferences).toMatchObject({
       timezone: "America/New_York",
-      focus: "urgent"
+      focus: "urgent",
+      actorContext: systemActor
     });
     expect(dashboard.briefingPreferences.schedules.find((schedule) => schedule.type === "midday")).toMatchObject({
       enabled: true,
       time: "13:30"
     });
+    expect(reloadedPreferences.actorContext).toEqual(systemActor);
     expect(dashboard.briefingHistory[0]).toMatchObject({
       goalId: briefingBundle.goal.id,
       type: "midday",
       title: briefingBundle.goal.title,
       status: briefingBundle.goal.status
     });
+    expect(
+      persisted.briefingPreferences.some(
+        (candidate) =>
+          candidate.userId === SYSTEM_USER_ID &&
+          JSON.stringify(candidate.actorContext) === JSON.stringify(systemActor)
+      )
+    ).toBe(true);
+  });
+
+  it("persists workspace selection actor attribution across repository reloads", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const workspace = WorkspaceSchema.parse({
+      id: "workspace-collab",
+      ownerUserId: SYSTEM_USER_ID,
+      slug: "collab",
+      name: "Collab",
+      description: "Shared planning workspace.",
+      isPersonal: false,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+
+    await repository.saveWorkspace(workspace, systemActor);
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-member-collab-owner",
+        workspaceId: workspace.id,
+        userId: SYSTEM_USER_ID,
+        role: "owner",
+        joinedAt: nowIso(),
+        updatedAt: nowIso()
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceSelection(
+      WorkspaceSelectionSchema.parse({
+        userId: SYSTEM_USER_ID,
+        workspaceId: workspace.id,
+        actorContext: systemActor,
+        selectedAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+
+    const reloadedRepository = createRepository({
+      storePath
+    });
+    const reloadedSelection = await reloadedRepository.getWorkspaceSelection(SYSTEM_USER_ID);
+    const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+      workspaceSelections: Array<{ userId: string; actorContext: unknown; workspaceId: string }>;
+    };
+
+    expect(reloadedSelection).toMatchObject({
+      userId: SYSTEM_USER_ID,
+      workspaceId: workspace.id,
+      actorContext: systemActor
+    });
+    expect(
+      persisted.workspaceSelections.some(
+        (candidate) =>
+          candidate.userId === SYSTEM_USER_ID &&
+          candidate.workspaceId === workspace.id &&
+          JSON.stringify(candidate.actorContext) === JSON.stringify(systemActor)
+      )
+    ).toBe(true);
+  });
+
+  it("persists memory actor attribution across repository reloads", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const memory = createMemoryRecord({
+      userId: SYSTEM_USER_ID,
+      category: "preferences",
+      memoryType: "observed",
+      content: "Prefers concise approval summaries.",
+      confidence: 0.8,
+      source: "test-suite",
+      actorContext: systemActor
+    });
+
+    await repository.saveMemory(memory);
+
+    const reloadedRepository = createRepository({
+      storePath
+    });
+    const listed = await reloadedRepository.listMemory(SYSTEM_USER_ID);
+    const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+      memories: Array<{ id: string; actorContext: unknown }>;
+    };
+
+    expect(listed.find((candidate) => candidate.id === memory.id)).toMatchObject({
+      id: memory.id,
+      actorContext: systemActor
+    });
+    expect(
+      persisted.memories.some(
+        (candidate) =>
+          candidate.id === memory.id &&
+          JSON.stringify(candidate.actorContext) === JSON.stringify(systemActor)
+      )
+    ).toBe(true);
+  });
+
+  it("persists integration actor attribution across seeded defaults and updates", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const [seededIntegration] = await repository.listIntegrations(SYSTEM_USER_ID);
+
+    expect(seededIntegration).toMatchObject({
+      id: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)[0]?.id,
+      actorContext: systemActor
+    });
+
+    const updatedIntegration = await repository.upsertIntegration({
+      ...seededIntegration!,
+      status: "disabled",
+      actorContext: systemActor,
+      updatedAt: nowIso()
+    });
+
+    const reloadedRepository = createRepository({
+      storePath
+    });
+    const listed = await reloadedRepository.listIntegrations(SYSTEM_USER_ID);
+    const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+      integrations: Array<{ id: string; actorContext: unknown; status: string }>;
+    };
+
+    expect(updatedIntegration).toMatchObject({
+      id: seededIntegration!.id,
+      status: "disabled",
+      actorContext: systemActor
+    });
+    expect(listed.find((candidate) => candidate.id === seededIntegration!.id)).toMatchObject({
+      id: seededIntegration!.id,
+      status: "disabled",
+      actorContext: systemActor
+    });
+    expect(
+      persisted.integrations.some(
+        (candidate) =>
+          candidate.id === seededIntegration!.id &&
+          candidate.status === "disabled" &&
+          JSON.stringify(candidate.actorContext) === JSON.stringify(systemActor)
+      )
+    ).toBe(true);
+  });
+
+  it("persists commitment actor attribution across repository reloads", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const commitment = await repository.saveCommitment({
+      id: "commitment-actor-1",
+      userId: SYSTEM_USER_ID,
+      title: "Verify actor attribution",
+      summary: "Ensure commitments persist who updated them.",
+      status: "completed",
+      sourceKind: "goal",
+      sourceId: "goal-actor-1",
+      goalId: "goal-actor-1",
+      approvalId: null,
+      dueAt: null,
+      confidence: 0.94,
+      evidence: [
+        {
+          section: "goals",
+          itemId: "goal-actor-1",
+          label: "Verify actor attribution"
+        }
+      ],
+      actorContext: systemActor,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+
+    const reloadedRepository = createRepository({
+      storePath
+    });
+    const listed = await reloadedRepository.listCommitments(SYSTEM_USER_ID);
+    const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+      commitments: Array<{ id: string; actorContext: unknown }>;
+    };
+
+    expect(listed.find((candidate) => candidate.id === commitment.id)).toMatchObject({
+      id: commitment.id,
+      actorContext: systemActor
+    });
+    expect(
+      persisted.commitments.some(
+        (candidate) =>
+          candidate.id === commitment.id &&
+          JSON.stringify(candidate.actorContext) === JSON.stringify(systemActor)
+      )
+    ).toBe(true);
+  });
+
+  it("persists agent actor attribution and enforces user scoping across repository reloads", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const secondaryUserId = "user-secondary";
+    const createdAt = nowIso();
+    const agentId = `agent-actor-${Date.now()}`;
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(secondaryUserId);
+
+    const agent = await repository.saveAgent(
+      AgentDefinitionSchema.parse({
+        id: agentId,
+        userId: SYSTEM_USER_ID,
+        name: "private-ops",
+        displayName: "Private Ops",
+        description: "Handles private operational workflows.",
+        icon: "ops",
+        category: "custom",
+        tags: ["ops"],
+        systemPrompt: "Review operational signals and propose the next action plan.",
+        promptVariables: [],
+        artifactType: "summary",
+        behaviorConfig: {
+          temperature: 0.4,
+          maxTokens: 1200,
+          topP: 1,
+          frequencyPenalty: 0,
+          presencePenalty: 0,
+          responseStyle: "balanced",
+          formality: "professional"
+        },
+        allowedCapabilities: ["read", "search"],
+        blockedCapabilities: [],
+        maxRiskClass: "R2",
+        integrationPermissions: [],
+        memoryPermissions: [],
+        actorContext: systemActor,
+        isBuiltIn: false,
+        parentAgentId: null,
+        version: 1,
+        status: "active",
+        createdAt,
+        updatedAt: createdAt
+      })
+    );
+
+    const reloadedRepository = createRepository({
+      storePath
+    });
+    const visible = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+    const hidden = await reloadedRepository.getAgent(agent.id, secondaryUserId);
+    const persistedBeforeDelete = JSON.parse(await readFile(storePath, "utf8")) as {
+      agents: Array<{ id: string; actorContext: unknown }>;
+    };
+
+    await reloadedRepository.deleteAgent(agent.id, secondaryUserId);
+    const stillVisible = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+
+    await reloadedRepository.deleteAgent(agent.id, SYSTEM_USER_ID);
+    const deleted = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+
+    expect(visible).toMatchObject({
+      id: agent.id,
+      actorContext: systemActor
+    });
+    expect(hidden).toBeNull();
+    expect(
+      persistedBeforeDelete.agents.some(
+        (candidate) =>
+          candidate.id === agent.id &&
+          JSON.stringify(candidate.actorContext) === JSON.stringify(systemActor)
+      )
+    ).toBe(true);
+    expect(stillVisible).toMatchObject({
+      id: agent.id
+    });
+    expect(deleted).toBeNull();
   });
 
   it("persists workflow canvas templates across repository reloads", async () => {
@@ -1644,6 +2046,7 @@ describe("repository", () => {
           }
         }
       ],
+      actorContext: systemActor,
       createdAt,
       updatedAt: createdAt
     });
@@ -1662,10 +2065,12 @@ describe("repository", () => {
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({
       id: template.id,
-      name: "Morning ops sweep"
+      name: "Morning ops sweep",
+      actorContext: systemActor
     });
     expect(loaded).toMatchObject({
       id: template.id,
+      actorContext: systemActor,
       triggers: [
         expect.objectContaining({
           type: "schedule"
@@ -1673,5 +2078,58 @@ describe("repository", () => {
       ]
     });
     expect(persisted.workflowTemplates.some((candidate) => candidate.id === template.id)).toBe(true);
+  });
+
+  it("persists goal templates with actor attribution across repository reloads", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const createdAt = nowIso();
+    const template = await repository.saveTemplate(
+      GoalTemplateSchema.parse({
+        id: "goal-template-actor-1",
+        userId: SYSTEM_USER_ID,
+        name: "Daily inbox review",
+        description: "Review priority inbox items.",
+        request: "Review my inbox and prepare the next response plan.",
+        parameters: {},
+        schedule: {
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastRunAt: null,
+          nextRunAt: null
+        },
+        actorContext: systemActor,
+        createdAt,
+        updatedAt: createdAt
+      })
+    );
+
+    const reloadedRepository = createRepository({
+      storePath
+    });
+    const listed = await reloadedRepository.listTemplates(SYSTEM_USER_ID);
+    const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+      templates: Array<{ id: string; actorContext: unknown }>;
+    };
+
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      id: template.id,
+      actorContext: systemActor
+    });
+    expect(
+      persisted.templates.some(
+        (candidate) =>
+          candidate.id === template.id &&
+          JSON.stringify(candidate.actorContext) === JSON.stringify(systemActor)
+      )
+    ).toBe(true);
   });
 });

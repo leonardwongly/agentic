@@ -1,8 +1,10 @@
 import {
+  createSystemActorContext,
   GoalBundleSchema,
   TaskSchema,
   WorkflowStateSchema,
   nowIso,
+  type ActorContext,
   type AgentMetrics,
   type GoalBundle,
   type MemoryRecord,
@@ -194,11 +196,14 @@ export async function refineGoal(params: {
   bundle: GoalBundle;
   refinement: string;
   memories: MemoryRecord[];
+  actorContext?: ActorContext | null;
   resolveAgentMetrics?: (agentIdOrName: string) => Promise<AgentMetrics | null>;
   governance?: WorkspaceGovernance | null;
 }): Promise<GoalBundle> {
   const bundle = GoalBundleSchema.parse(params.bundle);
   const refinement = params.refinement.trim();
+  const actorContext = params.actorContext ?? createSystemActorContext(bundle.goal.userId);
+  const actorLabel = actorContext.executor.userId ?? actorContext.executor.label;
 
   if (!refinement) {
     throw new Error("A non-empty refinement message is required.");
@@ -222,11 +227,12 @@ export async function refineGoal(params: {
     createActionLog({
       goalId: bundle.goal.id,
       workflowId: bundle.workflow.id,
-      actor: "user",
+      actor: actorLabel,
       kind: "goal.refined",
       message: `User refinement: "${refinement.slice(0, 200)}"`,
       details: {
         refinement,
+        actorContext,
         changesDetected: {
           updatedCount: changes.updatedTasks.length,
           newCount: changes.newTasks.length,
@@ -258,7 +264,10 @@ export async function refineGoal(params: {
         actor: "orchestrator",
         kind: "task.updated",
         message: `Updated task "${update.title ?? tasks.find((t) => t.id === update.taskId)?.title ?? update.taskId}" per refinement.`,
-        details: { update }
+        details: {
+          update,
+          actorContext
+        }
       })
     );
   }
@@ -279,7 +288,10 @@ export async function refineGoal(params: {
           actor: "orchestrator",
           kind: "task.removed",
           message: `Removed task "${removed.title}" per refinement.`,
-          details: { taskId: removed.id }
+          details: {
+            taskId: removed.id,
+            actorContext
+          }
         })
       );
     }
@@ -327,7 +339,10 @@ export async function refineGoal(params: {
         actor: "policy",
         kind: "policy.evaluated",
         message: `Evaluated policy for new task "${nextTask.title}".`,
-        details: decision
+        details: {
+          ...decision,
+          actorContext
+        }
       })
     );
     logs.push(
@@ -341,7 +356,8 @@ export async function refineGoal(params: {
         details: {
           confidence: agentResult.confidence,
           executionMode: agentResult.executionMode,
-          nextSteps: agentResult.nextSteps
+          nextSteps: agentResult.nextSteps,
+          actorContext
         }
       })
     );
@@ -356,6 +372,7 @@ export async function refineGoal(params: {
       kind: "goal.refined",
       message: `Applied refinement to goal "${changes.goalTitleUpdate ?? bundle.goal.title}".`,
       details: {
+        actorContext,
         updatedTaskIds: changes.updatedTasks.map((u) => u.taskId),
         newTaskCount: changes.newTasks.length,
         removedTaskIds: changes.removedTaskIds

@@ -1,4 +1,4 @@
-import { nowIso, type GoalBundle, type MemoryRecord, type Task } from "@agentic/contracts";
+import { nowIso, type ActorContext, type GoalBundle, type MemoryRecord, type Task } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
 import { type EpisodeRecord, EpisodeRecordSchema } from "@agentic/self-improvement-memory";
 import type { ExecutionResult } from "./execution-dispatch";
@@ -19,7 +19,7 @@ function taskOutcome(task: Task): "success" | "partial" | "failure" {
   return "partial";
 }
 
-function extractCapabilityMemory(bundle: GoalBundle, userId: string): MemoryRecord | null {
+function extractCapabilityMemory(bundle: GoalBundle, userId: string, actorContext: ActorContext | null): MemoryRecord | null {
   const capabilities = new Set(bundle.tasks.flatMap((t) => t.toolCapabilities));
   if (capabilities.size === 0) return null;
 
@@ -33,11 +33,12 @@ function extractCapabilityMemory(bundle: GoalBundle, userId: string): MemoryReco
     content,
     confidence: 0.72,
     source: "auto-capture",
-    permissions: ["orchestrator", "workflow", "knowledge"]
+    permissions: ["orchestrator", "workflow", "knowledge"],
+    actorContext
   });
 }
 
-function extractOutcomeMemory(bundle: GoalBundle, userId: string): MemoryRecord | null {
+function extractOutcomeMemory(bundle: GoalBundle, userId: string, actorContext: ActorContext | null): MemoryRecord | null {
   const completedTasks = bundle.tasks.filter((t) => t.state === "completed");
   const blockedTasks = bundle.tasks.filter((t) => t.state === "blocked");
   const approvedCount = bundle.approvals.filter((a) => a.decision === "approved").length;
@@ -60,11 +61,12 @@ function extractOutcomeMemory(bundle: GoalBundle, userId: string): MemoryRecord 
     content: parts.join(" "),
     confidence: 0.78,
     source: "auto-capture",
-    permissions: ["orchestrator", "workflow", "knowledge"]
+    permissions: ["orchestrator", "workflow", "knowledge"],
+    actorContext
   });
 }
 
-function extractPreferenceSignals(bundle: GoalBundle, userId: string): MemoryRecord[] {
+function extractPreferenceSignals(bundle: GoalBundle, userId: string, actorContext: ActorContext | null): MemoryRecord[] {
   const memories: MemoryRecord[] = [];
 
   for (const approval of bundle.approvals) {
@@ -86,7 +88,8 @@ function extractPreferenceSignals(bundle: GoalBundle, userId: string): MemoryRec
       content,
       confidence: approval.decision === "approved" ? 0.75 : 0.82,
       source: "auto-capture",
-      permissions: ["orchestrator", "workflow", "knowledge", "communications"]
+      permissions: ["orchestrator", "workflow", "knowledge", "communications"],
+      actorContext
     }));
   }
 
@@ -141,7 +144,12 @@ function buildEpisodes(bundle: GoalBundle): EpisodeRecord[] {
   });
 }
 
-function extractExecutionOutcomeMemory(bundle: GoalBundle, userId: string, results: ExecutionResult[]): MemoryRecord | null {
+function extractExecutionOutcomeMemory(
+  bundle: GoalBundle,
+  userId: string,
+  results: ExecutionResult[],
+  actorContext: ActorContext | null
+): MemoryRecord | null {
   if (results.length === 0) return null;
 
   const successCount = results.filter((result) => result.success).length;
@@ -163,11 +171,17 @@ function extractExecutionOutcomeMemory(bundle: GoalBundle, userId: string, resul
     content: `Execution outcomes for goal "${bundle.goal.title}": ${successCount} succeeded, ${failureCount} failed or were skipped across ${results.length} action(s). Actions: ${actionSummary}.`,
     confidence: failureCount > 0 ? 0.9 : 0.82,
     source: "auto-capture",
-    permissions: ["orchestrator", "workflow", "knowledge", "communications"]
+    permissions: ["orchestrator", "workflow", "knowledge", "communications"],
+    actorContext
   });
 }
 
-function extractExecutionFailureMemories(bundle: GoalBundle, userId: string, results: ExecutionResult[]): MemoryRecord[] {
+function extractExecutionFailureMemories(
+  bundle: GoalBundle,
+  userId: string,
+  results: ExecutionResult[],
+  actorContext: ActorContext | null
+): MemoryRecord[] {
   return results.flatMap((result) => {
     if (result.success) return [];
 
@@ -181,7 +195,8 @@ function extractExecutionFailureMemories(bundle: GoalBundle, userId: string, res
       content: `Execution issue for "${taskLabel}" on goal "${bundle.goal.title}": ${result.action} failed or was skipped. Detail: ${summarizeExecutionDetail(result.detail)}`,
       confidence: 0.92,
       source: "auto-capture",
-      permissions: ["orchestrator", "workflow", "knowledge", "communications"]
+      permissions: ["orchestrator", "workflow", "knowledge", "communications"],
+      actorContext
     })];
   });
 }
@@ -223,33 +238,42 @@ function buildExecutionEpisodes(bundle: GoalBundle, results: ExecutionResult[]):
   });
 }
 
-export function captureMemoriesFromBundle(bundle: GoalBundle, userId: string): CapturedMemories {
+export function captureMemoriesFromBundle(
+  bundle: GoalBundle,
+  userId: string,
+  actorContext: ActorContext | null = null
+): CapturedMemories {
   const memories: MemoryRecord[] = [];
 
-  const capabilityMemory = extractCapabilityMemory(bundle, userId);
+  const capabilityMemory = extractCapabilityMemory(bundle, userId, actorContext);
   if (capabilityMemory) memories.push(capabilityMemory);
 
-  const outcomeMemory = extractOutcomeMemory(bundle, userId);
+  const outcomeMemory = extractOutcomeMemory(bundle, userId, actorContext);
   if (outcomeMemory) memories.push(outcomeMemory);
 
-  memories.push(...extractPreferenceSignals(bundle, userId));
+  memories.push(...extractPreferenceSignals(bundle, userId, actorContext));
 
   const episodes = buildEpisodes(bundle);
 
   return { memories, episodes };
 }
 
-export function captureExecutionOutcomeSignals(bundle: GoalBundle, userId: string, results: ExecutionResult[]): CapturedMemories {
+export function captureExecutionOutcomeSignals(
+  bundle: GoalBundle,
+  userId: string,
+  results: ExecutionResult[],
+  actorContext: ActorContext | null = null
+): CapturedMemories {
   if (results.length === 0) {
     return { memories: [], episodes: [] };
   }
 
   const memories: MemoryRecord[] = [];
-  const outcomeMemory = extractExecutionOutcomeMemory(bundle, userId, results);
+  const outcomeMemory = extractExecutionOutcomeMemory(bundle, userId, results, actorContext);
   if (outcomeMemory) {
     memories.push(outcomeMemory);
   }
-  memories.push(...extractExecutionFailureMemories(bundle, userId, results));
+  memories.push(...extractExecutionFailureMemories(bundle, userId, results, actorContext));
 
   return {
     memories,

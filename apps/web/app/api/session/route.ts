@@ -4,6 +4,7 @@ import { AGENTIC_SESSION_COOKIE, checkSessionRateLimit, clearSessionCookie, crea
 import { authenticatedError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
 import { validateAuthRuntimeState } from "../../../lib/auth-runtime-state";
+import { getRequestClientKey } from "../../../lib/request-client-identity";
 import {
   clearFailedSessionUnlockAttempts,
   getSessionUnlockRateLimitStatus,
@@ -21,7 +22,7 @@ export async function POST(request: Request) {
     requireJsonContentType(request);
     validateAuthRuntimeState();
 
-    const rateLimitKey = request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "unknown";
+    const rateLimitKey = getRequestClientKey(request);
     const rateLimit = await checkSessionRateLimit(rateLimitKey);
 
     if (!rateLimit.allowed) {

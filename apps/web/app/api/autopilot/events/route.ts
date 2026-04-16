@@ -8,6 +8,7 @@ import {
   GoalTemplateSchema,
   nowIso,
   type AutopilotEvent,
+  type ActorContext,
   type AutopilotMode,
   type BriefingType,
   type GoalBundle,
@@ -24,6 +25,7 @@ import {
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
 import { requireApiSession } from "../../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../lib/server";
 import type { AgenticRepository } from "@agentic/repository";
 
@@ -47,6 +49,7 @@ function buildPendingEvent(params: {
   summary: string;
   details?: Record<string, unknown>;
   idempotencyKey?: string | null;
+  actorContext: ActorContext;
 }): AutopilotEvent {
   return AutopilotEventSchema.parse({
     id: crypto.randomUUID(),
@@ -58,6 +61,7 @@ function buildPendingEvent(params: {
     summary: params.summary,
     status: "pending",
     details: params.details ?? {},
+    actorContext: params.actorContext,
     createdAt: nowIso(),
     processedAt: null,
     resultGoalId: null,
@@ -146,13 +150,18 @@ function summarizeExecutionFailure(createdAt: string, processedAt: string): Reco
   };
 }
 
-async function persistCapturedMemories(repository: AgenticRepository, bundle: GoalBundle, userId: string) {
+async function persistCapturedMemories(
+  repository: AgenticRepository,
+  bundle: GoalBundle,
+  userId: string,
+  actorContext: ActorContext
+) {
   if (bundle.goal.status !== "completed") {
     return;
   }
 
   try {
-    const captured = captureMemoriesFromBundle(bundle, userId);
+    const captured = captureMemoriesFromBundle(bundle, userId, actorContext);
     const selfImprovement = await getSeededSelfImprovementRepository();
 
     await Promise.all([
@@ -231,7 +240,8 @@ async function executeWatcherEvent(
   repository: AgenticRepository,
   watcher: Watcher,
   goal: GoalBundle,
-  userId: string
+  userId: string,
+  actorContext: ActorContext
 ): Promise<GoalBundle> {
   const [memories, integrations] = await Promise.all([
     repository.listMemory(userId),
@@ -245,15 +255,20 @@ async function executeWatcherEvent(
     request: buildWatcherAutopilotRequest(watcher),
     memories,
     integrations,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
   });
 
   await repository.saveGoalBundle(bundle);
-  await persistCapturedMemories(repository, bundle, userId);
+  await persistCapturedMemories(repository, bundle, userId, actorContext);
   return bundle;
 }
 
-async function executeTemplateEvent(repository: AgenticRepository, template: GoalTemplate, userId: string): Promise<GoalBundle> {
+async function executeTemplateEvent(
+  repository: AgenticRepository,
+  template: GoalTemplate,
+  userId: string,
+  actorContext: ActorContext
+): Promise<GoalBundle> {
   const [memories, integrations] = await Promise.all([
     repository.listMemory(userId),
     repository.listIntegrations(userId)
@@ -266,7 +281,7 @@ async function executeTemplateEvent(repository: AgenticRepository, template: Goa
     request: interpolateTemplate(template),
     memories,
     integrations,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
   });
 
   await repository.saveGoalBundle(bundle);
@@ -281,14 +296,20 @@ async function executeTemplateEvent(repository: AgenticRepository, template: Goa
             ? computeNextRun(template.schedule.cron, template.schedule.timezone)
             : null
       },
+      actorContext,
       updatedAt: nowIso()
     })
   );
-  await persistCapturedMemories(repository, bundle, userId);
+  await persistCapturedMemories(repository, bundle, userId, actorContext);
   return bundle;
 }
 
-async function executeBriefingEvent(repository: AgenticRepository, type: BriefingType, userId: string): Promise<GoalBundle> {
+async function executeBriefingEvent(
+  repository: AgenticRepository,
+  type: BriefingType,
+  userId: string,
+  actorContext: ActorContext
+): Promise<GoalBundle> {
   const [preferences, memories, integrations, approvals, watchers] = await Promise.all([
     repository.getBriefingPreferences(userId),
     repository.listMemory(userId),
@@ -307,11 +328,11 @@ async function executeBriefingEvent(repository: AgenticRepository, type: Briefin
     integrations,
     pendingApprovals: approvals.filter((approval) => approval.decision === "pending"),
     activeWatchers: watchers.filter((watcher) => watcher.status === "active"),
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all")
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
   });
 
   await repository.saveGoalBundle(bundle);
-  await persistCapturedMemories(repository, bundle, userId);
+  await persistCapturedMemories(repository, bundle, userId, actorContext);
   return bundle;
 }
 
@@ -319,6 +340,7 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const repository = await getSeededRepository();
     const settings = await repository.getAutopilotSettings(principal.userId);
     const body = await parseJsonBody(request, TriggerAutopilotEventSchema);
@@ -352,7 +374,8 @@ export async function POST(request: Request) {
               watcherId: watcher.id,
               dryRun: true
             },
-            idempotencyKey: body.idempotencyKey
+            idempotencyKey: body.idempotencyKey,
+            actorContext
           }),
           status: "simulated"
         });
@@ -382,7 +405,8 @@ export async function POST(request: Request) {
               templateId: template.id,
               dryRun: true
             },
-            idempotencyKey: body.idempotencyKey
+            idempotencyKey: body.idempotencyKey,
+            actorContext
           }),
           status: "simulated"
         });
@@ -412,7 +436,8 @@ export async function POST(request: Request) {
               briefingType: type,
               dryRun: true
             },
-            idempotencyKey: body.idempotencyKey
+            idempotencyKey: body.idempotencyKey,
+            actorContext
           }),
           status: "simulated"
         });
@@ -433,6 +458,7 @@ export async function POST(request: Request) {
       mode: effectiveMode,
       summary,
       details: body.details,
+      actorContext,
       debounceMinutes: settings.debounceMinutes
     });
 
@@ -472,13 +498,13 @@ export async function POST(request: Request) {
 
       if (body.kind === "watcher_triggered") {
         const { watcher, goal } = await resolveWatcherSource(body.sourceId, principal.userId);
-        bundle = await executeWatcherEvent(repository, watcher, goal, principal.userId);
+        bundle = await executeWatcherEvent(repository, watcher, goal, principal.userId, actorContext);
       } else if (body.kind === "template_due") {
         const { template } = await resolveTemplateSource(body.sourceId, principal.userId);
-        bundle = await executeTemplateEvent(repository, template, principal.userId);
+        bundle = await executeTemplateEvent(repository, template, principal.userId, actorContext);
       } else {
         const { type } = await resolveBriefingSource(body.sourceId, principal.userId);
-        bundle = await executeBriefingEvent(repository, type, principal.userId);
+        bundle = await executeBriefingEvent(repository, type, principal.userId, actorContext);
       }
 
       const processedAt = nowIso();

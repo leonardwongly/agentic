@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AutopilotSettingsSchema, AutopilotModeSchema, nowIso } from "@agentic/contracts";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireApiSession } from "../../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 
 import { getSeededRepository } from "../../../../lib/server";
 
@@ -27,6 +28,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const principal = await requireApiSession(request);
+    const actorContext = createActorContextFromPrincipal(principal);
     const repository = await getSeededRepository();
     const body = await parseJsonBody(request, UpdateAutopilotSettingsSchema);
 
@@ -40,6 +42,7 @@ export async function POST(request: Request) {
         ...current,
         ...body,
         userId: principal.userId,
+        actorContext,
         updatedAt: nowIso()
       })
     );

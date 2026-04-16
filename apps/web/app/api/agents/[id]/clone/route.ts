@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AgentDefinitionSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
 import { getSeededRepository } from "../../../../../lib/server";
 
@@ -24,9 +25,10 @@ export async function POST(request: Request, { params }: RouteParams) {
     const { id } = await params;
     const body = await parseJsonBody(request, CloneAgentSchema);
     const repository = await getSeededRepository();
-    const source = await repository.getAgent(id);
+    const actorContext = createActorContextFromPrincipal(principal);
+    const source = await repository.getAgent(id, principal.userId);
 
-    if (!source || (!source.isBuiltIn && source.userId !== principal.userId)) {
+    if (!source) {
       return authenticatedJson({ error: "Source agent not found" }, { status: 404 });
     }
 
@@ -41,6 +43,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       parentAgentId: source.id,
       version: 1,
       status: "draft",
+      actorContext,
       createdAt: now,
       updatedAt: now
     });

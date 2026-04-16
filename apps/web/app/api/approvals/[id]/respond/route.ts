@@ -144,9 +144,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       try {
         const persisted = await persistCapturedMemories({
           repository,
-          captured: captureExecutionOutcomeSignals(updatedBundle, principal.userId, executionResults),
+          captured: captureExecutionOutcomeSignals(updatedBundle, principal.userId, executionResults, actor),
           goalId: updatedBundle.goal.id,
-          label: "execution-capture"
+          label: "execution-capture",
+          actorContext: actor
         });
         capturedMemoryIds.push(...persisted.memories.map((memory) => memory.id));
       } catch (captureError) {
@@ -158,9 +159,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       try {
         const persisted = await persistCapturedMemories({
           repository,
-          captured: captureMemoriesFromBundle(updatedBundle, principal.userId),
+          captured: captureMemoriesFromBundle(updatedBundle, principal.userId, actor),
           goalId: updatedBundle.goal.id,
-          label: "auto-capture"
+          label: "auto-capture",
+          actorContext: actor
         });
         capturedMemoryIds.push(...persisted.memories.map((memory) => memory.id));
       } catch (captureError) {

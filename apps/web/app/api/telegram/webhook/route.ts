@@ -112,6 +112,7 @@ export async function POST(request: Request) {
       await acknowledgeTelegramCallback(callbackQuery.id, "You are not authorized for this approval.", true);
       return NextResponse.json({ ok: true, skipped: true, reason: "unauthorized_actor" });
     }
+    const actorContext = createHumanActorContext(actorUserId);
 
     const repository = await getSeededRepository();
     const actorBundle = await repository.getGoalBundleForUser(action.goalId, actorUserId);
@@ -138,7 +139,7 @@ export async function POST(request: Request) {
         return await repository.respondToApproval({
           approvalId: action.approvalId,
           decision: action.decision,
-          actor: createHumanActorContext(actorUserId),
+          actor: actorContext,
           scope: "once",
           rationale: null
         });
@@ -202,9 +203,10 @@ export async function POST(request: Request) {
       try {
         await persistCapturedMemories({
           repository,
-          captured: captureExecutionOutcomeSignals(updatedBundle, actorUserId, executionResults),
+          captured: captureExecutionOutcomeSignals(updatedBundle, actorUserId, executionResults, actorContext),
           goalId: updatedBundle.goal.id,
-          label: "telegram-execution-capture"
+          label: "telegram-execution-capture",
+          actorContext
         });
       } catch (error) {
         console.error("[telegram-webhook][execution-capture] Failed to persist execution outcome signals:", error);
@@ -215,9 +217,10 @@ export async function POST(request: Request) {
       try {
         await persistCapturedMemories({
           repository,
-          captured: captureMemoriesFromBundle(updatedBundle, actorUserId),
+          captured: captureMemoriesFromBundle(updatedBundle, actorUserId, actorContext),
           goalId: updatedBundle.goal.id,
-          label: "telegram-auto-capture"
+          label: "telegram-auto-capture",
+          actorContext
         });
       } catch (error) {
         console.error("[telegram-webhook][auto-capture] Failed to persist captured memories:", error);

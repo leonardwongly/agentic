@@ -9,6 +9,7 @@ import {
   nowIso
 } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
+import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
 
@@ -46,9 +47,9 @@ export async function GET(request: Request, { params }: RouteParams) {
     const principal = await requireApiSession(request);
     const { id } = await params;
     const repository = await getSeededRepository();
-    const agent = await repository.getAgent(id);
+    const agent = await repository.getAgent(id, principal.userId);
 
-    if (!agent || (!agent.isBuiltIn && agent.userId !== principal.userId)) {
+    if (!agent) {
       return authenticatedJson({ error: "Agent not found" }, { status: 404 });
     }
 
@@ -64,9 +65,10 @@ export async function PUT(request: Request, { params }: RouteParams) {
     const { id } = await params;
     const body = await parseJsonBody(request, UpdateAgentSchema);
     const repository = await getSeededRepository();
-    const existing = await repository.getAgent(id);
+    const actorContext = createActorContextFromPrincipal(principal);
+    const existing = await repository.getAgent(id, principal.userId);
 
-    if (!existing || (!existing.isBuiltIn && existing.userId !== principal.userId)) {
+    if (!existing) {
       return authenticatedJson({ error: "Agent not found" }, { status: 404 });
     }
 
@@ -90,6 +92,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
       blockedCapabilities: body.blockedCapabilities ?? existing.blockedCapabilities,
       maxRiskClass: body.maxRiskClass ?? existing.maxRiskClass,
       status: body.status ?? existing.status,
+      actorContext,
       version: existing.version + 1,
       updatedAt: nowIso()
     });
@@ -110,9 +113,9 @@ export async function DELETE(request: Request, { params }: RouteParams) {
     const principal = await requireApiSession(request);
     const { id } = await params;
     const repository = await getSeededRepository();
-    const existing = await repository.getAgent(id);
+    const existing = await repository.getAgent(id, principal.userId);
 
-    if (!existing || (!existing.isBuiltIn && existing.userId !== principal.userId)) {
+    if (!existing) {
       return authenticatedJson({ error: "Agent not found" }, { status: 404 });
     }
 
@@ -120,7 +123,7 @@ export async function DELETE(request: Request, { params }: RouteParams) {
       return authenticatedJson({ error: "Cannot delete a built-in agent" }, { status: 403 });
     }
 
-    await repository.deleteAgent(id);
+    await repository.deleteAgent(id, principal.userId);
 
     return authenticatedJson({
       success: true,

@@ -16,6 +16,11 @@ import { POST as watchersRoute } from "../apps/web/app/api/watchers/route";
 import { PATCH as watcherUpdateRoute } from "../apps/web/app/api/watchers/[id]/route";
 import { POST as workflowTemplatesRoute } from "../apps/web/app/api/workflow-templates/route";
 import { POST as workspacesRoute } from "../apps/web/app/api/workspaces/route";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import { resetSessionUnlockRateLimit } from "../apps/web/lib/session-unlock-rate-limit";
 import {
   buildAuthorizedJsonRequest,
@@ -44,6 +49,7 @@ describe("api request validation", () => {
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
   const originalNodeEnv = process.env.NODE_ENV;
   const originalRequireSharedAuthState = process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
+  const originalTrustProxyHeaders = process.env.AGENTIC_TRUST_PROXY_HEADERS;
 
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
@@ -60,9 +66,11 @@ describe("api request validation", () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
+    process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     await resetSessionUnlockRateLimit();
+    resetAuthSessionStateStoreForTesting();
   });
 
   it.each([
@@ -446,6 +454,93 @@ describe("api request validation", () => {
     );
 
     expect(response.status).toBe(200);
+    expectNoStoreHeaders(response);
+  });
+
+  it("ignores spoofed forwarding headers for session login throttling by default", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(`check:${key}`);
+        return { allowed: true, retryAfterMs: 0 };
+      },
+      async clearRateLimit(key) {
+        seenKeys.push(`clear:${key}`);
+      },
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await sessionRoute(
+      new Request("http://localhost/api/session", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": "203.0.113.77",
+          "x-real-ip": "198.51.100.9",
+          "user-agent": "Agentic Route Test"
+        },
+        body: JSON.stringify({
+          accessKey: "test-access-key"
+        })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(seenKeys).toEqual([
+      "check:ua:agentic route test",
+      "clear:ua:agentic route test"
+    ]);
+    expectNoStoreHeaders(response);
+  });
+
+  it("uses the trusted forwarded client IP for session login throttling when proxy trust is enabled", async () => {
+    process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(`check:${key}`);
+        return { allowed: true, retryAfterMs: 0 };
+      },
+      async clearRateLimit(key) {
+        seenKeys.push(`clear:${key}`);
+      },
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await sessionRoute(
+      new Request("http://localhost/api/session", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": "203.0.113.77, 198.51.100.9",
+          "user-agent": "Agentic Route Test"
+        },
+        body: JSON.stringify({
+          accessKey: "test-access-key"
+        })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(seenKeys).toEqual([
+      "check:ip:203.0.113.77",
+      "clear:ip:203.0.113.77"
+    ]);
     expectNoStoreHeaders(response);
   });
 

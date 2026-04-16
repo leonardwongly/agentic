@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, nowIso } from "@agentic/contracts";
+import { SYSTEM_USER_ID, createSystemActorContext, nowIso } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { GET as operatorProductsRouteGet, POST as operatorProductsRoutePost } from "../apps/web/app/api/operator-products/route";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -50,6 +50,7 @@ describe("operator products route", () => {
     expectNoStoreHeaders(response);
     expect(payload.products.some((product) => product.slug === "communications-operator")).toBe(true);
     expect(payload.selection).not.toBeNull();
+    expect(payload.selection?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.agents.some((agent) => agent.id === "agent-builtin-communications")).toBe(true);
     expect(Array.isArray(payload.templates)).toBe(true);
   });
@@ -80,14 +81,17 @@ describe("operator products route", () => {
       })
     );
     const payload = (await response.json()) as {
-      selection: { operatorProductId: string };
+      selection: { operatorProductId: string; actorContext: unknown };
       products: Array<{ id: string }>;
     };
+    const persistedSelection = await repository.getOperatorProductSelection(SYSTEM_USER_ID);
 
     expect(response.status).toBe(200);
     expectNoStoreHeaders(response);
     expect(payload.selection.operatorProductId).toBe("operator-product-custom");
+    expect(payload.selection.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.products.some((product) => product.id === "operator-product-custom")).toBe(true);
+    expect(persistedSelection?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
   });
 
   it("returns 404 when selecting another user's custom operator product", async () => {
