@@ -34,12 +34,16 @@ import {
   GoalSchema,
   GoalTemplateSchema,
   IntegrationAccountSchema,
+  EncryptedSecretEnvelopeSchema,
   JobKindSchema,
   JobRecordSchema,
   JobStatusSchema,
   MemoryRecordSchema,
   OperatorProductSchema,
   OperatorProductSelectionSchema,
+  ProviderCredentialSchema,
+  ProviderCredentialSecretKindSchema,
+  ProviderCredentialSecretRecordSchema,
   SYSTEM_USER_ID,
   TaskSchema,
   WatcherSchema,
@@ -72,6 +76,10 @@ import {
   type GoalBundle,
   type GoalTemplate,
   type IntegrationAccount,
+  type Provider,
+  type ProviderCredential,
+  type ProviderCredentialSecretKind,
+  type ProviderCredentialSecretRecord,
   type JobKind,
   type JobRecord,
   type JobStatus,
@@ -123,6 +131,8 @@ const RuntimeStoreSchema = z.object({
   evidenceRecords: z.array(EvidenceRecordSchema).default([]),
   watchers: z.array(WatcherSchema),
   integrations: z.array(IntegrationAccountSchema),
+  providerCredentials: z.array(ProviderCredentialSchema).default([]),
+  providerCredentialSecrets: z.array(ProviderCredentialSecretRecordSchema).default([]),
   artifacts: z.array(ArtifactSchema),
   workspaces: z.array(WorkspaceSchema).default([]),
   workspaceMembers: z.array(WorkspaceMemberSchema).default([]),
@@ -369,6 +379,15 @@ export type AgenticRepository = {
   saveWatcher(watcher: Watcher): Promise<Watcher>;
   listIntegrations(userId?: string): Promise<IntegrationAccount[]>;
   upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount>;
+  listProviderCredentials(userId?: string): Promise<ProviderCredential[]>;
+  getProviderCredential(credentialId: string, userId?: string): Promise<ProviderCredential | null>;
+  saveProviderCredential(credential: ProviderCredential): Promise<ProviderCredential>;
+  getProviderCredentialSecret(
+    credentialId: string,
+    kind: ProviderCredentialSecretKind,
+    userId?: string
+  ): Promise<ProviderCredentialSecretRecord | null>;
+  saveProviderCredentialSecret(record: ProviderCredentialSecretRecord): Promise<ProviderCredentialSecretRecord>;
   listTemplates(userId?: string): Promise<GoalTemplate[]>;
   saveTemplate(template: GoalTemplate): Promise<GoalTemplate>;
   deleteTemplate(templateId: string): Promise<void>;
@@ -417,6 +436,8 @@ function createEmptyStore(): RuntimeStore {
     actionLogs: [],
     watchers: [],
     integrations: [],
+    providerCredentials: [],
+    providerCredentialSecrets: [],
     artifacts: [],
     workspaces: [],
     workspaceMembers: [],
@@ -444,6 +465,80 @@ function upsertById<T extends { id: string }>(items: T[], nextItem: T): T[] {
 function upsertByKey<T>(items: T[], nextItem: T, getKey: (item: T) => string): T[] {
   const nextKey = getKey(nextItem);
   return [...items.filter((item) => getKey(item) !== nextKey), nextItem];
+}
+
+function integrationStoreKey(account: Pick<IntegrationAccount, "id" | "userId">): string {
+  return `${account.userId}:${account.id}`;
+}
+
+function providerCredentialStoreKey(credential: Pick<ProviderCredential, "id" | "userId">): string {
+  return `${credential.userId}:${credential.id}`;
+}
+
+function providerCredentialSecretStoreKey(
+  record: Pick<ProviderCredentialSecretRecord, "credentialId" | "kind" | "userId">
+): string {
+  return `${record.userId}:${record.credentialId}:${record.kind}`;
+}
+
+const GOOGLE_MANAGED_INTEGRATION_IDS = ["gmail", "google-calendar"] as const;
+
+function buildGoogleManagedIntegrationStatus(status: ProviderCredential["status"]): IntegrationAccount["status"] {
+  return status === "connected" ? "ready" : "manual";
+}
+
+function buildGoogleManagedIntegrationMetadata(credential: ProviderCredential): Record<string, unknown> {
+  return {
+    provider: "google",
+    managed: true,
+    providerCredentialId: credential.id,
+    providerCredentialStatus: credential.status,
+    workspaceId: credential.workspaceId,
+    accountId: credential.accountId,
+    accountEmail: credential.accountEmail,
+    displayName: credential.displayName
+  };
+}
+
+function syncGoogleManagedIntegrations(
+  integrations: IntegrationAccount[],
+  credential: ProviderCredential
+): IntegrationAccount[] {
+  if (credential.provider !== "google") {
+    return integrations;
+  }
+
+  const defaults = buildDefaultIntegrationAccounts(credential.userId);
+  let nextIntegrations = [...integrations];
+
+  for (const integrationId of GOOGLE_MANAGED_INTEGRATION_IDS) {
+    const defaultIntegration = defaults.find((candidate) => candidate.id === integrationId);
+
+    if (!defaultIntegration) {
+      continue;
+    }
+
+    const existing =
+      nextIntegrations.find((candidate) => candidate.userId === credential.userId && candidate.id === integrationId) ?? null;
+
+    const managedIntegration = IntegrationAccountSchema.parse({
+      ...(existing ?? defaultIntegration),
+      userId: credential.userId,
+      status: buildGoogleManagedIntegrationStatus(credential.status),
+      metadata: {
+        ...defaultIntegration.metadata,
+        ...(existing?.metadata ?? {}),
+        ...buildGoogleManagedIntegrationMetadata(credential)
+      },
+      actorContext: credential.actorContext,
+      createdAt: existing?.createdAt ?? defaultIntegration.createdAt,
+      updatedAt: credential.updatedAt
+    });
+
+    nextIntegrations = upsertByKey(nextIntegrations, managedIntegration, integrationStoreKey);
+  }
+
+  return nextIntegrations;
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {
@@ -3216,9 +3311,68 @@ class FileRepository implements AgenticRepository {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const validated = IntegrationAccountSchema.parse(account);
-      store.integrations = upsertById(store.integrations, validated);
+      store.integrations = upsertByKey(store.integrations, validated, integrationStoreKey);
       await this.writeStore(store);
       return IntegrationAccountSchema.parse(clone(validated));
+    });
+  }
+
+  async listProviderCredentials(userId = SYSTEM_USER_ID): Promise<ProviderCredential[]> {
+    const store = await this.readStore();
+    return [...store.providerCredentials]
+      .filter((credential) => credential.userId === userId)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map((credential) => ProviderCredentialSchema.parse(clone(credential)));
+  }
+
+  async getProviderCredential(credentialId: string, userId = SYSTEM_USER_ID): Promise<ProviderCredential | null> {
+    const store = await this.readStore();
+    const credential = store.providerCredentials.find((candidate) => candidate.id === credentialId && candidate.userId === userId);
+    return credential ? ProviderCredentialSchema.parse(clone(credential)) : null;
+  }
+
+  async saveProviderCredential(credential: ProviderCredential): Promise<ProviderCredential> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const validated = ProviderCredentialSchema.parse(credential);
+      store.providerCredentials = upsertByKey(store.providerCredentials, validated, providerCredentialStoreKey);
+      store.integrations = syncGoogleManagedIntegrations(store.integrations, validated);
+      await this.writeStore(store);
+      return ProviderCredentialSchema.parse(clone(validated));
+    });
+  }
+
+  async getProviderCredentialSecret(
+    credentialId: string,
+    kind: ProviderCredentialSecretKind,
+    userId = SYSTEM_USER_ID
+  ): Promise<ProviderCredentialSecretRecord | null> {
+    const store = await this.readStore();
+    const record = store.providerCredentialSecrets.find(
+      (candidate) => candidate.credentialId === credentialId && candidate.kind === kind && candidate.userId === userId
+    );
+    return record ? ProviderCredentialSecretRecordSchema.parse(clone(record)) : null;
+  }
+
+  async saveProviderCredentialSecret(record: ProviderCredentialSecretRecord): Promise<ProviderCredentialSecretRecord> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const validated = ProviderCredentialSecretRecordSchema.parse(record);
+      const credential = store.providerCredentials.find(
+        (candidate) => candidate.id === validated.credentialId && candidate.userId === validated.userId
+      );
+
+      if (!credential) {
+        throw new Error(`Provider credential ${validated.credentialId} was not found for user ${validated.userId}.`);
+      }
+
+      store.providerCredentialSecrets = upsertByKey(
+        store.providerCredentialSecrets,
+        validated,
+        providerCredentialSecretStoreKey
+      );
+      await this.writeStore(store);
+      return ProviderCredentialSecretRecordSchema.parse(clone(validated));
     });
   }
 
@@ -3613,9 +3767,8 @@ class PostgresRepository implements AgenticRepository {
           id, user_id, name, system, status, scopes, capabilities, metadata, actor_context, created_at, updated_at
         )
         values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11)
-        on conflict (id) do update
-        set user_id = excluded.user_id,
-            name = excluded.name,
+        on conflict (user_id, id) do update
+        set name = excluded.name,
             system = excluded.system,
             status = excluded.status,
             scopes = excluded.scopes,
@@ -3636,6 +3789,103 @@ class PostgresRepository implements AgenticRepository {
         JSON.stringify(integration.actorContext),
         integration.createdAt,
         integration.updatedAt
+      ]
+    );
+  }
+
+  private async saveProviderCredentialWithClient(client: PoolClient, credential: ProviderCredential): Promise<void> {
+    const validated = ProviderCredentialSchema.parse(credential);
+    await client.query(
+      `
+        insert into provider_credentials (
+          id,
+          user_id,
+          workspace_id,
+          provider,
+          account_id,
+          account_email,
+          display_name,
+          status,
+          scopes,
+          last_validated_at,
+          last_rotated_at,
+          last_refresh_at,
+          last_refresh_failure_at,
+          reconnect_required_at,
+          revoked_at,
+          expires_at,
+          metadata,
+          actor_context,
+          created_at,
+          updated_at
+        )
+        values (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb, $19, $20
+        )
+        on conflict (user_id, id) do update
+        set workspace_id = excluded.workspace_id,
+            provider = excluded.provider,
+            account_id = excluded.account_id,
+            account_email = excluded.account_email,
+            display_name = excluded.display_name,
+            status = excluded.status,
+            scopes = excluded.scopes,
+            last_validated_at = excluded.last_validated_at,
+            last_rotated_at = excluded.last_rotated_at,
+            last_refresh_at = excluded.last_refresh_at,
+            last_refresh_failure_at = excluded.last_refresh_failure_at,
+            reconnect_required_at = excluded.reconnect_required_at,
+            revoked_at = excluded.revoked_at,
+            expires_at = excluded.expires_at,
+            metadata = excluded.metadata,
+            actor_context = excluded.actor_context,
+            updated_at = excluded.updated_at
+      `,
+      [
+        validated.id,
+        validated.userId,
+        validated.workspaceId,
+        validated.provider,
+        validated.accountId,
+        validated.accountEmail,
+        validated.displayName,
+        validated.status,
+        JSON.stringify(validated.scopes),
+        validated.lastValidatedAt,
+        validated.lastRotatedAt,
+        validated.lastRefreshAt,
+        validated.lastRefreshFailureAt,
+        validated.reconnectRequiredAt,
+        validated.revokedAt,
+        validated.expiresAt,
+        JSON.stringify(validated.metadata),
+        JSON.stringify(validated.actorContext),
+        validated.createdAt,
+        validated.updatedAt
+      ]
+    );
+
+  }
+
+  private async saveProviderCredentialSecretWithClient(client: PoolClient, record: ProviderCredentialSecretRecord): Promise<void> {
+    const validated = ProviderCredentialSecretRecordSchema.parse(record);
+    await client.query(
+      `
+        insert into provider_credential_secrets (
+          credential_id, user_id, kind, secret, created_at, updated_at
+        )
+        values ($1, $2, $3, $4::jsonb, $5, $6)
+        on conflict (user_id, credential_id, kind) do update
+        set secret = excluded.secret,
+            updated_at = excluded.updated_at
+      `,
+      [
+        validated.credentialId,
+        validated.userId,
+        validated.kind,
+        JSON.stringify(validated.secret),
+        validated.createdAt,
+        validated.updatedAt
       ]
     );
   }
@@ -6218,6 +6468,149 @@ class PostgresRepository implements AgenticRepository {
   async upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount> {
     await this.withTransaction((client) => this.saveIntegrationWithClient(client, account));
     return IntegrationAccountSchema.parse(clone(account));
+  }
+
+  async listProviderCredentials(userId = SYSTEM_USER_ID): Promise<ProviderCredential[]> {
+    await this.ready;
+    const result = await this.pool.query(
+      "select * from provider_credentials where user_id = $1 order by updated_at desc, created_at desc",
+      [userId]
+    );
+
+    return result.rows.map((row) =>
+      ProviderCredentialSchema.parse({
+        id: row.id,
+        userId: row.user_id,
+        workspaceId: row.workspace_id,
+        provider: row.provider,
+        accountId: row.account_id,
+        accountEmail: row.account_email,
+        displayName: row.display_name,
+        status: row.status,
+        scopes: row.scopes ?? [],
+        lastValidatedAt: row.last_validated_at ? new Date(row.last_validated_at).toISOString() : null,
+        lastRotatedAt: row.last_rotated_at ? new Date(row.last_rotated_at).toISOString() : null,
+        lastRefreshAt: row.last_refresh_at ? new Date(row.last_refresh_at).toISOString() : null,
+        lastRefreshFailureAt: row.last_refresh_failure_at ? new Date(row.last_refresh_failure_at).toISOString() : null,
+        reconnectRequiredAt: row.reconnect_required_at ? new Date(row.reconnect_required_at).toISOString() : null,
+        revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : null,
+        expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
+        metadata: row.metadata ?? {},
+        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        createdAt: new Date(row.created_at).toISOString(),
+        updatedAt: new Date(row.updated_at).toISOString()
+      })
+    );
+  }
+
+  async getProviderCredential(credentialId: string, userId = SYSTEM_USER_ID): Promise<ProviderCredential | null> {
+    await this.ready;
+    const result = await this.pool.query("select * from provider_credentials where user_id = $1 and id = $2 limit 1", [
+      userId,
+      credentialId
+    ]);
+    const row = result.rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return ProviderCredentialSchema.parse({
+      id: row.id,
+      userId: row.user_id,
+      workspaceId: row.workspace_id,
+      provider: row.provider,
+      accountId: row.account_id,
+      accountEmail: row.account_email,
+      displayName: row.display_name,
+      status: row.status,
+      scopes: row.scopes ?? [],
+      lastValidatedAt: row.last_validated_at ? new Date(row.last_validated_at).toISOString() : null,
+      lastRotatedAt: row.last_rotated_at ? new Date(row.last_rotated_at).toISOString() : null,
+      lastRefreshAt: row.last_refresh_at ? new Date(row.last_refresh_at).toISOString() : null,
+      lastRefreshFailureAt: row.last_refresh_failure_at ? new Date(row.last_refresh_failure_at).toISOString() : null,
+      reconnectRequiredAt: row.reconnect_required_at ? new Date(row.reconnect_required_at).toISOString() : null,
+      revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : null,
+      expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
+      metadata: row.metadata ?? {},
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      createdAt: new Date(row.created_at).toISOString(),
+      updatedAt: new Date(row.updated_at).toISOString()
+    });
+  }
+
+  async saveProviderCredential(credential: ProviderCredential): Promise<ProviderCredential> {
+    const validated = ProviderCredentialSchema.parse(credential);
+    await this.withTransaction(async (client) => {
+      await this.saveProviderCredentialWithClient(client, validated);
+      const existingIntegrations = await client.query("select * from integration_accounts where user_id = $1", [validated.userId]);
+      const managedIntegrations = syncGoogleManagedIntegrations(
+        existingIntegrations.rows.map((row) =>
+          IntegrationAccountSchema.parse({
+            id: row.id,
+            userId: row.user_id,
+            name: row.name,
+            system: row.system,
+            status: row.status,
+            scopes: row.scopes ?? [],
+            capabilities: row.capabilities ?? [],
+            metadata: row.metadata ?? {},
+            actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+            createdAt: new Date(row.created_at).toISOString(),
+            updatedAt: new Date(row.updated_at).toISOString()
+          })
+        ),
+        validated
+      ).filter((integration) => integration.userId === validated.userId && GOOGLE_MANAGED_INTEGRATION_IDS.includes(integration.id as (typeof GOOGLE_MANAGED_INTEGRATION_IDS)[number]));
+
+      for (const integration of managedIntegrations) {
+        await this.saveIntegrationWithClient(client, integration);
+      }
+    });
+    return ProviderCredentialSchema.parse(clone(validated));
+  }
+
+  async getProviderCredentialSecret(
+    credentialId: string,
+    kind: ProviderCredentialSecretKind,
+    userId = SYSTEM_USER_ID
+  ): Promise<ProviderCredentialSecretRecord | null> {
+    await this.ready;
+    const result = await this.pool.query(
+      "select * from provider_credential_secrets where user_id = $1 and credential_id = $2 and kind = $3 limit 1",
+      [userId, credentialId, kind]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return ProviderCredentialSecretRecordSchema.parse({
+      credentialId: row.credential_id,
+      userId: row.user_id,
+      kind: row.kind,
+      secret: EncryptedSecretEnvelopeSchema.parse(row.secret),
+      createdAt: new Date(row.created_at).toISOString(),
+      updatedAt: new Date(row.updated_at).toISOString()
+    });
+  }
+
+  async saveProviderCredentialSecret(record: ProviderCredentialSecretRecord): Promise<ProviderCredentialSecretRecord> {
+    const validated = ProviderCredentialSecretRecordSchema.parse(record);
+    await this.withTransaction(async (client) => {
+      const credential = await client.query("select 1 from provider_credentials where user_id = $1 and id = $2 limit 1", [
+        validated.userId,
+        validated.credentialId
+      ]);
+
+      if (credential.rowCount === 0) {
+        throw new Error(`Provider credential ${validated.credentialId} was not found for user ${validated.userId}.`);
+      }
+
+      await this.saveProviderCredentialSecretWithClient(client, validated);
+    });
+    return ProviderCredentialSecretRecordSchema.parse(clone(validated));
   }
 
   async listTemplates(userId = SYSTEM_USER_ID): Promise<GoalTemplate[]> {

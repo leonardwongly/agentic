@@ -41,6 +41,18 @@ export function authenticatedJson<T>(body: T, init?: ResponseInit) {
   });
 }
 
+export function authenticatedRedirect(url: string | URL, init?: ResponseInit & { status?: number }) {
+  return NextResponse.redirect(url, {
+    ...init,
+    headers: mergeHeaders(init, {
+      "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
+      Pragma: "no-cache",
+      Expires: "0",
+      Vary: "Cookie, X-Agentic-Access-Key"
+    })
+  });
+}
+
 export function authenticatedError(status: number, error: string) {
   return authenticatedJson({ error }, { status });
 }

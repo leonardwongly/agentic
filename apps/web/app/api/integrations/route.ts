@@ -46,6 +46,13 @@ export async function POST(request: Request) {
       throw new ApiRouteError(404, `Integration ${body.id} was not found.`);
     }
 
+    if (existing.metadata.provider === "google" && existing.metadata.managed === true) {
+      throw new ApiRouteError(
+        409,
+        `Integration ${body.id} is managed by Google provider credentials and cannot be toggled manually.`
+      );
+    }
+
     const integration = IntegrationAccountSchema.parse({
       ...existing,
       status: body.status,

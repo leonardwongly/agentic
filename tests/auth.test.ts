@@ -1,12 +1,14 @@
 import {
   AGENTIC_SESSION_COOKIE,
   AGENTIC_ACCESS_KEY_HEADER,
+  buildOAuthStateToken,
   buildSessionToken,
   checkSessionRateLimit,
   clearSessionCookie,
   createSessionCookie,
   getAuthMode,
   isAuthorizedSessionToken,
+  parseAuthorizedOAuthStateToken,
   parseAuthorizedSessionToken,
   requireApiSession,
   revokeSessionToken,
@@ -89,6 +91,49 @@ describe("auth helpers", () => {
 
     await expect(isAuthorizedSessionToken(firstToken)).resolves.toBe(false);
     await expect(isAuthorizedSessionToken(secondToken)).resolves.toBe(true);
+  });
+
+  it("issues signed OAuth state tokens scoped to the expected user and workspace", () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.NODE_ENV = "test";
+
+    const token = buildOAuthStateToken({
+      userId: "user-primary",
+      workspaceId: "workspace-123"
+    });
+    const parsed = parseAuthorizedOAuthStateToken(token, "user-primary");
+
+    expect(parsed).toMatchObject({
+      userId: "user-primary",
+      workspaceId: "workspace-123"
+    });
+    expect(parsed?.nonce).toBeTruthy();
+  });
+
+  it("rejects tampered OAuth state signatures", () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.NODE_ENV = "test";
+
+    const token = buildOAuthStateToken({
+      userId: "user-primary",
+      workspaceId: "workspace-123"
+    });
+    const [payload, signature] = token.split(".");
+    const tampered = `${payload}.${signature.slice(0, -1)}${signature.endsWith("a") ? "b" : "a"}`;
+
+    expect(parseAuthorizedOAuthStateToken(tampered, "user-primary")).toBeNull();
+  });
+
+  it("rejects OAuth state tokens presented for the wrong user", () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.NODE_ENV = "test";
+
+    const token = buildOAuthStateToken({
+      userId: "user-primary",
+      workspaceId: null
+    });
+
+    expect(parseAuthorizedOAuthStateToken(token, "user-secondary")).toBeNull();
   });
 
   it("supports swapping in a shared auth session state store boundary", async () => {

@@ -1,7 +1,5 @@
 import { CapabilitySchema, IntegrationAccountSchema, nowIso, type Capability, type IntegrationAccount } from "@agentic/contracts";
 import { defaultLocalNotesBasePath, ensureLocalNotesDirectory, seedLocalNotes } from "./local-notes";
-import { isGmailReady } from "./gmail";
-import { isCalendarReady } from "./google-calendar";
 import { isSlackReady } from "./slack";
 import { isTelegramReady } from "./telegram";
 
@@ -20,17 +18,25 @@ export const integrationTemplates: IntegrationTemplate[] = [
     key: "gmail",
     name: "Gmail Adapter",
     system: "email",
-    status: isGmailReady() ? "ready" : "manual",
+    status: "manual",
     scopes: ["messages.read", "messages.draft", "messages.send"],
-    capabilities: ["read", "search", "draft", "send"]
+    capabilities: ["read", "search", "draft", "send"],
+    metadata: {
+      provider: "google",
+      managed: true
+    }
   },
   {
     key: "google-calendar",
     name: "Google Calendar Adapter",
     system: "calendar",
-    status: isCalendarReady() ? "ready" : "manual",
+    status: "manual",
     scopes: ["calendar.read", "calendar.write"],
-    capabilities: ["read", "search", "schedule", "update"]
+    capabilities: ["read", "search", "schedule", "update"],
+    metadata: {
+      provider: "google",
+      managed: true
+    }
   },
   {
     key: "mock-tasks",
@@ -206,6 +212,8 @@ export function callWithCapabilityCheck<T>(
 
 export * from "./gmail";
 export * from "./google-calendar";
+export * from "./google-oauth";
+export * from "./provider-credential-secrets";
 export * from "./readiness";
 export * from "./slack";
 export * from "./telegram";

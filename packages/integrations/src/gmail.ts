@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { z } from "zod";
+import { createGoogleOAuthClient } from "./google-oauth";
 
 const EmailMessageSchema = z.object({
   id: z.string(),
@@ -26,22 +27,18 @@ const DraftResultSchema = z.object({
 
 export type DraftResult = z.infer<typeof DraftResultSchema>;
 
-function getOAuth2Client() {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+function getOAuth2Client(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
+  const normalizedRefreshToken = refreshToken?.trim();
 
-  if (!clientId || !clientSecret || !refreshToken) {
+  if (!normalizedRefreshToken) {
     return null;
   }
 
-  const oauth2 = new google.auth.OAuth2(clientId, clientSecret);
-  oauth2.setCredentials({ refresh_token: refreshToken });
-  return oauth2;
+  return createGoogleOAuthClient({ refreshToken: normalizedRefreshToken });
 }
 
-function getGmailClient() {
-  const auth = getOAuth2Client();
+function getGmailClient(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
+  const auth = getOAuth2Client(refreshToken);
   if (!auth) return null;
   return google.gmail({ version: "v1", auth });
 }
@@ -75,91 +72,146 @@ export function isGmailReady(): boolean {
   return getOAuth2Client() !== null;
 }
 
-export async function listRecentEmails(maxResults = 10, query?: string): Promise<EmailMessage[]> {
-  const gmail = getGmailClient();
-  if (!gmail) throw new Error("Gmail not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN.");
+export type GmailAdapter = {
+  listRecentEmails: (maxResults?: number, query?: string) => Promise<EmailMessage[]>;
+  searchEmails: (query: string, maxResults?: number) => Promise<EmailMessage[]>;
+  createDraft: (params: { to: string; subject: string; body: string; threadId?: string }) => Promise<DraftResult>;
+  sendDraft: (draftId: string) => Promise<{ messageId: string }>;
+};
 
-  const listResponse = await gmail.users.messages.list({
-    userId: "me",
-    maxResults,
-    q: query ?? "in:inbox"
-  });
+export function createGmailAdapter(params: { refreshToken: string }): GmailAdapter {
+  const getClient = () => {
+    const gmail = getGmailClient(params.refreshToken);
 
-  const messageIds = listResponse.data.messages ?? [];
-  const messages: EmailMessage[] = [];
+    if (!gmail) {
+      throw new Error("Gmail not configured.");
+    }
 
-  for (const msg of messageIds.slice(0, maxResults)) {
-    const detail = await gmail.users.messages.get({
+    return gmail;
+  };
+
+  const listMessages = async (maxResults = 10, query?: string) => {
+    const gmail = getClient();
+
+    const listResponse = await gmail.users.messages.list({
       userId: "me",
-      id: msg.id!,
-      format: "full"
+      maxResults,
+      q: query ?? "in:inbox"
     });
 
-    const headers = (detail.data.payload?.headers ?? []) as Array<{ name: string; value: string }>;
-    const body = extractBody(detail.data.payload);
+    const messageIds = listResponse.data.messages ?? [];
+    const messages: EmailMessage[] = [];
 
-    messages.push(EmailMessageSchema.parse({
-      id: detail.data.id!,
-      threadId: detail.data.threadId!,
-      from: extractHeader(headers, "From"),
-      to: extractHeader(headers, "To"),
-      subject: extractHeader(headers, "Subject"),
-      snippet: detail.data.snippet ?? "",
-      body: body.slice(0, 2000),
-      date: extractHeader(headers, "Date"),
-      isUnread: (detail.data.labelIds ?? []).includes("UNREAD"),
-      labels: detail.data.labelIds ?? []
-    }));
+    for (const msg of messageIds.slice(0, maxResults)) {
+      const detail = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id!,
+        format: "full"
+      });
+
+      const headers = (detail.data.payload?.headers ?? []) as Array<{ name: string; value: string }>;
+      const body = extractBody(detail.data.payload);
+
+      messages.push(EmailMessageSchema.parse({
+        id: detail.data.id!,
+        threadId: detail.data.threadId!,
+        from: extractHeader(headers, "From"),
+        to: extractHeader(headers, "To"),
+        subject: extractHeader(headers, "Subject"),
+        snippet: detail.data.snippet ?? "",
+        body: body.slice(0, 2000),
+        date: extractHeader(headers, "Date"),
+        isUnread: (detail.data.labelIds ?? []).includes("UNREAD"),
+        labels: detail.data.labelIds ?? []
+      }));
+    }
+
+    return messages;
+  };
+
+  return {
+    listRecentEmails: listMessages,
+    async searchEmails(query: string, maxResults = 10) {
+      return listMessages(maxResults, query);
+    },
+    async createDraft(paramsDraft: { to: string; subject: string; body: string; threadId?: string }) {
+      const gmail = getClient();
+      const rawMessage = [
+        `To: ${paramsDraft.to}`,
+        `Subject: ${paramsDraft.subject}`,
+        "Content-Type: text/plain; charset=utf-8",
+        "",
+        paramsDraft.body
+      ].join("\r\n");
+
+      const encodedMessage = Buffer.from(rawMessage).toString("base64url");
+
+      const response = await gmail.users.drafts.create({
+        userId: "me",
+        requestBody: {
+          message: {
+            raw: encodedMessage,
+            threadId: paramsDraft.threadId ?? undefined
+          }
+        }
+      });
+
+      return DraftResultSchema.parse({
+        id: response.data.id!,
+        threadId: paramsDraft.threadId ?? null,
+        to: paramsDraft.to,
+        subject: paramsDraft.subject,
+        body: paramsDraft.body
+      });
+    },
+    async sendDraft(draftId: string) {
+      const gmail = getClient();
+      const response = await gmail.users.drafts.send({
+        userId: "me",
+        requestBody: { id: draftId }
+      });
+
+      return { messageId: response.data.id! };
+    }
+  };
+}
+
+export async function listRecentEmails(maxResults = 10, query?: string): Promise<EmailMessage[]> {
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
+
+  if (!refreshToken) {
+    throw new Error("Gmail not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN.");
   }
 
-  return messages;
+  return createGmailAdapter({ refreshToken }).listRecentEmails(maxResults, query);
 }
 
 export async function searchEmails(query: string, maxResults = 10): Promise<EmailMessage[]> {
-  return listRecentEmails(maxResults, query);
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
+
+  if (!refreshToken) {
+    throw new Error("Gmail not configured.");
+  }
+
+  return createGmailAdapter({ refreshToken }).searchEmails(query, maxResults);
 }
 
 export async function createDraft(params: { to: string; subject: string; body: string; threadId?: string }): Promise<DraftResult> {
-  const gmail = getGmailClient();
-  if (!gmail) throw new Error("Gmail not configured.");
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
 
-  const rawMessage = [
-    `To: ${params.to}`,
-    `Subject: ${params.subject}`,
-    "Content-Type: text/plain; charset=utf-8",
-    "",
-    params.body
-  ].join("\r\n");
+  if (!refreshToken) {
+    throw new Error("Gmail not configured.");
+  }
 
-  const encodedMessage = Buffer.from(rawMessage).toString("base64url");
-
-  const response = await gmail.users.drafts.create({
-    userId: "me",
-    requestBody: {
-      message: {
-        raw: encodedMessage,
-        threadId: params.threadId ?? undefined
-      }
-    }
-  });
-
-  return DraftResultSchema.parse({
-    id: response.data.id!,
-    threadId: params.threadId ?? null,
-    to: params.to,
-    subject: params.subject,
-    body: params.body
-  });
+  return createGmailAdapter({ refreshToken }).createDraft(params);
 }
 
 export async function sendDraft(draftId: string): Promise<{ messageId: string }> {
-  const gmail = getGmailClient();
-  if (!gmail) throw new Error("Gmail not configured.");
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
 
-  const response = await gmail.users.drafts.send({
-    userId: "me",
-    requestBody: { id: draftId }
-  });
+  if (!refreshToken) {
+    throw new Error("Gmail not configured.");
+  }
 
-  return { messageId: response.data.id! };
+  return createGmailAdapter({ refreshToken }).sendDraft(draftId);
 }

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, jsonb, real, integer, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, jsonb, real, integer, index, primaryKey } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
@@ -358,19 +358,73 @@ export const jobs = pgTable(
   })
 );
 
-export const integrationAccounts = pgTable("integration_accounts", {
-  id: text("id").primaryKey(),
-  userId: text("user_id").notNull(),
-  name: text("name").notNull(),
-  system: text("system").notNull(),
-  status: text("status").notNull(),
-  scopes: jsonb("scopes").$type<string[]>().notNull(),
-  capabilities: jsonb("capabilities").$type<string[]>().notNull(),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull(),
-  actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
-});
+export const integrationAccounts = pgTable(
+  "integration_accounts",
+  {
+    id: text("id").notNull(),
+    userId: text("user_id").notNull(),
+    name: text("name").notNull(),
+    system: text("system").notNull(),
+    status: text("status").notNull(),
+    scopes: jsonb("scopes").$type<string[]>().notNull(),
+    capabilities: jsonb("capabilities").$type<string[]>().notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull(),
+    actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.userId, table.id] }),
+    systemIdx: index("integration_accounts_user_system_idx").on(table.userId, table.system)
+  })
+);
+
+export const providerCredentials = pgTable(
+  "provider_credentials",
+  {
+    id: text("id").notNull(),
+    userId: text("user_id").notNull(),
+    workspaceId: text("workspace_id"),
+    provider: text("provider").notNull(),
+    accountId: text("account_id"),
+    accountEmail: text("account_email"),
+    displayName: text("display_name").notNull(),
+    status: text("status").notNull(),
+    scopes: jsonb("scopes").$type<string[]>().notNull(),
+    lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }),
+    lastRotatedAt: timestamp("last_rotated_at", { withTimezone: true }),
+    lastRefreshAt: timestamp("last_refresh_at", { withTimezone: true }),
+    lastRefreshFailureAt: timestamp("last_refresh_failure_at", { withTimezone: true }),
+    reconnectRequiredAt: timestamp("reconnect_required_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull(),
+    actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.userId, table.id] }),
+    providerIdx: index("provider_credentials_user_provider_idx").on(table.userId, table.provider),
+    workspaceIdx: index("provider_credentials_workspace_idx").on(table.userId, table.workspaceId)
+  })
+);
+
+export const providerCredentialSecrets = pgTable(
+  "provider_credential_secrets",
+  {
+    credentialId: text("credential_id").notNull(),
+    userId: text("user_id").notNull(),
+    kind: text("kind").notNull(),
+    secret: jsonb("secret").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.userId, table.credentialId, table.kind] }),
+    credentialIdx: index("provider_credential_secrets_user_credential_idx").on(table.userId, table.credentialId)
+  })
+);
 
 export const artifacts = pgTable("artifacts", {
   id: text("id").primaryKey(),

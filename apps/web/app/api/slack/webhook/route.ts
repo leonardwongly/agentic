@@ -4,17 +4,10 @@ import { captureExecutionOutcomeSignals, executeApprovedTasks, captureMemoriesFr
 import {
   verifySlackSignature,
   updateMessage,
-  isGmailReady,
-  isCalendarReady,
-  createDraft,
-  sendDraft,
-  listRecentEmails,
-  createEvent,
-  updateEvent,
-  listUpcomingEvents,
   createLocalNote
 } from "@agentic/integrations";
 import { ApprovalMutationError } from "@agentic/repository";
+import { resolveGoogleWorkspaceAdapters } from "../../../../lib/google-provider-adapters";
 import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
 import { resolveSlackActorUserId, verifySlackApprovalToken } from "../../../../lib/slack-approvals";
 import { getSeededRepository } from "../../../../lib/server";
@@ -144,9 +137,14 @@ export async function POST(request: Request) {
       const approval = updatedBundle.approvals.find((a) => a.id === approvalId);
       if (approval) {
         try {
+          const googleAdapters = await resolveGoogleWorkspaceAdapters({
+            repository,
+            userId: actorUserId,
+            workspaceId: updatedBundle.goal.workspaceId
+          });
           const adapters = {
-            gmail: isGmailReady() ? { createDraft, sendDraft, listRecentEmails } : undefined,
-            calendar: isCalendarReady() ? { createEvent, updateEvent, listUpcomingEvents } : undefined,
+            gmail: googleAdapters?.gmail,
+            calendar: googleAdapters?.calendar,
             notes: { createLocalNote }
           };
           const governance = updatedBundle.goal.workspaceId

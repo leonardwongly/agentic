@@ -1283,6 +1283,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     );
   };
 
+  const connectGoogleProvider = () => {
+    window.location.assign("/api/integrations/google/connect");
+  };
+
   const renderDocs = async () => {
     setIsPending(true);
     setDocsState({ kind: "idle", message: "" });
@@ -2843,25 +2847,38 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             <span>{data.integrations.length} adapters</span>
           </div>
           <div className="list-stack">
-            {integrationSurfaces.map(({ integration, readiness }) => (
-              <div className="list-item vertical" key={integration.id}>
-                <div>
-                  <strong>{integration.name}</strong>
-                  <p>
-                    {integration.system} · {integration.capabilities.join(", ")}
-                  </p>
-                  <p>{readiness.reason}</p>
+            {integrationSurfaces.map(({ integration, readiness }) => {
+              const isManagedGoogle =
+                integration.metadata.provider === "google" && integration.metadata.managed === true;
+              const providerActionLabel =
+                integration.status === "ready" ? "Reconnect Google" : "Connect Google";
+
+              return (
+                <div className="list-item vertical" key={integration.id}>
+                  <div>
+                    <strong>{integration.name}</strong>
+                    <p>
+                      {integration.system} · {integration.capabilities.join(", ")}
+                    </p>
+                    <p>{readiness.reason}</p>
+                  </div>
+                  <div className="approval-actions">
+                    <StatusBadge status={integration.status} />
+                    <StatusBadge status={readiness.tier}>{readiness.label}</StatusBadge>
+                    {readiness.supportedModes.length > 0 ? <span className="pill">{readiness.supportedModes.join(" · ")}</span> : null}
+                    {isManagedGoogle ? (
+                      <button type="button" className="secondary-button" onClick={connectGoogleProvider} disabled={isPending}>
+                        {providerActionLabel}
+                      </button>
+                    ) : (
+                      <button type="button" className="secondary-button" onClick={() => cycleIntegration(integration.id, integration.status)} disabled={isPending}>
+                        Toggle
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="approval-actions">
-                  <StatusBadge status={integration.status} />
-                  <StatusBadge status={readiness.tier}>{readiness.label}</StatusBadge>
-                  {readiness.supportedModes.length > 0 ? <span className="pill">{readiness.supportedModes.join(" · ")}</span> : null}
-                  <button type="button" className="secondary-button" onClick={() => cycleIntegration(integration.id, integration.status)} disabled={isPending}>
-                    Toggle
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </article>
 

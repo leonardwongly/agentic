@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { BriefingTypeSchema, RiskClassSchema, type ActorContext } from "@agentic/contracts";
 import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, generateBriefing, processUserRequest, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
-import { isCalendarReady, isGmailReady, createDraft, createEvent, createLocalNote, listRecentEmails, listUpcomingEvents, sendDraft, updateEvent } from "@agentic/integrations";
+import { createLocalNote } from "@agentic/integrations";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import { resolveGoogleWorkspaceAdapters } from "../../../../lib/google-provider-adapters";
 import { buildNlCapabilitySummary } from "../../../../lib/nl-capabilities";
 import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
 import { getSeededRepository } from "../../../../lib/server";
@@ -204,9 +205,14 @@ async function approveAllR2(userId: string, actor: ActorContext) {
       let executionResults: ExecutionResult[] = [];
 
       try {
+        const googleAdapters = await resolveGoogleWorkspaceAdapters({
+          repository,
+          userId,
+          workspaceId: updatedBundle.goal.workspaceId
+        });
         const adapters = {
-          gmail: isGmailReady() ? { createDraft, sendDraft, listRecentEmails } : undefined,
-          calendar: isCalendarReady() ? { createEvent, updateEvent, listUpcomingEvents } : undefined,
+          gmail: googleAdapters?.gmail,
+          calendar: googleAdapters?.calendar,
           notes: { createLocalNote }
         };
         const governance = updatedBundle.goal.workspaceId

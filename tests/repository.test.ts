@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   AgentDefinitionSchema,
+  ProviderCredentialSchema,
   GoalTemplateSchema,
   SYSTEM_USER_ID,
   WatcherSchema,
@@ -14,7 +15,7 @@ import {
   createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
-import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
+import { buildDefaultIntegrationAccounts, createProviderCredentialSecretStore } from "@agentic/integrations";
 import { createRepository } from "@agentic/repository";
 import { createDurableJobQueue, createJobRecord } from "@agentic/execution";
 import { generateBriefing, processUserRequest } from "@agentic/orchestrator";
@@ -22,6 +23,37 @@ import { createMemoryRecord } from "@agentic/memory";
 
 describe("repository", () => {
   const systemActor = createSystemActorContext(SYSTEM_USER_ID);
+
+  function buildProviderCredential(params: {
+    userId: string;
+    workspaceId?: string | null;
+    accountId?: string;
+    accountEmail?: string;
+    status?: "connected" | "reconnect_required" | "refresh_failed" | "revoked";
+  }) {
+    const workspaceSegment = params.workspaceId ?? "global";
+
+    return ProviderCredentialSchema.parse({
+      id: `google:${workspaceSegment}:${params.accountId ?? "acct-123"}`,
+      userId: params.userId,
+      workspaceId: params.workspaceId ?? null,
+      provider: "google",
+      accountId: params.accountId ?? "acct-123",
+      accountEmail: params.accountEmail ?? "owner@example.com",
+      displayName: "Example Person",
+      status: params.status ?? "connected",
+      scopes: [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/calendar"
+      ],
+      metadata: {
+        providerAccountId: params.accountId ?? "acct-123"
+      },
+      actorContext: systemActor,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+  }
 
   async function createGoalForUser(
     repository: ReturnType<typeof createRepository>,
@@ -511,6 +543,197 @@ describe("repository", () => {
     });
 
     await expectDurableQueueLifecycle(repository, `jobs-queue-${Date.now()}`);
+  });
+
+  it("persists provider credentials, encrypted secrets, and managed Google integrations in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const secretStore = createProviderCredentialSecretStore({
+      masterKey: "test-provider-secret-key",
+      keyVersion: "test-v1"
+    });
+    const credential = buildProviderCredential({
+      userId: SYSTEM_USER_ID,
+      workspaceId: "workspace-alpha",
+      accountId: "acct-alpha",
+      accountEmail: "owner@example.com"
+    });
+    const refreshToken = "refresh-token-alpha";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveProviderCredential(credential);
+    await repository.saveProviderCredentialSecret({
+      credentialId: credential.id,
+      userId: SYSTEM_USER_ID,
+      kind: "oauth_refresh_token",
+      secret: secretStore.encrypt(refreshToken),
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+
+    const listedCredentials = await repository.listProviderCredentials(SYSTEM_USER_ID);
+    const storedSecret = await repository.getProviderCredentialSecret(
+      credential.id,
+      "oauth_refresh_token",
+      SYSTEM_USER_ID
+    );
+    const integrations = await repository.listIntegrations(SYSTEM_USER_ID);
+    const rawStore = await readFile(storePath, "utf8");
+
+    expect(listedCredentials).toEqual([credential]);
+    expect(storedSecret).not.toBeNull();
+    expect(secretStore.decrypt(storedSecret!.secret)).toBe(refreshToken);
+    expect(integrations.find((integration) => integration.id === "gmail")).toMatchObject({
+      id: "gmail",
+      status: "ready",
+      metadata: expect.objectContaining({
+        provider: "google",
+        providerCredentialId: credential.id,
+        managed: true,
+        workspaceId: "workspace-alpha"
+      })
+    });
+    expect(integrations.find((integration) => integration.id === "google-calendar")).toMatchObject({
+      id: "google-calendar",
+      status: "ready",
+      metadata: expect.objectContaining({
+        provider: "google",
+        providerCredentialId: credential.id,
+        managed: true,
+        workspaceId: "workspace-alpha"
+      })
+    });
+    expect(rawStore).not.toContain(refreshToken);
+  });
+
+  it("isolates provider credentials and secrets by user", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const primaryUserId = `provider-primary-${Date.now()}`;
+    const secondaryUserId = `provider-secondary-${Date.now()}`;
+    const secretStore = createProviderCredentialSecretStore({
+      masterKey: "test-provider-secret-key",
+      keyVersion: "test-v1"
+    });
+    const primaryCredential = buildProviderCredential({
+      userId: primaryUserId,
+      workspaceId: "workspace-primary",
+      accountId: "acct-primary",
+      accountEmail: "primary@example.com"
+    });
+    const secondaryCredential = buildProviderCredential({
+      userId: secondaryUserId,
+      workspaceId: "workspace-secondary",
+      accountId: "acct-secondary",
+      accountEmail: "secondary@example.com"
+    });
+
+    await repository.seedDefaults(primaryUserId);
+    await repository.seedDefaults(secondaryUserId);
+    await repository.saveProviderCredential(primaryCredential);
+    await repository.saveProviderCredential(secondaryCredential);
+    await repository.saveProviderCredentialSecret({
+      credentialId: primaryCredential.id,
+      userId: primaryUserId,
+      kind: "oauth_refresh_token",
+      secret: secretStore.encrypt("refresh-token-primary"),
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+
+    expect(await repository.listProviderCredentials(primaryUserId)).toEqual([primaryCredential]);
+    expect(await repository.listProviderCredentials(secondaryUserId)).toEqual([secondaryCredential]);
+    expect(
+      await repository.getProviderCredentialSecret(primaryCredential.id, "oauth_refresh_token", secondaryUserId)
+    ).toBeNull();
+    expect(
+      await repository.getProviderCredentialSecret(secondaryCredential.id, "oauth_refresh_token", secondaryUserId)
+    ).toBeNull();
+  });
+
+  it("keeps integration records isolated when multiple users share the same integration id", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const primaryUserId = `integration-primary-${Date.now()}`;
+    const secondaryUserId = `integration-secondary-${Date.now()}`;
+    const primaryLocalNotes = buildDefaultIntegrationAccounts(primaryUserId).find(
+      (integration) => integration.id === "local-notes"
+    );
+    const secondaryLocalNotes = buildDefaultIntegrationAccounts(secondaryUserId).find(
+      (integration) => integration.id === "local-notes"
+    );
+
+    await repository.seedDefaults(primaryUserId);
+    await repository.seedDefaults(secondaryUserId);
+    await repository.upsertIntegration({
+      ...primaryLocalNotes!,
+      status: "disabled",
+      metadata: {
+        owner: "primary"
+      },
+      actorContext: systemActor,
+      updatedAt: nowIso()
+    });
+    await repository.upsertIntegration({
+      ...secondaryLocalNotes!,
+      status: "ready",
+      metadata: {
+        owner: "secondary"
+      },
+      actorContext: systemActor,
+      updatedAt: nowIso()
+    });
+
+    expect((await repository.listIntegrations(primaryUserId)).find((integration) => integration.id === "local-notes")).toMatchObject({
+      id: "local-notes",
+      userId: primaryUserId,
+      status: "disabled",
+      metadata: {
+        owner: "primary"
+      }
+    });
+    expect((await repository.listIntegrations(secondaryUserId)).find((integration) => integration.id === "local-notes")).toMatchObject({
+      id: "local-notes",
+      userId: secondaryUserId,
+      status: "ready",
+      metadata: {
+        owner: "secondary"
+      }
+    });
+  });
+
+  it("rejects provider secrets for missing parent credentials", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const secretStore = createProviderCredentialSecretStore({
+      masterKey: "test-provider-secret-key",
+      keyVersion: "test-v1"
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    await expect(
+      repository.saveProviderCredentialSecret({
+        credentialId: "google:missing:acct-404",
+        userId: SYSTEM_USER_ID,
+        kind: "oauth_refresh_token",
+        secret: secretStore.encrypt("refresh-token-missing"),
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    ).rejects.toThrow(/Provider credential google:missing:acct-404 was not found/);
   });
 
   const databaseUrl = process.env.DATABASE_URL;

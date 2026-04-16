@@ -116,6 +116,11 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     saveWatcher: async (watcher) => watcher,
     listIntegrations: async () => [],
     upsertIntegration: async (account) => account,
+    listProviderCredentials: async () => [],
+    getProviderCredential: async () => null,
+    saveProviderCredential: async (credential) => credential,
+    getProviderCredentialSecret: async () => null,
+    saveProviderCredentialSecret: async (record) => record,
     getDashboardData: async () => ({
       workspaces: [workspace],
       activeWorkspace: workspace,

@@ -381,7 +381,7 @@ alter table briefing_preferences add column if not exists actor_context jsonb;
 alter table agent_definitions add column if not exists actor_context jsonb;
 
 create table if not exists integration_accounts (
-  id text primary key,
+  id text not null,
   user_id text not null,
   name text not null,
   system text not null,
@@ -391,9 +391,81 @@ create table if not exists integration_accounts (
   metadata jsonb not null default '{}'::jsonb,
   actor_context jsonb,
   created_at timestamptz not null,
-  updated_at timestamptz not null
+  updated_at timestamptz not null,
+  primary key (user_id, id)
 );
 alter table integration_accounts add column if not exists actor_context jsonb;
+create index if not exists integration_accounts_user_system_idx on integration_accounts (user_id, system);
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.table_constraints
+    where table_name = 'integration_accounts'
+      and constraint_type = 'PRIMARY KEY'
+      and constraint_name = 'integration_accounts_pkey'
+  ) then
+    alter table integration_accounts drop constraint integration_accounts_pkey;
+  end if;
+exception
+  when undefined_table then
+    null;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from information_schema.table_constraints
+    where table_name = 'integration_accounts'
+      and constraint_type = 'PRIMARY KEY'
+  ) then
+    alter table integration_accounts add primary key (user_id, id);
+  end if;
+exception
+  when undefined_table then
+    null;
+end $$;
+
+create table if not exists provider_credentials (
+  id text not null,
+  user_id text not null,
+  workspace_id text,
+  provider text not null,
+  account_id text,
+  account_email text,
+  display_name text not null,
+  status text not null,
+  scopes jsonb not null default '[]'::jsonb,
+  last_validated_at timestamptz,
+  last_rotated_at timestamptz,
+  last_refresh_at timestamptz,
+  last_refresh_failure_at timestamptz,
+  reconnect_required_at timestamptz,
+  revoked_at timestamptz,
+  expires_at timestamptz,
+  metadata jsonb not null default '{}'::jsonb,
+  actor_context jsonb,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  primary key (user_id, id)
+);
+alter table provider_credentials add column if not exists actor_context jsonb;
+create index if not exists provider_credentials_user_provider_idx on provider_credentials (user_id, provider);
+create index if not exists provider_credentials_workspace_idx on provider_credentials (user_id, workspace_id);
+
+create table if not exists provider_credential_secrets (
+  credential_id text not null,
+  user_id text not null,
+  kind text not null,
+  secret jsonb not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null,
+  primary key (user_id, credential_id, kind)
+);
+create index if not exists provider_credential_secrets_user_credential_idx
+  on provider_credential_secrets (user_id, credential_id);
 
 create table if not exists artifacts (
   id text primary key,

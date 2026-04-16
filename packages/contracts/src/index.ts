@@ -62,6 +62,14 @@ export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
 export const workspaceApprovalModeValues = ["always_review", "risk_based"] as const;
 export const actorKindValues = ["human", "system"] as const;
+export const providerValues = ["google"] as const;
+export const providerCredentialStatusValues = [
+  "connected",
+  "reconnect_required",
+  "refresh_failed",
+  "revoked"
+] as const;
+export const providerCredentialSecretKindValues = ["oauth_refresh_token"] as const;
 export const agentNameValues = [
   "communications",
   "calendar",
@@ -101,6 +109,9 @@ export const EvidenceRecordSourceKindSchema = z.enum(evidenceRecordSourceKindVal
 export const WorkspaceRoleSchema = z.enum(workspaceRoleValues);
 export const WorkspaceApprovalModeSchema = z.enum(workspaceApprovalModeValues);
 export const ActorKindSchema = z.enum(actorKindValues);
+export const ProviderSchema = z.enum(providerValues);
+export const ProviderCredentialStatusSchema = z.enum(providerCredentialStatusValues);
+export const ProviderCredentialSecretKindSchema = z.enum(providerCredentialSecretKindValues);
 export const AgentNameSchema = z.enum(agentNameValues);
 export const OperatorProductStatusSchema = z.enum(operatorProductStatusValues);
 export const OperatorProductReadinessSchema = z.enum(operatorProductReadinessValues);
@@ -777,6 +788,47 @@ export const IntegrationAccountSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
+export const EncryptedSecretEnvelopeSchema = z.object({
+  algorithm: z.literal("aes-256-gcm"),
+  keyVersion: z.string().min(1).max(100),
+  kdf: z.literal("scrypt"),
+  ciphertext: z.string().min(1),
+  iv: z.string().min(1),
+  authTag: z.string().min(1)
+});
+
+export const ProviderCredentialSchema = z.object({
+  id: z.string().min(1),
+  userId: z.string().min(1),
+  workspaceId: z.string().min(1).nullable().default(null),
+  provider: ProviderSchema,
+  accountId: z.string().min(1).max(200).nullable().default(null),
+  accountEmail: z.string().trim().email().max(320).nullable().default(null),
+  displayName: z.string().max(200).default(""),
+  status: ProviderCredentialStatusSchema,
+  scopes: z.array(z.string().min(1)).default([]),
+  lastValidatedAt: z.string().datetime().nullable().default(null),
+  lastRotatedAt: z.string().datetime().nullable().default(null),
+  lastRefreshAt: z.string().datetime().nullable().default(null),
+  lastRefreshFailureAt: z.string().datetime().nullable().default(null),
+  reconnectRequiredAt: z.string().datetime().nullable().default(null),
+  revokedAt: z.string().datetime().nullable().default(null),
+  expiresAt: z.string().datetime().nullable().default(null),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const ProviderCredentialSecretRecordSchema = z.object({
+  credentialId: z.string().min(1),
+  userId: z.string().min(1),
+  kind: ProviderCredentialSecretKindSchema,
+  secret: EncryptedSecretEnvelopeSchema,
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
 export const GoalBundleSchema = z.object({
   goal: GoalSchema,
   workflow: WorkflowStateSchema,
@@ -1362,6 +1414,12 @@ export type Watcher = z.infer<typeof WatcherSchema>;
 export type ActionLog = z.infer<typeof ActionLogSchema>;
 export type EvidenceRecord = z.infer<typeof EvidenceRecordSchema>;
 export type IntegrationAccount = z.infer<typeof IntegrationAccountSchema>;
+export type EncryptedSecretEnvelope = z.infer<typeof EncryptedSecretEnvelopeSchema>;
+export type Provider = z.infer<typeof ProviderSchema>;
+export type ProviderCredentialStatus = z.infer<typeof ProviderCredentialStatusSchema>;
+export type ProviderCredentialSecretKind = z.infer<typeof ProviderCredentialSecretKindSchema>;
+export type ProviderCredential = z.infer<typeof ProviderCredentialSchema>;
+export type ProviderCredentialSecretRecord = z.infer<typeof ProviderCredentialSecretRecordSchema>;
 export type GoalBundle = z.infer<typeof GoalBundleSchema>;
 export type GoalTemplate = z.infer<typeof GoalTemplateSchema>;
 export type WorkflowCanvasNode = z.infer<typeof WorkflowCanvasNodeSchema>;

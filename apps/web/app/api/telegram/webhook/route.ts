@@ -4,19 +4,12 @@ import { createHumanActorContext } from "@agentic/contracts";
 import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
 import {
   answerTelegramCallbackQuery,
-  createDraft,
-  createEvent,
   createLocalNote,
-  isCalendarReady,
-  isGmailReady,
-  listRecentEmails,
-  listUpcomingEvents,
-  sendDraft,
-  updateEvent,
   updateTelegramMessage,
   verifyTelegramWebhookSecret
 } from "@agentic/integrations";
 import { ApprovalMutationError } from "@agentic/repository";
+import { resolveGoogleWorkspaceAdapters } from "../../../../lib/google-provider-adapters";
 import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
 import {
   consumeTelegramApprovalActions,
@@ -170,9 +163,14 @@ export async function POST(request: Request) {
 
       if (approval) {
         try {
+          const googleAdapters = await resolveGoogleWorkspaceAdapters({
+            repository,
+            userId: actorUserId,
+            workspaceId: updatedBundle.goal.workspaceId
+          });
           const adapters = {
-            gmail: isGmailReady() ? { createDraft, sendDraft, listRecentEmails } : undefined,
-            calendar: isCalendarReady() ? { createEvent, updateEvent, listUpcomingEvents } : undefined,
+            gmail: googleAdapters?.gmail,
+            calendar: googleAdapters?.calendar,
             notes: { createLocalNote }
           };
           const governance = updatedBundle.goal.workspaceId

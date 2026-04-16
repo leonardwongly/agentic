@@ -283,6 +283,11 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     saveWatcher: async (watcher) => watcher,
     listIntegrations: async () => [],
     upsertIntegration: async (account) => account,
+    listProviderCredentials: async () => [],
+    getProviderCredential: async () => null,
+    saveProviderCredential: async (credential) => credential,
+    getProviderCredentialSecret: async () => null,
+    saveProviderCredentialSecret: async (record) => record,
     listTemplates: async () => [],
     saveTemplate: async (template) => template,
     deleteTemplate: async () => {},
@@ -346,10 +351,9 @@ describe("route user scoping", () => {
   });
 
   it("passes the system user explicitly when listing and updating integrations", async () => {
-    const integration = {
-      ...buildDefaultIntegrationAccounts(SYSTEM_USER_ID)[0],
-      id: "integration-local-notes"
-    };
+    const integration = buildDefaultIntegrationAccounts(SYSTEM_USER_ID).find(
+      (candidate) => candidate.id === "local-notes"
+    )!;
     const listIntegrationsCalls: Array<string | undefined> = [];
     const dashboardCalls: Array<string | undefined> = [];
     const updatedStatuses: string[] = [];
@@ -406,7 +410,7 @@ describe("route user scoping", () => {
         expect.objectContaining({
           id: integration.id,
           readiness: expect.objectContaining({
-            tier: "draft-grade"
+            tier: "autonomous-grade"
           })
         })
       ])

@@ -5,11 +5,22 @@ import { getAuthSessionStateStore } from "./auth-session-store";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const SESSION_TOKEN_VERSION = 1 as const;
+const OAUTH_STATE_TTL_SECONDS = 60 * 10;
+const OAUTH_STATE_TOKEN_VERSION = 1 as const;
 
 type SessionTokenPayload = {
   version: typeof SESSION_TOKEN_VERSION;
   userId: string;
   sessionId: string;
+  issuedAt: string;
+  expiresAt: string;
+};
+
+type OAuthStateTokenPayload = {
+  version: typeof OAUTH_STATE_TOKEN_VERSION;
+  userId: string;
+  workspaceId: string | null;
+  nonce: string;
   issuedAt: string;
   expiresAt: string;
 };
@@ -95,18 +106,29 @@ function resolveAccessKey(): { key: string | null; source: "env" | "development-
   return { key: null, source: "missing" };
 }
 
-export function getServerSigningSecret(scope: "session" | "share" = "session"): string {
+export function getServerSigningSecret(scope: "session" | "share" | "oauth" = "session"): string {
   const resolved = resolveAccessKey();
 
   if (!resolved.key) {
     throw new AuthError("AGENTIC_ACCESS_KEY is not configured for this runtime.");
   }
 
-  return scope === "session" ? resolved.key : `${resolved.key}:agentic-share-v1`;
+  switch (scope) {
+    case "session":
+      return resolved.key;
+    case "share":
+      return `${resolved.key}:agentic-share-v1`;
+    case "oauth":
+      return `${resolved.key}:agentic-oauth-v1`;
+  }
 }
 
 function signSessionTokenPayload(secret: string, encodedPayload: string): string {
   return crypto.createHmac("sha256", secret).update(`agentic-session-v1.${encodedPayload}`).digest("base64url");
+}
+
+function signOAuthStatePayload(secret: string, encodedPayload: string): string {
+  return crypto.createHmac("sha256", secret).update(`agentic-oauth-state-v1.${encodedPayload}`).digest("base64url");
 }
 
 function buildSessionTokenPayload(userId = SYSTEM_USER_ID, now = Date.now()): SessionTokenPayload {
@@ -119,7 +141,22 @@ function buildSessionTokenPayload(userId = SYSTEM_USER_ID, now = Date.now()): Se
   };
 }
 
+function buildOAuthStatePayload(params: { userId: string; workspaceId?: string | null }, now = Date.now()): OAuthStateTokenPayload {
+  return {
+    version: OAUTH_STATE_TOKEN_VERSION,
+    userId: params.userId,
+    workspaceId: params.workspaceId ?? null,
+    nonce: crypto.randomUUID(),
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + OAUTH_STATE_TTL_SECONDS * 1000).toISOString()
+  };
+}
+
 function encodeSessionTokenPayload(payload: SessionTokenPayload): string {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+function encodeOAuthStatePayload(payload: OAuthStateTokenPayload): string {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
@@ -148,6 +185,41 @@ function decodeSessionTokenPayload(encodedPayload: string): SessionTokenPayload 
       version: SESSION_TOKEN_VERSION,
       userId: parsed.userId,
       sessionId: parsed.sessionId,
+      issuedAt: parsed.issuedAt,
+      expiresAt: parsed.expiresAt
+    };
+  } catch {
+    return null;
+  }
+}
+
+function decodeOAuthStatePayload(encodedPayload: string): OAuthStateTokenPayload | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as Partial<OAuthStateTokenPayload>;
+
+    if (
+      parsed.version !== OAUTH_STATE_TOKEN_VERSION ||
+      typeof parsed.userId !== "string" ||
+      (parsed.workspaceId !== null && typeof parsed.workspaceId !== "string" && typeof parsed.workspaceId !== "undefined") ||
+      typeof parsed.nonce !== "string" ||
+      typeof parsed.issuedAt !== "string" ||
+      typeof parsed.expiresAt !== "string"
+    ) {
+      return null;
+    }
+
+    const issuedAt = Date.parse(parsed.issuedAt);
+    const expiresAt = Date.parse(parsed.expiresAt);
+
+    if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt) {
+      return null;
+    }
+
+    return {
+      version: OAUTH_STATE_TOKEN_VERSION,
+      userId: parsed.userId,
+      workspaceId: parsed.workspaceId ?? null,
+      nonce: parsed.nonce,
       issuedAt: parsed.issuedAt,
       expiresAt: parsed.expiresAt
     };
@@ -196,6 +268,14 @@ export function buildSessionToken(userId = SYSTEM_USER_ID): string {
   return `${encodedPayload}.${signature}`;
 }
 
+export function buildOAuthStateToken(params: { userId: string; workspaceId?: string | null }): string {
+  const payload = buildOAuthStatePayload(params);
+  const encodedPayload = encodeOAuthStatePayload(payload);
+  const signature = signOAuthStatePayload(getServerSigningSecret("oauth"), encodedPayload);
+
+  return `${encodedPayload}.${signature}`;
+}
+
 function parseSignedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): SessionTokenPayload | null {
   const token = candidate?.trim();
 
@@ -219,6 +299,47 @@ function parseSignedSessionToken(candidate: string | null | undefined, userId = 
 
   try {
     const expectedSignature = signSessionTokenPayload(getServerSigningSecret("session"), encodedPayload);
+
+    if (!constantTimeEqual(providedSignature, expectedSignature)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  if (Date.parse(payload.expiresAt) <= Date.now()) {
+    return null;
+  }
+
+  return payload;
+}
+
+export function parseAuthorizedOAuthStateToken(
+  candidate: string | null | undefined,
+  expectedUserId?: string
+): OAuthStateTokenPayload | null {
+  const token = candidate?.trim();
+
+  if (!token) {
+    return null;
+  }
+
+  const delimiterIndex = token.lastIndexOf(".");
+
+  if (delimiterIndex <= 0 || delimiterIndex === token.length - 1) {
+    return null;
+  }
+
+  const encodedPayload = token.slice(0, delimiterIndex);
+  const providedSignature = token.slice(delimiterIndex + 1);
+  const payload = decodeOAuthStatePayload(encodedPayload);
+
+  if (!payload || (expectedUserId && payload.userId !== expectedUserId)) {
+    return null;
+  }
+
+  try {
+    const expectedSignature = signOAuthStatePayload(getServerSigningSecret("oauth"), encodedPayload);
 
     if (!constantTimeEqual(providedSignature, expectedSignature)) {
       return null;

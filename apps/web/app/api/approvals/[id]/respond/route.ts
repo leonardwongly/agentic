@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
-import { isGmailReady, isCalendarReady, isSlackReady, sendNotification, createDraft, sendDraft, listRecentEmails, createEvent, updateEvent, listUpcomingEvents, createLocalNote } from "@agentic/integrations";
+import { isSlackReady, sendNotification, createLocalNote } from "@agentic/integrations";
 import type { GoalBundle } from "@agentic/contracts";
 import { ApprovalMutationError, type AgenticRepository } from "@agentic/repository";
 import { requireApiSession } from "../../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
+import { resolveGoogleWorkspaceAdapters } from "../../../../../lib/google-provider-adapters";
 import { requireJsonContentType } from "../../../../../lib/api-errors";
 import { persistCapturedMemories } from "../../../../../lib/persist-captured-memories";
 import { getSeededRepository } from "../../../../../lib/server";
@@ -109,9 +110,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       const approval = updatedBundle.approvals.find((a) => a.id === approvalId);
       if (approval) {
         try {
+          const googleAdapters = await resolveGoogleWorkspaceAdapters({
+            repository,
+            userId: principal.userId,
+            workspaceId: updatedBundle.goal.workspaceId
+          });
           const adapters = {
-            gmail: isGmailReady() ? { createDraft, sendDraft, listRecentEmails } : undefined,
-            calendar: isCalendarReady() ? { createEvent, updateEvent, listUpcomingEvents } : undefined,
+            gmail: googleAdapters?.gmail,
+            calendar: googleAdapters?.calendar,
             notes: { createLocalNote }
           };
           const governance = updatedBundle.goal.workspaceId
