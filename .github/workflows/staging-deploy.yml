@@ -16,6 +16,9 @@ jobs:
       AGENTIC_REQUIRE_SHARED_AUTH_STATE: "true"
       AGENTIC_SMOKE_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       AGENTIC_SMOKE_ACCESS_KEY: ${{ secrets.STAGING_SMOKE_ACCESS_KEY }}
+      AGENTIC_TELEMETRY_RETENTION_DIR: ${{ runner.temp }}/agentic-telemetry
+      AGENTIC_TELEMETRY_EXPORT_URL: ${{ secrets.STAGING_TELEMETRY_EXPORT_URL }}
+      AGENTIC_TELEMETRY_EXPORT_TOKEN: ${{ secrets.STAGING_TELEMETRY_EXPORT_TOKEN }}
       NODE_ENV: production
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +41,12 @@ jobs:
       - name: Validate staging database readiness
         run: npm run db:status -- --require-ready
 
+      - name: Validate telemetry exporter and retention wiring
+        run: npm run test:smoke:observability-export
+
+      - name: Validate rollout gate manifests against retained telemetry
+        run: npm run telemetry:rollout-gate -- --dir "$AGENTIC_TELEMETRY_RETENTION_DIR"
+
       - name: Build staging image
         run: docker build -t agentic-staging:${{ github.sha }} .
 
@@ -48,4 +57,12 @@ jobs:
       - name: Emit deployment handoff summary
         run: |
           echo "Staging deploy scaffolding completed."
-          echo "Attach the provider-specific deploy step after image publish and rollout wiring are available."
+          echo "Attach the provider-specific deploy step after image publish is available."
+
+      - name: Upload telemetry rollout evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentic-staging-telemetry
+          path: ${{ env.AGENTIC_TELEMETRY_RETENTION_DIR }}
+          if-no-files-found: warn

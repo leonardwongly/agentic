@@ -189,6 +189,35 @@ export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
 npm run test:smoke:deployment
 ```
 
+## Observability Rollout Gates
+
+The observability package can retain sanitized telemetry batches locally and optionally forward those same batches to a backend collector.
+
+Optional exporter configuration:
+
+```bash
+export AGENTIC_TELEMETRY_RETENTION_DIR=.agentic/telemetry
+export AGENTIC_TELEMETRY_EXPORT_URL=https://telemetry.example.com/ingest
+export AGENTIC_TELEMETRY_EXPORT_TOKEN=replace-this-with-a-telemetry-ingest-token
+```
+
+Validate the exporter path without external infrastructure:
+
+```bash
+npm run test:smoke:observability-export
+```
+
+Evaluate retained telemetry against the checked-in rollout gate thresholds:
+
+```bash
+npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
+```
+
+The threshold and dashboard manifests live in:
+
+- `config/observability/alerts.json`
+- `config/observability/dashboard.json`
+
 ## Persistence And Local Storage
 
 - If `DATABASE_URL` is set, the app uses the Postgres-backed repository.

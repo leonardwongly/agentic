@@ -25,6 +25,9 @@ Optional but commonly needed:
 ```bash
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_TELEMETRY_RETENTION_DIR=.agentic/telemetry
+export AGENTIC_TELEMETRY_EXPORT_URL=https://telemetry.example.com/ingest
+export AGENTIC_TELEMETRY_EXPORT_TOKEN=replace-this-with-a-telemetry-ingest-token
 ```
 
 ## Pre-Deploy Checks
@@ -59,6 +62,7 @@ npm run db:status -- --require-ready
 ```bash
 npm test
 npm run test:e2e
+npm run test:smoke:observability-export
 ```
 
 ## Rollout Procedure
@@ -94,6 +98,7 @@ curl -fsS https://agentic.example.com/api/ready
 
 ```bash
 npm run test:smoke:deployment
+npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
 
 ## Smoke Validation Expectations
@@ -103,8 +108,32 @@ Successful smoke validation confirms:
 - the container is live and serving `/api/health`
 - readiness passes on `/api/ready`
 - authenticated session bootstrap works when `AGENTIC_SMOKE_ACCESS_KEY` is provided
+- telemetry export sanitizes secret-bearing payloads before retention or backend delivery
+- rollout-gate metrics stay inside the thresholds defined in `config/observability/alerts.json`
 
 Treat any readiness failure as a failed rollout. Do not continue shifting traffic while `/api/ready` returns `503`.
+Treat any rollout-gate failure as a failed rollout, even when the deployment smoke request itself succeeds.
+
+## Observability Rollout Artifacts
+
+The rollout path is backed by checked-in observability config:
+
+- `config/observability/alerts.json`: gate and advisory thresholds for HTTP, worker, and provider metrics
+- `config/observability/dashboard.json`: dashboard panel definitions for the same metric families
+
+Use the local export smoke harness when validating exporter wiring before a real backend is available:
+
+```bash
+npm run test:smoke:observability-export
+```
+
+It emits sanitized logs, metrics, and spans to a local capture server and writes retained JSON batches to `AGENTIC_TELEMETRY_RETENTION_DIR`. The rollout gate CLI reads those retained batches:
+
+```bash
+npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
+```
+
+If `AGENTIC_TELEMETRY_EXPORT_URL` is configured, retained batches are still written locally so operators have fallback evidence even when the backend is unavailable.
 
 ## Rollback
 
@@ -129,6 +158,7 @@ curl -fsS https://agentic.example.com/api/ready
 
 ```bash
 npm run test:smoke:deployment
+npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
 
 5. Investigate the failed release before attempting another deploy.

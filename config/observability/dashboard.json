@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "name": "agentic-rollout-dashboard",
+  "title": "Agentic Rollout Gate Dashboard",
+  "sections": [
+    {
+      "key": "requests",
+      "title": "HTTP Requests",
+      "panels": [
+        {
+          "key": "request-volume",
+          "title": "Request volume by route and status",
+          "metric": "http.request.total",
+          "aggregation": "sum",
+          "groupBy": ["route", "statusCode"]
+        },
+        {
+          "key": "request-latency",
+          "title": "Request latency p95 by route",
+          "metric": "http.request.duration_ms",
+          "aggregation": "p95",
+          "groupBy": ["route"]
+        }
+      ]
+    },
+    {
+      "key": "queue",
+      "title": "Queue And Worker",
+      "panels": [
+        {
+          "key": "queue-throughput",
+          "title": "Jobs enqueued, processed, and completed",
+          "metric": "durable_job.enqueue.total",
+          "aggregation": "sum",
+          "groupBy": ["jobKind"]
+        },
+        {
+          "key": "worker-processing",
+          "title": "Worker loop throughput",
+          "metric": "worker.loop.processed.total",
+          "aggregation": "sum",
+          "groupBy": ["jobKind", "runnerId"]
+        },
+        {
+          "key": "worker-failures",
+          "title": "Worker failures and dead letters",
+          "metric": "worker.job.failed.total",
+          "aggregation": "sum",
+          "groupBy": ["jobKind", "runnerId"]
+        },
+        {
+          "key": "dead-letters",
+          "title": "Dead-letter events",
+          "metric": "durable_job.dead_letter.total",
+          "aggregation": "sum",
+          "groupBy": ["jobKind"]
+        }
+      ]
+    },
+    {
+      "key": "integrations",
+      "title": "Provider Calls",
+      "panels": [
+        {
+          "key": "integration-outcomes",
+          "title": "Integration outcomes by provider",
+          "metric": "integration.call.total",
+          "aggregation": "sum",
+          "groupBy": ["provider", "operation", "outcome"]
+        }
+      ]
+    },
+    {
+      "key": "tracing",
+      "title": "Tracing And Export",
+      "panels": [
+        {
+          "key": "span-latency",
+          "title": "Span latency p95 by span name",
+          "metric": "telemetry.span.duration_ms",
+          "aggregation": "p95",
+          "groupBy": ["spanName", "spanStatus"]
+        },
+        {
+          "key": "span-errors",
+          "title": "Span error counts",
+          "metric": "telemetry.span.errors_total",
+          "aggregation": "sum",
+          "groupBy": ["spanName"]
+        },
+        {
+          "key": "export-health",
+          "title": "Exporter outcomes",
+          "metric": "telemetry.export.total",
+          "aggregation": "sum",
+          "groupBy": ["outcome"]
+        },
+        {
+          "key": "retention-health",
+          "title": "Retention write outcomes",
+          "metric": "telemetry.retention.write.total",
+          "aggregation": "sum",
+          "groupBy": ["outcome"]
+        }
+      ]
+    }
+  ]
+}

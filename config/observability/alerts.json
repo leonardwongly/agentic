@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "name": "agentic-rollout-gates",
+  "alerts": [
+    {
+      "key": "http-server-errors",
+      "title": "No 5xx API responses during rollout validation",
+      "metric": "http.request.total",
+      "aggregation": "sum",
+      "operator": "<=",
+      "threshold": 0,
+      "filters": {
+        "statusCode": [500, 501, 502, 503, 504]
+      },
+      "minimumSamples": 0,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "Any server-side API failure during smoke or canary validation blocks rollout."
+    },
+    {
+      "key": "http-request-latency",
+      "title": "P95 request latency stays within the rollout budget",
+      "metric": "http.request.duration_ms",
+      "aggregation": "p95",
+      "operator": "<=",
+      "threshold": 1500,
+      "minimumSamples": 1,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "Healthy canary traffic should keep request latency below the 1.5s budget."
+    },
+    {
+      "key": "worker-dead-letter",
+      "title": "No durable jobs dead-letter during rollout validation",
+      "metric": "durable_job.dead_letter.total",
+      "aggregation": "sum",
+      "operator": "<=",
+      "threshold": 0,
+      "minimumSamples": 0,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "Dead-lettered jobs indicate a correctness regression in queue or worker handling."
+    },
+    {
+      "key": "worker-failure",
+      "title": "No worker execution failures during rollout validation",
+      "metric": "worker.job.failed.total",
+      "aggregation": "sum",
+      "operator": "<=",
+      "threshold": 0,
+      "minimumSamples": 0,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "The rollout gate fails if any worker job reports a failed execution."
+    },
+    {
+      "key": "integration-error-rate",
+      "title": "Integration calls stay error-free during rollout validation",
+      "metric": "integration.call.total",
+      "aggregation": "sum",
+      "operator": "<=",
+      "threshold": 0,
+      "filters": {
+        "outcome": "error"
+      },
+      "minimumSamples": 0,
+      "severity": "warning",
+      "rolloutGate": false,
+      "description": "Provider failures are surfaced immediately, but they are advisory when the rollout smoke path does not exercise live integrations."
+    },
+    {
+      "key": "telemetry-export-failure",
+      "title": "Telemetry exporter stays healthy while retention is enabled",
+      "metric": "telemetry.export.total",
+      "aggregation": "sum",
+      "operator": "==",
+      "threshold": 0,
+      "filters": {
+        "outcome": "error"
+      },
+      "minimumSamples": 0,
+      "severity": "warning",
+      "rolloutGate": false,
+      "description": "Backend export failures should page operators even when retained batches keep telemetry durable."
+    }
+  ]
+}

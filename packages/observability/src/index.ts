@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
+import { mkdir, readdir, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { ActionLogSchema, nowIso, type ActionLog, type AgentDefinition } from "@agentic/contracts";
 
 export type TelemetryPrimitive = string | number | boolean | null;
@@ -60,6 +62,55 @@ export type TelemetrySnapshot = {
   spans: TelemetrySpanEntry[];
 };
 
+export type TelemetryExportItem =
+  | {
+      kind: "log";
+      entry: StructuredLogEntry;
+    }
+  | {
+      kind: "metric";
+      entry: TelemetryMetric;
+    }
+  | {
+      kind: "span";
+      entry: TelemetrySpanEntry;
+    };
+
+export type TelemetryExportBatch = {
+  schemaVersion: 1;
+  source: {
+    service: string;
+    environment: string;
+    nodeEnv: string;
+  };
+  batchId: string;
+  createdAt: string;
+  droppedCount: number;
+  items: TelemetryExportItem[];
+};
+
+export type TelemetryExportConfig = {
+  enabled: boolean;
+  backendUrl: string | null;
+  backendToken: string | null;
+  timeoutMs: number;
+  batchSize: number;
+  flushIntervalMs: number;
+  retentionDir: string | null;
+  retentionMaxFiles: number;
+  queueLimit: number;
+  serviceName: string;
+  environment: string;
+};
+
+export type TelemetryPipelineState = {
+  pendingItems: number;
+  droppedItems: number;
+  lastFlushAt: string | null;
+  lastFlushError: string | null;
+  config: TelemetryExportConfig;
+};
+
 const telemetryContextStore = new AsyncLocalStorage<TelemetryContext>();
 const telemetrySnapshot: TelemetrySnapshot = {
   logs: [],
@@ -70,10 +121,34 @@ const TELEMETRY_BUFFER_LIMIT = 1_000;
 const REQUEST_ID_HEADER = "x-request-id";
 const TRACE_ID_HEADER = "x-trace-id";
 const TELEMETRY_CONSOLE_ENV = "AGENTIC_TELEMETRY_CONSOLE";
+const TELEMETRY_EXPORT_URL_ENV = "AGENTIC_TELEMETRY_EXPORT_URL";
+const TELEMETRY_EXPORT_TOKEN_ENV = "AGENTIC_TELEMETRY_EXPORT_TOKEN";
+const TELEMETRY_EXPORT_TIMEOUT_ENV = "AGENTIC_TELEMETRY_EXPORT_TIMEOUT_MS";
+const TELEMETRY_EXPORT_BATCH_SIZE_ENV = "AGENTIC_TELEMETRY_EXPORT_BATCH_SIZE";
+const TELEMETRY_EXPORT_INTERVAL_ENV = "AGENTIC_TELEMETRY_EXPORT_INTERVAL_MS";
+const TELEMETRY_RETENTION_DIR_ENV = "AGENTIC_TELEMETRY_RETENTION_DIR";
+const TELEMETRY_RETENTION_MAX_FILES_ENV = "AGENTIC_TELEMETRY_RETENTION_MAX_FILES";
+const TELEMETRY_QUEUE_LIMIT_ENV = "AGENTIC_TELEMETRY_EXPORT_QUEUE_LIMIT";
+const TELEMETRY_SERVICE_NAME_ENV = "AGENTIC_TELEMETRY_SERVICE_NAME";
 const SENSITIVE_KEY_PATTERN =
   /(authorization|cookie|password|secret|token|refresh|access[_-]?key|api[_-]?key|session|signature|raw|body)/iu;
 const SENSITIVE_VALUE_PATTERN =
   /\b(?:bearer\s+[a-z0-9._-]+|(?:token|secret|password|cookie|session|signature|access[_-]?key|api[_-]?key)\s*[=:]\s*[^\s,;]+)/iu;
+const TELEMETRY_EXPORT_DEFAULT_TIMEOUT_MS = 5_000;
+const TELEMETRY_EXPORT_DEFAULT_BATCH_SIZE = 64;
+const TELEMETRY_EXPORT_DEFAULT_INTERVAL_MS = 5_000;
+const TELEMETRY_EXPORT_DEFAULT_RETENTION_MAX_FILES = 512;
+const TELEMETRY_EXPORT_DEFAULT_QUEUE_LIMIT = 5_000;
+
+const telemetryExportQueue: TelemetryExportItem[] = [];
+let telemetryDroppedItems = 0;
+let telemetryFlushTimer: NodeJS.Timeout | null = null;
+let telemetryFlushPromise: Promise<void> | null = null;
+let telemetryLastFlushAt: string | null = null;
+let telemetryLastFlushError: string | null = null;
+let telemetryExportConfigCacheKey: string | null = null;
+let telemetryExportConfigCache: TelemetryExportConfig | null = null;
+let telemetryExportSuppressionDepth = 0;
 
 function createTelemetryId(): string {
   return crypto.randomBytes(8).toString("hex");
@@ -89,19 +164,278 @@ function trimBuffer<T>(buffer: T[]) {
   }
 }
 
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readOptionalEnv(name: string): string | null {
+  const value = process.env[name]?.trim();
+  return value ? value : null;
+}
+
+export function getTelemetryExportConfig(): TelemetryExportConfig {
+  const cacheKey = [
+    process.env[TELEMETRY_EXPORT_URL_ENV] ?? "",
+    process.env[TELEMETRY_EXPORT_TOKEN_ENV] ?? "",
+    process.env[TELEMETRY_EXPORT_TIMEOUT_ENV] ?? "",
+    process.env[TELEMETRY_EXPORT_BATCH_SIZE_ENV] ?? "",
+    process.env[TELEMETRY_EXPORT_INTERVAL_ENV] ?? "",
+    process.env[TELEMETRY_RETENTION_DIR_ENV] ?? "",
+    process.env[TELEMETRY_RETENTION_MAX_FILES_ENV] ?? "",
+    process.env[TELEMETRY_QUEUE_LIMIT_ENV] ?? "",
+    process.env[TELEMETRY_SERVICE_NAME_ENV] ?? "",
+    process.env.NODE_ENV ?? "",
+    process.env.VERCEL_ENV ?? ""
+  ].join("\u0000");
+
+  if (telemetryExportConfigCache && telemetryExportConfigCacheKey === cacheKey) {
+    return telemetryExportConfigCache;
+  }
+
+  const backendUrl = readOptionalEnv(TELEMETRY_EXPORT_URL_ENV);
+  const retentionDir = readOptionalEnv(TELEMETRY_RETENTION_DIR_ENV);
+
+  telemetryExportConfigCacheKey = cacheKey;
+  telemetryExportConfigCache = {
+    enabled: Boolean(backendUrl || retentionDir),
+    backendUrl,
+    backendToken: readOptionalEnv(TELEMETRY_EXPORT_TOKEN_ENV),
+    timeoutMs: parsePositiveIntEnv(TELEMETRY_EXPORT_TIMEOUT_ENV, TELEMETRY_EXPORT_DEFAULT_TIMEOUT_MS),
+    batchSize: parsePositiveIntEnv(TELEMETRY_EXPORT_BATCH_SIZE_ENV, TELEMETRY_EXPORT_DEFAULT_BATCH_SIZE),
+    flushIntervalMs: parsePositiveIntEnv(TELEMETRY_EXPORT_INTERVAL_ENV, TELEMETRY_EXPORT_DEFAULT_INTERVAL_MS),
+    retentionDir,
+    retentionMaxFiles: parsePositiveIntEnv(
+      TELEMETRY_RETENTION_MAX_FILES_ENV,
+      TELEMETRY_EXPORT_DEFAULT_RETENTION_MAX_FILES
+    ),
+    queueLimit: parsePositiveIntEnv(TELEMETRY_QUEUE_LIMIT_ENV, TELEMETRY_EXPORT_DEFAULT_QUEUE_LIMIT),
+    serviceName: readOptionalEnv(TELEMETRY_SERVICE_NAME_ENV) ?? "agentic",
+    environment: process.env.VERCEL_ENV?.trim() || process.env.NODE_ENV?.trim() || "development"
+  };
+  return telemetryExportConfigCache;
+}
+
+function cloneLogEntry(entry: StructuredLogEntry): StructuredLogEntry {
+  return {
+    ...entry,
+    attributes: { ...entry.attributes },
+    context: { ...entry.context }
+  };
+}
+
+function cloneMetricEntry(entry: TelemetryMetric): TelemetryMetric {
+  return {
+    ...entry,
+    attributes: { ...entry.attributes },
+    context: { ...entry.context }
+  };
+}
+
+function cloneSpanEntry(entry: TelemetrySpanEntry): TelemetrySpanEntry {
+  return {
+    ...entry,
+    attributes: { ...entry.attributes },
+    context: { ...entry.context }
+  };
+}
+
+function cloneTelemetryExportItem(item: TelemetryExportItem): TelemetryExportItem {
+  if (item.kind === "log") {
+    return {
+      kind: "log",
+      entry: cloneLogEntry(item.entry)
+    };
+  }
+
+  if (item.kind === "metric") {
+    return {
+      kind: "metric",
+      entry: cloneMetricEntry(item.entry)
+    };
+  }
+
+  return {
+    kind: "span",
+    entry: cloneSpanEntry(item.entry)
+  };
+}
+
+function withExportQueueSuppressed<T>(handler: () => T): T {
+  telemetryExportSuppressionDepth += 1;
+
+  try {
+    return handler();
+  } finally {
+    telemetryExportSuppressionDepth = Math.max(0, telemetryExportSuppressionDepth - 1);
+  }
+}
+
+function clearTelemetryFlushTimer() {
+  if (telemetryFlushTimer) {
+    clearTimeout(telemetryFlushTimer);
+    telemetryFlushTimer = null;
+  }
+}
+
+function scheduleTelemetryFlush(delayMs: number) {
+  if (telemetryFlushTimer) {
+    return;
+  }
+
+  telemetryFlushTimer = setTimeout(() => {
+    telemetryFlushTimer = null;
+    void flushTelemetryPipeline();
+  }, Math.max(1, delayMs));
+  telemetryFlushTimer.unref?.();
+}
+
+function reportTelemetryPipelineIssue(message: string, error?: unknown) {
+  const rendered =
+    error instanceof Error
+      ? `${message}: ${error.name}: ${error.message}`
+      : error
+        ? `${message}: ${String(error)}`
+        : message;
+
+  telemetryLastFlushError = toTelemetryPrimitive(rendered) as string;
+
+  if (process.env.NODE_ENV === "test" && process.env[TELEMETRY_CONSOLE_ENV]?.trim().toLowerCase() !== "on") {
+    return;
+  }
+
+  console.error(`[agentic.telemetry] ${telemetryLastFlushError}`);
+}
+
+function enqueueTelemetryExport(item: TelemetryExportItem) {
+  if (telemetryExportSuppressionDepth > 0) {
+    return;
+  }
+
+  const config = getTelemetryExportConfig();
+
+  if (!config.enabled) {
+    return;
+  }
+
+  telemetryExportQueue.push(cloneTelemetryExportItem(item));
+
+  if (telemetryExportQueue.length > config.queueLimit) {
+    const overflow = telemetryExportQueue.length - config.queueLimit;
+    telemetryExportQueue.splice(0, overflow);
+    telemetryDroppedItems += overflow;
+  }
+
+  if (telemetryExportQueue.length >= config.batchSize) {
+    void flushTelemetryPipeline();
+    return;
+  }
+
+  scheduleTelemetryFlush(config.flushIntervalMs);
+}
+
+function createTelemetryExportBatch(config: TelemetryExportConfig, items: TelemetryExportItem[]): TelemetryExportBatch {
+  const batchDroppedItems = telemetryDroppedItems;
+  telemetryDroppedItems = 0;
+
+  return {
+    schemaVersion: 1,
+    source: {
+      service: config.serviceName,
+      environment: config.environment,
+      nodeEnv: process.env.NODE_ENV?.trim() || "development"
+    },
+    batchId: crypto.randomUUID(),
+    createdAt: nowIso(),
+    droppedCount: batchDroppedItems,
+    items: items.map((item) => cloneTelemetryExportItem(item))
+  };
+}
+
+async function writeTelemetryRetentionBatch(config: TelemetryExportConfig, batch: TelemetryExportBatch): Promise<boolean> {
+  if (!config.retentionDir) {
+    return false;
+  }
+
+  try {
+    await mkdir(config.retentionDir, { recursive: true });
+    const fileName = `${batch.createdAt.replaceAll(":", "-").replaceAll(".", "-")}-${batch.batchId}.json`;
+    await writeFile(path.join(config.retentionDir, fileName), JSON.stringify(batch, null, 2), "utf8");
+
+    const retentionEntries = (await readdir(config.retentionDir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => entry.name)
+      .sort();
+    const overflow = retentionEntries.length - config.retentionMaxFiles;
+
+    if (overflow > 0) {
+      await Promise.all(
+        retentionEntries
+          .slice(0, overflow)
+          .map((entryName) => unlink(path.join(config.retentionDir!, entryName)).catch(() => undefined))
+      );
+    }
+
+    return true;
+  } catch (error) {
+    reportTelemetryPipelineIssue("retention write failed", error);
+    return false;
+  }
+}
+
+async function postTelemetryBatch(config: TelemetryExportConfig, batch: TelemetryExportBatch): Promise<boolean> {
+  if (!config.backendUrl) {
+    return false;
+  }
+
+  try {
+    const response = await fetch(config.backendUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(config.backendToken ? { authorization: `Bearer ${config.backendToken}` } : {})
+      },
+      body: JSON.stringify(batch),
+      signal: AbortSignal.timeout(config.timeoutMs)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Telemetry backend responded with ${response.status}.`);
+    }
+
+    return true;
+  } catch (error) {
+    reportTelemetryPipelineIssue("backend export failed", error);
+    return false;
+  }
+}
+
 function pushLog(entry: StructuredLogEntry) {
   telemetrySnapshot.logs.push(entry);
   trimBuffer(telemetrySnapshot.logs);
+  enqueueTelemetryExport({
+    kind: "log",
+    entry
+  });
 }
 
 function pushMetric(entry: TelemetryMetric) {
   telemetrySnapshot.metrics.push(entry);
   trimBuffer(telemetrySnapshot.metrics);
+  enqueueTelemetryExport({
+    kind: "metric",
+    entry
+  });
 }
 
 function pushSpan(entry: TelemetrySpanEntry) {
   telemetrySnapshot.spans.push(entry);
   trimBuffer(telemetrySnapshot.spans);
+  enqueueTelemetryExport({
+    kind: "span",
+    entry
+  });
 }
 
 function toTelemetryPrimitive(value: unknown, key?: string): TelemetryPrimitive {
@@ -397,29 +731,109 @@ export async function withSpan<T>(
   });
 }
 
+export async function flushTelemetryPipeline(): Promise<void> {
+  if (telemetryFlushPromise) {
+    await telemetryFlushPromise;
+
+    if (telemetryExportQueue.length > 0) {
+      return flushTelemetryPipeline();
+    }
+
+    return;
+  }
+
+  const config = getTelemetryExportConfig();
+
+  clearTelemetryFlushTimer();
+
+  if (!config.enabled || telemetryExportQueue.length === 0) {
+    return;
+  }
+
+  telemetryFlushPromise = (async () => {
+    while (telemetryExportQueue.length > 0) {
+      const activeConfig = getTelemetryExportConfig();
+
+      if (!activeConfig.enabled) {
+        telemetryExportQueue.length = 0;
+        telemetryDroppedItems = 0;
+        return;
+      }
+
+      const items = telemetryExportQueue.splice(0, activeConfig.batchSize);
+      const batch = createTelemetryExportBatch(activeConfig, items);
+      const retained = await writeTelemetryRetentionBatch(activeConfig, batch);
+      const exported = activeConfig.backendUrl ? await postTelemetryBatch(activeConfig, batch) : false;
+
+      if (!retained && !exported) {
+        telemetryExportQueue.unshift(...batch.items.map((item) => cloneTelemetryExportItem(item)));
+        scheduleTelemetryFlush(activeConfig.flushIntervalMs);
+        return;
+      }
+
+      telemetryLastFlushAt = nowIso();
+      telemetryLastFlushError =
+        activeConfig.backendUrl && !exported
+          ? "Telemetry backend export failed; retained batch on disk."
+          : activeConfig.retentionDir && !retained
+            ? "Telemetry retention write failed."
+            : null;
+
+      withExportQueueSuppressed(() => {
+        if (retained) {
+          recordCounter("telemetry.retention.write.total", 1, {
+            outcome: "ok"
+          });
+        } else if (activeConfig.retentionDir) {
+          recordCounter("telemetry.retention.write.total", 1, {
+            outcome: "error"
+          });
+        }
+
+        if (activeConfig.backendUrl) {
+          recordCounter("telemetry.export.total", 1, {
+            outcome: exported ? "ok" : "error"
+          });
+        }
+      });
+    }
+  })().finally(() => {
+    telemetryFlushPromise = null;
+
+    if (telemetryExportQueue.length > 0 && getTelemetryExportConfig().enabled) {
+      scheduleTelemetryFlush(getTelemetryExportConfig().flushIntervalMs);
+    }
+  });
+
+  await telemetryFlushPromise;
+}
+
 export function resetTelemetrySnapshot() {
   telemetrySnapshot.logs.length = 0;
   telemetrySnapshot.metrics.length = 0;
   telemetrySnapshot.spans.length = 0;
+  telemetryExportQueue.length = 0;
+  telemetryDroppedItems = 0;
+  telemetryLastFlushAt = null;
+  telemetryLastFlushError = null;
+  clearTelemetryFlushTimer();
 }
 
 export function getTelemetrySnapshot(): TelemetrySnapshot {
   return {
-    logs: telemetrySnapshot.logs.map((entry) => ({
-      ...entry,
-      attributes: { ...entry.attributes },
-      context: { ...entry.context }
-    })),
-    metrics: telemetrySnapshot.metrics.map((entry) => ({
-      ...entry,
-      attributes: { ...entry.attributes },
-      context: { ...entry.context }
-    })),
-    spans: telemetrySnapshot.spans.map((entry) => ({
-      ...entry,
-      attributes: { ...entry.attributes },
-      context: { ...entry.context }
-    }))
+    logs: telemetrySnapshot.logs.map((entry) => cloneLogEntry(entry)),
+    metrics: telemetrySnapshot.metrics.map((entry) => cloneMetricEntry(entry)),
+    spans: telemetrySnapshot.spans.map((entry) => cloneSpanEntry(entry))
+  };
+}
+
+export function getTelemetryPipelineState(): TelemetryPipelineState {
+  return {
+    pendingItems: telemetryExportQueue.length,
+    droppedItems: telemetryDroppedItems,
+    lastFlushAt: telemetryLastFlushAt,
+    lastFlushError: telemetryLastFlushError,
+    config: getTelemetryExportConfig()
   };
 }
 
