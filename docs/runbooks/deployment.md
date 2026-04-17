@@ -18,18 +18,24 @@ Set these variables for every production deployment:
 export NODE_ENV=production
 export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
-export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
 ```
+
+Only set `AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE=true` when production is intentionally single-instance and that tradeoff has been approved.
 
 Optional but commonly needed:
 
 ```bash
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
+export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
+export AGENTIC_STAGING_IMAGE_TAG=agentic:<tag>
 export AGENTIC_TELEMETRY_RETENTION_DIR=.agentic/telemetry
 export AGENTIC_TELEMETRY_EXPORT_URL=https://telemetry.example.com/ingest
 export AGENTIC_TELEMETRY_EXPORT_TOKEN=replace-this-with-a-telemetry-ingest-token
 ```
+
+`AGENTIC_STAGING_DEPLOY_BIN` and `AGENTIC_STAGING_DEPLOY_ARGS_JSON` are the CI contract for the provider-backed staging release step. The command is executed without a shell, so pass structured arguments instead of a shell pipeline.
 
 ## Pre-Deploy Checks
 
@@ -76,7 +82,14 @@ The E2E suite should be treated as the pre-rollout check that exercises worker-b
 docker build -t agentic:<tag> .
 ```
 
-2. Deploy the image using your platform-specific release mechanism.
+2. Deploy the image using the provider command contract.
+
+```bash
+export AGENTIC_STAGING_IMAGE_TAG=agentic:<tag>
+npm run deploy:staging:provider
+```
+
+The provider deploy command must roll both the web and worker runtimes to the same image or release artifact. Do not continue if the provider step exits non-zero.
 
 3. Start the web process with startup validation.
 
@@ -103,6 +116,7 @@ curl -fsS https://agentic.example.com/api/ready
 
 ```bash
 npm run test:smoke:deployment
+npm run test:smoke:deployment-async
 npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
 
@@ -111,12 +125,11 @@ npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.age
 Successful smoke validation confirms:
 
 - the container is live and serving `/api/health`
-- readiness passes on `/api/ready`
+- readiness passes on `/api/ready`, including async execution backlog health
 - authenticated session bootstrap works when `AGENTIC_SMOKE_ACCESS_KEY` is provided
+- a deployed goal request can be enqueued and completed through the live worker path
 - telemetry export sanitizes secret-bearing payloads before retention or backend delivery
 - rollout-gate metrics stay inside the thresholds defined in `config/observability/alerts.json`
-
-The deployment smoke suite does not prove that a worker is actively draining queued jobs. That confidence comes from the worker startup contract, pre-rollout E2E coverage, and the post-rollout worker metrics and rollout-gate thresholds.
 
 Treat any readiness failure as a failed rollout. Do not continue shifting traffic while `/api/ready` returns `503`.
 Treat any rollout-gate failure as a failed rollout, even when the deployment smoke request itself succeeds.
@@ -165,6 +178,7 @@ curl -fsS https://agentic.example.com/api/ready
 
 ```bash
 npm run test:smoke:deployment
+npm run test:smoke:deployment-async
 npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
 

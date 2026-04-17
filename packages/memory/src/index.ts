@@ -27,6 +27,8 @@ export function createMemoryRecord(params: {
   sensitivity?: string;
   permissions?: AgentName[];
   actorContext?: ActorContext | null;
+  agentId?: string | null;
+  agentScope?: "global" | "agent-only" | "agent-preferred";
   reviewAt?: string | null;
   expiryAt?: string | null;
   createdAt?: string;
@@ -46,6 +48,8 @@ export function createMemoryRecord(params: {
     sensitivity: params.sensitivity ?? "internal",
     permissions: params.permissions ?? ["orchestrator", "workflow", "knowledge"],
     actorContext: params.actorContext ?? null,
+    agentId: params.agentId ?? null,
+    agentScope: params.agentScope ?? "global",
     reviewAt: params.reviewAt ?? null,
     expiryAt: params.expiryAt ?? null,
     createdAt,

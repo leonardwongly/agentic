@@ -6,12 +6,30 @@ type DashboardAdvancedOperationsCardProps = {
   totalIntegrations: number;
   watcherCount: number;
   autopilotMode: string;
+  coreOperationalCount: number;
+  coreTotalCount: number;
+  advancedOperationalCount: number;
+  advancedTotalCount: number;
+  trackedContractCount: number;
   expanded: boolean;
   onToggle: () => void;
 };
 
 export function DashboardAdvancedOperationsCard(props: DashboardAdvancedOperationsCardProps) {
-  const { activeWorkspaceName, readyIntegrations, totalIntegrations, watcherCount, autopilotMode, expanded, onToggle } = props;
+  const {
+    activeWorkspaceName,
+    readyIntegrations,
+    totalIntegrations,
+    watcherCount,
+    autopilotMode,
+    coreOperationalCount,
+    coreTotalCount,
+    advancedOperationalCount,
+    advancedTotalCount,
+    trackedContractCount,
+    expanded,
+    onToggle
+  } = props;
 
   return (
     <article className="card advanced-operations-card" id="section-advanced-operations">
@@ -31,12 +49,20 @@ export function DashboardAdvancedOperationsCard(props: DashboardAdvancedOperatio
           Integrations: {readyIntegrations}/{totalIntegrations} ready
         </span>
         <span className="pill">
+          Core loop: {coreOperationalCount}/{coreTotalCount} operational+
+        </span>
+        <span className="pill">
+          Advanced lane: {advancedOperationalCount}/{advancedTotalCount} operational+
+        </span>
+        <span className="pill">
           {watcherCount} watcher{watcherCount === 1 ? "" : "s"}
         </span>
         <span className="pill">Autopilot: {autopilotMode.replace(/_/gu, " ")}</span>
       </div>
       <p className="empty-state advanced-operations-copy">
-        Open this area when you need to change how the system runs, not when you just need to run the queue.
+        Open this area when you need to change how the system runs, not when you just need to run the queue. The
+        feature registry tracks {trackedContractCount} route contracts so advanced surfaces do not drift away from
+        their backing APIs.
       </p>
       {expanded ? (
         <div className="advanced-operations-expanded">

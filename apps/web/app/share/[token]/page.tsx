@@ -1,10 +1,10 @@
 import { notFound } from "next/navigation";
 import {
   buildSharedGoalView,
-  createGoalShareViewedLog,
   fingerprintGoalShareToken,
   verifyGoalShareToken
 } from "../../../lib/share";
+import { PublicShareViewTracker } from "../../../components/public-share-view-tracker";
 import { getSeededRepository } from "../../../lib/server";
 
 export const dynamic = "force-dynamic";
@@ -42,26 +42,11 @@ export default async function ShareGoalPage({ params }: SharePageProps) {
     notFound();
   }
 
-  await repository.saveGoalShare({
-    ...share,
-    lastViewedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  });
-
-  const shareViewLog = createGoalShareViewedLog(bundle, share.id, token, Date.now());
-
-  if (shareViewLog) {
-    bundle = {
-      ...bundle,
-      actionLogs: [...bundle.actionLogs, shareViewLog]
-    };
-    await repository.saveGoalBundle(bundle);
-  }
-
   const sharedGoal = buildSharedGoalView(bundle);
 
   return (
     <main className="dashboard-shell public-share-shell">
+      <PublicShareViewTracker token={token} />
       <section className="hero-panel">
         <div>
           <p className="eyebrow">Shared from Agentic</p>

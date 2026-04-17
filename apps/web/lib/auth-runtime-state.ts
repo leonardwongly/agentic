@@ -7,6 +7,7 @@ export type AuthRuntimeStateStatus = {
   sessionStateScope: "process-local" | "shared";
   unlockStateScope: "process-local" | "shared";
   sharedStateConfigured: boolean;
+  allowsProcessLocalStateException: boolean;
   warnings: string[];
 };
 
@@ -33,9 +34,16 @@ function buildWarnings(status: Omit<AuthRuntimeStateStatus, "warnings">): string
   return warnings;
 }
 
+function allowsProcessLocalStateException(): boolean {
+  return process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE?.trim().toLowerCase() === "true";
+}
+
 export function getAuthRuntimeStateStatus(): AuthRuntimeStateStatus {
   const production = process.env.NODE_ENV === "production";
-  const requiresSharedState = process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE === "true";
+  const processLocalException = allowsProcessLocalStateException();
+  const requiresSharedState = production
+    ? !processLocalException
+    : process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE === "true";
   const sessionStateScope = getAuthSessionStateStore().scope;
   const unlockStateScope = getSessionUnlockStateStore().scope;
   const sharedStateConfigured = sessionStateScope === "shared" && unlockStateScope === "shared";
@@ -46,12 +54,14 @@ export function getAuthRuntimeStateStatus(): AuthRuntimeStateStatus {
     sessionStateScope,
     unlockStateScope,
     sharedStateConfigured,
+    allowsProcessLocalStateException: processLocalException,
     warnings: buildWarnings({
       production,
       requiresSharedState,
       sessionStateScope,
       unlockStateScope,
-      sharedStateConfigured
+      sharedStateConfigured,
+      allowsProcessLocalStateException: processLocalException
     })
   };
 }
@@ -61,7 +71,7 @@ function buildProductionGuidanceMessage(status: AuthRuntimeStateStatus): string 
     "Shared auth state is not configured for production.",
     ...status.warnings,
     "Configure shared stores for auth session state and session unlock throttling,",
-    "or unset AGENTIC_REQUIRE_SHARED_AUTH_STATE for single-instance deployments."
+    "or set AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE=true only for audited single-instance deployments."
   ].join(" ");
 }
 
@@ -79,7 +89,7 @@ export function validateAuthRuntimeState(): AuthRuntimeStateStatus {
   }
 
   if (!warnedAboutProcessLocalAuthState) {
-    console.warn(`[agentic] ${guidance} Set AGENTIC_REQUIRE_SHARED_AUTH_STATE=true to fail closed.`);
+    console.warn(`[agentic] ${guidance}`);
     warnedAboutProcessLocalAuthState = true;
   }
 

@@ -80,6 +80,10 @@ export function authenticatedError(status: number, error: string) {
   return authenticatedJson({ error }, { status });
 }
 
+export function operationalError(status: number, error: string) {
+  return operationalJson({ error }, { status });
+}
+
 export async function parseJsonBody<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
 
@@ -127,6 +131,25 @@ export function handleApiError(error: unknown, fallbackMessage: string) {
     fallbackMessage
   });
   return authenticatedError(500, fallbackMessage);
+}
+
+export function handleOperationalApiError(error: unknown, fallbackMessage: string) {
+  if (error instanceof z.ZodError) {
+    return operationalError(400, formatValidationError(error));
+  }
+
+  if (error instanceof ApiRouteError) {
+    return operationalError(error.status, error.message);
+  }
+
+  if (isContentTypeError(error)) {
+    return operationalError(415, "Content-Type must be application/json.");
+  }
+
+  logError("api.request.unhandled_error", error, {
+    fallbackMessage
+  });
+  return operationalError(500, fallbackMessage);
 }
 
 type ApiTelemetryHandler = () => Promise<Response> | Response;

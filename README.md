@@ -75,13 +75,13 @@ export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
 
 In local development only, the app falls back to `agentic-local-dev-key` if `AGENTIC_ACCESS_KEY` is not set. Production should always use an explicit secret.
 
-Optional production hardening:
+Optional production exception for audited single-instance deployments:
 
 ```bash
-export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
+export AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE=true
 ```
 
-When enabled in production, Agentic fails closed if session revocation, session rate limiting, and unlock throttling are still backed by process-local memory. This is the recommended mode for multi-instance deployments.
+By default, production now fails closed if session revocation, session rate limiting, and unlock throttling are still backed by process-local memory. Only set `AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE=true` when you have explicitly accepted a single-instance deployment model.
 
 Optional development or test opt-in for the shared auth-state backend:
 
@@ -167,7 +167,6 @@ Production startup is intentionally split into explicit migration, readiness, an
 export NODE_ENV=production
 export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
-export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
 ```
 
 2. Check schema status before rollout:
@@ -202,7 +201,7 @@ The web startup wrapper fails closed if required production configuration is mis
 Agentic exposes two unauthenticated operational endpoints for orchestration and deployment validation:
 
 - `GET /api/health`: liveness probe that reports process uptime and current timestamp
-- `GET /api/ready`: readiness probe that validates access-key configuration, database reachability and migration status, and auth runtime-state requirements
+- `GET /api/ready`: readiness probe that validates access-key configuration, database reachability and migration status, auth runtime-state requirements, and async execution backlog health
 
 Both routes return `Cache-Control: no-store` and are safe for container probes and deployment smoke tests.
 
@@ -273,7 +272,7 @@ The first concrete local adapter is a notes provider that reads and writes Markd
 - Session revocation, login throttling, and unlock throttling default to bounded in-memory stores for local development and tests.
 - Production automatically upgrades those controls to shared Postgres-backed state when `DATABASE_URL` is configured.
 - `AGENTIC_SHARED_AUTH_STATE=true` opts development and test into the shared Postgres-backed auth-state path.
-- `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` makes production fail closed if shared auth-state infrastructure is still unavailable.
+- `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` enables the same fail-closed shared auth-state requirement outside production when you want development or test to match the production contract.
 - Login throttling and unlock throttling ignore forwarded client-IP headers by default; set `AGENTIC_TRUST_PROXY_HEADERS=true` only when the app is deployed behind a trusted proxy that overwrites those headers.
 - External actions stay behind governance and approval checks unless a connector has earned a higher readiness tier.
 - Approval and execution evidence is persisted so operator-visible state matches what actually ran.

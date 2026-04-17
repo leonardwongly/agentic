@@ -43,6 +43,7 @@ describe("auth helpers", () => {
   const originalDatabaseUrl = process.env.DATABASE_URL;
   const originalSharedAuthState = process.env.AGENTIC_SHARED_AUTH_STATE;
   const originalTrustProxyHeaders = process.env.AGENTIC_TRUST_PROXY_HEADERS;
+  const originalAllowProcessLocalAuthState = process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
   const databaseUrl = process.env.DATABASE_URL;
   const postgresIt = databaseUrl ? it : it.skip;
 
@@ -57,6 +58,7 @@ describe("auth helpers", () => {
     process.env.DATABASE_URL = originalDatabaseUrl;
     process.env.AGENTIC_SHARED_AUTH_STATE = originalSharedAuthState;
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
+    process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = originalAllowProcessLocalAuthState;
     resetAuthRuntimeStateWarningsForTesting();
     resetSessionUnlockStateStoreForTesting();
     resetAuthSessionStateStoreForTesting();
@@ -317,21 +319,24 @@ describe("auth helpers", () => {
     });
   });
 
-  it("ignores forwarded headers by default and falls back to a bounded user-agent key", () => {
+  it("ignores forwarded headers by default and falls back to a bounded request fingerprint", () => {
     const request = new Request("http://localhost/api/session", {
       method: "POST",
       headers: {
         "x-forwarded-for": "203.0.113.10, 198.51.100.8",
         "x-real-ip": "198.51.100.9",
         "cf-connecting-ip": "198.51.100.10",
-        "user-agent": "  Agentic Test Client  "
+        "user-agent": "  Agentic Test Client  ",
+        "accept-language": "en-SG,en;q=0.9"
       }
     });
 
-    expect(getRequestClientIdentity(request)).toEqual({
-      key: "ua:agentic test client",
-      source: "user-agent-fallback"
+    const identity = getRequestClientIdentity(request);
+
+    expect(identity).toMatchObject({
+      source: "request-fingerprint"
     });
+    expect(identity.key).toMatch(/^fp:\/api\/session:[0-9a-f]{24}$/);
   });
 
   it("uses a canonical trusted proxy IP when proxy headers are explicitly trusted", () => {
@@ -352,7 +357,7 @@ describe("auth helpers", () => {
     });
   });
 
-  it("falls back to user-agent bucketing when trusted forwarded headers are malformed", () => {
+  it("falls back to request fingerprinting when trusted forwarded headers are malformed", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
 
     const request = new Request("http://localhost/api/session", {
@@ -360,14 +365,17 @@ describe("auth helpers", () => {
       headers: {
         "x-forwarded-for": "not-an-ip, 203.0.113.10",
         "x-real-ip": "also-not-an-ip",
-        "user-agent": "Agentic Test Client"
+        "user-agent": "Agentic Test Client",
+        "accept-language": "en-SG"
       }
     });
 
-    expect(getRequestClientIdentity(request)).toEqual({
-      key: "ua:agentic test client",
-      source: "user-agent-fallback"
+    const identity = getRequestClientIdentity(request);
+
+    expect(identity).toMatchObject({
+      source: "request-fingerprint"
     });
+    expect(identity.key).toMatch(/^fp:\/api\/session:[0-9a-f]{24}$/);
   });
 
   it("supports swapping in a shared session unlock state store boundary", async () => {
@@ -473,6 +481,7 @@ describe("auth helpers", () => {
   it("reports process-local auth runtime state by default", () => {
     process.env.NODE_ENV = "test";
     delete process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
+    delete process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
     expect(getAuthRuntimeStateStatus()).toMatchObject({
       production: false,
@@ -483,16 +492,16 @@ describe("auth helpers", () => {
     });
   });
 
-  it("rejects strict production mode when auth runtime state is still process-local", () => {
+  it("rejects production mode by default when auth runtime state is still process-local", () => {
     process.env.NODE_ENV = "production";
-    process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = "true";
+    delete process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
     expect(() => validateAuthRuntimeState()).toThrow(/Shared auth state is not configured for production/);
   });
 
   it("accepts strict production mode when shared auth runtime state is configured", () => {
     process.env.NODE_ENV = "production";
-    process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = "true";
+    delete process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
     const authStore: AuthSessionStateStore = {
       scope: "shared",
@@ -529,6 +538,17 @@ describe("auth helpers", () => {
 
     expect(() => validateAuthRuntimeState()).not.toThrow();
     expect(getAuthRuntimeStateStatus().sharedStateConfigured).toBe(true);
+  });
+
+  it("allows an explicit single-instance production exception when process-local auth state is intentional", () => {
+    process.env.NODE_ENV = "production";
+    process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = "true";
+
+    expect(() => validateAuthRuntimeState()).not.toThrow();
+    expect(getAuthRuntimeStateStatus()).toMatchObject({
+      requiresSharedState: false,
+      allowsProcessLocalStateException: true
+    });
   });
 
   it("defaults to shared auth runtime state when DATABASE_URL is configured", () => {

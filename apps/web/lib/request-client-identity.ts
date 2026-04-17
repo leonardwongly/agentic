@@ -1,13 +1,16 @@
+import crypto from "node:crypto";
 import { isIP } from "node:net";
 
 export type RequestClientIdentity = {
   key: string;
-  source: "trusted-ip" | "user-agent-fallback";
+  source: "trusted-ip" | "request-fingerprint";
 };
 
-const USER_AGENT_FALLBACK_PREFIX = "ua:";
+const REQUEST_FINGERPRINT_PREFIX = "fp:";
 const TRUSTED_IP_PREFIX = "ip:";
 const MAX_USER_AGENT_LENGTH = 200;
+const MAX_ACCEPT_LANGUAGE_LENGTH = 80;
+const MAX_PATHNAME_LENGTH = 120;
 
 function isTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "true";
@@ -69,9 +72,32 @@ function getTrustedProxyIp(request: Request): string | null {
   return candidates.find((candidate) => candidate !== null) ?? null;
 }
 
-function getUserAgentFallbackKey(request: Request): string {
+function normalizeFingerprintSegment(value: string | null | undefined, maxLength: number): string {
+  const normalized = value?.trim().toLowerCase().slice(0, maxLength);
+  return normalized || "unknown";
+}
+
+function getRequestFingerprintKey(request: Request): string {
+  const pathname = new URL(request.url).pathname.slice(0, MAX_PATHNAME_LENGTH) || "/";
   const userAgent = request.headers.get("user-agent")?.trim().toLowerCase().slice(0, MAX_USER_AGENT_LENGTH);
-  return `${USER_AGENT_FALLBACK_PREFIX}${userAgent || "unknown"}`;
+  const acceptLanguage = normalizeFingerprintSegment(
+    request.headers.get("accept-language"),
+    MAX_ACCEPT_LANGUAGE_LENGTH
+  );
+  const fingerprint = crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        method: request.method.toUpperCase(),
+        pathname,
+        userAgent: userAgent || "unknown",
+        acceptLanguage
+      })
+    )
+    .digest("hex")
+    .slice(0, 24);
+
+  return `${REQUEST_FINGERPRINT_PREFIX}${pathname}:${fingerprint}`;
 }
 
 export function getRequestClientIdentity(request: Request): RequestClientIdentity {
@@ -85,8 +111,8 @@ export function getRequestClientIdentity(request: Request): RequestClientIdentit
   }
 
   return {
-    key: getUserAgentFallbackKey(request),
-    source: "user-agent-fallback"
+    key: getRequestFingerprintKey(request),
+    source: "request-fingerprint"
   };
 }
 

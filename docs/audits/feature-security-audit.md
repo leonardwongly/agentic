@@ -80,19 +80,19 @@ Document note:
 
 | Surface | Inputs | Outputs | Trust boundary | Stateful side effects | Coverage after pass | Remaining gaps |
 | --- | --- | --- | --- | --- | --- | --- |
-| Session unlock/logout | JSON body, cookie jar, env access key, shared-state env | session cookie, JSON status | untrusted browser to auth boundary | sets, clears, and revokes session state plus unlock-throttle state | unit + route + e2e + readiness coverage | shared auth state is still optional unless `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` and shared stores are configured |
+| Session unlock/logout | JSON body, cookie jar, env access key, shared-state env | session cookie, JSON status | untrusted browser to auth boundary | sets, clears, and revokes session state plus unlock-throttle state | unit + route + e2e + readiness coverage | non-production still stays process-local by default unless `AGENTIC_SHARED_AUTH_STATE=true` or `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` is set |
 | Approvals respond | path param, JSON body | updated bundle | authenticated API caller | persists approval decision | route tests | no approval history endpoint yet |
 | Memory list/create | JSON body | memory list/record | authenticated API caller | persists memory record | route validation + header tests | no edit/delete flow |
 | Integrations list/update | JSON body | integration list/record | authenticated API caller | updates integration state | route scoping + validation tests | non-Google providers still rely on future provider-specific credential work |
 | Google OAuth connect/callback | signed OAuth state, query params, provider redirect | authenticated redirect, dashboard integration state | authenticated browser plus Google OAuth boundary | persists tenant-scoped credential metadata and encrypted refresh-token secret | route + repository coverage | provider availability and token rotation still depend on Google uptime and operator configuration |
 | Local notes list/create/read/update | query, path param, JSON body | note documents | authenticated API caller to local filesystem | creates or updates markdown files | unit + route + e2e | concurrent edits remain last-write-win |
 | Docs render | authenticated POST | docs build result | authenticated API caller to child process boundary | runs render/validate scripts | route tests | request-path build still expensive |
-| Goal create/read/share/status | JSON body, path params | `202` job acknowledgement, job status, goal bundle, share URL | authenticated browser/API caller, plus signed public-token boundary for share pages | saves goal bundles, durable jobs, and share logs | unit + route + e2e + worker coverage | share-page view logging still persists on the request path |
+| Goal create/read/share/status | JSON body, path params | `202` job acknowledgement, job status, goal bundle, share URL | authenticated browser/API caller, plus signed public-token boundary for share pages | saves goal bundles, durable jobs, and share logs | unit + route + e2e + worker coverage | share-page view tracking is now best-effort and still relies on repository write consistency under concurrent public traffic |
 | Autopilot event queueing | JSON body, idempotency key, actor context | deduplicated event status | authenticated API caller to durable-job boundary | persists autopilot event plus queued work | route + worker tests | event volume still depends on queue sizing and rollout alerting rather than per-route rate limits |
 | Privacy operations | JSON body, active-workspace ownership, actor context | operation list, accepted queued operation | workspace owner to governance boundary | persists privacy operation records, queued jobs, audit metadata, export/delete status | route + worker tests | destructive delete semantics remain asynchronous and require operators to wait for completion state |
 | Health and readiness probes | probe request, env, DB connectivity, auth runtime state | operational JSON report | infrastructure to runtime boundary | no user-data mutation | unit + smoke deployment coverage | these checks only protect production when wired into deployment gates and alerting |
 | Observability export and rollout gates | env config, retained telemetry files, backend URL/token | redacted logs, metrics, spans, gate results | internal runtime to telemetry backend/filesystem boundary | retains bounded telemetry batches and rollout validation artifacts | unit + smoke + failure-injection + load coverage | backend access control, retention policy enforcement, and live threshold tuning remain external-operational work |
-| Public share page | signed token path param | read-only shared view | anonymous internet to signed-token boundary | logs deduped page views | helper + route + e2e | page-view logging is still request-path persistence |
+| Public share page | signed token path param | read-only shared view | anonymous internet to signed-token boundary | emits best-effort view-tracking POST plus deduped page-view logs | helper + route + e2e | public-share tracking is asynchronous and still depends on repository durability |
 | Repository persistence | filesystem path or `DATABASE_URL` | domain models | process to filesystem/Postgres | creates and updates runtime data | repository tests | no automatic corruption repair |
 
 ## Implemented Remediation Summary
@@ -123,8 +123,8 @@ Document note:
 
 ## Deferred Follow-Up
 
-1. Shared auth state is only guaranteed cross-instance when shared session and unlock stores are configured; keep `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` in multi-instance production so startup fails closed when that contract is not met.
+1. Shared auth state is only guaranteed cross-instance when shared session and unlock stores are configured; production now fails closed by default, and non-production can opt into the same contract with `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true`.
 2. Add optimistic concurrency or version checks for local note edits if concurrent writers become common.
-3. Move share-page view logging off the request path if public traffic grows enough to make synchronous persistence noticeable.
+3. Public-share view tracking is now off the render path, but repository updates are still best-effort and last-write-win; add stronger concurrency control if public traffic grows.
 4. Docs rendering is still request-path process execution; if demand rises, move it behind the durable worker path instead of allowing user traffic to trigger build work directly.
 5. The telemetry pipeline is redacted and bounded in-process, but real retention, access control, and alert-threshold governance still depend on the external observability backend configuration.

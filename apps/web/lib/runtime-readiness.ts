@@ -1,9 +1,10 @@
 import { getDatabaseSchemaStatus, type DatabaseSchemaStatus } from "@agentic/db";
+import { createRepository } from "@agentic/repository";
 import { getAuthMode } from "./auth";
 import { getAuthRuntimeStateStatus, type AuthRuntimeStateStatus } from "./auth-runtime-state";
 
 export type ReadinessCheck = {
-  name: "access_key" | "database" | "auth_runtime_state";
+  name: "access_key" | "database" | "auth_runtime_state" | "async_execution";
   status: "pass" | "warn" | "fail";
   message: string;
   details?: Record<string, string | boolean | number | null>;
@@ -19,6 +20,7 @@ export type WebReadinessReport = {
 };
 
 type AuthModeSnapshot = ReturnType<typeof getAuthMode>;
+type AsyncExecutionCheckSnapshot = Omit<ReadinessCheck, "name">;
 
 type ReadinessEvaluationParams = {
   generatedAt?: string;
@@ -27,7 +29,10 @@ type ReadinessEvaluationParams = {
   authMode: AuthModeSnapshot;
   authRuntimeState: AuthRuntimeStateStatus;
   databaseStatus: DatabaseSchemaStatus | null;
+  asyncExecution: AsyncExecutionCheckSnapshot;
 };
+
+const DEFAULT_MAX_PENDING_JOB_AGE_MS = 15 * 60 * 1000;
 
 function normalizeRuntime(nodeEnv: string | undefined): WebReadinessReport["runtime"] {
   if (nodeEnv === "production") {
@@ -169,12 +174,120 @@ function buildAuthRuntimeStateCheck(params: ReadinessEvaluationParams): Readines
   };
 }
 
+function buildAsyncExecutionCheck(params: ReadinessEvaluationParams): ReadinessCheck {
+  return {
+    name: "async_execution",
+    ...params.asyncExecution
+  };
+}
+
+function getMaxPendingJobAgeMs(): number {
+  const configured = Number.parseInt(process.env.AGENTIC_READY_MAX_PENDING_JOB_AGE_MS ?? "", 10);
+
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+
+  return DEFAULT_MAX_PENDING_JOB_AGE_MS;
+}
+
+function getAsyncExecutionFailureStatus(runtime: WebReadinessReport["runtime"]): ReadinessCheck["status"] {
+  return runtime === "production" ? "fail" : "warn";
+}
+
+async function getAsyncExecutionCheckSnapshot(nodeEnv: string | undefined): Promise<AsyncExecutionCheckSnapshot> {
+  const runtime = normalizeRuntime(nodeEnv);
+  const maxPendingJobAgeMs = getMaxPendingJobAgeMs();
+
+  try {
+    const repository = createRepository();
+    const jobs = await repository.listJobs({
+      statuses: ["queued", "running", "retrying", "dead_letter"]
+    });
+    const now = Date.now();
+    const deadLetterCount = jobs.filter((job) => job.status === "dead_letter").length;
+    const expiredLeaseCount = jobs.filter((job) => {
+      if (job.status !== "running" || !job.leaseExpiresAt) {
+        return false;
+      }
+
+      const leaseExpiresAt = Date.parse(job.leaseExpiresAt);
+      return Number.isFinite(leaseExpiresAt) && leaseExpiresAt <= now;
+    }).length;
+    const pendingJobs = jobs.filter((job) => job.status === "queued" || job.status === "retrying");
+    const stalePendingCount = pendingJobs.filter((job) => {
+      const availableAt = Date.parse(job.availableAt);
+      return Number.isFinite(availableAt) && availableAt <= now && now - availableAt > maxPendingJobAgeMs;
+    }).length;
+    const oldestPendingAgeMs =
+      pendingJobs.length === 0
+        ? null
+        : pendingJobs.reduce<number | null>((oldest, job) => {
+            const availableAt = Date.parse(job.availableAt);
+
+            if (!Number.isFinite(availableAt) || availableAt > now) {
+              return oldest;
+            }
+
+            const age = Math.max(0, now - availableAt);
+            return oldest === null ? age : Math.max(oldest, age);
+          }, null);
+    const details = {
+      queuedJobs: jobs.filter((job) => job.status === "queued").length,
+      retryingJobs: jobs.filter((job) => job.status === "retrying").length,
+      runningJobs: jobs.filter((job) => job.status === "running").length,
+      deadLetterJobs: deadLetterCount,
+      expiredLeases: expiredLeaseCount,
+      stalePendingJobs: stalePendingCount,
+      oldestPendingJobAgeSeconds: oldestPendingAgeMs === null ? null : Math.floor(oldestPendingAgeMs / 1000),
+      maxPendingJobAgeSeconds: Math.floor(maxPendingJobAgeMs / 1000)
+    };
+
+    if (deadLetterCount > 0 || expiredLeaseCount > 0 || stalePendingCount > 0) {
+      const issues: string[] = [];
+
+      if (deadLetterCount > 0) {
+        issues.push(`${deadLetterCount} dead-letter job(s)`);
+      }
+
+      if (expiredLeaseCount > 0) {
+        issues.push(`${expiredLeaseCount} expired worker lease(s)`);
+      }
+
+      if (stalePendingCount > 0) {
+        issues.push(`${stalePendingCount} stale pending job(s)`);
+      }
+
+      return {
+        status: getAsyncExecutionFailureStatus(runtime),
+        message: `Async execution requires attention: ${issues.join(", ")}.`,
+        details
+      };
+    }
+
+    return {
+      status: "pass",
+      message: "Async execution backlog checks passed.",
+      details
+    };
+  } catch (error) {
+    return {
+      status: getAsyncExecutionFailureStatus(runtime),
+      message: "Async execution readiness checks could not be completed.",
+      details: {
+        error: error instanceof Error ? error.message : "Unknown readiness failure"
+      }
+    };
+  }
+}
+
 export function buildWebReadinessReport(params: ReadinessEvaluationParams): WebReadinessReport {
   const runtime = normalizeRuntime(params.nodeEnv);
   const checks = [
     buildAccessKeyCheck(params),
     buildDatabaseCheck(params),
-    buildAuthRuntimeStateCheck(params)
+    buildAuthRuntimeStateCheck(params),
+    buildAsyncExecutionCheck(params)
   ];
   const ok = checks.every((check) => check.status !== "fail");
 
@@ -190,9 +303,10 @@ export function buildWebReadinessReport(params: ReadinessEvaluationParams): WebR
 
 export async function getWebReadinessReport(): Promise<WebReadinessReport> {
   const databaseConfigured = Boolean(process.env.DATABASE_URL?.trim());
+  const nodeEnv = process.env.NODE_ENV;
 
   return buildWebReadinessReport({
-    nodeEnv: process.env.NODE_ENV,
+    nodeEnv,
     databaseConfigured,
     authMode: getAuthMode({ emitDevelopmentWarning: false }),
     authRuntimeState: getAuthRuntimeStateStatus(),
@@ -200,6 +314,7 @@ export async function getWebReadinessReport(): Promise<WebReadinessReport> {
       ? await getDatabaseSchemaStatus({
           databaseUrl: process.env.DATABASE_URL
         })
-      : null
+      : null,
+    asyncExecution: await getAsyncExecutionCheckSnapshot(nodeEnv)
   });
 }

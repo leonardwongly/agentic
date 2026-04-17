@@ -23,7 +23,10 @@ import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/i
 import { getMemoryFreshness } from "@agentic/memory";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
+import { CoreLoopViewTracker } from "./core-loop-view-tracker";
 import { isAdvancedDashboardSection } from "../lib/dashboard-surface";
+import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-loop-telemetry";
+import { summarizeFeatureCapabilities } from "../lib/feature-capabilities";
 import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
 import { getGoalShareSuccessMessage } from "../lib/share-client";
 import { AgentsPanel } from "./agents";
@@ -363,6 +366,9 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     () => data.integrations.filter((integration) => integration.status === "ready").length,
     [data.integrations]
   );
+  const featureCapabilitySummary = useMemo(() => summarizeFeatureCapabilities(), []);
+  const coreLoopSummary = useMemo(() => summarizeCoreLoopTelemetry(data), [data]);
+  const coreLoopHealthCopy = useMemo(() => describeCoreLoopHealth(coreLoopSummary), [coreLoopSummary]);
   const integrationSurfaces = useMemo(
     () =>
       data.integrations.map((integration) => ({
@@ -1773,6 +1779,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       />
 
       <main className={`dashboard-shell ${theme.mode === 'dark' ? 'dark-mode' : ''}`}>
+        <CoreLoopViewTracker workspaceId={data.activeWorkspace?.id ?? null} />
         {/* Stats Bar with Theme Toggle */}
         <div className="stats-bar-wrapper">
           <StatsBar {...statsBar.props} />
@@ -1815,6 +1822,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               changed recently. The reproducible document export stays available as an evidence snapshot instead of
               driving the main operating flow.
             </p>
+            <div className="advanced-operations-summary" aria-label="Governed loop summary">
+              <span className="pill">Decide: {coreLoopSummary.counts.commitments} commitments</span>
+              <span className="pill">Approve: {coreLoopSummary.counts.pendingApprovals} pending</span>
+              <span className="pill">Execute: {coreLoopSummary.counts.activeGoals} active</span>
+              <span className="pill">Observe: {coreLoopSummary.counts.recentActivity} events</span>
+              <span className="pill">Improve: {coreLoopSummary.counts.memories} memories</span>
+            </div>
           </div>
           <div className="hero-actions">
             <div className="hero-button-row">
@@ -1836,6 +1850,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             <p className={`status-chip ${docsState.kind}`}>
               {docsState.message || "The governed document snapshot is ready whenever you need an exportable record."}
             </p>
+            <p className={`status-chip ${coreLoopSummary.health === "idle" ? "idle" : "success"}`}>{coreLoopHealthCopy}</p>
           </div>
         </section>
 
@@ -1993,6 +2008,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             totalIntegrations={data.integrations.length}
             watcherCount={data.watchers.length}
             autopilotMode={data.autopilotSettings.mode}
+            coreOperationalCount={featureCapabilitySummary.core.operationalOrBetter}
+            coreTotalCount={featureCapabilitySummary.core.total}
+            advancedOperationalCount={featureCapabilitySummary.advanced.operationalOrBetter}
+            advancedTotalCount={featureCapabilitySummary.advanced.total}
+            trackedContractCount={featureCapabilitySummary.trackedContracts}
             expanded={showAdvancedOperations}
             onToggle={() => setShowAdvancedOperations((current) => !current)}
           />

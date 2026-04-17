@@ -1,6 +1,7 @@
 import { buildWebReadinessReport } from "../apps/web/lib/runtime-readiness";
 import type { AuthRuntimeStateStatus } from "../apps/web/lib/auth-runtime-state";
 import type { DatabaseSchemaStatus } from "@agentic/db";
+import type { ReadinessCheck } from "../apps/web/lib/runtime-readiness";
 
 function buildAuthRuntimeState(
   overrides?: Partial<AuthRuntimeStateStatus>
@@ -11,10 +12,29 @@ function buildAuthRuntimeState(
     sessionStateScope: "process-local",
     unlockStateScope: "process-local",
     sharedStateConfigured: false,
+    allowsProcessLocalStateException: false,
     warnings: [
       "Session revocation and rate limiting are still process-local.",
       "Session unlock throttling is still process-local."
     ],
+    ...overrides
+  };
+}
+
+function buildAsyncExecutionCheck(overrides?: Partial<Omit<ReadinessCheck, "name">>): Omit<ReadinessCheck, "name"> {
+  return {
+    status: "pass",
+    message: "Async execution backlog checks passed.",
+    details: {
+      queuedJobs: 0,
+      retryingJobs: 0,
+      runningJobs: 0,
+      deadLetterJobs: 0,
+      expiredLeases: 0,
+      stalePendingJobs: 0,
+      oldestPendingJobAgeSeconds: null,
+      maxPendingJobAgeSeconds: 900
+    },
     ...overrides
   };
 }
@@ -49,6 +69,10 @@ describe("runtime readiness", () => {
         production: true,
         requiresSharedState: true
       }),
+      asyncExecution: buildAsyncExecutionCheck({
+        status: "fail",
+        message: "Async execution requires attention: 1 stale pending job(s)."
+      }),
       databaseStatus: null,
       generatedAt: "2026-04-17T00:00:00.000Z"
     });
@@ -71,6 +95,10 @@ describe("runtime readiness", () => {
       expect.objectContaining({
         name: "auth_runtime_state",
         status: "fail"
+      }),
+      expect.objectContaining({
+        name: "async_execution",
+        status: "fail"
       })
     ]);
   });
@@ -85,6 +113,7 @@ describe("runtime readiness", () => {
         configured: true
       },
       authRuntimeState: buildAuthRuntimeState(),
+      asyncExecution: buildAsyncExecutionCheck(),
       databaseStatus: null,
       generatedAt: "2026-04-17T00:00:00.000Z"
     });
@@ -107,6 +136,10 @@ describe("runtime readiness", () => {
       expect.objectContaining({
         name: "auth_runtime_state",
         status: "pass"
+      }),
+      expect.objectContaining({
+        name: "async_execution",
+        status: "pass"
       })
     ]);
   });
@@ -126,8 +159,10 @@ describe("runtime readiness", () => {
         sessionStateScope: "shared",
         unlockStateScope: "shared",
         sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
         warnings: []
       }),
+      asyncExecution: buildAsyncExecutionCheck(),
       databaseStatus: buildDatabaseStatus(),
       generatedAt: "2026-04-17T00:00:00.000Z"
     });
@@ -155,8 +190,10 @@ describe("runtime readiness", () => {
         sessionStateScope: "shared",
         unlockStateScope: "shared",
         sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
         warnings: []
       }),
+      asyncExecution: buildAsyncExecutionCheck(),
       databaseStatus: buildDatabaseStatus({
         ready: false,
         failureReason: "pending_migrations",
@@ -173,6 +210,54 @@ describe("runtime readiness", () => {
         status: "fail",
         details: expect.objectContaining({
           pendingMigrations: 1
+        })
+      })
+    );
+  });
+
+  it("fails readiness when async execution has dead-lettered work", () => {
+    const report = buildWebReadinessReport({
+      nodeEnv: "production",
+      databaseConfigured: true,
+      authMode: {
+        requiresConfiguredKey: false,
+        usesDevelopmentFallback: false,
+        configured: true
+      },
+      authRuntimeState: buildAuthRuntimeState({
+        production: true,
+        requiresSharedState: true,
+        sessionStateScope: "shared",
+        unlockStateScope: "shared",
+        sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      asyncExecution: buildAsyncExecutionCheck({
+        status: "fail",
+        message: "Async execution requires attention: 1 dead-letter job(s).",
+        details: {
+          queuedJobs: 0,
+          retryingJobs: 0,
+          runningJobs: 0,
+          deadLetterJobs: 1,
+          expiredLeases: 0,
+          stalePendingJobs: 0,
+          oldestPendingJobAgeSeconds: null,
+          maxPendingJobAgeSeconds: 900
+        }
+      }),
+      databaseStatus: buildDatabaseStatus(),
+      generatedAt: "2026-04-17T00:00:00.000Z"
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "async_execution",
+        status: "fail",
+        details: expect.objectContaining({
+          deadLetterJobs: 1
         })
       })
     );

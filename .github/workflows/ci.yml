@@ -37,6 +37,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Validate migrations
         run: |
           npm run db:migrate
@@ -44,6 +47,12 @@ jobs:
 
       - name: Run unit and integration tests
         run: npm test
+
+      - name: Validate feature capability contracts
+        run: npm run test:smoke:capabilities
+
+      - name: Run async execution smoke
+        run: npm run test:smoke:observability
 
       - name: Build applications
         run: npm run build

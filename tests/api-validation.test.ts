@@ -50,6 +50,7 @@ describe("api request validation", () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalRequireSharedAuthState = process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
   const originalTrustProxyHeaders = process.env.AGENTIC_TRUST_PROXY_HEADERS;
+  const originalAllowProcessLocalAuthState = process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
@@ -67,6 +68,7 @@ describe("api request validation", () => {
     process.env.NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
+    process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = originalAllowProcessLocalAuthState;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     await resetSessionUnlockRateLimit();
@@ -493,10 +495,9 @@ describe("api request validation", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(seenKeys).toEqual([
-      "check:ua:agentic route test",
-      "clear:ua:agentic route test"
-    ]);
+    expect(seenKeys).toHaveLength(2);
+    expect(seenKeys[0]).toMatch(/^check:fp:\/api\/session:[0-9a-f]{24}$/);
+    expect(seenKeys[1]).toBe(seenKeys[0]?.replace(/^check:/, "clear:"));
     expectNoStoreHeaders(response);
   });
 
@@ -544,9 +545,9 @@ describe("api request validation", () => {
     expectNoStoreHeaders(response);
   });
 
-  it("rejects session creation when production requires shared auth state but only process-local stores are configured", async () => {
+  it("rejects session creation in production when only process-local auth stores are configured", async () => {
     process.env.NODE_ENV = "production";
-    process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = "true";
+    delete process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
     const response = await sessionRoute(
       buildJsonRequest(
