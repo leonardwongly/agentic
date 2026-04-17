@@ -3,6 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = 3201;
 const e2eRoot = path.join(process.cwd(), ".agentic", "e2e", process.env.PLAYWRIGHT_E2E_RUN_ID ?? `${Date.now()}`);
+const useProductionServer = process.env.PLAYWRIGHT_USE_PROD_SERVER === "true" && Boolean(process.env.DATABASE_URL?.trim());
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -24,7 +25,7 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: `npm run build && npm run start -w @agentic/web -- --hostname 127.0.0.1 --port ${port}`,
+    command: `tsx scripts/playwright-stack.ts --hostname 127.0.0.1 --port ${port}`,
     url: `http://127.0.0.1:${port}`,
     timeout: 180_000,
     reuseExistingServer: false,
@@ -32,7 +33,8 @@ export default defineConfig({
       AGENTIC_ACCESS_KEY: "playwright-e2e-key",
       AGENTIC_NOTES_PATH: path.join(e2eRoot, "notes"),
       AGENTIC_RUNTIME_STORE_PATH: path.join(e2eRoot, "runtime-store.json"),
-      NODE_ENV: "test"
+      PLAYWRIGHT_STACK_MODE: useProductionServer ? "production" : "development",
+      NODE_ENV: useProductionServer ? "production" : "test"
     }
   }
 });

@@ -1,0 +1,51 @@
+name: Staging Deploy
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      AGENTIC_ACCESS_KEY: ${{ secrets.STAGING_AGENTIC_ACCESS_KEY }}
+      AGENTIC_REQUIRE_SHARED_AUTH_STATE: "true"
+      AGENTIC_SMOKE_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      AGENTIC_SMOKE_ACCESS_KEY: ${{ secrets.STAGING_SMOKE_ACCESS_KEY }}
+      NODE_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Validate required staging configuration
+        run: |
+          test -n "$DATABASE_URL" || { echo "Missing STAGING_DATABASE_URL"; exit 1; }
+          test -n "$AGENTIC_ACCESS_KEY" || { echo "Missing STAGING_AGENTIC_ACCESS_KEY"; exit 1; }
+
+      - run: npm ci
+
+      - name: Build deployable artifacts
+        run: npm run build
+
+      - name: Validate staging database readiness
+        run: npm run db:status -- --require-ready
+
+      - name: Build staging image
+        run: docker build -t agentic-staging:${{ github.sha }} .
+
+      - name: Smoke-check deployed staging environment
+        if: ${{ env.AGENTIC_SMOKE_BASE_URL != '' }}
+        run: npm run test:smoke:deployment
+
+      - name: Emit deployment handoff summary
+        run: |
+          echo "Staging deploy scaffolding completed."
+          echo "Attach the provider-specific deploy step after image publish and rollout wiring are available."

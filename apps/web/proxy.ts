@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { buildContentSecurityPolicy } from "./lib/csp";
 
+const HTML_CACHE_CONTROL = "no-store, max-age=0, must-revalidate";
+
 export function proxy(request: NextRequest) {
   const nonce = btoa(crypto.randomUUID());
   const requestHeaders = new Headers(request.headers);
@@ -19,6 +21,7 @@ export function proxy(request: NextRequest) {
   });
 
   response.headers.set("Content-Security-Policy", contentSecurityPolicy);
+  response.headers.set("Cache-Control", HTML_CACHE_CONTROL);
 
   return response;
 }

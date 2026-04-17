@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { unlockDashboard } from "./helpers";
+import { openRequestComposer, unlockDashboard } from "./helpers";
+
+const useProductionServer = process.env.PLAYWRIGHT_USE_PROD_SERVER === "true" && Boolean(process.env.DATABASE_URL?.trim());
 
 test("serves baseline security headers on the dashboard shell", async ({ page }) => {
   const response = await page.goto("/");
@@ -20,26 +22,40 @@ test("serves a nonce-backed content security policy on HTML pages", async ({ pag
   expect(csp).toBeTruthy();
   expect(csp).toContain("default-src 'self'");
   expect(csp).toContain("script-src 'self' 'nonce-");
-  expect(csp).toContain("'strict-dynamic'");
-  expect(csp).toContain("style-src 'self' 'nonce-");
   expect(csp).toContain("frame-ancestors 'none'");
-  expect(csp).not.toContain("'unsafe-inline'");
-  expect(csp).not.toContain("'unsafe-eval'");
   expect(html).toMatch(/<script[^>]+nonce="[^"]+"/u);
+
+  if (useProductionServer) {
+    expect(csp).toContain("'strict-dynamic'");
+    expect(csp).toContain("style-src 'self' 'nonce-");
+    expect(csp).not.toContain("'unsafe-inline'");
+    expect(csp).not.toContain("'unsafe-eval'");
+  } else {
+    expect(csp).toContain("'strict-dynamic'");
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("'unsafe-eval'");
+  }
 });
 
 test("keeps the authenticated dashboard non-cacheable and applies security headers to public share pages", async ({ browser, page }) => {
   await unlockDashboard(page);
 
   const dashboardResponse = await page.goto("/");
+  const cacheControl = dashboardResponse?.headers()["cache-control"] ?? "";
 
   expect(dashboardResponse).not.toBeNull();
-  expect(dashboardResponse?.headers()["cache-control"]).toContain("no-store");
+  if (useProductionServer) {
+    expect(cacheControl).toContain("no-store");
+  } else {
+    expect(cacheControl).toContain("must-revalidate");
+    expect(cacheControl).toMatch(/no-store|no-cache/u);
+  }
 
-  await page.getByPlaceholder("Example: Triage my inbox and draft replies for anything urgent.").fill(
+  const { requestInput } = await openRequestComposer(page);
+  await requestInput.fill(
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Create goal" }).click();
+  await page.getByRole("button", { name: "Submit request" }).click();
 
   const createdGoal = page
     .locator(".request-card .list-item")

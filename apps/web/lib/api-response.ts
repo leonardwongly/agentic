@@ -17,6 +17,7 @@ import { AuthRuntimeStateConfigurationError } from "./auth-runtime-state";
 import { SharedAuthStateStoreError } from "./shared-auth-state-db";
 
 export const AUTHENTICATED_API_CACHE_CONTROL = "private, no-store, max-age=0, must-revalidate";
+export const OPERATIONAL_API_CACHE_CONTROL = "no-store, max-age=0, must-revalidate";
 
 const JSON_CONTENT_TYPE_PREFIX = "application/json";
 
@@ -48,6 +49,17 @@ export function authenticatedJson<T>(body: T, init?: ResponseInit) {
       Pragma: "no-cache",
       Expires: "0",
       Vary: "Cookie, X-Agentic-Access-Key"
+    }))
+  });
+}
+
+export function operationalJson<T>(body: T, init?: ResponseInit) {
+  return NextResponse.json(body, {
+    ...init,
+    headers: appendCorrelationHeaders(mergeHeaders(init, {
+      "Cache-Control": OPERATIONAL_API_CACHE_CONTROL,
+      Pragma: "no-cache",
+      Expires: "0"
     }))
   });
 }

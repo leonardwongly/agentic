@@ -1,14 +1,14 @@
 import { expect, test } from "@playwright/test";
-import { unlockDashboard } from "./helpers";
+import { openRequestComposer, unlockDashboard } from "./helpers";
 
 test("creates and approves an inbox-triage goal end-to-end", async ({ page }) => {
   await unlockDashboard(page);
 
-  const requestCard = page.locator(".request-card");
-  await requestCard.getByPlaceholder("Example: Triage my inbox and draft replies for anything urgent.").fill(
+  const { requestCard, requestInput } = await openRequestComposer(page);
+  await requestInput.fill(
     "Triage my inbox and prepare replies for important clients."
   );
-  await requestCard.locator(".hero-button-row").getByRole("button", { name: "Create goal" }).click();
+  await requestCard.locator(".hero-button-row").getByRole("button", { name: "Submit request" }).click();
 
   await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible();
   await expect(
@@ -28,7 +28,7 @@ test("creates and approves an inbox-triage goal end-to-end", async ({ page }) =>
   await approvalRow.getByRole("button", { name: "Approve once" }).click();
 
   await expect(page.getByText("Marked the approval as approved.").first()).toBeVisible();
-  await expect(page.getByText("No pending approvals.")).toBeVisible();
+  await expect(approvalRow).toHaveCount(0);
 
   const approvalTimelineRow = page
     .locator(".timeline-row")

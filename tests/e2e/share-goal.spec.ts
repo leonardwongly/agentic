@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
-import { unlockDashboard } from "./helpers";
+import { openRequestComposer, unlockDashboard } from "./helpers";
 
 function createSignedShareToken(goalId: string, expiresAt: string): string {
   const payload = Buffer.from(
@@ -16,11 +16,11 @@ function createSignedShareToken(goalId: string, expiresAt: string): string {
   return `${payload}.${signature}`;
 }
 
-async function sumVisibleOpenCounts(page: Page): Promise<number> {
+async function sumVisibleViewedCounts(page: Page): Promise<number> {
   const metrics = await page.locator(".request-card .share-metric").allTextContents();
 
   return metrics.reduce((total, metric) => {
-    const match = metric.match(/^(\d+)\s+open/);
+    const match = metric.match(/·\s+(\d+)\s+viewed$/u);
 
     return total + (match ? Number.parseInt(match[1], 10) : 0);
   }, 0);
@@ -29,10 +29,11 @@ async function sumVisibleOpenCounts(page: Page): Promise<number> {
 test("creates a public goal share link and opens the shared page", async ({ page }) => {
   await unlockDashboard(page);
 
-  await page.getByPlaceholder("Example: Triage my inbox and draft replies for anything urgent.").fill(
+  const { requestInput } = await openRequestComposer(page);
+  await requestInput.fill(
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Create goal" }).click();
+  await page.getByRole("button", { name: "Submit request" }).click();
 
   const createdGoal = page
     .locator(".request-card .list-item")
@@ -60,10 +61,11 @@ test("creates a public goal share link and opens the shared page", async ({ page
 test("keeps the share flow successful when clipboard access is blocked", async ({ page }) => {
   await unlockDashboard(page);
 
-  await page.getByPlaceholder("Example: Triage my inbox and draft replies for anything urgent.").fill(
+  const { requestInput } = await openRequestComposer(page);
+  await requestInput.fill(
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Create goal" }).click();
+  await page.getByRole("button", { name: "Submit request" }).click();
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -98,10 +100,11 @@ test("renders a valid public share page in a fresh unauthenticated context and d
 }) => {
   await unlockDashboard(page);
 
-  await page.getByPlaceholder("Example: Triage my inbox and draft replies for anything urgent.").fill(
+  const { requestInput } = await openRequestComposer(page);
+  await requestInput.fill(
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Create goal" }).click();
+  await page.getByRole("button", { name: "Submit request" }).click();
 
   const createdGoal = page
     .locator(".request-card .list-item")
@@ -119,7 +122,7 @@ test("renders a valid public share page in a fresh unauthenticated context and d
 
   const publicContext = await browser.newContext();
   const publicPage = await publicContext.newPage();
-  const openCountBeforePublicView = await sumVisibleOpenCounts(page);
+  const viewedCountBeforePublicView = await sumVisibleViewedCounts(page);
 
   await publicPage.goto(shareUrl!);
   await expect(publicPage.getByText("Shared from Agentic")).toBeVisible();
@@ -135,7 +138,7 @@ test("renders a valid public share page in a fresh unauthenticated context and d
   await publicContext.close();
   await page.reload();
 
-  await expect.poll(() => sumVisibleOpenCounts(page)).toBe(openCountBeforePublicView + 1);
+  await expect.poll(() => sumVisibleViewedCounts(page)).toBe(viewedCountBeforePublicView + 1);
 });
 
 test("shows the invalid-share page for tampered or missing shared goals", async ({ page }) => {

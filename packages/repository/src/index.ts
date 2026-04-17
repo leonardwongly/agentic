@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { assertDatabaseSchemaReady, runDatabaseMigrations } from "@agentic/db";
 import { Pool, type PoolClient } from "pg";
 import { z } from "zod";
 import {
@@ -509,8 +510,6 @@ const DASHBOARD_GOAL_LIMIT = 40;
 const DASHBOARD_AUTOPILOT_EVENT_LIMIT = 24;
 const DASHBOARD_MEMORY_LIMIT = 40;
 const DASHBOARD_INTEGRATION_LIMIT = 24;
-
-const migrationPath = path.join(/* turbopackIgnore: true */ process.cwd(), "packages", "db", "migrations", "0001_init.sql");
 
 function resolveDefaultStorePath(): string {
   const configured = process.env.AGENTIC_RUNTIME_STORE_PATH?.trim();
@@ -4432,13 +4431,16 @@ class PostgresRepository implements AgenticRepository {
   private readonly pool: Pool;
   private readonly ready: Promise<void>;
 
-  constructor(url: string) {
+  constructor(
+    url: string,
+    options?: {
+      autoMigrate?: boolean;
+    }
+  ) {
     this.pool = new Pool({ connectionString: url });
-    this.ready = this.ensureSchema();
-  }
-
-  private async ensureSchema(): Promise<void> {
-    await this.pool.query(await readFile(migrationPath, "utf8"));
+    this.ready = options?.autoMigrate
+      ? runDatabaseMigrations({ pool: this.pool }).then(() => undefined)
+      : assertDatabaseSchemaReady({ pool: this.pool }).then(() => undefined);
   }
 
   private async withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -8929,7 +8931,9 @@ export function createRepository(options?: { storePath?: string; databaseUrl?: s
   const databaseUrl = options?.databaseUrl ?? process.env.DATABASE_URL;
 
   if (databaseUrl) {
-    return new PostgresRepository(databaseUrl);
+    return new PostgresRepository(databaseUrl, {
+      autoMigrate: shouldAutoMigratePostgresSchema()
+    });
   }
 
   if (process.env.NODE_ENV === "production") {
@@ -8939,4 +8943,18 @@ export function createRepository(options?: { storePath?: string; databaseUrl?: s
   }
 
   return new FileRepository(options?.storePath);
+}
+
+function shouldAutoMigratePostgresSchema(): boolean {
+  const configured = process.env.AGENTIC_AUTO_MIGRATE?.trim().toLowerCase();
+
+  if (configured === "true") {
+    return true;
+  }
+
+  if (configured === "false") {
+    return false;
+  }
+
+  return process.env.NODE_ENV === "test";
 }

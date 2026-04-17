@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.git
+.github
+.claude
+.next
+apps/web/.next
+coverage
+playwright-report
+test-results
+.agentic
+build
+docs/.DS_Store
+docs/superpowers/.DS_Store

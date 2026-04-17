@@ -1442,7 +1442,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     try {
       const query = noteQuery.trim();
       const params = query ? `?q=${encodeURIComponent(query)}` : "";
-      const payload = await readJson<{ notes: LocalNoteDocument[] }>(await fetch(`/api/integrations/local-notes${params}`));
+      const payload = await readJson<{ notes: LocalNoteDocument[] }>(
+        await fetch(`/api/integrations/local-notes${params}`, {
+          cache: "no-store"
+        })
+      );
 
       startTransition(() => {
         setNotes(payload.notes);
@@ -1470,7 +1474,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     setIsPending(true);
 
     try {
-      const payload = await readJson<{ note: LocalNoteDocument }>(await fetch(`/api/integrations/local-notes/${encodeURIComponent(slug)}`));
+      const payload = await readJson<{ note: LocalNoteDocument }>(
+        await fetch(`/api/integrations/local-notes/${encodeURIComponent(slug)}`, {
+          cache: "no-store"
+        })
+      );
 
       startTransition(() => {
         loadSelectedNoteDraft(payload.note);
@@ -1683,17 +1691,9 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     }
   };
 
-  const logout = async () => {
+  const logout = () => {
     setIsPending(true);
-
-    try {
-      await fetch("/api/session", {
-        method: "DELETE"
-      });
-      window.location.reload();
-    } finally {
-      setIsPending(false);
-    }
+    window.location.assign("/logout");
   };
 
   // Quick actions for the floating bar
@@ -3025,7 +3025,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                 value={selectedNoteTitle}
                 onChange={(event) => setSelectedNoteTitleDraft(event.target.value)}
                 placeholder="Open a note to edit its title"
-                disabled={!selectedNoteSlug}
+                disabled={!selectedNoteSlug || isPending}
               />
             </label>
             <textarea
@@ -3033,7 +3033,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               onChange={(event) => setSelectedNoteContentDraft(event.target.value)}
               placeholder="Open a note to edit its body."
               rows={6}
-              disabled={!selectedNoteSlug}
+              disabled={!selectedNoteSlug || isPending}
             />
             <button type="button" onClick={saveSelectedNote} disabled={isPending || !selectedNoteSlug}>
               Save selected note

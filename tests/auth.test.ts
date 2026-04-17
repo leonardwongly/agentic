@@ -206,6 +206,22 @@ describe("auth helpers", () => {
     expect(verifyAccessKey("agentic-local-dev-key")).toBe(false);
   });
 
+  it("can inspect auth mode without emitting the development fallback warning", () => {
+    const warningSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    delete process.env.AGENTIC_ACCESS_KEY;
+    process.env.NODE_ENV = "development";
+
+    const authMode = getAuthMode({ emitDevelopmentWarning: false });
+
+    expect(authMode).toMatchObject({
+      configured: true,
+      usesDevelopmentFallback: true,
+      requiresConfiguredKey: false
+    });
+    expect(warningSpy).not.toHaveBeenCalled();
+    warningSpy.mockRestore();
+  });
+
   it("accepts the access-key header without touching the cookie store", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
     process.env.NODE_ENV = "test";

@@ -1,14 +1,14 @@
 import { expect, test } from "@playwright/test";
-import { unlockDashboard } from "./helpers";
+import { openRequestComposer, unlockDashboard } from "./helpers";
 
 test("operating loop cards deep-link operators into the active queue", async ({ page }) => {
   await unlockDashboard(page);
 
-  const requestCard = page.locator(".request-card");
-  await requestCard.getByPlaceholder("Example: Triage my inbox and draft replies for anything urgent.").fill(
+  const { requestCard, requestInput } = await openRequestComposer(page);
+  await requestInput.fill(
     "Review my inbox and send one external reply."
   );
-  await requestCard.locator(".hero-button-row").getByRole("button", { name: "Create goal" }).click();
+  await requestCard.locator(".hero-button-row").getByRole("button", { name: "Submit request" }).click();
 
   await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible();
 

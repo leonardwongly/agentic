@@ -132,10 +132,68 @@ npm run test:e2e
 npm run build
 ```
 
+## Production Bootstrap
+
+Production startup is intentionally split into explicit migration, readiness, and process-launch steps so the app does not silently mutate schema state during request handling.
+
+1. Configure required production environment:
+
+```bash
+export NODE_ENV=production
+export DATABASE_URL=postgres://user:password@db-host:5432/agentic
+export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
+```
+
+2. Check schema status before rollout:
+
+```bash
+npm run db:status -- --require-ready
+```
+
+3. Apply checked-in migrations from `packages/db/migrations` when needed:
+
+```bash
+npm run db:migrate
+```
+
+4. Build and start the web app through the startup validation wrapper:
+
+```bash
+npm run build
+npm run start:web:prod -- --hostname 0.0.0.0 --port 3000
+```
+
+5. Start the worker through the schema-readiness wrapper:
+
+```bash
+npm run start:worker:prod
+```
+
+The web startup wrapper fails closed if required production configuration is missing, if the database is unreachable, or if checked-in migrations have not been applied. The worker startup wrapper refuses to start until the schema is ready.
+
+## Operational Endpoints
+
+Agentic exposes two unauthenticated operational endpoints for orchestration and deployment validation:
+
+- `GET /api/health`: liveness probe that reports process uptime and current timestamp
+- `GET /api/ready`: readiness probe that validates access-key configuration, database reachability and migration status, and auth runtime-state requirements
+
+Both routes return `Cache-Control: no-store` and are safe for container probes and deployment smoke tests.
+
+The deployment smoke helper exercises those endpoints against a live environment:
+
+```bash
+export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
+export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
+npm run test:smoke:deployment
+```
+
 ## Persistence And Local Storage
 
 - If `DATABASE_URL` is set, the app uses the Postgres-backed repository.
 - Otherwise it falls back to a file-backed runtime store at `.agentic/runtime-store.json` so the app stays runnable before the database is provisioned outside production. Production requires `DATABASE_URL`.
+- The Postgres repository no longer auto-applies migrations during normal startup in production. Use `npm run db:migrate` as an explicit deployment step instead.
 - In production, `DATABASE_URL` also enables Postgres-backed auth session rate limiting, session revocation, and session unlock throttling.
 - In development and test, those auth-state controls stay in-memory by default so local runs do not silently depend on Postgres. Set `AGENTIC_SHARED_AUTH_STATE=true` when you want to exercise the shared backend outside production.
 - `AGENTIC_RUNTIME_STORE_PATH` overrides the file-backed store path when you need isolated local or test storage.

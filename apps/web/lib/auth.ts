@@ -84,7 +84,9 @@ function readCookieValue(cookieHeader: string | null | undefined, cookieName: st
 
 let _devKeyWarningEmitted = false;
 
-function resolveAccessKey(): { key: string | null; source: "env" | "development-fallback" | "missing" } {
+function resolveAccessKey(options?: {
+  emitDevelopmentWarning?: boolean;
+}): { key: string | null; source: "env" | "development-fallback" | "missing" } {
   const configured = process.env.AGENTIC_ACCESS_KEY?.trim();
 
   if (configured) {
@@ -92,7 +94,7 @@ function resolveAccessKey(): { key: string | null; source: "env" | "development-
   }
 
   if (process.env.NODE_ENV !== "production") {
-    if (!_devKeyWarningEmitted) {
+    if (options?.emitDevelopmentWarning !== false && !_devKeyWarningEmitted) {
       console.warn(
         "[agentic] SECURITY WARNING: AGENTIC_ACCESS_KEY is not set. " +
           "Using the well-known development fallback key. " +
@@ -239,8 +241,8 @@ function constantTimeEqual(left: string, right: string): boolean {
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-export function getAuthMode() {
-  const resolved = resolveAccessKey();
+export function getAuthMode(options?: { emitDevelopmentWarning?: boolean }) {
+  const resolved = resolveAccessKey(options);
 
   return {
     requiresConfiguredKey: resolved.source === "missing",

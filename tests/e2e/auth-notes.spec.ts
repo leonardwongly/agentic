@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { unlockDashboard } from "./helpers";
+import { showAdvancedOperations, unlockDashboard } from "./helpers";
 
 test("unlocks the dashboard and edits a local note end-to-end", async ({ page }) => {
   const uniqueSuffix = `${Date.now()}`;
@@ -8,6 +8,7 @@ test("unlocks the dashboard and edits a local note end-to-end", async ({ page })
   const updatedBody = `updated body ${uniqueSuffix}`;
 
   await unlockDashboard(page);
+  await showAdvancedOperations(page);
 
   await page.getByPlaceholder("Example: Travel packing list").fill(title);
   await page.getByPlaceholder("Write a note that should be searchable through the notes adapter.").fill(initialBody);
@@ -16,10 +17,12 @@ test("unlocks the dashboard and edits a local note end-to-end", async ({ page })
   await expect(page.getByText("Created a new local note.")).toBeVisible();
   await expect(page.getByRole("heading", { name: `Edit ${title}` })).toBeVisible();
 
-  await page.getByPlaceholder("Search local notes").fill(title);
-  await page.getByRole("button", { name: "Search" }).click();
+  const notesSection = page.locator("#section-notes");
+  await notesSection.getByPlaceholder("Search local notes").fill(title);
+  await notesSection.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(notesSection.getByText(/Loaded \d+ matching note/u)).toBeVisible();
 
-  const searchedNote = page.locator(".list-item.vertical").filter({ hasText: title }).first();
+  const searchedNote = notesSection.locator(".list-item.vertical").filter({ hasText: title }).first();
   await expect(searchedNote.getByText(title, { exact: true })).toBeVisible();
   await searchedNote.getByRole("button", { name: "Open" }).click();
 
@@ -36,10 +39,11 @@ test("unlocks the dashboard and edits a local note end-to-end", async ({ page })
 
   await expect(page.getByText(`Saved note "${title}".`)).toBeVisible();
 
-  await page.getByPlaceholder("Search local notes").fill(title);
-  await page.getByRole("button", { name: "Search" }).click();
+  await notesSection.getByPlaceholder("Search local notes").fill(title);
+  await notesSection.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(notesSection.getByText(/Loaded \d+ matching note/u)).toBeVisible();
 
-  const updatedSearchResult = page.locator(".list-item.vertical").filter({ hasText: title }).first();
+  const updatedSearchResult = notesSection.locator(".list-item.vertical").filter({ hasText: title }).first();
   await expect(updatedSearchResult.getByText(title, { exact: true })).toBeVisible();
   await expect(updatedSearchResult).toContainText(updatedBody);
   await expect(editorBody).toHaveValue(updatedBody);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type RelativeTimeProps = {
   date: string | Date;
@@ -41,8 +41,21 @@ function formatAbsoluteTime(date: Date): string {
 
 export function RelativeTime({ date, className = "" }: RelativeTimeProps) {
   const dateObj = useMemo(() => (typeof date === "string" ? new Date(date) : date), [date]);
-  const relative = useMemo(() => formatRelativeTime(dateObj), [dateObj]);
-  const absolute = useMemo(() => formatAbsoluteTime(dateObj), [dateObj]);
+  const stableAbsolute = useMemo(() => dateObj.toISOString(), [dateObj]);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    setIsHydrated(true);
+    const interval = window.setInterval(() => {
+      setTick((current) => current + 1);
+    }, 30_000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const relative = useMemo(() => (isHydrated ? formatRelativeTime(dateObj) : stableAbsolute), [dateObj, isHydrated, stableAbsolute, tick]);
+  const absolute = useMemo(() => (isHydrated ? formatAbsoluteTime(dateObj) : stableAbsolute), [dateObj, isHydrated, stableAbsolute]);
 
   return (
     <time dateTime={dateObj.toISOString()} title={absolute} className={`relative-time ${className}`}>
@@ -53,7 +66,14 @@ export function RelativeTime({ date, className = "" }: RelativeTimeProps) {
 
 export function AbsoluteTime({ date, className = "" }: RelativeTimeProps) {
   const dateObj = useMemo(() => (typeof date === "string" ? new Date(date) : date), [date]);
-  const absolute = useMemo(() => formatAbsoluteTime(dateObj), [dateObj]);
+  const stableAbsolute = useMemo(() => dateObj.toISOString(), [dateObj]);
+  const [isHydrated, setIsHydrated] = useState(false);
+
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
+
+  const absolute = useMemo(() => (isHydrated ? formatAbsoluteTime(dateObj) : stableAbsolute), [dateObj, isHydrated, stableAbsolute]);
 
   return (
     <time dateTime={dateObj.toISOString()} className={`absolute-time ${className}`}>
