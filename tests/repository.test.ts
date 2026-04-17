@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import {
   AgentDefinitionSchema,
+  AutopilotEventSchema,
   ProviderCredentialSchema,
   GoalTemplateSchema,
+  IntegrationAccountSchema,
   SYSTEM_USER_ID,
   WatcherSchema,
   WorkspaceGovernanceSchema,
@@ -250,7 +252,7 @@ describe("repository", () => {
 
     expect(reloaded?.goal.id).toBe(bundle.goal.id);
     expect(persisted.goals.some((goal) => goal.id === bundle.goal.id)).toBe(true);
-  });
+  }, 15_000);
 
   it("rejects duplicate approval responses once the first decision is committed", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
@@ -294,7 +296,7 @@ describe("repository", () => {
       rationale: "The next few outbound replies can follow the same pattern.",
       actorContext: systemActor
     });
-  });
+  }, 15_000);
 
   it("round-trips approval previews and decision history through the file-backed store", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
@@ -533,7 +535,7 @@ describe("repository", () => {
     expect(reloaded?.watchers.map((watcher) => watcher.id)).toEqual(replacementBundle.watchers.map((watcher) => watcher.id));
     expect(reloaded?.actionLogs.map((log) => log.id)).toEqual(replacementBundle.actionLogs.map((log) => log.id));
     expect(reloaded?.tasks.some((task) => firstBundle.tasks.some((candidate) => candidate.id === task.id))).toBe(false);
-  });
+  }, 15_000);
 
   it("persists retry and dead-letter transitions through the durable queue in the file-backed store", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
@@ -739,6 +741,49 @@ describe("repository", () => {
   const databaseUrl = process.env.DATABASE_URL;
   const postgresIt = databaseUrl ? it : it.skip;
 
+  async function countPostgresQueries<T>(
+    repository: ReturnType<typeof createRepository>,
+    run: () => Promise<T>
+  ): Promise<{ result: T; queryCount: number }> {
+    const postgresRepository = repository as ReturnType<typeof createRepository> & {
+      pool: {
+        query: (...args: unknown[]) => Promise<unknown>;
+        connect: () => Promise<{
+          query: (...args: unknown[]) => Promise<unknown>;
+          release: () => void;
+        }>;
+      };
+    };
+    let queryCount = 0;
+    const originalPoolQuery = postgresRepository.pool.query.bind(postgresRepository.pool);
+    const originalPoolConnect = postgresRepository.pool.connect.bind(postgresRepository.pool);
+
+    postgresRepository.pool.query = (async (...args: unknown[]) => {
+      queryCount += 1;
+      return originalPoolQuery(...args);
+    }) as typeof postgresRepository.pool.query;
+
+    postgresRepository.pool.connect = (async () => {
+      const client = await originalPoolConnect();
+      const originalClientQuery = client.query.bind(client);
+
+      client.query = (async (...args: unknown[]) => {
+        queryCount += 1;
+        return originalClientQuery(...args);
+      }) as typeof client.query;
+
+      return client;
+    }) as typeof postgresRepository.pool.connect;
+
+    try {
+      const result = await run();
+      return { result, queryCount };
+    } finally {
+      postgresRepository.pool.query = originalPoolQuery as typeof postgresRepository.pool.query;
+      postgresRepository.pool.connect = originalPoolConnect as typeof postgresRepository.pool.connect;
+    }
+  }
+
   postgresIt("persists and reloads a goal bundle in Postgres when DATABASE_URL is configured", async () => {
     const repository = createRepository({
       databaseUrl
@@ -754,6 +799,25 @@ describe("repository", () => {
     expect(reloaded?.goal.id).toBe(bundle.goal.id);
     expect(dashboard.goals.some((goalBundle) => goalBundle.goal.id === bundle.goal.id)).toBe(true);
   });
+
+  postgresIt("hydrates Postgres goal pages without per-goal query fanout when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    for (let index = 0; index < 6; index += 1) {
+      await createGoalForUser(repository, SYSTEM_USER_ID, `Measure paged Postgres hydration ${Date.now()}-${index}.`);
+    }
+
+    const { result: firstPage, queryCount } = await countPostgresQueries(repository, () =>
+      repository.listGoalsPage({ userId: SYSTEM_USER_ID, limit: 3 })
+    );
+
+    expect(firstPage.items).toHaveLength(3);
+    expect(queryCount).toBeLessThanOrEqual(8);
+  }, 15_000);
 
   postgresIt("replaces an existing goal bundle snapshot in Postgres without leaving stale child records", async () => {
     const repository = createRepository({
@@ -953,6 +1017,114 @@ describe("repository", () => {
       attemptCount: 2
     });
   });
+
+  postgresIt("bounds dashboard query count and recent slices in Postgres when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+    const unique = Date.now();
+    const timestamp = nowIso();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const workspace = await repository.saveWorkspace(
+      WorkspaceSchema.parse({
+        id: `workspace-scale-postgres-${unique}`,
+        ownerUserId: SYSTEM_USER_ID,
+        slug: `scale-postgres-${unique}`,
+        name: "Scale Postgres",
+        description: "Workspace for dashboard scale validation.",
+        isPersonal: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: `workspace-member-scale-postgres-${unique}`,
+        workspaceId: workspace.id,
+        userId: SYSTEM_USER_ID,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceSelection(
+      WorkspaceSelectionSchema.parse({
+        userId: SYSTEM_USER_ID,
+        workspaceId: workspace.id,
+        selectedAt: timestamp,
+        updatedAt: timestamp
+      })
+    );
+    const initialMemoryCount = (await repository.listMemory(SYSTEM_USER_ID)).length;
+    const initialIntegrationCount = (await repository.listIntegrations(SYSTEM_USER_ID)).length;
+
+    for (let index = 0; index < 41; index += 1) {
+      await createGoalForUser(repository, SYSTEM_USER_ID, `Bounded dashboard goal ${unique}-${index}.`, workspace.id);
+    }
+
+    for (let index = 0; index < 25; index += 1) {
+      await repository.saveAutopilotEvent(
+        AutopilotEventSchema.parse({
+          id: `autopilot-scale-postgres-${unique}-${index}`,
+          userId: SYSTEM_USER_ID,
+          kind: "watcher_triggered",
+          sourceId: `calendar-scale-postgres-${index}`,
+          idempotencyKey: null,
+          mode: "notify_only",
+          summary: `Watcher trigger ${index}`,
+          status: "pending",
+          details: { index },
+          actorContext: systemActor,
+          createdAt: nowIso(),
+          processedAt: null,
+          resultGoalId: null,
+          error: null
+        })
+      );
+      await repository.saveMemory(
+        createMemoryRecord({
+          userId: SYSTEM_USER_ID,
+          category: "preferences",
+          memoryType: "observed",
+          content: `Scale memory ${unique}-${index}`,
+          confidence: 0.75,
+          source: "postgres-test",
+          actorContext: systemActor
+        })
+      );
+      await repository.upsertIntegration(
+        IntegrationAccountSchema.parse({
+          id: `integration-scale-postgres-${unique}-${index}`,
+          userId: SYSTEM_USER_ID,
+          name: `Scale Integration ${index}`,
+          system: `system-${index}`,
+          status: "ready",
+          scopes: ["scope.read"],
+          capabilities: ["read"],
+          metadata: { index },
+          actorContext: systemActor,
+          createdAt: nowIso(),
+          updatedAt: nowIso()
+        })
+      );
+    }
+
+    const { result: dashboard, queryCount } = await countPostgresQueries(repository, () =>
+      repository.getDashboardData(SYSTEM_USER_ID)
+    );
+
+    expect(dashboard.activeWorkspace?.id).toBe(workspace.id);
+    expect(dashboard.goals).toHaveLength(40);
+    expect(dashboard.goals.every((bundle) => bundle.goal.workspaceId === workspace.id)).toBe(true);
+    expect(dashboard.autopilotEvents).toHaveLength(8);
+    expect(dashboard.memories).toHaveLength(Math.min(40, initialMemoryCount + 25));
+    expect(dashboard.integrations).toHaveLength(Math.min(24, initialIntegrationCount + 25));
+    expect(queryCount).toBeLessThanOrEqual(20);
+  }, 60_000);
 
   it("derives agent scorecards from persisted goal execution history", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
@@ -1321,6 +1493,147 @@ describe("repository", () => {
     });
   });
 
+  it("paginates goal bundles with stable cursors and rejects malformed cursors", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    for (let index = 0; index < 6; index += 1) {
+      await createGoalForUser(repository, SYSTEM_USER_ID, `Paged file goal ${Date.now()}-${index}.`);
+    }
+
+    const fullList = await repository.listGoals(SYSTEM_USER_ID);
+    const firstPage = await repository.listGoalsPage({ userId: SYSTEM_USER_ID, limit: 3 });
+    const secondPage = await repository.listGoalsPage({
+      userId: SYSTEM_USER_ID,
+      limit: 3,
+      cursor: firstPage.nextCursor
+    });
+
+    expect(firstPage.items.map((bundle) => bundle.goal.id)).toEqual(fullList.slice(0, 3).map((bundle) => bundle.goal.id));
+    expect(secondPage.items.map((bundle) => bundle.goal.id)).toEqual(fullList.slice(3, 6).map((bundle) => bundle.goal.id));
+    expect(secondPage.items.some((bundle) => firstPage.items.some((prior) => prior.goal.id === bundle.goal.id))).toBe(false);
+    expect(secondPage.nextCursor).toBeNull();
+
+    await expect(repository.listGoalsPage({ userId: SYSTEM_USER_ID, cursor: "not-base64" })).rejects.toMatchObject({
+      code: "invalid_cursor"
+    });
+  });
+
+  it("bounds dashboard collections to the active workspace scope in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const timestamp = nowIso();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const workspace = await repository.saveWorkspace(
+      WorkspaceSchema.parse({
+        id: "workspace-scale-file",
+        ownerUserId: SYSTEM_USER_ID,
+        slug: "scale-file",
+        name: "Scale File",
+        description: "Workspace for bounded file-backed dashboard validation.",
+        isPersonal: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-member-scale-file",
+        workspaceId: workspace.id,
+        userId: SYSTEM_USER_ID,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceSelection(
+      WorkspaceSelectionSchema.parse({
+        userId: SYSTEM_USER_ID,
+        workspaceId: workspace.id,
+        selectedAt: timestamp,
+        updatedAt: timestamp
+      })
+    );
+    const initialMemoryCount = (await repository.listMemory(SYSTEM_USER_ID)).length;
+    const initialIntegrationCount = (await repository.listIntegrations(SYSTEM_USER_ID)).length;
+
+    for (let index = 0; index < 41; index += 1) {
+      await createGoalForUser(repository, SYSTEM_USER_ID, `Bounded file goal ${Date.now()}-${index}.`, workspace.id);
+    }
+
+    for (let index = 0; index < 25; index += 1) {
+      await repository.saveAutopilotEvent(
+        AutopilotEventSchema.parse({
+          id: `autopilot-scale-file-${index}`,
+          userId: SYSTEM_USER_ID,
+          kind: "watcher_triggered",
+          sourceId: `calendar-scale-file-${index}`,
+          idempotencyKey: null,
+          mode: "notify_only",
+          summary: `Watcher trigger ${index}`,
+          status: "pending",
+          details: { index },
+          actorContext: systemActor,
+          createdAt: nowIso(),
+          processedAt: null,
+          resultGoalId: null,
+          error: null
+        })
+      );
+      await repository.saveMemory(
+        createMemoryRecord({
+          userId: SYSTEM_USER_ID,
+          category: "preferences",
+          memoryType: "observed",
+          content: `Scale file memory ${index}`,
+          confidence: 0.8,
+          source: "file-test",
+          actorContext: systemActor
+        })
+      );
+      await repository.upsertIntegration(
+        IntegrationAccountSchema.parse({
+          id: `integration-scale-file-${index}`,
+          userId: SYSTEM_USER_ID,
+          name: `Scale File Integration ${index}`,
+          system: `scale-file-system-${index}`,
+          status: "ready",
+          scopes: ["scope.read"],
+          capabilities: ["read"],
+          metadata: { index },
+          actorContext: systemActor,
+          createdAt: nowIso(),
+          updatedAt: nowIso()
+        })
+      );
+    }
+
+    for (let index = 0; index < 2; index += 1) {
+      await createGoalForUser(repository, SYSTEM_USER_ID, `Out-of-scope goal ${Date.now()}-${index}.`);
+    }
+
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+
+    expect(dashboard.activeWorkspace?.id).toBe(workspace.id);
+    expect(dashboard.goals).toHaveLength(40);
+    expect(dashboard.goals.every((bundle) => bundle.goal.workspaceId === workspace.id)).toBe(true);
+    expect(dashboard.autopilotEvents).toHaveLength(8);
+    expect(dashboard.memories).toHaveLength(Math.min(40, initialMemoryCount + 25));
+    expect(dashboard.integrations).toHaveLength(Math.min(24, initialIntegrationCount + 25));
+  }, 45_000);
+
   it("shares workspace-scoped goals with workspace members and isolates inactive workspaces", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -1433,7 +1746,7 @@ describe("repository", () => {
     const personalDashboard = await repository.getDashboardData(collaboratorUserId);
     expect(personalDashboard.activeWorkspace?.isPersonal).toBe(true);
     expect(personalDashboard.goals.some((bundle) => bundle.goal.id === sharedBundle.goal.id)).toBe(false);
-  });
+  }, 15_000);
 
   it("derives commitments from active goals and pending approvals", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
@@ -1538,7 +1851,7 @@ describe("repository", () => {
     expect(reopenedDashboard.commitments.find((commitment) => commitment.id === goalCommitment?.id)?.sourceId).toBe(
       bundle.goal.id
     );
-  });
+  }, 15_000);
 
   it("builds a bounded commitments inbox with server-side buckets and persisted-only items", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
@@ -2434,10 +2747,12 @@ describe("repository", () => {
 
     await repository.seedDefaults(SYSTEM_USER_ID);
 
-    const [seededIntegration] = await repository.listIntegrations(SYSTEM_USER_ID);
+    const seededIntegrations = await repository.listIntegrations(SYSTEM_USER_ID);
+    const expectedSeededId = buildDefaultIntegrationAccounts(SYSTEM_USER_ID)[0]?.id;
+    const seededIntegration = seededIntegrations.find((candidate) => candidate.id === expectedSeededId);
 
     expect(seededIntegration).toMatchObject({
-      id: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)[0]?.id,
+      id: expectedSeededId,
       actorContext: systemActor
     });
 

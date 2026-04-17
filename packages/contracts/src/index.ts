@@ -428,6 +428,8 @@ export const CommitmentInboxBucketSchema = z.enum(commitmentInboxBucketValues);
 export const DEFAULT_COMMITMENT_INBOX_BUCKET = "unresolved" as const;
 export const DEFAULT_COMMITMENT_INBOX_LIMIT = 8;
 export const MAX_COMMITMENT_INBOX_LIMIT = 50;
+export const DEFAULT_COLLECTION_PAGE_LIMIT = 20;
+export const MAX_COLLECTION_PAGE_LIMIT = 100;
 
 export const CommitmentInboxPageSchema = z.object({
   bucket: CommitmentInboxBucketSchema,
@@ -457,6 +459,15 @@ export const NowQueueSchema = z.object({
   totalCount: z.number().int().min(0),
   items: z.array(NowQueueItemSchema)
 });
+
+function buildCollectionPageSchema<TItem extends z.ZodTypeAny>(itemSchema: TItem) {
+  return z.object({
+    items: z.array(itemSchema),
+    limit: z.number().int().min(1).max(MAX_COLLECTION_PAGE_LIMIT),
+    nextCursor: z.string().min(1).nullable(),
+    generatedAt: z.string().datetime()
+  });
+}
 
 export const dashboardOperatingSectionKeyValues = ["now", "automation", "execution", "trust", "build"] as const;
 export const dashboardOperatingSectionStatusValues = ["healthy", "attention", "critical", "idle"] as const;
@@ -896,6 +907,12 @@ export const GoalBundleSchema = z.object({
   watchers: z.array(WatcherSchema),
   actionLogs: z.array(ActionLogSchema)
 });
+
+export const GoalBundlePageSchema = buildCollectionPageSchema(GoalBundleSchema);
+export const AutopilotEventPageSchema = buildCollectionPageSchema(AutopilotEventSchema);
+export const MemoryRecordPageSchema = buildCollectionPageSchema(MemoryRecordSchema);
+export const WatcherPageSchema = buildCollectionPageSchema(WatcherSchema);
+export const IntegrationAccountPageSchema = buildCollectionPageSchema(IntegrationAccountSchema);
 
 export const GoalTemplateSchema = z.object({
   id: z.string().min(1),
@@ -1445,6 +1462,11 @@ export type CommitmentSuggestedAction = z.infer<typeof CommitmentSuggestedAction
 export type Commitment = z.infer<typeof CommitmentSchema>;
 export type CommitmentInboxBucket = z.infer<typeof CommitmentInboxBucketSchema>;
 export type CommitmentInboxPage = z.infer<typeof CommitmentInboxPageSchema>;
+export type GoalBundlePage = z.infer<typeof GoalBundlePageSchema>;
+export type AutopilotEventPage = z.infer<typeof AutopilotEventPageSchema>;
+export type MemoryRecordPage = z.infer<typeof MemoryRecordPageSchema>;
+export type WatcherPage = z.infer<typeof WatcherPageSchema>;
+export type IntegrationAccountPage = z.infer<typeof IntegrationAccountPageSchema>;
 export type NowQueueItem = z.infer<typeof NowQueueItemSchema>;
 export type NowQueue = z.infer<typeof NowQueueSchema>;
 export type DashboardOperatingSectionKey = z.infer<typeof DashboardOperatingSectionKeySchema>;

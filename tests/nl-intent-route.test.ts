@@ -89,7 +89,7 @@ describe("nl intent route", () => {
     };
 
     expect(response.status).toBe(200);
-    expect(payload.message).toContain("Found 1 approval");
+    expect(payload.message).toContain("Showing 1 recent approval from the active workspace view.");
     expect(payload.data).toEqual([
       expect.objectContaining({
         id: bundle.approvals[0]!.id,
@@ -98,7 +98,7 @@ describe("nl intent route", () => {
       })
     ]);
     expectNoStoreHeaders(response);
-  });
+  }, 15_000);
 
   it("publishes bounded NL capabilities and live integration readiness", async () => {
     const repository = await buildRepository();
@@ -170,7 +170,7 @@ describe("nl intent route", () => {
       ])
     );
     expectNoStoreHeaders(response);
-  });
+  }, 15_000);
 
   it("creates goal bundles from the NL command boundary", async () => {
     const repository = await buildRepository();

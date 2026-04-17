@@ -123,7 +123,7 @@ async function queryIntent(userId: string, intent: z.infer<typeof NLQueryIntentS
       });
 
       return {
-        message: `Found ${approvals.length} approval${approvals.length === 1 ? "" : "s"}.`,
+        message: `Showing ${approvals.length} recent approval${approvals.length === 1 ? "" : "s"} from the active workspace view.`,
         data: approvals.slice(0, 10)
       };
     }
@@ -137,7 +137,7 @@ async function queryIntent(userId: string, intent: z.infer<typeof NLQueryIntentS
       });
 
       return {
-        message: `Found ${goals.length} goal bundle${goals.length === 1 ? "" : "s"}.`,
+        message: `Showing ${goals.length} recent goal bundle${goals.length === 1 ? "" : "s"} from the active workspace view.`,
         data: goals.slice(0, 10)
       };
     }
@@ -154,7 +154,7 @@ async function queryIntent(userId: string, intent: z.infer<typeof NLQueryIntentS
       const memories = dashboard.memories.slice(0, 10);
 
       return {
-        message: `Found ${dashboard.memories.length} memory record${dashboard.memories.length === 1 ? "" : "s"}.`,
+        message: `Showing ${memories.length} recent memory record${memories.length === 1 ? "" : "s"}.`,
         data: memories
       };
     }

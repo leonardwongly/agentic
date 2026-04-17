@@ -618,6 +618,42 @@ create table if not exists operator_products (
 create unique index if not exists operator_products_user_slug_idx
   on operator_products (user_id, slug);
 
+create index if not exists goals_user_created_at_id_idx
+  on goals (user_id, created_at desc, id desc);
+
+create index if not exists goals_workspace_created_at_id_idx
+  on goals (workspace_id, created_at desc, id desc);
+
+create index if not exists workflows_goal_id_idx
+  on workflows (goal_id);
+
+create index if not exists tasks_goal_created_at_id_idx
+  on tasks (goal_id, created_at asc, id asc);
+
+create index if not exists artifacts_goal_created_at_id_idx
+  on artifacts (goal_id, created_at asc, id asc);
+
+create index if not exists approval_requests_goal_created_at_id_idx
+  on approval_requests (goal_id, created_at asc, id asc);
+
+create index if not exists watchers_goal_created_at_id_idx
+  on watchers (goal_id, created_at asc, id asc);
+
+create index if not exists action_logs_goal_created_at_id_idx
+  on action_logs (goal_id, created_at asc, id asc);
+
+create index if not exists memory_records_user_created_at_id_idx
+  on memory_records (user_id, created_at desc, id desc);
+
+create index if not exists autopilot_events_user_created_at_id_idx
+  on autopilot_events (user_id, created_at desc, id desc);
+
+create index if not exists integration_accounts_user_created_at_id_idx
+  on integration_accounts (user_id, created_at desc, id desc);
+
+create index if not exists evidence_records_user_goal_created_at_idx
+  on evidence_records (user_id, goal_id, created_at desc, id desc);
+
 create table if not exists operator_product_selections (
   user_id text primary key,
   operator_product_id text not null,

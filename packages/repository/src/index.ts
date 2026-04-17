@@ -26,9 +26,14 @@ import {
   BriefingPreferencesSchema,
   briefingTypeValues,
   CommitmentSchema,
+  DEFAULT_COLLECTION_PAGE_LIMIT,
   DEFAULT_COMMITMENT_INBOX_BUCKET,
   DEFAULT_COMMITMENT_INBOX_LIMIT,
+  GoalBundlePageSchema,
   MAX_COMMITMENT_INBOX_LIMIT,
+  MAX_COLLECTION_PAGE_LIMIT,
+  MemoryRecordPageSchema,
+  AutopilotEventPageSchema,
   commitmentInboxBucketValues,
   GoalBundleSchema,
   GoalSchema,
@@ -40,6 +45,7 @@ import {
   JobKindSchema,
   JobRecordSchema,
   JobStatusSchema,
+  IntegrationAccountPageSchema,
   MemoryRecordSchema,
   OperatorProductSchema,
   OperatorProductSelectionSchema,
@@ -49,9 +55,11 @@ import {
   ProviderCredentialSchema,
   ProviderCredentialSecretKindSchema,
   ProviderCredentialSecretRecordSchema,
+  RiskClassSchema,
   SYSTEM_USER_ID,
   TaskSchema,
   WatcherSchema,
+  WatcherPageSchema,
   WorkflowCanvasTemplateSchema,
   WorkflowStateSchema,
   WorkspaceGovernanceSchema,
@@ -67,6 +75,7 @@ import {
   type ActorContext,
   type ApprovalRequest,
   type Artifact,
+  type AutopilotEventPage,
   type BriefingHistoryItem,
   type BriefingPreferences,
   type BriefingType,
@@ -78,10 +87,13 @@ import {
   type CommitmentSuggestedAction,
   type CommitmentUrgency,
   type EvidenceRecord,
+  type Goal,
   type GoalBundle,
+  type GoalBundlePage,
   type GoalShareRecord,
   type GoalShareStatus,
   type GoalTemplate,
+  type IntegrationAccountPage,
   type IntegrationAccount,
   type PrivacyOperation,
   type PrivacyOperationKind,
@@ -94,11 +106,13 @@ import {
   type JobRecord,
   type JobStatus,
   type MemoryRecord,
+  type MemoryRecordPage,
   type NowQueue,
   type OperatorProduct,
   type OperatorProductSelection,
   type Task,
   type Watcher,
+  type WatcherPage,
   type WorkflowCanvasTemplate,
   type Workspace,
   type WorkspaceGovernance,
@@ -273,6 +287,20 @@ export type PrivacyOperationListFilters = {
   statuses?: PrivacyOperationStatus[];
 };
 
+export type CollectionPageParams = {
+  userId?: string;
+  limit?: number;
+  cursor?: string | null;
+};
+
+export type GoalPageParams = CollectionPageParams & {
+  workspaceId?: string | null;
+};
+
+export type WatcherPageParams = CollectionPageParams & {
+  goalId?: string;
+};
+
 export type WorkspaceRetentionParams = {
   workspaceId: string;
   userId: string;
@@ -327,6 +355,16 @@ export class CommitmentInboxQueryError extends Error {
   }
 }
 
+export class CollectionPageQueryError extends Error {
+  constructor(
+    public readonly code: "invalid_cursor",
+    message: string
+  ) {
+    super(message);
+    this.name = "CollectionPageQueryError";
+  }
+}
+
 export type AgenticRepository = {
   backend: "file" | "postgres";
   seedDefaults(userId?: string): Promise<void>;
@@ -359,6 +397,7 @@ export type AgenticRepository = {
   getGoalBundle(goalId: string): Promise<GoalBundle | null>;
   getGoalBundleForUser(goalId: string, userId?: string): Promise<GoalBundle | null>;
   listGoals(userId?: string): Promise<GoalBundle[]>;
+  listGoalsPage(params?: GoalPageParams): Promise<GoalBundlePage>;
   listApprovals(userId?: string): Promise<ApprovalRequest[]>;
   listEvidenceRecords(params?: {
     userId?: string;
@@ -380,6 +419,7 @@ export type AgenticRepository = {
   getAutopilotSettings(userId?: string): Promise<AutopilotSettings>;
   saveAutopilotSettings(settings: AutopilotSettings): Promise<AutopilotSettings>;
   listAutopilotEvents(userId?: string): Promise<AutopilotEvent[]>;
+  listAutopilotEventsPage(params?: CollectionPageParams): Promise<AutopilotEventPage>;
   claimAutopilotEvent(params: {
     userId?: string;
     kind: AutopilotEventKind;
@@ -424,11 +464,14 @@ export type AgenticRepository = {
     error: string;
   }): Promise<JobRecord>;
   listMemory(userId?: string): Promise<MemoryRecord[]>;
+  listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage>;
   saveMemory(record: MemoryRecord): Promise<MemoryRecord>;
   saveEvidenceRecord(record: EvidenceRecord): Promise<EvidenceRecord>;
   listWatchers(filters?: WatcherListFilters): Promise<Watcher[]>;
+  listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage>;
   saveWatcher(watcher: Watcher): Promise<Watcher>;
   listIntegrations(userId?: string): Promise<IntegrationAccount[]>;
+  listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage>;
   upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount>;
   listProviderCredentials(userId?: string): Promise<ProviderCredential[]>;
   getProviderCredential(credentialId: string, userId?: string): Promise<ProviderCredential | null>;
@@ -462,6 +505,10 @@ export type AgenticRepository = {
 
 const STALLED_WORKFLOW_MS = 30 * 60 * 1000;
 const APPROVAL_WAIT_SLA_MS = 6 * 60 * 60 * 1000;
+const DASHBOARD_GOAL_LIMIT = 40;
+const DASHBOARD_AUTOPILOT_EVENT_LIMIT = 24;
+const DASHBOARD_MEMORY_LIMIT = 40;
+const DASHBOARD_INTEGRATION_LIMIT = 24;
 
 const migrationPath = path.join(/* turbopackIgnore: true */ process.cwd(), "packages", "db", "migrations", "0001_init.sql");
 
@@ -608,8 +655,110 @@ function uniqueById<T extends { id: string }>(items: T[]): T[] {
   return [...map.values()];
 }
 
-function sortByCreatedDesc<T extends { createdAt: string }>(items: T[]): T[] {
-  return [...items].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+const CollectionCursorSchema = z.object({
+  createdAt: z.string().datetime(),
+  id: z.string().min(1)
+});
+
+type CollectionCursor = z.infer<typeof CollectionCursorSchema>;
+
+function compareCreatedDescKeys(left: CollectionCursor, right: CollectionCursor): number {
+  const createdComparison = right.createdAt.localeCompare(left.createdAt);
+  return createdComparison !== 0 ? createdComparison : right.id.localeCompare(left.id);
+}
+
+function compareCreatedAscKeys(left: CollectionCursor, right: CollectionCursor): number {
+  const createdComparison = left.createdAt.localeCompare(right.createdAt);
+  return createdComparison !== 0 ? createdComparison : left.id.localeCompare(right.id);
+}
+
+function normalizeCollectionPageLimit(limit?: number): number {
+  if (limit === undefined) {
+    return DEFAULT_COLLECTION_PAGE_LIMIT;
+  }
+
+  const normalized = Math.trunc(limit);
+
+  if (!Number.isFinite(normalized) || normalized < 1 || normalized > MAX_COLLECTION_PAGE_LIMIT) {
+    return DEFAULT_COLLECTION_PAGE_LIMIT;
+  }
+
+  return normalized;
+}
+
+function encodeCollectionCursor(cursor: CollectionCursor): string {
+  return Buffer.from(JSON.stringify(CollectionCursorSchema.parse(cursor)), "utf8").toString("base64url");
+}
+
+function decodeCollectionCursor(cursor?: string | null): CollectionCursor | null {
+  if (!cursor) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
+    return CollectionCursorSchema.parse(parsed);
+  } catch {
+    throw new CollectionPageQueryError("invalid_cursor", "Collection page cursor is invalid.");
+  }
+}
+
+function isItemAfterCursor(cursor: CollectionCursor, candidate: CollectionCursor): boolean {
+  if (candidate.createdAt !== cursor.createdAt) {
+    return candidate.createdAt.localeCompare(cursor.createdAt) < 0;
+  }
+
+  return candidate.id.localeCompare(cursor.id) < 0;
+}
+
+function sortByCreatedDesc<T extends { createdAt: string; id?: string }>(items: T[]): T[] {
+  return [...items].sort((left, right) =>
+    compareCreatedDescKeys(
+      { createdAt: left.createdAt, id: left.id ?? "" },
+      { createdAt: right.createdAt, id: right.id ?? "" }
+    )
+  );
+}
+
+function sortByCreatedAsc<T extends { createdAt: string; id?: string }>(items: T[]): T[] {
+  return [...items].sort((left, right) =>
+    compareCreatedAscKeys(
+      { createdAt: left.createdAt, id: left.id ?? "" },
+      { createdAt: right.createdAt, id: right.id ?? "" }
+    )
+  );
+}
+
+function buildCollectionPage<TItem, TPage>(params: {
+  items: TItem[];
+  limit?: number;
+  cursor?: string | null;
+  getCursorKey: (item: TItem) => CollectionCursor;
+  parsePage: (page: {
+    items: TItem[];
+    limit: number;
+    nextCursor: string | null;
+    generatedAt: string;
+  }) => TPage;
+}): TPage {
+  const limit = normalizeCollectionPageLimit(params.limit);
+  const cursor = decodeCollectionCursor(params.cursor);
+  const sorted = [...params.items].sort((left, right) =>
+    compareCreatedDescKeys(params.getCursorKey(left), params.getCursorKey(right))
+  );
+  const filtered = cursor
+    ? sorted.filter((item) => isItemAfterCursor(cursor, params.getCursorKey(item)))
+    : sorted;
+  const pageItems = filtered.slice(0, limit);
+  const nextCursor =
+    filtered.length > limit ? encodeCollectionCursor(params.getCursorKey(pageItems[pageItems.length - 1]!)) : null;
+
+  return params.parsePage({
+    items: pageItems,
+    limit,
+    nextCursor,
+    generatedAt: nowIso()
+  });
 }
 
 function pluralize(count: number, noun: string): string {
@@ -2113,22 +2262,28 @@ function normalizePrivacyOperationFilters(filters?: PrivacyOperationListFilters)
   };
 }
 
+function isGoalInActiveWorkspaceScope(
+  goal: Pick<Goal, "workspaceId" | "userId">,
+  activeWorkspace: Workspace | null,
+  userId: string
+): boolean {
+  if (!activeWorkspace) {
+    return false;
+  }
+
+  if (goal.workspaceId) {
+    return goal.workspaceId === activeWorkspace.id;
+  }
+
+  return activeWorkspace.isPersonal && goal.userId === userId;
+}
+
 function filterBundlesForWorkspace(
   bundles: GoalBundle[],
   activeWorkspace: Workspace | null,
   userId: string
 ): GoalBundle[] {
-  if (!activeWorkspace) {
-    return [];
-  }
-
-  return bundles.filter((bundle) => {
-    if (bundle.goal.workspaceId) {
-      return bundle.goal.workspaceId === activeWorkspace.id;
-    }
-
-    return activeWorkspace.isPersonal && bundle.goal.userId === userId;
-  });
+  return bundles.filter((bundle) => isGoalInActiveWorkspaceScope(bundle.goal, activeWorkspace, userId));
 }
 
 function listWorkspaceMembersForWorkspaceFromStore(store: RuntimeStore, workspaceId: string): WorkspaceMember[] {
@@ -3334,6 +3489,38 @@ class FileRepository implements AgenticRepository {
       .map((bundle) => GoalBundleSchema.parse(clone(bundle)));
   }
 
+  async listGoalsPage(params?: GoalPageParams): Promise<GoalBundlePage> {
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const store = await this.readStore();
+    const workspaceIds = workspaceIdsForUser(store, userId);
+    const visibleGoals = store.goals.filter((goal) => {
+      if (!isGoalVisibleToUser(goal, workspaceIds, userId)) {
+        return false;
+      }
+
+      if (params?.workspaceId === undefined) {
+        return true;
+      }
+
+      return goal.workspaceId === params.workspaceId;
+    });
+    const bundles = visibleGoals
+      .map((goal) => bundleFromStore(store, goal.id))
+      .filter((bundle): bundle is GoalBundle => bundle !== null)
+      .map((bundle) => GoalBundleSchema.parse(clone(bundle)));
+
+    return buildCollectionPage({
+      items: bundles,
+      limit: params?.limit,
+      cursor: params?.cursor,
+      getCursorKey: (bundle) => ({
+        createdAt: bundle.goal.createdAt,
+        id: bundle.goal.id
+      }),
+      parsePage: (page) => GoalBundlePageSchema.parse(page)
+    });
+  }
+
   async listApprovals(userId = SYSTEM_USER_ID): Promise<ApprovalRequest[]> {
     const store = await this.readStore();
     const goalIds = goalIdsForUser(store, userId);
@@ -3469,6 +3656,25 @@ class FileRepository implements AgenticRepository {
     return sortByCreatedDesc(store.autopilotEvents.filter((event) => event.userId === userId)).map((event) =>
       AutopilotEventSchema.parse(clone(event))
     );
+  }
+
+  async listAutopilotEventsPage(params?: CollectionPageParams): Promise<AutopilotEventPage> {
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const store = await this.readStore();
+    const events = store.autopilotEvents
+      .filter((event) => event.userId === userId)
+      .map((event) => AutopilotEventSchema.parse(clone(event)));
+
+    return buildCollectionPage({
+      items: events,
+      limit: params?.limit,
+      cursor: params?.cursor,
+      getCursorKey: (event) => ({
+        createdAt: event.createdAt,
+        id: event.id
+      }),
+      parsePage: (page) => AutopilotEventPageSchema.parse(page)
+    });
   }
 
   async claimAutopilotEvent(params: {
@@ -3757,6 +3963,25 @@ class FileRepository implements AgenticRepository {
     );
   }
 
+  async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const store = await this.readStore();
+    const memories = store.memories
+      .filter((memory) => memory.userId === userId)
+      .map((memory) => MemoryRecordSchema.parse(clone(memory)));
+
+    return buildCollectionPage({
+      items: memories,
+      limit: params?.limit,
+      cursor: params?.cursor,
+      getCursorKey: (memory) => ({
+        createdAt: memory.createdAt,
+        id: memory.id
+      }),
+      parsePage: (page) => MemoryRecordPageSchema.parse(page)
+    });
+  }
+
   async saveMemory(record: MemoryRecord): Promise<MemoryRecord> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
@@ -3804,6 +4029,32 @@ class FileRepository implements AgenticRepository {
     return sortByCreatedDesc(watchers).map((watcher) => WatcherSchema.parse(clone(watcher)));
   }
 
+  async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
+    const store = await this.readStore();
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const goalIds = goalIdsForUser(store, userId);
+    const watchers = store.watchers
+      .filter((watcher) => {
+        if (!goalIds.has(watcher.goalId)) {
+          return false;
+        }
+
+        return params?.goalId ? watcher.goalId === params.goalId : true;
+      })
+      .map((watcher) => WatcherSchema.parse(clone(watcher)));
+
+    return buildCollectionPage({
+      items: watchers,
+      limit: params?.limit,
+      cursor: params?.cursor,
+      getCursorKey: (watcher) => ({
+        createdAt: watcher.createdAt,
+        id: watcher.id
+      }),
+      parsePage: (page) => WatcherPageSchema.parse(page)
+    });
+  }
+
   async saveWatcher(watcher: Watcher): Promise<Watcher> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
@@ -3820,6 +4071,25 @@ class FileRepository implements AgenticRepository {
     return sortByCreatedDesc(store.integrations.filter((integration) => integration.userId === userId)).map((integration) =>
       IntegrationAccountSchema.parse(clone(integration))
     );
+  }
+
+  async listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage> {
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const store = await this.readStore();
+    const integrations = store.integrations
+      .filter((integration) => integration.userId === userId)
+      .map((integration) => IntegrationAccountSchema.parse(clone(integration)));
+
+    return buildCollectionPage({
+      items: integrations,
+      limit: params?.limit,
+      cursor: params?.cursor,
+      getCursorKey: (integration) => ({
+        createdAt: integration.createdAt,
+        id: integration.id
+      }),
+      parsePage: (page) => IntegrationAccountPageSchema.parse(page)
+    });
   }
 
   async upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount> {
@@ -4089,22 +4359,33 @@ class FileRepository implements AgenticRepository {
   }
 
   async getDashboardData(userId = SYSTEM_USER_ID): Promise<DashboardData> {
-    const [goals, approvals, evidenceRecords, commitments, briefingPreferences, autopilotSettings, autopilotEvents, memories, integrations, watchers, workspaces, goalShares] = await Promise.all([
-      this.listGoals(userId),
-      this.listApprovals(userId),
-      this.listEvidenceRecords({ userId }),
-      this.listCommitments(userId),
-      this.getBriefingPreferences(userId),
-      this.getAutopilotSettings(userId),
-      this.listAutopilotEvents(userId),
-      this.listMemory(userId),
-      this.listIntegrations(userId),
-      this.listWatchers({ userId }),
-      this.listWorkspaces(userId),
-      this.listGoalShares({ userId })
-    ]);
     const store = await this.readStore();
     const { activeWorkspace, workspaceSelection } = resolveActiveWorkspaceFromStore(store, userId);
+    const workspaces = listWorkspacesForUserFromStore(store, userId);
+    const goals = filterBundlesForWorkspace(
+      sortByCreatedDesc(visibleGoalsForUser(store, userId))
+        .map((goal) => bundleFromStore(store, goal.id))
+        .filter((bundle): bundle is GoalBundle => bundle !== null)
+        .map((bundle) => GoalBundleSchema.parse(clone(bundle))),
+      activeWorkspace,
+      userId
+    ).slice(0, DASHBOARD_GOAL_LIMIT);
+    const goalIds = new Set(goals.map((bundle) => bundle.goal.id));
+    const approvals = sortByCreatedDesc(goals.flatMap((bundle) => bundle.approvals));
+    const evidenceRecords = sortByCreatedDesc(
+      store.evidenceRecords.filter((record) => record.userId === userId && goalIds.has(record.goalId))
+    ).map((record) => EvidenceRecordSchema.parse(clone(record)));
+    const watchers = sortByCreatedDesc(goals.flatMap((bundle) => bundle.watchers));
+    const [commitments, briefingPreferences, autopilotSettings, autopilotEventsPage, memoryPage, integrationsPage, goalShares] =
+      await Promise.all([
+        this.listCommitments(userId),
+        this.getBriefingPreferences(userId),
+        this.getAutopilotSettings(userId),
+        this.listAutopilotEventsPage({ userId, limit: DASHBOARD_AUTOPILOT_EVENT_LIMIT }),
+        this.listMemoryPage({ userId, limit: DASHBOARD_MEMORY_LIMIT }),
+        this.listIntegrationsPage({ userId, limit: DASHBOARD_INTEGRATION_LIMIT }),
+        this.listGoalShares({ userId })
+      ]);
     const workspaceMembers = activeWorkspace ? listWorkspaceMembersForWorkspaceFromStore(store, activeWorkspace.id) : [];
     const workspaceGovernance = activeWorkspace
       ? (store.workspaceGovernance.find((governance) => governance.workspaceId === activeWorkspace.id) ?? null)
@@ -4129,10 +4410,10 @@ class FileRepository implements AgenticRepository {
       commitments,
       briefingPreferences,
       autopilotSettings,
-      autopilotEvents,
-      memories,
+      autopilotEvents: autopilotEventsPage.items,
+      memories: memoryPage.items,
       watchers,
-      integrations,
+      integrations: integrationsPage.items,
       filterBundlesForWorkspace,
       mergeCommitments,
       buildDiagnostics: buildDashboardDiagnostics,
@@ -4998,6 +5279,139 @@ class PostgresRepository implements AgenticRepository {
     });
   }
 
+  private mapGoalRow(row: Record<string, unknown>): GoalBundle["goal"] {
+    return GoalSchema.parse({
+      id: row.id,
+      userId: row.user_id,
+      workspaceId: typeof row.workspace_id === "string" ? row.workspace_id : null,
+      workflowId: row.workflow_id,
+      title: row.title,
+      request: row.request,
+      intent: row.intent,
+      status: row.status,
+      confidence: Number(row.confidence),
+      explanation: row.explanation,
+      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+      updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
+    });
+  }
+
+  private mapWorkflowStateRow(row: Record<string, unknown>): GoalBundle["workflow"] {
+    return WorkflowStateSchema.parse({
+      id: row.id,
+      goalId: row.goal_id,
+      workspaceId: typeof row.workspace_id === "string" ? row.workspace_id : null,
+      status: row.status,
+      currentStep: row.current_step,
+      checkpoint: typeof row.checkpoint === "string" ? row.checkpoint : null,
+      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+      updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
+    });
+  }
+
+  private mapTaskRow(row: Record<string, unknown>): Task {
+    return TaskSchema.parse({
+      id: row.id,
+      goalId: row.goal_id,
+      workflowId: row.workflow_id,
+      title: row.title,
+      summary: row.summary,
+      assignedAgent: row.assigned_agent,
+      state: row.state,
+      riskClass: row.risk_class,
+      requiresApproval: Boolean(row.requires_approval),
+      dependsOn: row.depends_on ?? [],
+      toolCapabilities: row.tool_capabilities ?? [],
+      artifactIds: row.artifact_ids ?? [],
+      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+      updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
+    });
+  }
+
+  private mapArtifactRow(row: Record<string, unknown>): Artifact {
+    return ArtifactSchema.parse({
+      id: row.id,
+      goalId: row.goal_id,
+      taskId: typeof row.task_id === "string" ? row.task_id : undefined,
+      artifactType: row.artifact_type,
+      title: row.title,
+      content: row.content,
+      metadata: row.metadata ?? {},
+      createdAt: new Date(row.created_at as string | number | Date).toISOString()
+    });
+  }
+
+  private mapApprovalRow(row: Record<string, unknown>): ApprovalRequest {
+    const title = typeof row.title === "string" ? row.title : "";
+    const requestedAction = typeof row.requested_action === "string" ? row.requested_action : "";
+    const parsedActionIntent = ActionIntentSchema.safeParse(row.action_intent);
+    const actionIntent = parsedActionIntent.success ? parsedActionIntent.data : null;
+    const parsedPreview = ApprovalPreviewSchema.safeParse(row.preview);
+    const preview = parsedPreview.success ? parsedPreview.data : null;
+    const parsedRiskClass = RiskClassSchema.safeParse(row.risk_class);
+    const riskClass = parsedRiskClass.success ? parsedRiskClass.data : "R2";
+
+    return ApprovalRequestSchema.parse({
+      id: row.id,
+      goalId: row.goal_id,
+      taskId: row.task_id,
+      title,
+      rationale: row.rationale,
+      riskClass,
+      decision: row.decision,
+      requestedAction,
+      actionIntent:
+        actionIntent ??
+        buildFallbackApprovalActionIntent({
+          title,
+          requestedAction,
+          preview
+        }),
+      preview: preview ?? buildFallbackApprovalPreview({
+        title,
+        requestedAction,
+        riskClass
+      }),
+      decisionScope: normalizeApprovalDecisionScope(row.decision_scope),
+      decisionRationale: typeof row.decision_rationale === "string" ? row.decision_rationale : null,
+      history: normalizeApprovalHistory(row.history),
+      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+      expiryAt: new Date(row.expiry_at as string | number | Date).toISOString(),
+      respondedAt: row.responded_at ? new Date(row.responded_at as string | number | Date).toISOString() : null
+    });
+  }
+
+  private mapWatcherRow(row: Record<string, unknown>): Watcher {
+    return WatcherSchema.parse({
+      id: row.id,
+      goalId: row.goal_id,
+      targetEntity: row.target_entity,
+      condition: row.condition,
+      frequency: row.frequency,
+      triggerAction: row.trigger_action,
+      sourceSystems: row.source_systems ?? [],
+      status: row.status,
+      expiryAt: row.expiry_at ? new Date(row.expiry_at as string | number | Date).toISOString() : null,
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+      updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
+    });
+  }
+
+  private mapActionLogRow(row: Record<string, unknown>): ActionLog {
+    return ActionLogSchema.parse({
+      id: row.id,
+      goalId: row.goal_id,
+      taskId: typeof row.task_id === "string" ? row.task_id : undefined,
+      workflowId: typeof row.workflow_id === "string" ? row.workflow_id : undefined,
+      actor: row.actor,
+      kind: row.kind,
+      message: row.message,
+      details: row.details ?? {},
+      createdAt: new Date(row.created_at as string | number | Date).toISOString()
+    });
+  }
+
   private mapJobRow(row: Record<string, unknown>): JobRecord {
     return JobRecordSchema.parse({
       id: row.id,
@@ -5649,137 +6063,199 @@ class PostgresRepository implements AgenticRepository {
     };
   }
 
-  private async mapGoalBundleWithClient(client: Pick<PoolClient, "query">, goalId: string): Promise<GoalBundle | null> {
-    const goalResult = await client.query("select * from goals where id = $1 limit 1", [goalId]);
+  private async mapGoalBundlesWithClient(
+    client: Pick<PoolClient, "query">,
+    goalIds: string[]
+  ): Promise<GoalBundle[]> {
+    const uniqueGoalIds = [...new Set(goalIds.filter((goalId) => goalId.trim().length > 0))];
 
-    if (Number(goalResult.rowCount ?? 0) === 0) {
-      return null;
+    if (uniqueGoalIds.length === 0) {
+      return [];
     }
 
-    const goalRow = goalResult.rows[0];
-    const workflowResult = await client.query("select * from workflows where id = $1 limit 1", [goalRow.workflow_id]);
-    const tasksResult = await client.query("select * from tasks where goal_id = $1 order by created_at asc", [goalId]);
-    const artifactsResult = await client.query("select * from artifacts where goal_id = $1 order by created_at asc", [goalId]);
-    const approvalsResult = await client.query("select * from approval_requests where goal_id = $1 order by created_at asc", [goalId]);
-    const watchersResult = await client.query("select * from watchers where goal_id = $1 order by created_at asc", [goalId]);
-    const logsResult = await client.query("select * from action_logs where goal_id = $1 order by created_at asc", [goalId]);
+    const goalResult = await client.query("select * from goals where id = any($1::text[])", [uniqueGoalIds]);
+    const goals = goalResult.rows.map((row) => this.mapGoalRow(row));
 
-    return GoalBundleSchema.parse({
-      goal: {
-        id: goalRow.id,
-        userId: goalRow.user_id,
-        workspaceId: typeof goalRow.workspace_id === "string" ? goalRow.workspace_id : null,
-        workflowId: goalRow.workflow_id,
-        title: goalRow.title,
-        request: goalRow.request,
-        intent: goalRow.intent,
-        status: goalRow.status,
-        confidence: Number(goalRow.confidence),
-        explanation: goalRow.explanation,
-        createdAt: new Date(goalRow.created_at).toISOString(),
-        updatedAt: new Date(goalRow.updated_at).toISOString()
-      },
-      workflow: {
-        id: workflowResult.rows[0].id,
-        goalId: workflowResult.rows[0].goal_id,
-        workspaceId:
-          typeof workflowResult.rows[0].workspace_id === "string" ? workflowResult.rows[0].workspace_id : null,
-        status: workflowResult.rows[0].status,
-        currentStep: workflowResult.rows[0].current_step,
-        checkpoint: workflowResult.rows[0].checkpoint,
-        createdAt: new Date(workflowResult.rows[0].created_at).toISOString(),
-        updatedAt: new Date(workflowResult.rows[0].updated_at).toISOString()
-      },
-      tasks: tasksResult.rows.map((row) =>
-        TaskSchema.parse({
-          id: row.id,
-          goalId: row.goal_id,
-          workflowId: row.workflow_id,
-          title: row.title,
-          summary: row.summary,
-          assignedAgent: row.assigned_agent,
-          state: row.state,
-          riskClass: row.risk_class,
-          requiresApproval: row.requires_approval,
-          dependsOn: row.depends_on ?? [],
-          toolCapabilities: row.tool_capabilities ?? [],
-          artifactIds: row.artifact_ids ?? [],
-          createdAt: new Date(row.created_at).toISOString(),
-          updatedAt: new Date(row.updated_at).toISOString()
-        })
+    if (goals.length === 0) {
+      return [];
+    }
+
+    const workflowIds = [...new Set(goals.map((goal) => goal.workflowId))];
+    const [workflowResult, tasksResult, artifactsResult, approvalsResult, watchersResult, logsResult] = await Promise.all([
+      client.query("select * from workflows where id = any($1::text[])", [workflowIds]),
+      client.query(
+        "select * from tasks where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
+        [uniqueGoalIds]
       ),
-      artifacts: artifactsResult.rows.map((row) =>
-        ArtifactSchema.parse({
-          id: row.id,
-          goalId: row.goal_id,
-          taskId: row.task_id ?? undefined,
-          artifactType: row.artifact_type,
-          title: row.title,
-          content: row.content,
-          metadata: row.metadata ?? {},
-          createdAt: new Date(row.created_at).toISOString()
-        })
+      client.query(
+        "select * from artifacts where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
+        [uniqueGoalIds]
       ),
-      approvals: approvalsResult.rows.map((row) =>
-        ApprovalRequestSchema.parse({
-          id: row.id,
-          goalId: row.goal_id,
-          taskId: row.task_id,
-          title: row.title,
-          rationale: row.rationale,
-          riskClass: row.risk_class,
-          decision: row.decision,
-          requestedAction: row.requested_action,
-          actionIntent:
-            row.action_intent ??
-            buildFallbackApprovalActionIntent({
-              title: row.title,
-              requestedAction: row.requested_action,
-              preview: row.preview
-            }),
-          preview: row.preview ?? buildFallbackApprovalPreview({
-            title: row.title,
-            requestedAction: row.requested_action,
-            riskClass: row.risk_class
-          }),
-          decisionScope: normalizeApprovalDecisionScope(row.decision_scope),
-          decisionRationale: typeof row.decision_rationale === "string" ? row.decision_rationale : null,
-          history: normalizeApprovalHistory(row.history),
-          createdAt: new Date(row.created_at).toISOString(),
-          expiryAt: new Date(row.expiry_at).toISOString(),
-          respondedAt: row.responded_at ? new Date(row.responded_at).toISOString() : null
-        })
+      client.query(
+        "select * from approval_requests where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
+        [uniqueGoalIds]
       ),
-      watchers: watchersResult.rows.map((row) =>
-        WatcherSchema.parse({
-          id: row.id,
-          goalId: row.goal_id,
-          targetEntity: row.target_entity,
-          condition: row.condition,
-          frequency: row.frequency,
-          triggerAction: row.trigger_action,
-          sourceSystems: row.source_systems ?? [],
-          status: row.status,
-          expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-          actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-          createdAt: new Date(row.created_at).toISOString(),
-          updatedAt: new Date(row.updated_at).toISOString()
-        })
+      client.query(
+        "select * from watchers where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
+        [uniqueGoalIds]
       ),
-      actionLogs: logsResult.rows.map((row) =>
-        ActionLogSchema.parse({
-          id: row.id,
-          goalId: row.goal_id,
-          taskId: row.task_id,
-          workflowId: row.workflow_id,
-          actor: row.actor,
-          kind: row.kind,
-          message: row.message,
-          details: row.details ?? {},
-          createdAt: new Date(row.created_at).toISOString()
-        })
+      client.query(
+        "select * from action_logs where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
+        [uniqueGoalIds]
       )
+    ]);
+
+    const goalsById = new Map(goals.map((goal) => [goal.id, goal] as const));
+    const workflowsById = new Map(
+      workflowResult.rows.map((row) => {
+        const workflow = this.mapWorkflowStateRow(row);
+        return [workflow.id, workflow] as const;
+      })
+    );
+    const tasksByGoalId = new Map<string, Task[]>();
+    const artifactsByGoalId = new Map<string, Artifact[]>();
+    const approvalsByGoalId = new Map<string, ApprovalRequest[]>();
+    const watchersByGoalId = new Map<string, Watcher[]>();
+    const logsByGoalId = new Map<string, ActionLog[]>();
+
+    for (const row of tasksResult.rows) {
+      const task = this.mapTaskRow(row);
+      const existing = tasksByGoalId.get(task.goalId) ?? [];
+      existing.push(task);
+      tasksByGoalId.set(task.goalId, existing);
+    }
+
+    for (const row of artifactsResult.rows) {
+      const artifact = this.mapArtifactRow(row);
+      const existing = artifactsByGoalId.get(artifact.goalId) ?? [];
+      existing.push(artifact);
+      artifactsByGoalId.set(artifact.goalId, existing);
+    }
+
+    for (const row of approvalsResult.rows) {
+      const approval = this.mapApprovalRow(row);
+      const existing = approvalsByGoalId.get(approval.goalId) ?? [];
+      existing.push(approval);
+      approvalsByGoalId.set(approval.goalId, existing);
+    }
+
+    for (const row of watchersResult.rows) {
+      const watcher = this.mapWatcherRow(row);
+      const existing = watchersByGoalId.get(watcher.goalId) ?? [];
+      existing.push(watcher);
+      watchersByGoalId.set(watcher.goalId, existing);
+    }
+
+    for (const row of logsResult.rows) {
+      const log = this.mapActionLogRow(row);
+      const existing = logsByGoalId.get(log.goalId) ?? [];
+      existing.push(log);
+      logsByGoalId.set(log.goalId, existing);
+    }
+
+    return uniqueGoalIds.flatMap((goalId) => {
+      const goal = goalsById.get(goalId);
+
+      if (!goal) {
+        return [];
+      }
+
+      const workflow = workflowsById.get(goal.workflowId);
+
+      if (!workflow) {
+        throw new Error(`Workflow ${goal.workflowId} is missing for goal ${goalId}.`);
+      }
+
+      return [
+        GoalBundleSchema.parse({
+          goal,
+          workflow,
+          tasks: tasksByGoalId.get(goalId) ?? [],
+          artifacts: artifactsByGoalId.get(goalId) ?? [],
+          approvals: approvalsByGoalId.get(goalId) ?? [],
+          watchers: watchersByGoalId.get(goalId) ?? [],
+          actionLogs: logsByGoalId.get(goalId) ?? []
+        })
+      ];
     });
+  }
+
+  private async mapGoalBundleWithClient(client: Pick<PoolClient, "query">, goalId: string): Promise<GoalBundle | null> {
+    const [bundle] = await this.mapGoalBundlesWithClient(client, [goalId]);
+    return bundle ?? null;
+  }
+
+  private async listEvidenceRecordsForGoalIdsWithClient(
+    client: Pick<PoolClient, "query">,
+    params: {
+      userId: string;
+      goalIds: string[];
+    }
+  ): Promise<EvidenceRecord[]> {
+    const uniqueGoalIds = [...new Set(params.goalIds.filter((goalId) => goalId.trim().length > 0))];
+
+    if (uniqueGoalIds.length === 0) {
+      return [];
+    }
+
+    const result = await client.query(
+      `
+        select er.*
+        from evidence_records er
+        join goals g on g.id = er.goal_id
+        left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $1
+        where er.user_id = $1
+          and er.goal_id = any($2::text[])
+          and (
+            (g.workspace_id is null and g.user_id = $1)
+            or wm.user_id is not null
+          )
+        order by er.created_at desc, er.id desc
+      `,
+      [params.userId, uniqueGoalIds]
+    );
+
+    return result.rows.map((row) => this.mapEvidenceRecordRow(row));
+  }
+
+  private async listDashboardGoalBundlesWithClient(
+    client: Pick<PoolClient, "query">,
+    params: {
+      userId: string;
+      activeWorkspace: Workspace | null;
+      limit: number;
+    }
+  ): Promise<GoalBundle[]> {
+    if (!params.activeWorkspace) {
+      return [];
+    }
+
+    const values: unknown[] = [params.userId, params.activeWorkspace.id, params.limit];
+    const predicates = [
+      `(
+        (g.workspace_id is null and g.user_id = $1)
+        or wm.user_id is not null
+      )`,
+      params.activeWorkspace.isPersonal
+        ? `(g.workspace_id = $2 or (g.workspace_id is null and g.user_id = $1))`
+        : `g.workspace_id = $2`
+    ];
+    const result = await client.query(
+      `
+        select g.id
+        from goals g
+        left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $1
+        where ${predicates.join(" and ")}
+        order by g.created_at desc, g.id desc
+        limit $3
+      `,
+      values
+    );
+
+    return this.mapGoalBundlesWithClient(
+      client,
+      result.rows.map((row) => String(row.id))
+    );
   }
 
   private async upsertGoalBundle(client: PoolClient, bundle: GoalBundle): Promise<void> {
@@ -6954,21 +7430,103 @@ class PostgresRepository implements AgenticRepository {
 
   async listGoals(userId = SYSTEM_USER_ID): Promise<GoalBundle[]> {
     await this.ready;
-    const result = await this.pool.query(
-      `
-        select distinct g.id, g.created_at
-        from goals g
-        left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $1
-        where (
+    const client = await this.pool.connect();
+
+    try {
+      const result = await client.query(
+        `
+          select distinct g.id, g.created_at
+          from goals g
+          left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $1
+          where (
+            (g.workspace_id is null and g.user_id = $1)
+            or wm.user_id is not null
+          )
+          order by g.created_at desc, g.id desc
+        `,
+        [userId]
+      );
+      const bundles = await this.mapGoalBundlesWithClient(
+        client,
+        result.rows.map((row) => String(row.id))
+      );
+
+      return bundles.map((bundle) => GoalBundleSchema.parse(clone(bundle)));
+    } finally {
+      client.release();
+    }
+  }
+
+  async listGoalsPage(params?: GoalPageParams): Promise<GoalBundlePage> {
+    await this.ready;
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const limit = normalizeCollectionPageLimit(params?.limit);
+    const cursor = decodeCollectionCursor(params?.cursor ?? null);
+    const client = await this.pool.connect();
+
+    try {
+      const values: unknown[] = [userId];
+      const predicates = [
+        `(
           (g.workspace_id is null and g.user_id = $1)
           or wm.user_id is not null
-        )
-        order by g.created_at desc
-      `,
-      [userId]
-    );
-    const bundles = await Promise.all(result.rows.map((row) => this.mapGoalBundle(row.id)));
-    return bundles.filter((bundle): bundle is GoalBundle => bundle !== null).map((bundle) => GoalBundleSchema.parse(clone(bundle)));
+        )`
+      ];
+
+      if (params?.workspaceId !== undefined) {
+        if (params.workspaceId === null) {
+          predicates.push("g.workspace_id is null");
+        } else {
+          values.push(params.workspaceId);
+          predicates.push(`g.workspace_id = $${values.length}`);
+        }
+      }
+
+      if (cursor) {
+        values.push(cursor.createdAt, cursor.id);
+        const createdAtIndex = values.length - 1;
+        const idIndex = values.length;
+        predicates.push(`(g.created_at < $${createdAtIndex} or (g.created_at = $${createdAtIndex} and g.id < $${idIndex}))`);
+      }
+
+      values.push(limit + 1);
+      const limitIndex = values.length;
+      const result = await client.query(
+        `
+          select distinct g.id, g.created_at
+          from goals g
+          left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $1
+          where ${predicates.join(" and ")}
+          order by g.created_at desc, g.id desc
+          limit $${limitIndex}
+        `,
+        values
+      );
+      const pageRows = result.rows.slice(0, limit);
+      const bundles = await this.mapGoalBundlesWithClient(
+        client,
+        pageRows.map((row) => String(row.id))
+      );
+      const bundlesById = new Map(bundles.map((bundle) => [bundle.goal.id, bundle] as const));
+      const items = pageRows
+        .map((row) => bundlesById.get(String(row.id)) ?? null)
+        .filter((bundle): bundle is GoalBundle => bundle !== null)
+        .map((bundle) => GoalBundleSchema.parse(clone(bundle)));
+      const lastRow = pageRows.at(-1);
+
+      return GoalBundlePageSchema.parse({
+        items,
+        nextCursor:
+          result.rows.length > limit && lastRow
+            ? encodeCollectionCursor({
+                createdAt: new Date(lastRow.created_at).toISOString(),
+                id: String(lastRow.id)
+              })
+            : null
+      });
+    } finally {
+      client.release();
+    }
   }
 
   async listApprovals(userId = SYSTEM_USER_ID): Promise<ApprovalRequest[]> {
@@ -6986,36 +7544,7 @@ class PostgresRepository implements AgenticRepository {
       [userId]
     );
 
-    return result.rows.map((row) =>
-      ApprovalRequestSchema.parse({
-        id: row.id,
-        goalId: row.goal_id,
-        taskId: row.task_id,
-        title: row.title,
-        rationale: row.rationale,
-        riskClass: row.risk_class,
-        decision: row.decision,
-        requestedAction: row.requested_action,
-        actionIntent:
-          row.action_intent ??
-          buildFallbackApprovalActionIntent({
-            title: row.title,
-            requestedAction: row.requested_action,
-            preview: row.preview
-          }),
-        preview: row.preview ?? buildFallbackApprovalPreview({
-          title: row.title,
-          requestedAction: row.requested_action,
-          riskClass: row.risk_class
-        }),
-        decisionScope: normalizeApprovalDecisionScope(row.decision_scope),
-        decisionRationale: typeof row.decision_rationale === "string" ? row.decision_rationale : null,
-        history: normalizeApprovalHistory(row.history),
-        createdAt: new Date(row.created_at).toISOString(),
-        expiryAt: new Date(row.expiry_at).toISOString(),
-        respondedAt: row.responded_at ? new Date(row.responded_at).toISOString() : null
-      })
-    );
+    return result.rows.map((row) => this.mapApprovalRow(row as Record<string, unknown>));
   }
 
   async listEvidenceRecords(params?: {
@@ -7233,11 +7762,53 @@ class PostgresRepository implements AgenticRepository {
   async listAutopilotEvents(userId = SYSTEM_USER_ID): Promise<AutopilotEvent[]> {
     await this.ready;
     const result = await this.pool.query(
-      "select * from autopilot_events where user_id = $1 order by created_at desc",
+      "select * from autopilot_events where user_id = $1 order by created_at desc, id desc",
       [userId]
     );
 
     return result.rows.map((row) => this.mapAutopilotEventRow(row));
+  }
+
+  async listAutopilotEventsPage(params?: CollectionPageParams): Promise<AutopilotEventPage> {
+    await this.ready;
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const limit = normalizeCollectionPageLimit(params?.limit);
+    const cursor = decodeCollectionCursor(params?.cursor ?? null);
+    const values: unknown[] = [userId];
+    let cursorClause = "";
+
+    if (cursor) {
+      values.push(cursor.createdAt, cursor.id);
+      const createdAtIndex = values.length - 1;
+      const idIndex = values.length;
+      cursorClause = ` and (created_at < $${createdAtIndex} or (created_at = $${createdAtIndex} and id < $${idIndex}))`;
+    }
+
+    values.push(limit + 1);
+    const limitIndex = values.length;
+    const result = await this.pool.query(
+      `
+        select *
+        from autopilot_events
+        where user_id = $1${cursorClause}
+        order by created_at desc, id desc
+        limit $${limitIndex}
+      `,
+      values
+    );
+    const items = result.rows.slice(0, limit).map((row) => this.mapAutopilotEventRow(row));
+    const last = items.at(-1);
+
+    return AutopilotEventPageSchema.parse({
+      items,
+      nextCursor:
+        result.rows.length > limit && last
+          ? encodeCollectionCursor({
+              createdAt: last.createdAt,
+              id: last.id
+            })
+          : null
+    });
   }
 
   async claimAutopilotEvent(params: {
@@ -7562,7 +8133,7 @@ class PostgresRepository implements AgenticRepository {
 
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
     await this.ready;
-    const result = await this.pool.query("select * from memory_records where user_id = $1 order by created_at desc", [userId]);
+    const result = await this.pool.query("select * from memory_records where user_id = $1 order by created_at desc, id desc", [userId]);
 
     return result.rows.map((row) =>
       MemoryRecordSchema.parse({
@@ -7582,6 +8153,65 @@ class PostgresRepository implements AgenticRepository {
         updatedAt: new Date(row.updated_at).toISOString()
       })
     );
+  }
+
+  async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
+    await this.ready;
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const limit = normalizeCollectionPageLimit(params?.limit);
+    const cursor = decodeCollectionCursor(params?.cursor ?? null);
+    const values: unknown[] = [userId];
+    let cursorClause = "";
+
+    if (cursor) {
+      values.push(cursor.createdAt, cursor.id);
+      const createdAtIndex = values.length - 1;
+      const idIndex = values.length;
+      cursorClause = ` and (created_at < $${createdAtIndex} or (created_at = $${createdAtIndex} and id < $${idIndex}))`;
+    }
+
+    values.push(limit + 1);
+    const limitIndex = values.length;
+    const result = await this.pool.query(
+      `
+        select *
+        from memory_records
+        where user_id = $1${cursorClause}
+        order by created_at desc, id desc
+        limit $${limitIndex}
+      `,
+      values
+    );
+    const items = result.rows.slice(0, limit).map((row) =>
+      MemoryRecordSchema.parse({
+        id: row.id,
+        userId: row.user_id,
+        category: row.category,
+        memoryType: row.memory_type,
+        content: row.content,
+        confidence: Number(row.confidence),
+        source: row.source,
+        sensitivity: row.sensitivity,
+        permissions: row.permissions ?? [],
+        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
+        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
+        createdAt: new Date(row.created_at).toISOString(),
+        updatedAt: new Date(row.updated_at).toISOString()
+      })
+    );
+    const last = items.at(-1);
+
+    return MemoryRecordPageSchema.parse({
+      items,
+      nextCursor:
+        result.rows.length > limit && last
+          ? encodeCollectionCursor({
+              createdAt: last.createdAt,
+              id: last.id
+            })
+          : null
+    });
   }
 
   async saveMemory(record: MemoryRecord): Promise<MemoryRecord> {
@@ -7639,7 +8269,7 @@ class PostgresRepository implements AgenticRepository {
           (g.workspace_id is null and g.user_id = $1)
           or wm.user_id is not null
         )${goalClause}
-        order by w.created_at desc
+        order by w.created_at desc, w.id desc
       `,
       values
     );
@@ -7660,6 +8290,60 @@ class PostgresRepository implements AgenticRepository {
         updatedAt: new Date(row.updated_at).toISOString()
       })
     );
+  }
+
+  async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
+    await this.ready;
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const limit = normalizeCollectionPageLimit(params?.limit);
+    const cursor = decodeCollectionCursor(params?.cursor ?? null);
+    const values: unknown[] = [userId];
+    const predicates = [
+      `(
+        (g.workspace_id is null and g.user_id = $1)
+        or wm.user_id is not null
+      )`
+    ];
+
+    if (params?.goalId) {
+      values.push(params.goalId);
+      predicates.push(`w.goal_id = $${values.length}`);
+    }
+
+    if (cursor) {
+      values.push(cursor.createdAt, cursor.id);
+      const createdAtIndex = values.length - 1;
+      const idIndex = values.length;
+      predicates.push(`(w.created_at < $${createdAtIndex} or (w.created_at = $${createdAtIndex} and w.id < $${idIndex}))`);
+    }
+
+    values.push(limit + 1);
+    const limitIndex = values.length;
+    const result = await this.pool.query(
+      `
+        select w.*
+        from watchers w
+        join goals g on g.id = w.goal_id
+        left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $1
+        where ${predicates.join(" and ")}
+        order by w.created_at desc, w.id desc
+        limit $${limitIndex}
+      `,
+      values
+    );
+    const items = result.rows.slice(0, limit).map((row) => this.mapWatcherRow(row));
+    const last = items.at(-1);
+
+    return WatcherPageSchema.parse({
+      items,
+      nextCursor:
+        result.rows.length > limit && last
+          ? encodeCollectionCursor({
+              createdAt: last.createdAt,
+              id: last.id
+            })
+          : null
+    });
   }
 
   async saveWatcher(watcher: Watcher): Promise<Watcher> {
@@ -7712,7 +8396,7 @@ class PostgresRepository implements AgenticRepository {
 
   async listIntegrations(userId = SYSTEM_USER_ID): Promise<IntegrationAccount[]> {
     await this.ready;
-    const result = await this.pool.query("select * from integration_accounts where user_id = $1 order by created_at desc", [userId]);
+    const result = await this.pool.query("select * from integration_accounts where user_id = $1 order by created_at desc, id desc", [userId]);
 
     return result.rows.map((row) =>
       IntegrationAccountSchema.parse({
@@ -7729,6 +8413,62 @@ class PostgresRepository implements AgenticRepository {
         updatedAt: new Date(row.updated_at).toISOString()
       })
     );
+  }
+
+  async listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage> {
+    await this.ready;
+    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const limit = normalizeCollectionPageLimit(params?.limit);
+    const cursor = decodeCollectionCursor(params?.cursor ?? null);
+    const values: unknown[] = [userId];
+    let cursorClause = "";
+
+    if (cursor) {
+      values.push(cursor.createdAt, cursor.id);
+      const createdAtIndex = values.length - 1;
+      const idIndex = values.length;
+      cursorClause = ` and (created_at < $${createdAtIndex} or (created_at = $${createdAtIndex} and id < $${idIndex}))`;
+    }
+
+    values.push(limit + 1);
+    const limitIndex = values.length;
+    const result = await this.pool.query(
+      `
+        select *
+        from integration_accounts
+        where user_id = $1${cursorClause}
+        order by created_at desc, id desc
+        limit $${limitIndex}
+      `,
+      values
+    );
+    const items = result.rows.slice(0, limit).map((row) =>
+      IntegrationAccountSchema.parse({
+        id: row.id,
+        userId: row.user_id,
+        name: row.name,
+        system: row.system,
+        status: row.status,
+        scopes: row.scopes ?? [],
+        capabilities: row.capabilities ?? [],
+        metadata: row.metadata ?? {},
+        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        createdAt: new Date(row.created_at).toISOString(),
+        updatedAt: new Date(row.updated_at).toISOString()
+      })
+    );
+    const last = items.at(-1);
+
+    return IntegrationAccountPageSchema.parse({
+      items,
+      nextCursor:
+        result.rows.length > limit && last
+          ? encodeCollectionCursor({
+              createdAt: last.createdAt,
+              id: last.id
+            })
+          : null
+    });
   }
 
   async upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount> {
@@ -8091,29 +8831,19 @@ class PostgresRepository implements AgenticRepository {
 
   async getDashboardData(userId = SYSTEM_USER_ID): Promise<DashboardData> {
     const [
-      goals,
-      approvals,
-      evidenceRecords,
       commitments,
       briefingPreferences,
       autopilotSettings,
-      autopilotEvents,
-      memories,
-      integrations,
-      watchers,
-      workspaces
+      autopilotEventsPage,
+      memoryPage,
+      integrationsPage
     ] = await Promise.all([
-      this.listGoals(userId),
-      this.listApprovals(userId),
-      this.listEvidenceRecords({ userId }),
       this.listCommitments(userId),
       this.getBriefingPreferences(userId),
       this.getAutopilotSettings(userId),
-      this.listAutopilotEvents(userId),
-      this.listMemory(userId),
-      this.listIntegrations(userId),
-      this.listWatchers({ userId }),
-      this.listWorkspaces(userId)
+      this.listAutopilotEventsPage({ userId, limit: DASHBOARD_AUTOPILOT_EVENT_LIMIT }),
+      this.listMemoryPage({ userId, limit: DASHBOARD_MEMORY_LIMIT }),
+      this.listIntegrationsPage({ userId, limit: DASHBOARD_INTEGRATION_LIMIT })
     ]);
     const client = await this.pool.connect();
     let activeWorkspace: Workspace | null = null;
@@ -8122,12 +8852,32 @@ class PostgresRepository implements AgenticRepository {
     let workspaceGovernance: WorkspaceGovernance | null = null;
     let goalShares: GoalShareRecord[] = [];
     let privacyOperations: PrivacyOperation[] = [];
+    let workspaces: Workspace[] = [];
+    let goals: GoalBundle[] = [];
+    let approvals: ApprovalRequest[] = [];
+    let evidenceRecords: EvidenceRecord[] = [];
+    let watchers: Watcher[] = [];
 
     try {
       const resolved = await this.resolveActiveWorkspaceWithClient(client, userId);
+      workspaces = resolved.workspaces;
       activeWorkspace = resolved.activeWorkspace;
       workspaceSelection = resolved.workspaceSelection;
       goalShares = await this.listGoalSharesWithClient(client, { userId });
+      goals = await this.listDashboardGoalBundlesWithClient(client, {
+        userId,
+        activeWorkspace,
+        limit: DASHBOARD_GOAL_LIMIT
+      });
+      approvals = sortByCreatedDesc(goals.flatMap((bundle) => bundle.approvals));
+      watchers = sortByCreatedDesc(goals.flatMap((bundle) => bundle.watchers));
+      evidenceRecords =
+        goals.length > 0
+          ? await this.listEvidenceRecordsForGoalIdsWithClient(client, {
+              userId,
+              goalIds: goals.map((bundle) => bundle.goal.id)
+            })
+          : [];
 
       if (activeWorkspace) {
         [workspaceMembers, workspaceGovernance, privacyOperations] = await Promise.all([
@@ -8158,10 +8908,10 @@ class PostgresRepository implements AgenticRepository {
       commitments,
       briefingPreferences,
       autopilotSettings,
-      autopilotEvents,
-      memories,
+      autopilotEvents: autopilotEventsPage.items,
+      memories: memoryPage.items,
       watchers,
-      integrations,
+      integrations: integrationsPage.items,
       filterBundlesForWorkspace,
       mergeCommitments,
       buildDiagnostics: buildDashboardDiagnostics,
