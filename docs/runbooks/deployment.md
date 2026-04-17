@@ -5,6 +5,7 @@
 This runbook defines the safe rollout path for Agentic production and staging environments. The deployment contract is explicit:
 
 - migrations run before app startup
+- the web and worker processes roll independently but against the same checked-in schema contract
 - readiness must pass before traffic is considered healthy
 - smoke checks validate the live environment after rollout
 - rollback returns traffic to the previous build without mutating schema backward in place
@@ -65,6 +66,8 @@ npm run test:e2e
 npm run test:smoke:observability-export
 ```
 
+The E2E suite should be treated as the pre-rollout check that exercises worker-backed goal flows from the user surface. The deployment smoke suite validates the deployed web boundary and rollout-gate telemetry after release.
+
 ## Rollout Procedure
 
 1. Build the container image.
@@ -86,6 +89,8 @@ npm run start:web:prod -- --hostname 0.0.0.0 --port 3000
 ```bash
 npm run start:worker:prod
 ```
+
+Do not skip the worker rollout. Goal creation, autopilot execution, and privacy lifecycle operations depend on the worker runtime and will remain queued if only the web process is healthy.
 
 5. Verify liveness and readiness from outside the deployment boundary.
 
@@ -110,6 +115,8 @@ Successful smoke validation confirms:
 - authenticated session bootstrap works when `AGENTIC_SMOKE_ACCESS_KEY` is provided
 - telemetry export sanitizes secret-bearing payloads before retention or backend delivery
 - rollout-gate metrics stay inside the thresholds defined in `config/observability/alerts.json`
+
+The deployment smoke suite does not prove that a worker is actively draining queued jobs. That confidence comes from the worker startup contract, pre-rollout E2E coverage, and the post-rollout worker metrics and rollout-gate thresholds.
 
 Treat any readiness failure as a failed rollout. Do not continue shifting traffic while `/api/ready` returns `503`.
 Treat any rollout-gate failure as a failed rollout, even when the deployment smoke request itself succeeds.

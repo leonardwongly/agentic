@@ -1,6 +1,6 @@
 # Agentic
 
-Agentic is a trusted execution control plane for commitments, approvals, automations, memories, and integrations. It is built as a TypeScript-first modular monolith with a Next.js web surface, a governed execution loop, and a reproducible `agentic.docx` pipeline.
+Agentic is a trusted execution control plane for commitments, approvals, automations, memories, and integrations. It is built as a TypeScript-first modular monolith with a Next.js web surface, a durable worker-backed execution loop, tenant-scoped provider credentials, privacy lifecycle controls, and a reproducible `agentic.docx` pipeline.
 
 ## What It Does
 
@@ -15,19 +15,27 @@ Agentic keeps day-to-day work inside a bounded operating loop:
 The current product surface is centered on:
 
 - a commitment-first dashboard for the next actions that matter
-- approvals and autopilot events with explicit evidence and recovery state
+- async goal creation with job polling, idempotency keys, and worker execution
+- approvals and autopilot events with explicit evidence, retry behavior, and recovery state
 - policy-aware memories, goals, workflows, and watchers
+- tenant-scoped Google provider credentials with encrypted secret storage
+- privacy lifecycle operations for retention enforcement, workspace export, and workspace deletion
 - connector readiness reporting so the UI only advertises what an integration can safely do
+- observability rollout gates backed by retained telemetry, checked-in alert thresholds, and dashboard manifests
 
 ## Architecture At A Glance
 
 - `apps/web`: Next.js UI, JSON API routes, session handling, and dashboard surfaces
+- `apps/worker`: worker process for durable goal, autopilot, and privacy-operation execution
+- `packages/contracts`: shared schemas and runtime contracts
+- `packages/db`: database access, migrations, and schema-readiness checks
 - `packages/orchestrator`: workflow assembly, routing, approvals, and execution coordination
 - `packages/policy`: governance, risk classification, and approval gating
 - `packages/repository`: persistence access for dashboards, goals, approvals, and integrations
 - `packages/integrations`: provider-neutral adapter contracts and readiness classification
 - `packages/memory`: memory records and ranking behavior
 - `packages/execution`: task and workflow execution state
+- `packages/worker-runtime`: durable queue contracts, retries, dead-letter handling, and worker dispatch
 - `packages/observability`: action logs, explanations, and execution evidence
 - `packages/agents`: bounded specialist outputs
 - `docs/specs/agentic.md`: deeper product and architecture specification
@@ -102,35 +110,52 @@ npm run dev
 
 The app runs at `http://localhost:3000`.
 
-5. Create a session:
+5. Start the worker when you want async goals, autopilot processing, retention jobs, export jobs, or deletion jobs to complete locally:
+
+```bash
+npm run worker:start
+```
+
+6. Create a session:
 
 - Use the dashboard sign-in flow, or
 - POST the access key to `/api/session` and let the app issue the session cookie used by authenticated API routes
 
-6. Render and validate the document:
+7. Render and validate the document:
 
 ```bash
 npm run docs:build
 ```
 
-7. Run tests:
+8. Run tests:
 
 ```bash
 npm test
 ```
 
-8. Run browser E2E coverage:
+9. Run browser E2E coverage:
 
 ```bash
 npx playwright install chromium
 npm run test:e2e
 ```
 
-9. Build the production web app:
+10. Build the production web app and worker:
 
 ```bash
 npm run build
 ```
+
+## Async Execution Model
+
+Goal creation, autopilot processing, and privacy lifecycle operations are durable job flows rather than best-effort request-time side effects.
+
+- `POST /api/goals` enqueues goal creation and returns `202 Accepted` with a pollable status URL
+- autopilot events are claimed, deduplicated, and processed through the worker runtime
+- privacy retention, workspace export, and workspace deletion run as worker jobs with sanitized failure state
+- retries and dead-letter handling preserve operator-visible recovery details without exposing raw backend secrets
+
+For realistic local validation of these flows, run both `npm run dev` and `npm run worker:start`.
 
 ## Production Bootstrap
 
@@ -218,6 +243,13 @@ The threshold and dashboard manifests live in:
 - `config/observability/alerts.json`
 - `config/observability/dashboard.json`
 
+## Provider Credentials And Integration Safety
+
+- Google provider credentials are stored per tenant rather than as a single shared global integration secret.
+- Refresh tokens and other provider secrets are stored through the encrypted provider-credential secret abstraction.
+- Gmail and Google Calendar operations resolve credentials through that tenant-scoped repository path.
+- Connector readiness remains the outer safety contract: the UI and API advertise draft, approval, or autonomous execution only when an integration is configured and safe enough for that mode.
+
 ## Persistence And Local Storage
 
 - If `DATABASE_URL` is set, the app uses the Postgres-backed repository.
@@ -247,6 +279,16 @@ The first concrete local adapter is a notes provider that reads and writes Markd
 - Approval and execution evidence is persisted so operator-visible state matches what actually ran.
 - Telegram approval callbacks require the `x-telegram-bot-api-secret-token` header to match `TELEGRAM_WEBHOOK_SECRET`.
 - Telegram approval actions are one-time, expiry-bound, and actor-mapped before they can mutate approval state.
+- Provider credential flows use tenant-scoped records and encrypted secret storage instead of process-global provider tokens.
+
+## Privacy Lifecycle
+
+Agentic includes worker-backed privacy operations so governance controls do not depend on synchronous request handlers.
+
+- retention enforcement can revoke expired shares and apply workspace retention policy
+- workspace export jobs produce metadata-only completion state suitable for audit review
+- workspace deletion jobs run through the same durable execution path with audit visibility
+- privacy-operation failures are sanitized before they are persisted back into operator-visible state
 
 ## Documents And Specs
 

@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Agentic is a trusted execution control plane for coordinating work across messages, calendars, tasks, notes, and generated artifacts. The first release prioritizes trustworthy execution over provider-specific depth, and keeps the daily operating loop centered on commitments, approvals, and evidence.
+Agentic is a trusted execution control plane for coordinating work across commitments, approvals, automations, memories, integrations, and generated artifacts. The current system prioritizes trustworthy execution over provider-specific breadth and keeps the daily operating loop centered on commitments, approvals, evidence, and recoverable automation.
 
-The product is intentionally designed as a modular monolith so the first milestone can stay fast to iterate, easy to test, and auditable from the first user request through every policy decision and resulting artifact.
+The product is intentionally designed as a TypeScript-first modular monolith so the system stays fast to iterate, easy to test, and auditable from the first user request through every policy decision, queued job, integration action, and resulting artifact.
 
 ## Product Principles
 
@@ -17,19 +17,24 @@ The product is intentionally designed as a modular monolith so the first milesto
 
 ## Architecture
 
-The Phase 1 system runs as a TypeScript-first Node 20 application with a Next.js web surface, shared packages for orchestration logic, and a repository layer that can run against Postgres or a deterministic file-backed development store.
+The current system runs as a TypeScript-first Node 20 application with a Next.js web surface, a dedicated worker process for durable execution, shared packages for orchestration and policy logic, and a repository layer that can run against Postgres or a deterministic file-backed development store outside production.
 
 ### Core Modules
 
-| Module | Responsibility | Phase 1 expectation |
+| Module | Responsibility | Current expectation |
 | --- | --- | --- |
-| `orchestrator` | Intake, planning, routing, workflow assembly | Required |
-| `memory` | Explicit and inferred memory records | Required |
-| `policy` | Risk classification and approval gating | Required |
-| `execution` | Task state and workflow transitions | Required |
+| `apps/web` | Next.js UI, session handling, API routes, health and readiness endpoints | Required |
+| `apps/worker` | Dedicated process for durable goal, autopilot, and privacy-operation execution | Required |
+| `contracts` | Shared schemas, runtime contracts, and validation rules | Required |
+| `db` | Migrations, schema-readiness checks, and Postgres access | Required |
+| `orchestrator` | Intake, planning, routing, workflow assembly, and artifact generation | Required |
+| `memory` | Explicit and inferred memory records plus capture from completed work | Required |
+| `policy` | Risk classification, governance, and approval gating | Required |
+| `execution` | Durable queue contracts, retries, dead-letter handling, and job claiming | Required |
+| `worker-runtime` | Typed worker dispatch for goal, autopilot, and privacy jobs | Required |
 | `agents` | Bounded specialist outputs as validated JSON | Required |
-| `integrations` | Capability-normalized adapters | Required |
-| `observability` | Append-only action logs and explanations | Required |
+| `integrations` | Capability-normalized adapters plus provider credential resolution | Required |
+| `observability` | Structured logs, counters, histograms, spans, retention, and rollout gates | Required |
 | `notifications` | Human-facing alerts and reminders | Required |
 
 ## Persistence Model
@@ -40,15 +45,19 @@ The canonical relational entities are:
 - `goals`
 - `tasks`
 - `workflows`
+- `jobs`
 - `memory_records`
 - `policy_rules`
 - `approval_requests`
 - `action_logs`
 - `watchers`
 - `integration_accounts`
+- `provider_credentials`
+- `privacy_operations`
+- `autopilot_events`
 - `artifacts`
 
-All action history is append-only. Every plan, tool call, approval request, approval response, retry, watcher registration, and artifact generation must leave an auditable log entry.
+All action history is append-only. Every plan, tool call, approval request, approval response, retry, watcher registration, queued privacy action, autopilot event, and artifact generation must leave an auditable log entry.
 
 ## Capability Model
 
@@ -85,34 +94,53 @@ The orchestrator routes against capabilities only. Provider-specific method name
 
 ## API Surface
 
-The initial HTTP JSON API supports the UI and future external automation:
+The HTTP JSON API supports the UI and bounded automation:
 
 | Endpoint | Method | Responsibility |
 | --- | --- | --- |
-| `/api/goals` | `POST` | Create a structured goal from a user request |
+| `/api/session` | `POST` | Create an authenticated session from the access key |
+| `/api/goals` | `GET`, `POST` | Load the goals dashboard and enqueue goal creation |
+| `/api/goals/jobs/:id` | `GET` | Poll queued goal status and final result summary |
 | `/api/goals/:id` | `GET` | Fetch workflow, tasks, artifacts, and explanations |
 | `/api/approvals/:id/respond` | `POST` | Approve or reject a gated action |
 | `/api/memory` | `GET`, `POST` | Review and add memory records |
 | `/api/watchers` | `GET`, `POST` | Register persistent monitors |
-| `/api/integrations` | `GET`, `POST` | Inspect or update adapter state |
+| `/api/autopilot/settings` | `GET`, `POST` | Inspect or update autopilot mode and scheduling controls |
+| `/api/autopilot/events` | `POST` | Queue deduplicated autopilot work from watcher, template, or briefing triggers |
+| `/api/integrations` | `GET`, `POST` | Inspect or update adapter state and readiness |
+| `/api/governance/privacy` | `GET`, `POST` | Inspect or queue retention, export, and deletion operations |
+| `/api/governance/audit` | `GET` | Review governance and audit outputs |
+| `/api/health` | `GET` | Return liveness state for orchestration and probes |
+| `/api/ready` | `GET` | Return readiness state for access key, DB, migrations, and auth backing |
 | `/api/docs/render` | `POST` | Rebuild and validate `agentic.docx` |
 
 ## Goal Lifecycle
 
 1. Accept a user request.
 2. Normalize and validate the request.
-3. Detect the likely scenario.
-4. Resolve relevant memory and available integrations.
-5. Build a workflow and task graph.
-6. Evaluate each task through policy.
-7. Generate draft artifacts.
-8. Request approval when a task crosses an external-action threshold.
-9. Register watchers for ongoing coordination.
-10. Persist the full bundle and action history.
+3. Resolve the active workspace, relevant memory, and available integrations.
+4. Enqueue a durable goal-creation job and return a pollable status handle.
+5. Process the goal inside the worker runtime with typed orchestration and policy evaluation.
+6. Build the workflow and task graph.
+7. Evaluate tasks through governance and approval rules.
+8. Generate draft artifacts and capture structured evidence.
+9. Request approval when a task crosses an external-action threshold.
+10. Register watchers for ongoing coordination.
+11. Persist the full bundle, action history, and resulting job state.
+
+## Durable Execution Model
+
+The system intentionally moves long-running or failure-prone work out of request handlers.
+
+- goal creation is queued and processed by the worker runtime
+- autopilot events are deduplicated, claimed, and retried through durable jobs
+- privacy retention, workspace export, and workspace deletion are worker-backed operations
+- retries use bounded policies and dead-letter state rather than unbounded in-request loops
+- operator-visible status is sanitized so backend failures do not leak raw secrets or provider internals
 
 ## Policy Model
 
-Risk classes are intentionally simple in the first milestone:
+Risk classes remain intentionally simple:
 
 | Risk class | Meaning | Default behavior |
 | --- | --- | --- |
@@ -121,7 +149,7 @@ Risk classes are intentionally simple in the first milestone:
 | `R3` | External commitment such as sending or scheduling | Require approval |
 | `R4` | Irreversible or highly sensitive action | Block by default |
 
-Low-confidence tasks downgrade to draft behavior instead of acting autonomously.
+Low-confidence tasks downgrade to draft behavior instead of acting autonomously. Connector readiness additionally constrains whether a provider can draft, require approval, or participate in higher-trust autonomous execution.
 
 ## Memory Model
 
@@ -137,7 +165,7 @@ Memory ranking should prefer overlap with the active request, confirmed records,
 
 ## Specialist Agents
 
-Phase 2 introduces five bounded specialists:
+The system uses bounded specialists for different work shapes:
 
 | Agent | Role |
 | --- | --- |
@@ -148,6 +176,24 @@ Phase 2 introduces five bounded specialists:
 | `knowledge` | Memory retrieval, policy-aware context assembly, checklists |
 
 Each agent must emit schema-validated JSON and stay inside an allowlisted capability envelope.
+
+## Provider Credential Model
+
+Provider connectivity is tenant-scoped rather than process-global.
+
+- provider credentials are stored per tenant
+- refresh tokens and similar secrets are stored through an encrypted secret abstraction
+- Gmail and Google Calendar resolve credentials through that tenant-scoped repository path
+- connector readiness remains the outer contract for which actions are safe to advertise or execute
+
+## Privacy Lifecycle
+
+Privacy controls are first-class durable workflows rather than ad hoc administrative actions.
+
+- retention enforcement applies workspace retention settings and can revoke expired shares
+- workspace export produces audit-friendly metadata and artifact packaging
+- workspace deletion runs through the same durable execution path with audit visibility
+- persisted failures are sanitized before being shown back to operators
 
 ## Example Workflow: Inbox Triage
 
@@ -173,15 +219,25 @@ Each agent must emit schema-validated JSON and stay inside an allowlisted capabi
 4. Draft schedule updates without committing them.
 5. Re-open the checklist as the travel date approaches.
 
+## Operations And Observability
+
+The production contract is explicit:
+
+- production requires `DATABASE_URL`
+- migrations run before process startup rather than during request handling
+- the web process exposes liveness and readiness endpoints
+- the worker process starts only after schema readiness succeeds
+- telemetry is retained locally, optionally exported, and evaluated against checked-in rollout gates
+- logs, metrics, and spans use shared correlation context across web requests, worker jobs, and provider calls
+
 ## Delivery Roadmap
 
 | Phase | Outcome | Key additions |
 | --- | --- | --- |
-| 1 | Foundation | UI shell, orchestration, policy, memory, mock adapters, doc pipeline |
-| 2 | Specialist quality | Five bounded agents, routing rules, evaluation metrics |
-| 3 | Persistent execution | Delayed jobs, retries, resumable checkpoints, richer watcher behavior |
-| 4 | Personalization | Memory ranking improvements, policy tuning, selective proactivity |
-| 5 | Ecosystem expansion | Real provider adapters and later broader workspace growth |
+| 1 | Foundation hardening | Web auth boundary, browser security headers, cache-control discipline, deterministic doc pipeline, repository safety fixes |
+| 2 | Durable execution | Job contracts, worker runtime, async goal creation, autopilot queueing, privacy-operation jobs, retry and dead-letter handling |
+| 3 | Production readiness | Shared-auth-state support, health/readiness probes, migration bootstrap, tenant-scoped provider credentials, observability and rollout gates |
+| 4 | Operational rollout | Telemetry backend hookup, dashboard and alert tuning, staged environment validation, production rollout playbooks |
 
 ## Security Requirements
 
@@ -191,6 +247,9 @@ Each agent must emit schema-validated JSON and stay inside an allowlisted capabi
 - Use parameterized SQL for Postgres-backed persistence.
 - Normalize and bound document-generation inputs.
 - Keep irreversible actions blocked or approval-gated by default.
+- Fail closed in production when required access-key, DB, or shared auth-state infrastructure is missing.
+- Keep provider credentials tenant-scoped and stored through encrypted secret handling.
+- Sanitize persisted worker, autopilot, and privacy-operation failures before surfacing them to operators.
 
 ## Performance Requirements
 
@@ -198,6 +257,8 @@ Each agent must emit schema-validated JSON and stay inside an allowlisted capabi
 - Avoid quadratic scans when ranking memory or assembling dashboards.
 - Bound large list views with predictable ordering.
 - Keep document rendering deterministic and suitable for CI.
+- Keep request handlers short by moving long-running work onto the durable worker runtime.
+- Bound queue retries, telemetry retention, and in-memory buffers to avoid unbounded resource growth.
 
 ## Testing Requirements
 
@@ -206,8 +267,13 @@ The baseline test suite must cover:
 - policy classification and approval gating
 - memory ranking behavior
 - orchestration happy path and approval transitions
+- durable goal creation, job polling, and dead-letter handling
+- autopilot enqueue, retry, deduplication, and recovery state
+- privacy retention, export, and deletion operations
+- provider credential isolation and secret handling
 - repository persistence round-trips
 - document render and validation checks
+- deployment smoke and observability rollout-gate validation
 
 Abuse cases must include malformed payloads, oversized requests, capability misuse, and hostile content embedded in external documents.
 
