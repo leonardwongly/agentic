@@ -9,7 +9,7 @@ import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { verifyGoalShareToken } from "../apps/web/lib/share";
-import { POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/route";
+import { DELETE as revokeGoalShareRoute, POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/route";
 import { expectNoStoreHeaders } from "./route-test-helpers";
 
 function buildAutopilotSettings() {
@@ -83,6 +83,15 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       updatedAt: timestamp
     }),
     saveWorkspaceGovernance: async (governance) => governance,
+    listGoalShares: async () => [],
+    getGoalShare: async () => null,
+    getGoalShareByTokenFingerprint: async () => null,
+    saveGoalShare: async (share) => share,
+    listPrivacyOperations: async () => [],
+    getPrivacyOperation: async () => null,
+    savePrivacyOperation: async (operation) => operation,
+    enforceWorkspaceRetention: async () => ({}),
+    deleteWorkspaceData: async () => ({}),
     exportWorkspaceAudit: async (workspaceId) => ({
       workspaceId,
       fileName: `${workspaceId}-audit.json`,
@@ -188,6 +197,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       goals: [],
       approvals: [],
       commitments: [],
+      goalShares: [],
+      privacyOperations: [],
       briefingPreferences: {
         userId: SYSTEM_USER_ID,
         timezone: "Asia/Singapore",
@@ -297,12 +308,17 @@ describe("goal share route", () => {
     const reloadedBundle = await createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     }).getGoalBundle(bundle.goal.id);
+    const shares = await createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    }).listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
     const createdLog = reloadedBundle?.actionLogs.find((log) => log.kind === "share.link_created");
 
     expect(response.status).toBe(200);
     expect(payload.shareUrl).toContain("/share/");
     expect(Date.parse(payload.expiresAt)).toBeGreaterThan(Date.now());
+    expect(shares).toHaveLength(1);
     expect(verifyGoalShareToken(decodeURIComponent(token) ?? "")).toMatchObject({
+      shareId: shares[0]?.id,
       goalId: bundle.goal.id
     });
     expect(createdLog).toBeDefined();
@@ -453,5 +469,54 @@ describe("goal share route", () => {
     expect(response.status).toBe(500);
     expect(payload.error).toBe("Failed to create a goal share link.");
     expectNoStoreHeaders(response);
+  });
+
+  it("revokes an existing public share link and records a revoke log", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share the current planning context with a reviewer.");
+    const shareResponse = await goalShareRoute(
+      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const sharePayload = (await shareResponse.json()) as { shareId: string };
+
+    const revokeResponse = await revokeGoalShareRoute(
+      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          shareId: sharePayload.shareId
+        })
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const revokedShare = await repository.getGoalShare(sharePayload.shareId, SYSTEM_USER_ID);
+    const reloadedBundle = await repository.getGoalBundle(bundle.goal.id);
+    const revokedLog = reloadedBundle?.actionLogs.find((log) => log.kind === "share.link_revoked");
+
+    expect(revokeResponse.status).toBe(200);
+    expect(revokedShare).toMatchObject({
+      id: sharePayload.shareId,
+      status: "revoked"
+    });
+    expect(revokedShare?.revokedAt).not.toBeNull();
+    expect(revokedLog?.details.shareId).toBe(sharePayload.shareId);
+    expectNoStoreHeaders(revokeResponse);
   });
 });

@@ -11,6 +11,7 @@ const MAX_GOAL_SHARE_TOKEN_LENGTH = 4096;
 
 const GoalShareTokenPayloadSchema = z
   .object({
+    shareId: z.string().trim().min(1).max(200),
     goalId: z.string().trim().min(1).max(200),
     exp: z.number().int().positive(),
     v: z.literal(GOAL_SHARE_TOKEN_VERSION)
@@ -38,13 +39,8 @@ export type SharedGoalView = {
   artifacts: Array<{
     title: string;
     artifactType: string;
-    content: string;
+    preview: string;
     createdAt: string;
-  }>;
-  watchers: Array<{
-    targetEntity: string;
-    condition: string;
-    frequency: string;
   }>;
 };
 
@@ -67,8 +63,9 @@ export function getGoalShareExpiry(now = Date.now()): string {
   return new Date(now + GOAL_SHARE_TTL_MS).toISOString();
 }
 
-export function createGoalShareToken(goalId: string, expiresAt = getGoalShareExpiry()): string {
+export function createGoalShareToken(shareId: string, goalId: string, expiresAt = getGoalShareExpiry()): string {
   const payload = GoalShareTokenPayloadSchema.parse({
+    shareId,
     goalId,
     exp: Date.parse(expiresAt),
     v: GOAL_SHARE_TOKEN_VERSION
@@ -123,6 +120,7 @@ export function fingerprintGoalShareToken(token: string): string {
 
 export function createGoalShareCreatedLog(
   bundle: GoalBundle,
+  shareId: string,
   token: string,
   expiresAt: string,
   actorContext: ActorContext | null = null
@@ -135,6 +133,7 @@ export function createGoalShareCreatedLog(
     kind: "share.link_created",
     message: `Created a public share link for "${bundle.goal.title}".`,
     details: {
+      shareId,
       expiresAt,
       tokenFingerprint: fingerprintGoalShareToken(token),
       actorContext
@@ -142,7 +141,7 @@ export function createGoalShareCreatedLog(
   });
 }
 
-export function createGoalShareViewedLog(bundle: GoalBundle, token: string, now = Date.now()) {
+export function createGoalShareViewedLog(bundle: GoalBundle, shareId: string, token: string, now = Date.now()) {
   const tokenFingerprint = fingerprintGoalShareToken(token);
   const dedupeThreshold = now - SHARE_VIEW_DEDUP_WINDOW_MS;
   const alreadyTracked = bundle.actionLogs.some((log) => {
@@ -168,7 +167,27 @@ export function createGoalShareViewedLog(bundle: GoalBundle, token: string, now 
     kind: "share.page_viewed",
     message: `Opened the public share page for "${bundle.goal.title}".`,
     details: {
+      shareId,
       tokenFingerprint
+    }
+  });
+}
+
+export function createGoalShareRevokedLog(
+  bundle: GoalBundle,
+  shareId: string,
+  actorContext: ActorContext | null = null
+) {
+  return createActionLog({
+    goalId: bundle.goal.id,
+    taskId: null,
+    workflowId: bundle.workflow.id,
+    actor: "dashboard",
+    kind: "share.link_revoked",
+    message: `Revoked a public share link for "${bundle.goal.title}".`,
+    details: {
+      shareId,
+      actorContext
     }
   });
 }
@@ -193,13 +212,8 @@ export function buildSharedGoalView(bundle: GoalBundle): SharedGoalView {
     artifacts: bundle.artifacts.map((artifact) => ({
       title: artifact.title,
       artifactType: artifact.artifactType,
-      content: artifact.content,
+      preview: "Artifact content is hidden on public share links.",
       createdAt: artifact.createdAt
-    })),
-    watchers: bundle.watchers.map((watcher) => ({
-      targetEntity: watcher.targetEntity,
-      condition: watcher.condition,
-      frequency: watcher.frequency
     }))
   };
 }

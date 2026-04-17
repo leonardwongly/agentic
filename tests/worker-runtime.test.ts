@@ -14,8 +14,10 @@ import { EpisodeRecordSchema, createSelfImprovementRepository } from "@agentic/s
 import {
   enqueueAutopilotProcessJob,
   enqueueGoalCreateJob,
+  enqueuePrivacyOperationJob,
   executeAutopilotProcessJob,
   executeGoalCreateJob,
+  executePrivacyOperationJob,
   runWorkerRuntime
 } from "@agentic/worker-runtime";
 import { vi } from "vitest";
@@ -43,6 +45,31 @@ describe("worker runtime", () => {
       repository,
       selfImprovementRepository
     };
+  }
+
+  async function createPrivacyOperation(params: {
+    repository: Awaited<ReturnType<typeof createTestRuntime>>["repository"];
+    workspaceId: string;
+    kind: "retention_enforcement" | "workspace_export" | "workspace_delete";
+    details?: Record<string, unknown>;
+  }) {
+    return params.repository.savePrivacyOperation({
+      id: `privacy-${params.kind}-${params.workspaceId}`,
+      workspaceId: params.workspaceId,
+      userId: SYSTEM_USER_ID,
+      kind: params.kind,
+      status: "queued",
+      requestedBy: SYSTEM_USER_ID,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      jobId: null,
+      details: params.details ?? {},
+      result: {},
+      startedAt: null,
+      completedAt: null,
+      error: null,
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
   }
 
   function buildCompletedBundle(goalId: string, workflowId: string) {
@@ -311,6 +338,228 @@ describe("worker runtime", () => {
     });
     expect(persistedJob?.lastError).toContain("episode store unavailable");
     expect(episodes).toHaveLength(0);
+  });
+
+  it("stores metadata-only results for workspace export privacy jobs", async () => {
+    const { repository } = await createTestRuntime();
+    const workspaceId = (await repository.getDashboardData(SYSTEM_USER_ID)).activeWorkspace!.id;
+    const operation = await createPrivacyOperation({
+      repository,
+      workspaceId,
+      kind: "workspace_export"
+    });
+    const job = await enqueuePrivacyOperationJob({
+      repository,
+      operation: {
+        id: operation.id,
+        workspaceId,
+        userId: SYSTEM_USER_ID,
+        kind: operation.kind,
+        actorContext: operation.actorContext
+      }
+    });
+
+    await executePrivacyOperationJob({
+      repository,
+      job
+    });
+
+    const persistedOperation = await repository.getPrivacyOperation(operation.id, SYSTEM_USER_ID);
+
+    expect(persistedOperation).toMatchObject({
+      id: operation.id,
+      status: "completed",
+      error: null
+    });
+    expect(persistedOperation?.result).toMatchObject({
+      workspaceId,
+      fileName: expect.stringContaining("audit"),
+      contentType: "application/json"
+    });
+    expect(persistedOperation?.result).toHaveProperty("contentLength");
+    expect(persistedOperation?.result).not.toHaveProperty("content");
+  });
+
+  it("enforces retention and revokes expired active shares", async () => {
+    const { repository } = await createTestRuntime();
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const workspaceId = dashboard.activeWorkspace!.id;
+    const bundle = await orchestrator.processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Prepare a sharable summary for a reviewer.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+
+    await repository.saveGoalBundle(bundle);
+    await repository.saveGoalShare({
+      id: "share-expired-retention",
+      goalId: bundle.goal.id,
+      userId: SYSTEM_USER_ID,
+      workspaceId,
+      tokenFingerprint: "abcdef123456",
+      status: "active",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      expiresAt: "2026-04-10T00:00:00.000Z",
+      lastViewedAt: null,
+      revokedAt: null,
+      createdAt: "2026-04-10T00:00:00.000Z",
+      updatedAt: "2026-04-10T00:00:00.000Z"
+    });
+
+    const operation = await createPrivacyOperation({
+      repository,
+      workspaceId,
+      kind: "retention_enforcement",
+      details: {
+        retentionDays: 30
+      }
+    });
+    const job = await enqueuePrivacyOperationJob({
+      repository,
+      operation: {
+        id: operation.id,
+        workspaceId,
+        userId: SYSTEM_USER_ID,
+        kind: operation.kind,
+        actorContext: operation.actorContext
+      }
+    });
+
+    await executePrivacyOperationJob({
+      repository,
+      job
+    });
+
+    const persistedOperation = await repository.getPrivacyOperation(operation.id, SYSTEM_USER_ID);
+    const revokedShare = await repository.getGoalShare("share-expired-retention", SYSTEM_USER_ID);
+
+    expect(persistedOperation).toMatchObject({
+      id: operation.id,
+      status: "completed",
+      error: null
+    });
+    expect(persistedOperation?.result).toMatchObject({
+      workspaceId,
+      retentionDays: 30,
+      revokedSharesCount: 1,
+      purgedSharesCount: 0
+    });
+    expect(revokedShare).toMatchObject({
+      id: "share-expired-retention",
+      status: "revoked"
+    });
+    expect(revokedShare?.revokedAt).not.toBeNull();
+  });
+
+  it("deletes shared-workspace data and leaves a tombstone for workspace delete jobs", async () => {
+    const { repository } = await createTestRuntime();
+    const actor = createSystemActorContext(SYSTEM_USER_ID);
+    const workspaceId = "workspace-shared-delete";
+
+    await repository.saveWorkspace(
+      {
+        id: workspaceId,
+        ownerUserId: SYSTEM_USER_ID,
+        slug: "shared-delete",
+        name: "Shared Delete Workspace",
+        description: "Workspace used to test delete tombstones.",
+        isPersonal: false,
+        createdAt: "2026-04-16T00:00:00.000Z",
+        updatedAt: "2026-04-16T00:00:00.000Z"
+      },
+      actor
+    );
+    await repository.saveWorkspaceMember(
+      {
+        id: `workspace-member-${workspaceId}-${SYSTEM_USER_ID}`,
+        workspaceId,
+        userId: SYSTEM_USER_ID,
+        role: "owner",
+        joinedAt: "2026-04-16T00:00:00.000Z",
+        updatedAt: "2026-04-16T00:00:00.000Z"
+      },
+      actor
+    );
+
+    const operation = await createPrivacyOperation({
+      repository,
+      workspaceId,
+      kind: "workspace_delete"
+    });
+    const job = await enqueuePrivacyOperationJob({
+      repository,
+      operation: {
+        id: operation.id,
+        workspaceId,
+        userId: SYSTEM_USER_ID,
+        kind: operation.kind,
+        actorContext: operation.actorContext
+      }
+    });
+
+    await executePrivacyOperationJob({
+      repository,
+      job
+    });
+
+    const persistedOperation = await repository.getPrivacyOperation(operation.id, SYSTEM_USER_ID);
+    const tombstonedWorkspace = (await repository.listWorkspaces(SYSTEM_USER_ID)).find(
+      (workspace) => workspace.id === workspaceId
+    );
+
+    expect(persistedOperation).toMatchObject({
+      id: operation.id,
+      status: "completed",
+      error: null
+    });
+    expect(persistedOperation?.result).toMatchObject({
+      workspaceId,
+      operationId: operation.id,
+      tombstonedWorkspaceSlug: expect.stringContaining("deleted-")
+    });
+    expect(tombstonedWorkspace?.slug).toBe(persistedOperation?.result.tombstonedWorkspaceSlug);
+    expect(tombstonedWorkspace?.description).toContain(operation.id);
+  });
+
+  it("records sanitized privacy-operation failures without leaking backend errors", async () => {
+    const { repository } = await createTestRuntime();
+    const workspaceId = (await repository.getDashboardData(SYSTEM_USER_ID)).activeWorkspace!.id;
+    const operation = await createPrivacyOperation({
+      repository,
+      workspaceId,
+      kind: "workspace_export"
+    });
+    const job = await enqueuePrivacyOperationJob({
+      repository,
+      operation: {
+        id: operation.id,
+        workspaceId,
+        userId: SYSTEM_USER_ID,
+        kind: operation.kind,
+        actorContext: operation.actorContext
+      }
+    });
+
+    vi.spyOn(repository, "exportWorkspaceAudit").mockRejectedValueOnce(
+      new Error("upstream export failed: token=super-secret")
+    );
+
+    await expect(
+      executePrivacyOperationJob({
+        repository,
+        job
+      })
+    ).rejects.toThrow("upstream export failed");
+
+    const persistedOperation = await repository.getPrivacyOperation(operation.id, SYSTEM_USER_ID);
+
+    expect(persistedOperation).toMatchObject({
+      id: operation.id,
+      status: "failed",
+      error: "Workspace export failed."
+    });
+    expect(JSON.stringify(persistedOperation)).not.toContain("super-secret");
   });
 
   it("keeps autopilot watcher execution idempotent across repeated worker attempts", async () => {

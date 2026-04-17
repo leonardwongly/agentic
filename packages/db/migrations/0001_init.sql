@@ -215,6 +215,63 @@ create table if not exists workspace_governance (
   updated_at timestamptz not null
 );
 
+create table if not exists goal_shares (
+  id text primary key,
+  goal_id text not null,
+  user_id text not null,
+  workspace_id text,
+  token_fingerprint text not null,
+  status text not null,
+  actor_context jsonb,
+  expires_at timestamptz not null,
+  last_viewed_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create unique index if not exists goal_shares_token_fingerprint_idx
+  on goal_shares (token_fingerprint);
+
+create index if not exists goal_shares_goal_id_idx
+  on goal_shares (goal_id);
+
+create index if not exists goal_shares_workspace_id_idx
+  on goal_shares (workspace_id);
+
+create index if not exists goal_shares_user_updated_at_idx
+  on goal_shares (user_id, updated_at);
+
+create table if not exists privacy_operations (
+  id text primary key,
+  workspace_id text not null,
+  user_id text not null,
+  kind text not null,
+  status text not null,
+  requested_by text not null,
+  actor_context jsonb,
+  job_id text,
+  details jsonb not null default '{}'::jsonb,
+  result jsonb not null default '{}'::jsonb,
+  started_at timestamptz,
+  completed_at timestamptz,
+  error text,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create index if not exists privacy_operations_workspace_created_at_idx
+  on privacy_operations (workspace_id, created_at);
+
+create index if not exists privacy_operations_user_created_at_idx
+  on privacy_operations (user_id, created_at);
+
+create index if not exists privacy_operations_status_created_at_idx
+  on privacy_operations (status, created_at);
+
+create index if not exists privacy_operations_job_id_idx
+  on privacy_operations (job_id);
+
 create table if not exists briefing_preferences (
   user_id text primary key,
   timezone text not null,

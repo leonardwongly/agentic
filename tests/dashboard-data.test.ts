@@ -23,6 +23,8 @@ describe("assembleDashboardData instrumentation", () => {
       workspaceMembers: [],
       workspaceGovernance: null,
       goals: [],
+      goalShares: [],
+      privacyOperations: [],
       approvals: [],
       evidenceRecords: [],
       commitments: [],
@@ -92,6 +94,8 @@ describe("assembleDashboardData instrumentation", () => {
       workspaceMembers: [],
       workspaceGovernance: null,
       goals: [],
+      goalShares: [],
+      privacyOperations: [],
       approvals: [],
       evidenceRecords: [],
       commitments: [],
@@ -205,6 +209,8 @@ describe("assembleDashboardData instrumentation", () => {
           actionLogs: []
         }
       ],
+      goalShares: [],
+      privacyOperations: [],
       approvals: [
         {
           id: "approval-1",

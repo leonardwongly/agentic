@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, jsonb, real, integer, index, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, jsonb, real, integer, index, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
@@ -212,6 +212,57 @@ export const workspaceGovernance = pgTable("workspace_governance", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
+
+export const goalShares = pgTable(
+  "goal_shares",
+  {
+    id: text("id").primaryKey(),
+    goalId: text("goal_id").notNull(),
+    userId: text("user_id").notNull(),
+    workspaceId: text("workspace_id"),
+    tokenFingerprint: text("token_fingerprint").notNull(),
+    status: text("status").notNull(),
+    actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    tokenFingerprintIdx: uniqueIndex("goal_shares_token_fingerprint_idx").on(table.tokenFingerprint),
+    goalIdx: index("goal_shares_goal_id_idx").on(table.goalId),
+    workspaceIdx: index("goal_shares_workspace_id_idx").on(table.workspaceId),
+    userUpdatedAtIdx: index("goal_shares_user_updated_at_idx").on(table.userId, table.updatedAt)
+  })
+);
+
+export const privacyOperations = pgTable(
+  "privacy_operations",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    userId: text("user_id").notNull(),
+    kind: text("kind").notNull(),
+    status: text("status").notNull(),
+    requestedBy: text("requested_by").notNull(),
+    actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+    jobId: text("job_id"),
+    details: jsonb("details").$type<Record<string, unknown>>().notNull(),
+    result: jsonb("result").$type<Record<string, unknown>>().notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    workspaceCreatedAtIdx: index("privacy_operations_workspace_created_at_idx").on(table.workspaceId, table.createdAt),
+    userCreatedAtIdx: index("privacy_operations_user_created_at_idx").on(table.userId, table.createdAt),
+    statusCreatedAtIdx: index("privacy_operations_status_created_at_idx").on(table.status, table.createdAt),
+    jobIdIdx: index("privacy_operations_job_id_idx").on(table.jobId)
+  })
+);
 
 export const briefingPreferences = pgTable("briefing_preferences", {
   userId: text("user_id").primaryKey(),

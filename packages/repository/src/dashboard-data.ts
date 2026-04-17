@@ -10,9 +10,11 @@ import type {
   DashboardOperatingSections,
   EvidenceRecord,
   GoalBundle,
+  GoalShareRecord,
   IntegrationAccount,
   MemoryRecord,
   NowQueue,
+  PrivacyOperation,
   Watcher,
   Workspace,
   WorkspaceGovernance,
@@ -28,6 +30,8 @@ type AssembleDashboardDataParams = {
   workspaceSelection: WorkspaceSelection | null;
   workspaceMembers: WorkspaceMember[];
   workspaceGovernance: WorkspaceGovernance | null;
+  goalShares: GoalShareRecord[];
+  privacyOperations: PrivacyOperation[];
   goals: GoalBundle[];
   approvals: ApprovalRequest[];
   evidenceRecords: EvidenceRecord[];
@@ -219,6 +223,12 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
   const startedAt = Date.now();
   const scopedGoals = params.filterBundlesForWorkspace(params.goals, params.activeWorkspace, params.userId);
   const scopedGoalIds = new Set(scopedGoals.map((bundle) => bundle.goal.id));
+  const goalShares = params.goalShares ?? [];
+  const privacyOperations = params.privacyOperations ?? [];
+  const scopedGoalShares = goalShares.filter((share) => scopedGoalIds.has(share.goalId));
+  const scopedPrivacyOperations = params.activeWorkspace
+    ? privacyOperations.filter((operation) => operation.workspaceId === params.activeWorkspace?.id)
+    : [];
   const scopedEvidenceRecords = params.evidenceRecords.filter((record) => scopedGoalIds.has(record.goalId));
   const scopedApprovals = enrichApprovals({
     approvals: params.approvals.filter((approval) => scopedGoalIds.has(approval.goalId)),
@@ -272,6 +282,8 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
     workspaceSelection: params.workspaceSelection,
     workspaceMembers: params.workspaceMembers,
     workspaceGovernance: params.workspaceGovernance,
+    goalShares: scopedGoalShares,
+    privacyOperations: scopedPrivacyOperations,
     controlPlane: params.buildControlPlane({
       activeWorkspace: params.activeWorkspace,
       workspaceMembers: params.workspaceMembers,
@@ -313,6 +325,8 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
       durationMs,
       totalGoals: params.goals.length,
       scopedGoals: scopedGoals.length,
+      goalShares: scopedGoalShares.length,
+      privacyOperations: scopedPrivacyOperations.length,
       approvals: scopedApprovals.length,
       commitments: mergedCommitments.length,
       watchers: scopedWatchers.length,

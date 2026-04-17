@@ -32,6 +32,8 @@ import {
   commitmentInboxBucketValues,
   GoalBundleSchema,
   GoalSchema,
+  GoalShareRecordSchema,
+  GoalShareStatusSchema,
   GoalTemplateSchema,
   IntegrationAccountSchema,
   EncryptedSecretEnvelopeSchema,
@@ -41,6 +43,9 @@ import {
   MemoryRecordSchema,
   OperatorProductSchema,
   OperatorProductSelectionSchema,
+  PrivacyOperationKindSchema,
+  PrivacyOperationSchema,
+  PrivacyOperationStatusSchema,
   ProviderCredentialSchema,
   ProviderCredentialSecretKindSchema,
   ProviderCredentialSecretRecordSchema,
@@ -74,8 +79,13 @@ import {
   type CommitmentUrgency,
   type EvidenceRecord,
   type GoalBundle,
+  type GoalShareRecord,
+  type GoalShareStatus,
   type GoalTemplate,
   type IntegrationAccount,
+  type PrivacyOperation,
+  type PrivacyOperationKind,
+  type PrivacyOperationStatus,
   type Provider,
   type ProviderCredential,
   type ProviderCredentialSecretKind,
@@ -138,6 +148,8 @@ const RuntimeStoreSchema = z.object({
   workspaceMembers: z.array(WorkspaceMemberSchema).default([]),
   workspaceSelections: z.array(WorkspaceSelectionSchema).default([]),
   workspaceGovernance: z.array(WorkspaceGovernanceSchema).default([]),
+  goalShares: z.array(GoalShareRecordSchema).default([]),
+  privacyOperations: z.array(PrivacyOperationSchema).default([]),
   commitments: z.array(CommitmentSchema).default([]),
   policyRules: z.array(PolicyRuleRecordSchema),
   templates: z.array(GoalTemplateSchema).default([]),
@@ -160,6 +172,8 @@ export type DashboardData = {
   workspaceSelection: WorkspaceSelection | null;
   workspaceMembers: WorkspaceMember[];
   workspaceGovernance: WorkspaceGovernance | null;
+  goalShares: GoalShareRecord[];
+  privacyOperations: PrivacyOperation[];
   controlPlane: DashboardControlPlane;
   operatingSections: DashboardOperatingSections;
   nowQueue: NowQueue;
@@ -245,6 +259,34 @@ export type WatcherListFilters = {
   goalId?: string;
 };
 
+export type GoalShareListFilters = {
+  userId?: string;
+  goalId?: string;
+  workspaceId?: string | null;
+  statuses?: GoalShareStatus[];
+};
+
+export type PrivacyOperationListFilters = {
+  userId?: string;
+  workspaceId?: string;
+  kinds?: PrivacyOperationKind[];
+  statuses?: PrivacyOperationStatus[];
+};
+
+export type WorkspaceRetentionParams = {
+  workspaceId: string;
+  userId: string;
+  retentionDays: number;
+  now?: string;
+};
+
+export type WorkspaceDeleteParams = {
+  workspaceId: string;
+  userId: string;
+  operationId: string;
+  now?: string;
+};
+
 export type AutopilotEventClaim =
   | {
       outcome: "claimed";
@@ -296,6 +338,15 @@ export type AgenticRepository = {
   saveWorkspaceSelection(selection: WorkspaceSelection): Promise<WorkspaceSelection>;
   getWorkspaceGovernance(workspaceId: string, userId?: string): Promise<WorkspaceGovernance | null>;
   saveWorkspaceGovernance(governance: WorkspaceGovernance, actor: ActorContext): Promise<WorkspaceGovernance>;
+  listGoalShares(filters?: GoalShareListFilters): Promise<GoalShareRecord[]>;
+  getGoalShare(shareId: string, userId?: string): Promise<GoalShareRecord | null>;
+  getGoalShareByTokenFingerprint(tokenFingerprint: string): Promise<GoalShareRecord | null>;
+  saveGoalShare(share: GoalShareRecord): Promise<GoalShareRecord>;
+  listPrivacyOperations(filters?: PrivacyOperationListFilters): Promise<PrivacyOperation[]>;
+  getPrivacyOperation(operationId: string, userId?: string): Promise<PrivacyOperation | null>;
+  savePrivacyOperation(operation: PrivacyOperation): Promise<PrivacyOperation>;
+  enforceWorkspaceRetention(params: WorkspaceRetentionParams): Promise<Record<string, unknown>>;
+  deleteWorkspaceData(params: WorkspaceDeleteParams): Promise<Record<string, unknown>>;
   exportWorkspaceAudit(workspaceId: string, userId?: string): Promise<WorkspaceAuditExport>;
   saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle>;
   respondToApproval(params: {
@@ -443,6 +494,8 @@ function createEmptyStore(): RuntimeStore {
     workspaceMembers: [],
     workspaceSelections: [],
     workspaceGovernance: [],
+    goalShares: [],
+    privacyOperations: [],
     commitments: [],
     policyRules: [],
     templates: [],
@@ -479,6 +532,10 @@ function providerCredentialSecretStoreKey(
   record: Pick<ProviderCredentialSecretRecord, "credentialId" | "kind" | "userId">
 ): string {
   return `${record.userId}:${record.credentialId}:${record.kind}`;
+}
+
+function goalShareFingerprintStoreKey(share: Pick<GoalShareRecord, "tokenFingerprint">): string {
+  return share.tokenFingerprint.toLowerCase();
 }
 
 const GOOGLE_MANAGED_INTEGRATION_IDS = ["gmail", "google-calendar"] as const;
@@ -2023,6 +2080,39 @@ function assertWorkspaceOwner(store: RuntimeStore, workspaceId: string, userId: 
   return member;
 }
 
+function goalByIdFromStore(store: RuntimeStore, goalId: string): GoalBundle["goal"] | null {
+  return store.goals.find((candidate) => candidate.id === goalId) ?? null;
+}
+
+function isGoalShareVisibleToUser(store: RuntimeStore, share: GoalShareRecord, userId: string): boolean {
+  const goal = goalByIdFromStore(store, share.goalId);
+
+  if (!goal) {
+    return false;
+  }
+
+  const workspaceIds = workspaceIdsForUser(store, userId);
+  return isGoalVisibleToUser(goal, workspaceIds, userId);
+}
+
+function normalizeGoalShareFilters(filters?: GoalShareListFilters): GoalShareListFilters {
+  return {
+    userId: filters?.userId ?? SYSTEM_USER_ID,
+    goalId: filters?.goalId,
+    workspaceId: filters?.workspaceId,
+    statuses: filters?.statuses?.map((status) => GoalShareStatusSchema.parse(status))
+  };
+}
+
+function normalizePrivacyOperationFilters(filters?: PrivacyOperationListFilters): PrivacyOperationListFilters {
+  return {
+    userId: filters?.userId ?? SYSTEM_USER_ID,
+    workspaceId: filters?.workspaceId,
+    kinds: filters?.kinds?.map((kind) => PrivacyOperationKindSchema.parse(kind)),
+    statuses: filters?.statuses?.map((status) => PrivacyOperationStatusSchema.parse(status))
+  };
+}
+
 function filterBundlesForWorkspace(
   bundles: GoalBundle[],
   activeWorkspace: Workspace | null,
@@ -2053,6 +2143,8 @@ function buildWorkspaceAuditExport(params: {
   governance: WorkspaceGovernance | null;
   members: WorkspaceMember[];
   goals: GoalBundle[];
+  goalShares: GoalShareRecord[];
+  privacyOperations: PrivacyOperation[];
 }): WorkspaceAuditExport {
   const generatedAt = nowIso();
 
@@ -2067,6 +2159,8 @@ function buildWorkspaceAuditExport(params: {
         workspace: params.workspace,
         governance: params.governance,
         members: params.members,
+        goalShares: params.goalShares,
+        privacyOperations: params.privacyOperations,
         goals: params.goals.map((bundle) => ({
           goal: bundle.goal,
           workflow: bundle.workflow,
@@ -2081,6 +2175,88 @@ function buildWorkspaceAuditExport(params: {
       2
     )
   };
+}
+
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+function resolveRetentionWindow(retentionDays: number, now = nowIso()): {
+  effectiveNow: string;
+  effectiveNowMs: number;
+  retentionCutoff: string;
+  retentionCutoffMs: number;
+} {
+  if (!Number.isInteger(retentionDays) || retentionDays < 0) {
+    throw new Error(`Retention days must be a non-negative integer. Received ${retentionDays}.`);
+  }
+
+  const effectiveNowMs = Date.parse(now);
+
+  if (!Number.isFinite(effectiveNowMs)) {
+    throw new Error(`Invalid retention clock value: ${now}.`);
+  }
+
+  const retentionCutoffMs = effectiveNowMs - retentionDays * DAY_IN_MS;
+
+  return {
+    effectiveNow: new Date(effectiveNowMs).toISOString(),
+    effectiveNowMs,
+    retentionCutoff: new Date(retentionCutoffMs).toISOString(),
+    retentionCutoffMs
+  };
+}
+
+function isGoalOwnedByWorkspace(goal: GoalBundle["goal"], workspace: Workspace): boolean {
+  if (goal.workspaceId) {
+    return goal.workspaceId === workspace.id;
+  }
+
+  return workspace.isPersonal && goal.userId === workspace.ownerUserId;
+}
+
+function workspaceGoalIdsFromStore(store: RuntimeStore, workspace: Workspace): Set<string> {
+  return new Set(store.goals.filter((goal) => isGoalOwnedByWorkspace(goal, workspace)).map((goal) => goal.id));
+}
+
+function goalShareTerminalAt(share: Pick<GoalShareRecord, "expiresAt" | "revokedAt">): string {
+  return share.revokedAt ?? share.expiresAt;
+}
+
+function buildDeletedWorkspaceTombstone(workspace: Workspace, operationId: string, now = nowIso()): Workspace {
+  const shortWorkspaceId = workspace.id.replace(/[^a-z0-9]/gi, "").slice(0, 24).toLowerCase() || "workspace";
+  const shortOperationId = operationId.replace(/[^a-z0-9]/gi, "").slice(0, 8).toLowerCase() || "deleted";
+  const slug = `deleted-${shortWorkspaceId}-${shortOperationId}`.slice(0, 120);
+
+  return WorkspaceSchema.parse({
+    ...workspace,
+    slug,
+    name: `Deleted workspace ${workspace.id.slice(0, 8)}`,
+    description: `Deleted on ${now} by privacy operation ${operationId}.`,
+    updatedAt: now
+  });
+}
+
+function isJobScopedToWorkspace(
+  job: JobRecord,
+  params: {
+    workspaceId: string;
+    goalIds: ReadonlySet<string>;
+    watcherIds: ReadonlySet<string>;
+    preservedPrivacyOperationId?: string;
+  }
+): boolean {
+  switch (job.payload.type) {
+    case "goal_create":
+      return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
+    case "autopilot_process":
+      return params.watcherIds.has(job.payload.sourceId);
+    case "privacy_operation":
+      return (
+        job.payload.workspaceId === params.workspaceId &&
+        job.payload.operationId !== params.preservedPrivacyOperationId
+      );
+    default:
+      return false;
+  }
 }
 
 function buildPendingAutopilotEvent(params: {
@@ -2679,6 +2855,336 @@ class FileRepository implements AgenticRepository {
     return governance ? WorkspaceGovernanceSchema.parse(clone(governance)) : null;
   }
 
+  async listGoalShares(filters?: GoalShareListFilters): Promise<GoalShareRecord[]> {
+    const normalized = normalizeGoalShareFilters(filters);
+    const store = await this.readStore();
+
+    return [...store.goalShares]
+      .filter((share) => {
+        if (!isGoalShareVisibleToUser(store, share, normalized.userId ?? SYSTEM_USER_ID)) {
+          return false;
+        }
+
+        if (normalized.goalId && share.goalId !== normalized.goalId) {
+          return false;
+        }
+
+        if (normalized.workspaceId !== undefined && share.workspaceId !== normalized.workspaceId) {
+          return false;
+        }
+
+        if (normalized.statuses?.length && !normalized.statuses.includes(share.status)) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map((share) => GoalShareRecordSchema.parse(clone(share)));
+  }
+
+  async getGoalShare(shareId: string, userId = SYSTEM_USER_ID): Promise<GoalShareRecord | null> {
+    const store = await this.readStore();
+    const share = store.goalShares.find((candidate) => candidate.id === shareId);
+
+    if (!share || !isGoalShareVisibleToUser(store, share, userId)) {
+      return null;
+    }
+
+    return GoalShareRecordSchema.parse(clone(share));
+  }
+
+  async getGoalShareByTokenFingerprint(tokenFingerprint: string): Promise<GoalShareRecord | null> {
+    const store = await this.readStore();
+    const normalizedFingerprint = goalShareFingerprintStoreKey({
+      tokenFingerprint: tokenFingerprint.trim()
+    });
+    const share = store.goalShares.find(
+      (candidate) => goalShareFingerprintStoreKey(candidate) === normalizedFingerprint
+    );
+    return share ? GoalShareRecordSchema.parse(clone(share)) : null;
+  }
+
+  async saveGoalShare(share: GoalShareRecord): Promise<GoalShareRecord> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const validated = GoalShareRecordSchema.parse({
+        ...share,
+        tokenFingerprint: goalShareFingerprintStoreKey(share)
+      });
+      const goal = goalByIdFromStore(store, validated.goalId);
+
+      if (!goal) {
+        throw new Error(`Goal ${validated.goalId} was not found.`);
+      }
+
+      if (!isGoalShareVisibleToUser(store, validated, validated.userId)) {
+        throw new Error(`User ${validated.userId} cannot manage shares for goal ${validated.goalId}.`);
+      }
+
+      store.goalShares = upsertById(store.goalShares, validated);
+      await this.writeStore(store);
+      return GoalShareRecordSchema.parse(clone(validated));
+    });
+  }
+
+  async listPrivacyOperations(filters?: PrivacyOperationListFilters): Promise<PrivacyOperation[]> {
+    const normalized = normalizePrivacyOperationFilters(filters);
+    const store = await this.readStore();
+
+    return [...store.privacyOperations]
+      .filter((operation) => {
+        if (!getWorkspaceMemberFromStore(store, operation.workspaceId, normalized.userId ?? SYSTEM_USER_ID)) {
+          return false;
+        }
+
+        if (normalized.workspaceId && operation.workspaceId !== normalized.workspaceId) {
+          return false;
+        }
+
+        if (normalized.kinds?.length && !normalized.kinds.includes(operation.kind)) {
+          return false;
+        }
+
+        if (normalized.statuses?.length && !normalized.statuses.includes(operation.status)) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map((operation) => PrivacyOperationSchema.parse(clone(operation)));
+  }
+
+  async getPrivacyOperation(operationId: string, userId = SYSTEM_USER_ID): Promise<PrivacyOperation | null> {
+    const store = await this.readStore();
+    const operation = store.privacyOperations.find((candidate) => candidate.id === operationId);
+
+    if (!operation) {
+      return null;
+    }
+
+    assertWorkspaceMember(store, operation.workspaceId, userId);
+    return PrivacyOperationSchema.parse(clone(operation));
+  }
+
+  async savePrivacyOperation(operation: PrivacyOperation): Promise<PrivacyOperation> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const validated = PrivacyOperationSchema.parse(operation);
+      assertWorkspaceMember(store, validated.workspaceId, validated.userId);
+      store.privacyOperations = upsertById(store.privacyOperations, validated);
+      await this.writeStore(store);
+      return PrivacyOperationSchema.parse(clone(validated));
+    });
+  }
+
+  async enforceWorkspaceRetention(params: WorkspaceRetentionParams): Promise<Record<string, unknown>> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const workspace = assertWorkspaceExistsInStore(store, params.workspaceId);
+      assertWorkspaceOwner(store, params.workspaceId, params.userId);
+      const { effectiveNow, effectiveNowMs, retentionCutoff, retentionCutoffMs } = resolveRetentionWindow(
+        params.retentionDays,
+        params.now
+      );
+      const goalIds = workspaceGoalIdsFromStore(store, workspace);
+      let revokedSharesCount = 0;
+      let purgedSharesCount = 0;
+
+      store.goalShares = store.goalShares.flatMap((share) => {
+        if (!goalIds.has(share.goalId)) {
+          return [share];
+        }
+
+        const shareExpiresAtMs = Date.parse(share.expiresAt);
+        const hasExpired = Number.isFinite(shareExpiresAtMs) && shareExpiresAtMs <= effectiveNowMs;
+        const terminalAtMs = Date.parse(goalShareTerminalAt(share));
+        const isPurgeEligible = Number.isFinite(terminalAtMs) && terminalAtMs <= retentionCutoffMs;
+
+        if (isPurgeEligible) {
+          purgedSharesCount += 1;
+          return [];
+        }
+
+        if (share.status === "active" && hasExpired) {
+          revokedSharesCount += 1;
+          return [
+            GoalShareRecordSchema.parse({
+              ...share,
+              status: "revoked",
+              revokedAt: share.revokedAt ?? effectiveNow,
+              updatedAt: effectiveNow
+            })
+          ];
+        }
+
+        return [share];
+      });
+
+      await this.writeStore(store);
+
+      return {
+        workspaceId: params.workspaceId,
+        retentionDays: params.retentionDays,
+        enforcedAt: effectiveNow,
+        retentionCutoff,
+        goalCount: goalIds.size,
+        revokedSharesCount,
+        purgedSharesCount,
+        remainingShareCount: store.goalShares.filter((share) => goalIds.has(share.goalId)).length
+      };
+    });
+  }
+
+  async deleteWorkspaceData(params: WorkspaceDeleteParams): Promise<Record<string, unknown>> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const workspace = assertWorkspaceExistsInStore(store, params.workspaceId);
+      assertWorkspaceOwner(store, params.workspaceId, params.userId);
+
+      if (workspace.isPersonal) {
+        throw new Error(`Workspace ${params.workspaceId} is personal and cannot be deleted.`);
+      }
+
+      const effectiveNow = params.now ? new Date(Date.parse(params.now)).toISOString() : nowIso();
+      const tombstone = buildDeletedWorkspaceTombstone(workspace, params.operationId, effectiveNow);
+      const goalIds = workspaceGoalIdsFromStore(store, workspace);
+      const workflowIds = new Set(
+        store.workflows
+          .filter((workflow) => workflow.workspaceId === workspace.id || goalIds.has(workflow.goalId))
+          .map((workflow) => workflow.id)
+      );
+      const approvalIds = new Set(
+        store.approvals.filter((approval) => goalIds.has(approval.goalId)).map((approval) => approval.id)
+      );
+      const watcherIds = new Set(
+        store.watchers.filter((watcher) => goalIds.has(watcher.goalId)).map((watcher) => watcher.id)
+      );
+      const providerCredentialIds = new Set(
+        store.providerCredentials
+          .filter((credential) => credential.workspaceId === workspace.id)
+          .map((credential) => `${credential.userId}:${credential.id}`)
+      );
+      const preservedOperation = store.privacyOperations.find((operation) => operation.id === params.operationId) ?? null;
+
+      const countAndFilter = <T>(items: T[], predicate: (item: T) => boolean) => {
+        const nextItems = items.filter((item) => !predicate(item));
+        return {
+          nextItems,
+          removedCount: items.length - nextItems.length
+        };
+      };
+
+      const goalsResult = countAndFilter(store.goals, (goal) => goalIds.has(goal.id));
+      const workflowsResult = countAndFilter(
+        store.workflows,
+        (workflow) => workflow.workspaceId === workspace.id || goalIds.has(workflow.goalId)
+      );
+      const tasksResult = countAndFilter(
+        store.tasks,
+        (task) => goalIds.has(task.goalId) || workflowIds.has(task.workflowId)
+      );
+      const approvalsResult = countAndFilter(store.approvals, (approval) => goalIds.has(approval.goalId));
+      const actionLogsResult = countAndFilter(
+        store.actionLogs,
+        (log) => goalIds.has(log.goalId) || (log.workflowId ? workflowIds.has(log.workflowId) : false)
+      );
+      const evidenceRecordsResult = countAndFilter(
+        store.evidenceRecords,
+        (record) => goalIds.has(record.goalId) || approvalIds.has(record.approvalId)
+      );
+      const watchersResult = countAndFilter(store.watchers, (watcher) => goalIds.has(watcher.goalId));
+      const artifactsResult = countAndFilter(store.artifacts, (artifact) => goalIds.has(artifact.goalId));
+      const goalSharesResult = countAndFilter(
+        store.goalShares,
+        (share) => goalIds.has(share.goalId) || share.workspaceId === workspace.id
+      );
+      const commitmentsResult = countAndFilter(
+        store.commitments,
+        (commitment) =>
+          (commitment.goalId ? goalIds.has(commitment.goalId) : false) ||
+          (commitment.approvalId ? approvalIds.has(commitment.approvalId) : false)
+      );
+      const autopilotEventsResult = countAndFilter(
+        store.autopilotEvents,
+        (event) =>
+          watcherIds.has(event.sourceId) || (event.resultGoalId ? goalIds.has(event.resultGoalId) : false)
+      );
+      const jobsResult = countAndFilter(store.jobs, (job) =>
+        isJobScopedToWorkspace(job, {
+          workspaceId: workspace.id,
+          goalIds,
+          watcherIds,
+          preservedPrivacyOperationId: preservedOperation?.id
+        })
+      );
+      const providerCredentialsResult = countAndFilter(
+        store.providerCredentials,
+        (credential) => credential.workspaceId === workspace.id
+      );
+      const providerCredentialSecretsResult = countAndFilter(
+        store.providerCredentialSecrets,
+        (secret) => providerCredentialIds.has(`${secret.userId}:${secret.credentialId}`)
+      );
+      const workspaceSelectionsResult = countAndFilter(
+        store.workspaceSelections,
+        (selection) => selection.workspaceId === workspace.id
+      );
+      const workspaceGovernanceResult = countAndFilter(
+        store.workspaceGovernance,
+        (governance) => governance.workspaceId === workspace.id
+      );
+
+      store.goals = goalsResult.nextItems;
+      store.workflows = workflowsResult.nextItems;
+      store.tasks = tasksResult.nextItems;
+      store.approvals = approvalsResult.nextItems;
+      store.actionLogs = actionLogsResult.nextItems;
+      store.evidenceRecords = evidenceRecordsResult.nextItems;
+      store.watchers = watchersResult.nextItems;
+      store.artifacts = artifactsResult.nextItems;
+      store.goalShares = goalSharesResult.nextItems;
+      store.commitments = commitmentsResult.nextItems;
+      store.autopilotEvents = autopilotEventsResult.nextItems;
+      store.jobs = jobsResult.nextItems;
+      store.providerCredentials = providerCredentialsResult.nextItems;
+      store.providerCredentialSecrets = providerCredentialSecretsResult.nextItems;
+      store.workspaceSelections = workspaceSelectionsResult.nextItems;
+      store.workspaceGovernance = workspaceGovernanceResult.nextItems;
+      store.workspaceMembers = store.workspaceMembers.filter(
+        (member) => member.workspaceId !== workspace.id || member.userId === workspace.ownerUserId
+      );
+      store.workspaces = upsertById(store.workspaces, tombstone);
+
+      await this.writeStore(store);
+
+      return {
+        workspaceId: workspace.id,
+        deletedAt: effectiveNow,
+        operationId: params.operationId,
+        deletedGoalCount: goalsResult.removedCount,
+        deletedWorkflowCount: workflowsResult.removedCount,
+        deletedTaskCount: tasksResult.removedCount,
+        deletedApprovalCount: approvalsResult.removedCount,
+        deletedActionLogCount: actionLogsResult.removedCount,
+        deletedEvidenceRecordCount: evidenceRecordsResult.removedCount,
+        deletedWatcherCount: watchersResult.removedCount,
+        deletedArtifactCount: artifactsResult.removedCount,
+        deletedGoalShareCount: goalSharesResult.removedCount,
+        deletedCommitmentCount: commitmentsResult.removedCount,
+        deletedAutopilotEventCount: autopilotEventsResult.removedCount,
+        deletedJobCount: jobsResult.removedCount,
+        deletedProviderCredentialCount: providerCredentialsResult.removedCount,
+        deletedProviderCredentialSecretCount: providerCredentialSecretsResult.removedCount,
+        deletedWorkspaceSelectionCount: workspaceSelectionsResult.removedCount,
+        deletedWorkspaceGovernanceCount: workspaceGovernanceResult.removedCount,
+        retainedWorkspaceMemberCount: store.workspaceMembers.filter((member) => member.workspaceId === workspace.id).length,
+        tombstonedWorkspaceSlug: tombstone.slug
+      };
+    });
+  }
+
   async saveWorkspaceGovernance(
     governance: WorkspaceGovernance,
     actor: ActorContext
@@ -2705,12 +3211,21 @@ class FileRepository implements AgenticRepository {
       .map((goal) => bundleFromStore(store, goal.id))
       .filter((bundle): bundle is GoalBundle => bundle !== null)
       .map((bundle) => GoalBundleSchema.parse(clone(bundle)));
+    const goalIds = new Set(goals.map((bundle) => bundle.goal.id));
+    const goalShares = store.goalShares
+      .filter((share) => goalIds.has(share.goalId))
+      .map((share) => GoalShareRecordSchema.parse(clone(share)));
+    const privacyOperations = store.privacyOperations
+      .filter((operation) => operation.workspaceId === workspaceId)
+      .map((operation) => PrivacyOperationSchema.parse(clone(operation)));
 
     return buildWorkspaceAuditExport({
       workspace,
       governance,
       members,
-      goals
+      goals,
+      goalShares,
+      privacyOperations
     });
   }
 
@@ -3574,7 +4089,7 @@ class FileRepository implements AgenticRepository {
   }
 
   async getDashboardData(userId = SYSTEM_USER_ID): Promise<DashboardData> {
-    const [goals, approvals, evidenceRecords, commitments, briefingPreferences, autopilotSettings, autopilotEvents, memories, integrations, watchers, workspaces] = await Promise.all([
+    const [goals, approvals, evidenceRecords, commitments, briefingPreferences, autopilotSettings, autopilotEvents, memories, integrations, watchers, workspaces, goalShares] = await Promise.all([
       this.listGoals(userId),
       this.listApprovals(userId),
       this.listEvidenceRecords({ userId }),
@@ -3585,7 +4100,8 @@ class FileRepository implements AgenticRepository {
       this.listMemory(userId),
       this.listIntegrations(userId),
       this.listWatchers({ userId }),
-      this.listWorkspaces(userId)
+      this.listWorkspaces(userId),
+      this.listGoalShares({ userId })
     ]);
     const store = await this.readStore();
     const { activeWorkspace, workspaceSelection } = resolveActiveWorkspaceFromStore(store, userId);
@@ -3593,6 +4109,11 @@ class FileRepository implements AgenticRepository {
     const workspaceGovernance = activeWorkspace
       ? (store.workspaceGovernance.find((governance) => governance.workspaceId === activeWorkspace.id) ?? null)
       : null;
+    const privacyOperations = activeWorkspace
+      ? store.privacyOperations
+          .filter((operation) => operation.workspaceId === activeWorkspace.id)
+          .map((operation) => PrivacyOperationSchema.parse(clone(operation)))
+      : [];
     return assembleDashboardData({
       userId,
       workspaces,
@@ -3600,6 +4121,8 @@ class FileRepository implements AgenticRepository {
       workspaceSelection,
       workspaceMembers,
       workspaceGovernance,
+      goalShares,
+      privacyOperations,
       goals,
       approvals,
       evidenceRecords,
@@ -4689,6 +5212,278 @@ class PostgresRepository implements AgenticRepository {
     );
   }
 
+  private mapGoalShareRow(row: Record<string, unknown>): GoalShareRecord {
+    return GoalShareRecordSchema.parse({
+      id: row.id,
+      goalId: row.goal_id,
+      userId: row.user_id,
+      workspaceId: typeof row.workspace_id === "string" ? row.workspace_id : null,
+      tokenFingerprint: row.token_fingerprint,
+      status: row.status,
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      expiresAt: new Date(row.expires_at as string | number | Date).toISOString(),
+      lastViewedAt: row.last_viewed_at ? new Date(row.last_viewed_at as string | number | Date).toISOString() : null,
+      revokedAt: row.revoked_at ? new Date(row.revoked_at as string | number | Date).toISOString() : null,
+      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+      updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
+    });
+  }
+
+  private mapPrivacyOperationRow(row: Record<string, unknown>): PrivacyOperation {
+    return PrivacyOperationSchema.parse({
+      id: row.id,
+      workspaceId: row.workspace_id,
+      userId: row.user_id,
+      kind: row.kind,
+      status: row.status,
+      requestedBy: row.requested_by,
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      jobId: typeof row.job_id === "string" ? row.job_id : null,
+      details: (row.details as Record<string, unknown> | null) ?? {},
+      result: (row.result as Record<string, unknown> | null) ?? {},
+      startedAt: row.started_at ? new Date(row.started_at as string | number | Date).toISOString() : null,
+      completedAt: row.completed_at ? new Date(row.completed_at as string | number | Date).toISOString() : null,
+      error: typeof row.error === "string" ? row.error : null,
+      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+      updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
+    });
+  }
+
+  private async saveGoalShareWithClient(client: PoolClient, share: GoalShareRecord): Promise<void> {
+    const validated = GoalShareRecordSchema.parse({
+      ...share,
+      tokenFingerprint: goalShareFingerprintStoreKey(share)
+    });
+    await client.query(
+      `
+        insert into goal_shares (
+          id, goal_id, user_id, workspace_id, token_fingerprint, status, actor_context,
+          expires_at, last_viewed_at, revoked_at, created_at, updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12)
+        on conflict (id) do update
+        set goal_id = excluded.goal_id,
+            user_id = excluded.user_id,
+            workspace_id = excluded.workspace_id,
+            token_fingerprint = excluded.token_fingerprint,
+            status = excluded.status,
+            actor_context = excluded.actor_context,
+            expires_at = excluded.expires_at,
+            last_viewed_at = excluded.last_viewed_at,
+            revoked_at = excluded.revoked_at,
+            updated_at = excluded.updated_at
+      `,
+      [
+        validated.id,
+        validated.goalId,
+        validated.userId,
+        validated.workspaceId,
+        validated.tokenFingerprint,
+        validated.status,
+        JSON.stringify(validated.actorContext),
+        validated.expiresAt,
+        validated.lastViewedAt,
+        validated.revokedAt,
+        validated.createdAt,
+        validated.updatedAt
+      ]
+    );
+  }
+
+  private async savePrivacyOperationWithClient(client: PoolClient, operation: PrivacyOperation): Promise<void> {
+    const validated = PrivacyOperationSchema.parse(operation);
+    await client.query(
+      `
+        insert into privacy_operations (
+          id, workspace_id, user_id, kind, status, requested_by, actor_context, job_id, details, result,
+          started_at, completed_at, error, created_at, updated_at
+        )
+        values (
+          $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb,
+          $11, $12, $13, $14, $15
+        )
+        on conflict (id) do update
+        set workspace_id = excluded.workspace_id,
+            user_id = excluded.user_id,
+            kind = excluded.kind,
+            status = excluded.status,
+            requested_by = excluded.requested_by,
+            actor_context = excluded.actor_context,
+            job_id = excluded.job_id,
+            details = excluded.details,
+            result = excluded.result,
+            started_at = excluded.started_at,
+            completed_at = excluded.completed_at,
+            error = excluded.error,
+            updated_at = excluded.updated_at
+      `,
+      [
+        validated.id,
+        validated.workspaceId,
+        validated.userId,
+        validated.kind,
+        validated.status,
+        validated.requestedBy,
+        JSON.stringify(validated.actorContext),
+        validated.jobId,
+        JSON.stringify(validated.details),
+        JSON.stringify(validated.result),
+        validated.startedAt,
+        validated.completedAt,
+        validated.error,
+        validated.createdAt,
+        validated.updatedAt
+      ]
+    );
+  }
+
+  private async listGoalSharesWithClient(
+    client: Pick<PoolClient, "query">,
+    filters?: GoalShareListFilters
+  ): Promise<GoalShareRecord[]> {
+    const normalized = normalizeGoalShareFilters(filters);
+    const values: unknown[] = [normalized.userId ?? SYSTEM_USER_ID];
+    const predicates = [
+      `(
+        (g.workspace_id is null and g.user_id = $1)
+        or wm.user_id is not null
+      )`
+    ];
+
+    if (normalized.goalId) {
+      values.push(normalized.goalId);
+      predicates.push(`gs.goal_id = $${values.length}`);
+    }
+
+    if (normalized.workspaceId !== undefined) {
+      if (normalized.workspaceId === null) {
+        predicates.push("gs.workspace_id is null");
+      } else {
+        values.push(normalized.workspaceId);
+        predicates.push(`gs.workspace_id = $${values.length}`);
+      }
+    }
+
+    if (normalized.statuses?.length) {
+      values.push(normalized.statuses);
+      predicates.push(`gs.status = any($${values.length}::text[])`);
+    }
+
+    const result = await client.query(
+      `
+        select gs.*
+        from goal_shares gs
+        join goals g on g.id = gs.goal_id
+        left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $1
+        where ${predicates.join(" and ")}
+        order by gs.updated_at desc
+      `,
+      values
+    );
+
+    return result.rows.map((row) => this.mapGoalShareRow(row));
+  }
+
+  private async getGoalShareWithClient(
+    client: Pick<PoolClient, "query">,
+    shareId: string,
+    userId = SYSTEM_USER_ID
+  ): Promise<GoalShareRecord | null> {
+    const result = await client.query(
+      `
+        select gs.*
+        from goal_shares gs
+        join goals g on g.id = gs.goal_id
+        left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $2
+        where gs.id = $1
+          and (
+            (g.workspace_id is null and g.user_id = $2)
+            or wm.user_id is not null
+          )
+        limit 1
+      `,
+      [shareId, userId]
+    );
+
+    return result.rows[0] ? this.mapGoalShareRow(result.rows[0]) : null;
+  }
+
+  private async getGoalShareByTokenFingerprintWithClient(
+    client: Pick<PoolClient, "query">,
+    tokenFingerprint: string
+  ): Promise<GoalShareRecord | null> {
+    const normalizedFingerprint = goalShareFingerprintStoreKey({
+      tokenFingerprint: tokenFingerprint.trim()
+    });
+    const result = await client.query(
+      `
+        select *
+        from goal_shares
+        where token_fingerprint = $1
+        limit 1
+      `,
+      [normalizedFingerprint]
+    );
+
+    return result.rows[0] ? this.mapGoalShareRow(result.rows[0]) : null;
+  }
+
+  private async listPrivacyOperationsWithClient(
+    client: Pick<PoolClient, "query">,
+    filters?: PrivacyOperationListFilters
+  ): Promise<PrivacyOperation[]> {
+    const normalized = normalizePrivacyOperationFilters(filters);
+    const values: unknown[] = [normalized.userId ?? SYSTEM_USER_ID];
+    const predicates = ["wm.user_id is not null"];
+
+    if (normalized.workspaceId) {
+      values.push(normalized.workspaceId);
+      predicates.push(`po.workspace_id = $${values.length}`);
+    }
+
+    if (normalized.kinds?.length) {
+      values.push(normalized.kinds);
+      predicates.push(`po.kind = any($${values.length}::text[])`);
+    }
+
+    if (normalized.statuses?.length) {
+      values.push(normalized.statuses);
+      predicates.push(`po.status = any($${values.length}::text[])`);
+    }
+
+    const result = await client.query(
+      `
+        select po.*
+        from privacy_operations po
+        join workspace_members wm on wm.workspace_id = po.workspace_id and wm.user_id = $1
+        where ${predicates.join(" and ")}
+        order by po.created_at desc
+      `,
+      values
+    );
+
+    return result.rows.map((row) => this.mapPrivacyOperationRow(row));
+  }
+
+  private async getPrivacyOperationWithClient(
+    client: Pick<PoolClient, "query">,
+    operationId: string,
+    userId = SYSTEM_USER_ID
+  ): Promise<PrivacyOperation | null> {
+    const result = await client.query(
+      `
+        select po.*
+        from privacy_operations po
+        join workspace_members wm on wm.workspace_id = po.workspace_id and wm.user_id = $2
+        where po.id = $1
+        limit 1
+      `,
+      [operationId, userId]
+    );
+
+    return result.rows[0] ? this.mapPrivacyOperationRow(result.rows[0]) : null;
+  }
+
   private async getWorkspaceByIdWithClient(
     client: Pick<PoolClient, "query">,
     workspaceId: string
@@ -5509,6 +6304,441 @@ class PostgresRepository implements AgenticRepository {
     }
   }
 
+  async listGoalShares(filters?: GoalShareListFilters): Promise<GoalShareRecord[]> {
+    await this.ready;
+    const client = await this.pool.connect();
+
+    try {
+      return (await this.listGoalSharesWithClient(client, filters)).map((share) => GoalShareRecordSchema.parse(clone(share)));
+    } finally {
+      client.release();
+    }
+  }
+
+  async getGoalShare(shareId: string, userId = SYSTEM_USER_ID): Promise<GoalShareRecord | null> {
+    await this.ready;
+    const client = await this.pool.connect();
+
+    try {
+      const share = await this.getGoalShareWithClient(client, shareId, userId);
+      return share ? GoalShareRecordSchema.parse(clone(share)) : null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getGoalShareByTokenFingerprint(tokenFingerprint: string): Promise<GoalShareRecord | null> {
+    await this.ready;
+    const client = await this.pool.connect();
+
+    try {
+      const share = await this.getGoalShareByTokenFingerprintWithClient(client, tokenFingerprint);
+      return share ? GoalShareRecordSchema.parse(clone(share)) : null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async saveGoalShare(share: GoalShareRecord): Promise<GoalShareRecord> {
+    const validated = GoalShareRecordSchema.parse({
+      ...share,
+      tokenFingerprint: goalShareFingerprintStoreKey(share)
+    });
+
+    await this.withTransaction(async (client) => {
+      const goalResult = await client.query(
+        `
+          select id, user_id, workspace_id
+          from goals
+          where id = $1
+          limit 1
+        `,
+        [validated.goalId]
+      );
+
+      if (!goalResult.rows[0]) {
+        throw new Error(`Goal ${validated.goalId} was not found.`);
+      }
+
+      const goalRow = goalResult.rows[0];
+
+      if (typeof goalRow.workspace_id === "string") {
+        await this.assertWorkspaceMemberWithClient(client, goalRow.workspace_id, validated.userId);
+      } else if (goalRow.user_id !== validated.userId) {
+        throw new Error(`User ${validated.userId} cannot manage shares for goal ${validated.goalId}.`);
+      }
+
+      await this.saveGoalShareWithClient(client, validated);
+    });
+
+    return GoalShareRecordSchema.parse(clone(validated));
+  }
+
+  async listPrivacyOperations(filters?: PrivacyOperationListFilters): Promise<PrivacyOperation[]> {
+    await this.ready;
+    const client = await this.pool.connect();
+
+    try {
+      return (await this.listPrivacyOperationsWithClient(client, filters)).map((operation) =>
+        PrivacyOperationSchema.parse(clone(operation))
+      );
+    } finally {
+      client.release();
+    }
+  }
+
+  async getPrivacyOperation(operationId: string, userId = SYSTEM_USER_ID): Promise<PrivacyOperation | null> {
+    await this.ready;
+    const client = await this.pool.connect();
+
+    try {
+      const operation = await this.getPrivacyOperationWithClient(client, operationId, userId);
+      return operation ? PrivacyOperationSchema.parse(clone(operation)) : null;
+    } finally {
+      client.release();
+    }
+  }
+
+  async savePrivacyOperation(operation: PrivacyOperation): Promise<PrivacyOperation> {
+    const validated = PrivacyOperationSchema.parse(operation);
+
+    await this.withTransaction(async (client) => {
+      await this.assertWorkspaceMemberWithClient(client, validated.workspaceId, validated.userId);
+      await this.savePrivacyOperationWithClient(client, validated);
+    });
+
+    return PrivacyOperationSchema.parse(clone(validated));
+  }
+
+  async enforceWorkspaceRetention(params: WorkspaceRetentionParams): Promise<Record<string, unknown>> {
+    return this.withTransaction(async (client) => {
+      const workspace = await this.getWorkspaceByIdWithClient(client, params.workspaceId);
+
+      if (!workspace) {
+        throw new Error(`Workspace ${params.workspaceId} was not found.`);
+      }
+
+      await this.assertWorkspaceOwnerWithClient(client, params.workspaceId, params.userId);
+
+      const { effectiveNow, retentionCutoff } = resolveRetentionWindow(params.retentionDays, params.now);
+      const goalValues: unknown[] = [workspace.id];
+      const goalPredicates = ["workspace_id = $1"];
+
+      if (workspace.isPersonal) {
+        goalValues.push(workspace.ownerUserId);
+        goalPredicates.push("(workspace_id is null and user_id = $2)");
+      }
+
+      const goalIds = (
+        await client.query(
+          `
+            select id
+            from goals
+            where ${goalPredicates.join(" or ")}
+          `,
+          goalValues
+        )
+      ).rows.map((row) => row.id as string);
+
+      if (goalIds.length === 0) {
+        return {
+          workspaceId: params.workspaceId,
+          retentionDays: params.retentionDays,
+          enforcedAt: effectiveNow,
+          retentionCutoff,
+          goalCount: 0,
+          revokedSharesCount: 0,
+          purgedSharesCount: 0,
+          remainingShareCount: 0
+        };
+      }
+
+      const revokedResult = await client.query(
+        `
+          update goal_shares
+          set status = 'revoked',
+              revoked_at = coalesce(revoked_at, $2),
+              updated_at = $2
+          where goal_id = any($1::text[])
+            and status = 'active'
+            and expires_at <= $2
+        `,
+        [goalIds, effectiveNow]
+      );
+      const purgedResult = await client.query(
+        `
+          delete from goal_shares
+          where goal_id = any($1::text[])
+            and coalesce(revoked_at, expires_at) <= $2
+        `,
+        [goalIds, retentionCutoff]
+      );
+      const remainingResult = await client.query(
+        `
+          select count(*)::int as count
+          from goal_shares
+          where goal_id = any($1::text[])
+        `,
+        [goalIds]
+      );
+
+      return {
+        workspaceId: params.workspaceId,
+        retentionDays: params.retentionDays,
+        enforcedAt: effectiveNow,
+        retentionCutoff,
+        goalCount: goalIds.length,
+        revokedSharesCount: Number(revokedResult.rowCount ?? 0),
+        purgedSharesCount: Number(purgedResult.rowCount ?? 0),
+        remainingShareCount: Number(remainingResult.rows[0]?.count ?? 0)
+      };
+    });
+  }
+
+  async deleteWorkspaceData(params: WorkspaceDeleteParams): Promise<Record<string, unknown>> {
+    return this.withTransaction(async (client) => {
+      const workspace = await this.getWorkspaceByIdWithClient(client, params.workspaceId);
+
+      if (!workspace) {
+        throw new Error(`Workspace ${params.workspaceId} was not found.`);
+      }
+
+      await this.assertWorkspaceOwnerWithClient(client, params.workspaceId, params.userId);
+
+      if (workspace.isPersonal) {
+        throw new Error(`Workspace ${params.workspaceId} is personal and cannot be deleted.`);
+      }
+
+      const effectiveNow = params.now ? new Date(Date.parse(params.now)).toISOString() : nowIso();
+      const tombstone = buildDeletedWorkspaceTombstone(workspace, params.operationId, effectiveNow);
+      const goalIds = (
+        await client.query(
+          `
+            select id
+            from goals
+            where workspace_id = $1
+          `,
+          [workspace.id]
+        )
+      ).rows.map((row) => row.id as string);
+      const workflowIds = (
+        await client.query(
+          `
+            select id
+            from workflows
+            where workspace_id = $1
+               or goal_id = any($2::text[])
+          `,
+          [workspace.id, goalIds]
+        )
+      ).rows.map((row) => row.id as string);
+      const approvalIds = (
+        await client.query(
+          `
+            select id
+            from approval_requests
+            where goal_id = any($1::text[])
+          `,
+          [goalIds]
+        )
+      ).rows.map((row) => row.id as string);
+      const watcherIds = (
+        await client.query(
+          `
+            select id
+            from watchers
+            where goal_id = any($1::text[])
+          `,
+          [goalIds]
+        )
+      ).rows.map((row) => row.id as string);
+      const credentialKeys = (
+        await client.query(
+          `
+            select user_id, id
+            from provider_credentials
+            where workspace_id = $1
+          `,
+          [workspace.id]
+        )
+      ).rows.map((row) => `${row.user_id as string}:${row.id as string}`);
+
+      const evidenceRecordsResult = await client.query(
+        `
+          delete from evidence_records
+          where goal_id = any($1::text[])
+             or approval_id = any($2::text[])
+        `,
+        [goalIds, approvalIds]
+      );
+      const commitmentsResult = await client.query(
+        `
+          delete from commitments
+          where goal_id = any($1::text[])
+             or approval_id = any($2::text[])
+        `,
+        [goalIds, approvalIds]
+      );
+      const autopilotEventsResult = await client.query(
+        `
+          delete from autopilot_events
+          where source_id = any($1::text[])
+             or result_goal_id = any($2::text[])
+        `,
+        [watcherIds, goalIds]
+      );
+      const jobsResult = await client.query(
+        `
+          delete from jobs
+          where (
+            payload ->> 'type' = 'goal_create'
+            and (
+              payload ->> 'workspaceId' = $1
+              or payload ->> 'goalId' = any($2::text[])
+            )
+          ) or (
+            payload ->> 'type' = 'autopilot_process'
+            and payload ->> 'sourceId' = any($3::text[])
+          ) or (
+            payload ->> 'type' = 'privacy_operation'
+            and payload ->> 'workspaceId' = $1
+            and payload ->> 'operationId' <> $4
+          )
+        `,
+        [workspace.id, goalIds, watcherIds, params.operationId]
+      );
+      const providerCredentialSecretsResult = await client.query(
+        `
+          delete from provider_credential_secrets
+          where (user_id || ':' || credential_id) = any($1::text[])
+        `,
+        [credentialKeys]
+      );
+      const providerCredentialsResult = await client.query(
+        `
+          delete from provider_credentials
+          where workspace_id = $1
+        `,
+        [workspace.id]
+      );
+      const goalSharesResult = await client.query(
+        `
+          delete from goal_shares
+          where goal_id = any($1::text[])
+             or workspace_id = $2
+        `,
+        [goalIds, workspace.id]
+      );
+      const actionLogsResult = await client.query(
+        `
+          delete from action_logs
+          where goal_id = any($1::text[])
+             or workflow_id = any($2::text[])
+        `,
+        [goalIds, workflowIds]
+      );
+      const artifactsResult = await client.query(
+        `
+          delete from artifacts
+          where goal_id = any($1::text[])
+        `,
+        [goalIds]
+      );
+      const watchersResult = await client.query(
+        `
+          delete from watchers
+          where goal_id = any($1::text[])
+        `,
+        [goalIds]
+      );
+      const approvalsResult = await client.query(
+        `
+          delete from approval_requests
+          where goal_id = any($1::text[])
+        `,
+        [goalIds]
+      );
+      const tasksResult = await client.query(
+        `
+          delete from tasks
+          where goal_id = any($1::text[])
+             or workflow_id = any($2::text[])
+        `,
+        [goalIds, workflowIds]
+      );
+      const workflowsResult = await client.query(
+        `
+          delete from workflows
+          where workspace_id = $1
+             or goal_id = any($2::text[])
+        `,
+        [workspace.id, goalIds]
+      );
+      const goalsResult = await client.query(
+        `
+          delete from goals
+          where id = any($1::text[])
+        `,
+        [goalIds]
+      );
+      const workspaceSelectionsResult = await client.query(
+        `
+          delete from workspace_selections
+          where workspace_id = $1
+        `,
+        [workspace.id]
+      );
+      const workspaceGovernanceResult = await client.query(
+        `
+          delete from workspace_governance
+          where workspace_id = $1
+        `,
+        [workspace.id]
+      );
+      await client.query(
+        `
+          delete from workspace_members
+          where workspace_id = $1
+            and user_id <> $2
+        `,
+        [workspace.id, workspace.ownerUserId]
+      );
+      await this.saveWorkspaceWithClient(client, tombstone);
+      const retainedMembersResult = await client.query(
+        `
+          select count(*)::int as count
+          from workspace_members
+          where workspace_id = $1
+        `,
+        [workspace.id]
+      );
+
+      return {
+        workspaceId: workspace.id,
+        deletedAt: effectiveNow,
+        operationId: params.operationId,
+        deletedGoalCount: Number(goalsResult.rowCount ?? 0),
+        deletedWorkflowCount: Number(workflowsResult.rowCount ?? 0),
+        deletedTaskCount: Number(tasksResult.rowCount ?? 0),
+        deletedApprovalCount: Number(approvalsResult.rowCount ?? 0),
+        deletedActionLogCount: Number(actionLogsResult.rowCount ?? 0),
+        deletedEvidenceRecordCount: Number(evidenceRecordsResult.rowCount ?? 0),
+        deletedWatcherCount: Number(watchersResult.rowCount ?? 0),
+        deletedArtifactCount: Number(artifactsResult.rowCount ?? 0),
+        deletedGoalShareCount: Number(goalSharesResult.rowCount ?? 0),
+        deletedCommitmentCount: Number(commitmentsResult.rowCount ?? 0),
+        deletedAutopilotEventCount: Number(autopilotEventsResult.rowCount ?? 0),
+        deletedJobCount: Number(jobsResult.rowCount ?? 0),
+        deletedProviderCredentialCount: Number(providerCredentialsResult.rowCount ?? 0),
+        deletedProviderCredentialSecretCount: Number(providerCredentialSecretsResult.rowCount ?? 0),
+        deletedWorkspaceSelectionCount: Number(workspaceSelectionsResult.rowCount ?? 0),
+        deletedWorkspaceGovernanceCount: Number(workspaceGovernanceResult.rowCount ?? 0),
+        retainedWorkspaceMemberCount: Number(retainedMembersResult.rows[0]?.count ?? 0),
+        tombstonedWorkspaceSlug: tombstone.slug
+      };
+    });
+  }
+
   async saveWorkspaceGovernance(
     governance: WorkspaceGovernance,
     actor: ActorContext
@@ -5540,26 +6770,62 @@ class PostgresRepository implements AgenticRepository {
         this.getWorkspaceGovernanceWithClient(client, workspaceId),
         this.listWorkspaceMembersForWorkspaceWithClient(client, workspaceId)
       ]);
+      const goalValues: unknown[] = [workspaceId];
+      const goalPredicates = ["workspace_id = $1"];
+
+      if (workspace.isPersonal) {
+        goalValues.push(userId);
+        goalPredicates.push(`(workspace_id is null and user_id = $2)`);
+      }
+
       const goalsResult = await client.query(
         `
           select id
           from goals
-          where workspace_id = $1
+          where ${goalPredicates.join(" or ")}
           order by created_at desc
         `,
-        [workspaceId]
+        goalValues
       );
       const goals = (
         await Promise.all(goalsResult.rows.map((row) => this.mapGoalBundleWithClient(client, row.id as string)))
       )
         .filter((bundle): bundle is GoalBundle => bundle !== null)
         .map((bundle) => GoalBundleSchema.parse(clone(bundle)));
+      const goalIds = goals.map((bundle) => bundle.goal.id);
+      const goalShares =
+        goalIds.length > 0
+          ? (
+              await client.query(
+                `
+                  select *
+                  from goal_shares
+                  where goal_id = any($1::text[])
+                  order by updated_at desc
+                `,
+                [goalIds]
+              )
+            ).rows.map((row) => this.mapGoalShareRow(row))
+          : [];
+      const privacyOperations = (
+        await client.query(
+          `
+            select *
+            from privacy_operations
+            where workspace_id = $1
+            order by created_at desc
+          `,
+          [workspaceId]
+        )
+      ).rows.map((row) => this.mapPrivacyOperationRow(row));
 
       return buildWorkspaceAuditExport({
         workspace,
         governance,
         members,
-        goals
+        goals,
+        goalShares,
+        privacyOperations
       });
     } finally {
       client.release();
@@ -6854,16 +8120,23 @@ class PostgresRepository implements AgenticRepository {
     let workspaceSelection: WorkspaceSelection | null = null;
     let workspaceMembers: WorkspaceMember[] = [];
     let workspaceGovernance: WorkspaceGovernance | null = null;
+    let goalShares: GoalShareRecord[] = [];
+    let privacyOperations: PrivacyOperation[] = [];
 
     try {
       const resolved = await this.resolveActiveWorkspaceWithClient(client, userId);
       activeWorkspace = resolved.activeWorkspace;
       workspaceSelection = resolved.workspaceSelection;
+      goalShares = await this.listGoalSharesWithClient(client, { userId });
 
       if (activeWorkspace) {
-        [workspaceMembers, workspaceGovernance] = await Promise.all([
+        [workspaceMembers, workspaceGovernance, privacyOperations] = await Promise.all([
           this.listWorkspaceMembersForWorkspaceWithClient(client, activeWorkspace.id),
-          this.getWorkspaceGovernanceWithClient(client, activeWorkspace.id)
+          this.getWorkspaceGovernanceWithClient(client, activeWorkspace.id),
+          this.listPrivacyOperationsWithClient(client, {
+            userId,
+            workspaceId: activeWorkspace.id
+          })
         ]);
       }
     } finally {
@@ -6877,6 +8150,8 @@ class PostgresRepository implements AgenticRepository {
       workspaceSelection,
       workspaceMembers,
       workspaceGovernance,
+      goalShares,
+      privacyOperations,
       goals,
       approvals,
       evidenceRecords,

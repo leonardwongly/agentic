@@ -1,5 +1,10 @@
 import { notFound } from "next/navigation";
-import { buildSharedGoalView, createGoalShareViewedLog, verifyGoalShareToken } from "../../../lib/share";
+import {
+  buildSharedGoalView,
+  createGoalShareViewedLog,
+  fingerprintGoalShareToken,
+  verifyGoalShareToken
+} from "../../../lib/share";
 import { getSeededRepository } from "../../../lib/server";
 
 export const dynamic = "force-dynamic";
@@ -19,13 +24,31 @@ export default async function ShareGoalPage({ params }: SharePageProps) {
   }
 
   const repository = await getSeededRepository();
+  const share = await repository.getGoalShareByTokenFingerprint(fingerprintGoalShareToken(token));
+
+  if (
+    !share ||
+    share.id !== verifiedToken.shareId ||
+    share.goalId !== verifiedToken.goalId ||
+    share.status !== "active" ||
+    Date.parse(share.expiresAt) <= Date.now()
+  ) {
+    notFound();
+  }
+
   let bundle = await repository.getGoalBundle(verifiedToken.goalId);
 
   if (!bundle) {
     notFound();
   }
 
-  const shareViewLog = createGoalShareViewedLog(bundle, token);
+  await repository.saveGoalShare({
+    ...share,
+    lastViewedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  });
+
+  const shareViewLog = createGoalShareViewedLog(bundle, share.id, token, Date.now());
 
   if (shareViewLog) {
     bundle = {
@@ -99,7 +122,7 @@ export default async function ShareGoalPage({ params }: SharePageProps) {
                   <strong>{artifact.title}</strong>
                   <span className="pill">{artifact.artifactType}</span>
                 </div>
-                <pre>{artifact.content}</pre>
+                <pre>{artifact.preview}</pre>
               </div>
             ))}
           </div>
@@ -111,16 +134,13 @@ export default async function ShareGoalPage({ params }: SharePageProps) {
             <span>{sharedGoal.watcherCount}</span>
           </div>
           <div className="list-stack">
-            {sharedGoal.watchers.length === 0 ? <p className="empty-state">No active watchers for this goal.</p> : null}
-            {sharedGoal.watchers.map((watcher, index) => (
-              <div className="list-item vertical" key={`${watcher.targetEntity}-${watcher.frequency}-${index}`}>
-                <div>
-                  <strong>{watcher.targetEntity}</strong>
-                  <p>{watcher.condition}</p>
-                </div>
-                <span className="pill">{watcher.frequency}</span>
+            {sharedGoal.watcherCount === 0 ? <p className="empty-state">No active watchers for this goal.</p> : null}
+            {sharedGoal.watcherCount > 0 ? (
+              <div className="list-item vertical">
+                <strong>Active watchers</strong>
+                <p>{sharedGoal.watcherCount} watcher(s) are attached to this goal. Public share links do not expose watcher details.</p>
               </div>
-            ))}
+            ) : null}
           </div>
         </article>
       </section>

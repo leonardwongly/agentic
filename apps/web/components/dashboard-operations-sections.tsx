@@ -3,6 +3,9 @@
 import type { Dispatch, SetStateAction } from "react";
 import {
   autopilotModeValues,
+  privacyOperationKindValues,
+  type GoalShareRecord,
+  type PrivacyOperation,
   workspaceApprovalModeValues,
   workspaceRoleValues,
   type AutopilotMode,
@@ -26,6 +29,7 @@ type DashboardOperationsSectionsProps = {
   workspaceState: RequestState;
   governanceState: RequestState;
   autopilotState: RequestState;
+  privacyState: RequestState;
   workspaceName: string;
   setWorkspaceName: Dispatch<SetStateAction<string>>;
   workspaceSlug: string;
@@ -48,6 +52,8 @@ type DashboardOperationsSectionsProps = {
   saveWorkspaceGovernance: () => Promise<void>;
   exportWorkspaceAudit: () => Promise<void>;
   saveAutopilotSettings: () => Promise<void>;
+  runPrivacyOperation: (kind: (typeof privacyOperationKindValues)[number]) => Promise<void>;
+  revokeGoalShare: (goalId: string, shareId: string, title: string) => Promise<void>;
 };
 
 const autopilotModeLabels: Record<AutopilotMode, string> = {
@@ -55,6 +61,41 @@ const autopilotModeLabels: Record<AutopilotMode, string> = {
   draft_goal: "Draft goal",
   auto_run: "Auto-run"
 };
+
+const privacyOperationLabels: Record<(typeof privacyOperationKindValues)[number], string> = {
+  retention_enforcement: "Run retention enforcement",
+  workspace_export: "Queue workspace export",
+  workspace_delete: "Queue workspace deletion"
+};
+
+const privacyOperationDescriptions: Record<(typeof privacyOperationKindValues)[number], string> = {
+  retention_enforcement: "Revoke expired shares and purge privacy records that have aged past the retention window.",
+  workspace_export: "Package the current workspace audit data through the durable worker path.",
+  workspace_delete: "Delete shared workspace data and leave only a tombstone plus the owner audit trail."
+};
+
+const privacyOperationStatusLabels: Record<PrivacyOperation["status"], string> = {
+  queued: "queued",
+  running: "running",
+  completed: "completed",
+  failed: "failed"
+};
+
+function formatPrivacyOperationTimestamp(operation: PrivacyOperation): string {
+  return operation.completedAt ?? operation.startedAt ?? operation.updatedAt;
+}
+
+function summarizeGoalShareStatus(share: GoalShareRecord): string {
+  if (share.status === "revoked") {
+    return share.revokedAt ? `Revoked ${share.revokedAt}` : "Revoked";
+  }
+
+  if (share.lastViewedAt) {
+    return `Viewed ${share.lastViewedAt}`;
+  }
+
+  return `Expires ${share.expiresAt}`;
+}
 
 export function DashboardOperationsSections(props: DashboardOperationsSectionsProps) {
   const {
@@ -64,6 +105,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
     workspaceState,
     governanceState,
     autopilotState,
+    privacyState,
     workspaceName,
     setWorkspaceName,
     workspaceSlug,
@@ -85,8 +127,11 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
     addWorkspaceMember,
     saveWorkspaceGovernance,
     exportWorkspaceAudit,
-    saveAutopilotSettings
+    saveAutopilotSettings,
+    runPrivacyOperation,
+    revokeGoalShare
   } = props;
+  const goalTitleById = new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.title]));
 
   return (
     <>
@@ -309,6 +354,113 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
           <button type="button" className="primary-button" onClick={() => void saveWorkspaceGovernance()} disabled={isPending || !data.activeWorkspace}>
             Save governance
           </button>
+        </div>
+      </article>
+
+      <article className="card" id="section-privacy">
+        <div className="card-header">
+          <div>
+            <h2>Privacy lifecycle</h2>
+            <p className="operator-product-subtitle">
+              Share links, retention, exports, and destructive deletion all run through persisted records so privacy controls survive retries and multiple instances.
+            </p>
+          </div>
+          <span>{data.privacyOperations.length} recent operations</span>
+        </div>
+        <p className={`status-chip ${privacyState.kind}`}>
+          {privacyState.message ||
+            (data.activeWorkspace
+              ? `Privacy controls are scoped to ${data.activeWorkspace.name}.`
+              : "Select a workspace before running privacy operations.")}
+        </p>
+        <div className="list-stack compact">
+          {privacyOperationKindValues.map((kind) => (
+            <div className="list-item vertical" key={kind}>
+              <div>
+                <strong>{privacyOperationLabels[kind]}</strong>
+                <p>{privacyOperationDescriptions[kind]}</p>
+              </div>
+              <div className="goal-item-actions">
+                <button
+                  type="button"
+                  className={kind === "workspace_delete" ? "danger-button" : "secondary-button"}
+                  onClick={() => void runPrivacyOperation(kind)}
+                  disabled={isPending || !data.activeWorkspace}
+                >
+                  {privacyOperationLabels[kind]}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="card-header">
+          <h3>Recent share links</h3>
+          <span>{data.goalShares.length} tracked</span>
+        </div>
+        <div className="list-stack">
+          {data.goalShares.length === 0 ? (
+            <div className="list-item vertical">
+              <div>
+                <strong>No active share history</strong>
+                <p>New goal shares will appear here with revoke controls and view status.</p>
+              </div>
+            </div>
+          ) : (
+            data.goalShares.slice(0, 8).map((share) => (
+              <div className="list-item vertical" key={share.id}>
+                <div>
+                  <strong>{goalTitleById.get(share.goalId) ?? share.goalId}</strong>
+                  <p>{summarizeGoalShareStatus(share)}</p>
+                </div>
+                <div className="goal-item-actions">
+                  <span className="pill">{share.status}</span>
+                  <RelativeTime date={share.updatedAt} />
+                  {share.status === "active" ? (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void revokeGoalShare(share.goalId, share.id, goalTitleById.get(share.goalId) ?? share.goalId)}
+                      disabled={isPending}
+                    >
+                      Revoke
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="card-header">
+          <h3>Recent privacy operations</h3>
+          <span>{data.privacyOperations.length} recorded</span>
+        </div>
+        <div className="list-stack">
+          {data.privacyOperations.length === 0 ? (
+            <div className="list-item vertical">
+              <div>
+                <strong>No privacy operations yet</strong>
+                <p>Retention enforcement, exports, and deletion workflows will be logged here as they run.</p>
+              </div>
+            </div>
+          ) : (
+            data.privacyOperations.slice(0, 8).map((operation) => (
+              <div className="list-item vertical" key={operation.id}>
+                <div>
+                  <strong>{privacyOperationLabels[operation.kind]}</strong>
+                  <p>
+                    Requested by {operation.requestedBy} · {operation.jobId ? `job ${operation.jobId}` : "queueing pending"}
+                  </p>
+                </div>
+                <div className="goal-item-actions">
+                  <span className="pill">{privacyOperationStatusLabels[operation.status]}</span>
+                  <RelativeTime date={formatPrivacyOperationTimestamp(operation)} />
+                </div>
+                {operation.error ? <p className="status-chip error">{operation.error}</p> : null}
+              </div>
+            ))
+          )}
         </div>
       </article>
 

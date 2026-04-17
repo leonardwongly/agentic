@@ -12,6 +12,7 @@ import {
   type GoalTemplate,
   type JobKind,
   type JobRecord,
+  type PrivacyOperationJobPayload,
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
@@ -37,7 +38,7 @@ import {
   type SelfImprovementRepository
 } from "@agentic/self-improvement-memory";
 
-export const workerJobKindValues = ["goal_create", "autopilot_process"] as const;
+export const workerJobKindValues = ["goal_create", "autopilot_process", "privacy_operation"] as const;
 
 export type GoalJobResultSummary = {
   goalId: string;
@@ -110,6 +111,24 @@ function buildAutopilotWorkflowId(eventId: string): string {
 
 function buildAutopilotProcessJobIdempotencyKey(eventId: string): string {
   return `autopilot-process:${eventId}`;
+}
+
+function buildPrivacyOperationPayload(params: {
+  operationId: string;
+  workspaceId: string;
+  kind: PrivacyOperationJobPayload["kind"];
+}): PrivacyOperationJobPayload {
+  return {
+    type: "privacy_operation",
+    operationId: params.operationId,
+    workspaceId: params.workspaceId,
+    kind: params.kind,
+    metadata: {}
+  };
+}
+
+function buildPrivacyOperationJobIdempotencyKey(operationId: string): string {
+  return `privacy-operation:${operationId}`;
 }
 
 async function resolveGoalCreateGovernance(
@@ -503,6 +522,12 @@ export function isAutopilotProcessJob(
   return job?.kind === "autopilot_process" && job.payload.type === "autopilot_process";
 }
 
+export function isPrivacyOperationJob(
+  job: JobRecord | null
+): job is JobRecord & { payload: PrivacyOperationJobPayload } {
+  return job?.kind === "privacy_operation" && job.payload.type === "privacy_operation";
+}
+
 export async function enqueueGoalCreateJob(params: {
   repository: AgenticRepository;
   userId: string;
@@ -544,6 +569,32 @@ export async function enqueueAutopilotProcessJob(params: {
     idempotencyKey: buildAutopilotProcessJobIdempotencyKey(params.autopilotEvent.id),
     maxAttempts: 3
   })) as Promise<JobRecord & { payload: AutopilotProcessJobPayload }>;
+}
+
+export async function enqueuePrivacyOperationJob(params: {
+  repository: AgenticRepository;
+  operation: {
+    id: string;
+    workspaceId: string;
+    userId: string;
+    kind: PrivacyOperationJobPayload["kind"];
+    actorContext: ActorContext | null;
+  };
+}): Promise<JobRecord & { payload: PrivacyOperationJobPayload }> {
+  const payload = buildPrivacyOperationPayload({
+    operationId: params.operation.id,
+    workspaceId: params.operation.workspaceId,
+    kind: params.operation.kind
+  });
+
+  return params.repository.enqueueJob(createJobRecord({
+    userId: params.operation.userId,
+    kind: "privacy_operation",
+    payload,
+    actorContext: params.operation.actorContext,
+    idempotencyKey: buildPrivacyOperationJobIdempotencyKey(params.operation.id),
+    maxAttempts: 3
+  })) as Promise<JobRecord & { payload: PrivacyOperationJobPayload }>;
 }
 
 export async function executeGoalCreateJob(params: {
@@ -681,6 +732,113 @@ export async function executeAutopilotProcessJob(params: {
   }
 }
 
+function sanitizePrivacyOperationError(kind: PrivacyOperationJobPayload["kind"]): string {
+  switch (kind) {
+    case "workspace_export":
+      return "Workspace export failed.";
+    case "workspace_delete":
+      return "Workspace deletion failed.";
+    case "retention_enforcement":
+      return "Retention enforcement failed.";
+    default:
+      return "Privacy operation failed.";
+  }
+}
+
+export async function executePrivacyOperationJob(params: {
+  repository: AgenticRepository;
+  job: JobRecord;
+}) {
+  const { job, repository } = params;
+
+  if (!isPrivacyOperationJob(job)) {
+    throw new Error(`Expected a privacy_operation payload for job ${job.id}.`);
+  }
+
+  const operation = await repository.getPrivacyOperation(job.payload.operationId, job.userId);
+
+  if (!operation) {
+    throw new Error(`Privacy operation ${job.payload.operationId} was not found.`);
+  }
+
+  if (operation.kind !== job.payload.kind || operation.workspaceId !== job.payload.workspaceId) {
+    throw new Error(`Privacy operation ${operation.id} no longer matches the queued job payload.`);
+  }
+
+  const startedAt = nowIso();
+  const runningOperation = await repository.savePrivacyOperation({
+    ...operation,
+    status: "running",
+    startedAt,
+    completedAt: null,
+    error: null,
+    updatedAt: startedAt
+  });
+
+  try {
+    let result: Record<string, unknown>;
+
+    switch (job.payload.kind) {
+      case "workspace_export": {
+        const audit = await repository.exportWorkspaceAudit(job.payload.workspaceId, job.userId);
+        result = {
+          workspaceId: audit.workspaceId,
+          fileName: audit.fileName,
+          contentType: audit.contentType,
+          generatedAt: audit.generatedAt,
+          contentLength: Buffer.byteLength(audit.content, "utf8")
+        };
+        break;
+      }
+      case "retention_enforcement": {
+        const retentionDays = operation.details.retentionDays;
+
+        if (typeof retentionDays !== "number" || !Number.isInteger(retentionDays) || retentionDays < 0) {
+          throw new Error(`Privacy operation ${operation.id} is missing a valid retention policy.`);
+        }
+
+        result = await repository.enforceWorkspaceRetention({
+          workspaceId: job.payload.workspaceId,
+          userId: job.userId,
+          retentionDays,
+          now: startedAt
+        });
+        break;
+      }
+      case "workspace_delete":
+        result = await repository.deleteWorkspaceData({
+          workspaceId: job.payload.workspaceId,
+          userId: job.userId,
+          operationId: operation.id,
+          now: startedAt
+        });
+        break;
+    }
+
+    const completedAt = nowIso();
+    await repository.savePrivacyOperation({
+      ...runningOperation,
+      status: "completed",
+      result,
+      completedAt,
+      error: null,
+      updatedAt: completedAt
+    });
+  } catch (error) {
+    const completedAt = nowIso();
+
+    await repository.savePrivacyOperation({
+      ...runningOperation,
+      status: "failed",
+      completedAt,
+      error: sanitizePrivacyOperationError(job.payload.kind),
+      updatedAt: completedAt
+    });
+
+    throw error;
+  }
+}
+
 export function createWorkerJobHandlers(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
@@ -699,6 +857,11 @@ export function createWorkerJobHandlers(params: {
         selfImprovementRepository: params.selfImprovementRepository,
         job,
         retryPolicy: params.retryPolicy
+      }),
+    privacy_operation: (job) =>
+      executePrivacyOperationJob({
+        repository: params.repository,
+        job
       })
   };
 }

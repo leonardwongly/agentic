@@ -2,6 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  privacyOperationKindValues,
   workspaceRoleValues,
   DEFAULT_COMMITMENT_INBOX_LIMIT,
   type OperatorProduct,
@@ -250,6 +251,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [noteState, setNoteState] = useState<RequestState>({ kind: "idle", message: "" });
   const [briefingState, setBriefingState] = useState<RequestState>({ kind: "idle", message: "" });
   const [autopilotState, setAutopilotState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [privacyState, setPrivacyState] = useState<RequestState>({ kind: "idle", message: "" });
   const [lastShareUrl, setLastShareUrl] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [templates, setTemplates] = useState<GoalTemplate[]>([]);
@@ -388,15 +390,20 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const shareStatsByGoal = useMemo(
     () =>
       new Map(
-        data.goals.map((bundle) => [
-          bundle.goal.id,
-          {
-            created: bundle.actionLogs.filter((log) => log.kind === "share.link_created").length,
-            opened: bundle.actionLogs.filter((log) => log.kind === "share.page_viewed").length
-          }
-        ])
+        data.goals.map((bundle) => {
+          const goalShares = data.goalShares.filter((share) => share.goalId === bundle.goal.id);
+
+          return [
+            bundle.goal.id,
+            {
+              total: goalShares.length,
+              active: goalShares.filter((share) => share.status === "active").length,
+              viewed: goalShares.filter((share) => share.lastViewedAt !== null).length
+            }
+          ];
+        })
       ),
-    [data.goals]
+    [data.goalShares, data.goals]
   );
 
   const reliabilityHealth = useMemo(() => {
@@ -912,6 +919,78 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     }
   }, []);
 
+  const runPrivacyOperation = useCallback(async (kind: (typeof privacyOperationKindValues)[number]) => {
+    setIsPending(true);
+
+    try {
+      const payload = await readJson<{ operation: { id: string; status: string }; reused: boolean; dashboard: DashboardData }>(
+        await fetch("/api/governance/privacy", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({ kind })
+        })
+      );
+      const actionLabel =
+        kind === "retention_enforcement"
+          ? "retention enforcement"
+          : kind === "workspace_export"
+            ? "workspace export"
+            : "workspace deletion";
+
+      startTransition(() => {
+        setData(payload.dashboard);
+        setPrivacyState({
+          kind: "success",
+          message: payload.reused
+            ? `Reused the in-flight ${actionLabel} operation.`
+            : `Queued ${actionLabel}.`
+        });
+        statsBar.updateSync();
+      });
+      toast.success(payload.reused ? "Reused privacy operation." : "Queued privacy operation.");
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to queue privacy operation.";
+      setPrivacyState({ kind: "error", message: errorMessage });
+      toast.error("Action failed", errorMessage);
+    } finally {
+      setIsPending(false);
+    }
+  }, [statsBar]);
+
+  const revokeGoalShare = useCallback(async (goalId: string, shareId: string, title: string) => {
+    setIsPending(true);
+
+    try {
+      const payload = await readJson<{ dashboard: DashboardData }>(
+        await fetch(`/api/goals/${encodeURIComponent(goalId)}/share`, {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({ shareId })
+        })
+      );
+
+      startTransition(() => {
+        setData(payload.dashboard);
+        setShareState({
+          kind: "success",
+          message: `Revoked the public share link for ${title}.`
+        });
+        statsBar.updateSync();
+      });
+      toast.success("Revoked share link.");
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to revoke the public share link.";
+      setShareState({ kind: "error", message: errorMessage });
+      toast.error("Action failed", errorMessage);
+    } finally {
+      setIsPending(false);
+    }
+  }, [statsBar]);
+
   const updateBriefingScheduleDraft = useCallback(
     (type: BriefingType, patch: Partial<BriefingPreferences["schedules"][number]>) => {
       setBriefingPreferencesDraft((current) => ({
@@ -1079,7 +1158,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     setIsPending(true);
 
     try {
-      const payload = await readJson<{ shareUrl: string; dashboard: DashboardData }>(
+      const payload = await readJson<{ shareId: string; shareUrl: string; dashboard: DashboardData }>(
         await fetch(`/api/goals/${encodeURIComponent(goalId)}/share`, {
           method: "POST"
         })
@@ -1926,6 +2005,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               workspaceState={workspaceState}
               governanceState={governanceState}
               autopilotState={autopilotState}
+              privacyState={privacyState}
               workspaceName={workspaceName}
               setWorkspaceName={setWorkspaceName}
               workspaceSlug={workspaceSlug}
@@ -1948,6 +2028,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               saveWorkspaceGovernance={saveWorkspaceGovernance}
               exportWorkspaceAudit={exportWorkspaceAudit}
               saveAutopilotSettings={saveAutopilotSettings}
+              runPrivacyOperation={runPrivacyOperation}
+              revokeGoalShare={revokeGoalShare}
             />
           </div>
 
@@ -2425,7 +2507,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                       </button>
                     ) : null}
                     <small className="share-metric">
-                      {shareStatsByGoal.get(bundle.goal.id)?.opened ?? 0} open{(shareStatsByGoal.get(bundle.goal.id)?.opened ?? 0) === 1 ? "" : "s"}
+                      {shareStatsByGoal.get(bundle.goal.id)?.active ?? 0} active · {shareStatsByGoal.get(bundle.goal.id)?.viewed ?? 0} viewed
                     </small>
                   </div>
                   {refinementLogs.length > 0 ? (

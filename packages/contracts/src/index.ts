@@ -56,7 +56,10 @@ export const briefingFocusValues = ["balanced", "urgent", "deep"] as const;
 export const autopilotModeValues = ["notify_only", "draft_goal", "auto_run"] as const;
 export const autopilotEventKindValues = ["watcher_triggered", "template_due", "briefing_due"] as const;
 export const autopilotEventStatusValues = ["pending", "simulated", "notified", "executed", "debounced", "ignored", "failed"] as const;
-export const jobKindValues = ["goal_create", "autopilot_process"] as const;
+export const goalShareStatusValues = ["active", "revoked"] as const;
+export const privacyOperationKindValues = ["retention_enforcement", "workspace_export", "workspace_delete"] as const;
+export const privacyOperationStatusValues = ["queued", "running", "completed", "failed"] as const;
+export const jobKindValues = ["goal_create", "autopilot_process", "privacy_operation"] as const;
 export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
 export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
@@ -103,6 +106,9 @@ export const BriefingFocusSchema = z.enum(briefingFocusValues);
 export const AutopilotModeSchema = z.enum(autopilotModeValues);
 export const AutopilotEventKindSchema = z.enum(autopilotEventKindValues);
 export const AutopilotEventStatusSchema = z.enum(autopilotEventStatusValues);
+export const GoalShareStatusSchema = z.enum(goalShareStatusValues);
+export const PrivacyOperationKindSchema = z.enum(privacyOperationKindValues);
+export const PrivacyOperationStatusSchema = z.enum(privacyOperationStatusValues);
 export const JobKindSchema = z.enum(jobKindValues);
 export const JobStatusSchema = z.enum(jobStatusValues);
 export const EvidenceRecordSourceKindSchema = z.enum(evidenceRecordSourceKindValues);
@@ -515,6 +521,39 @@ export const WorkspaceGovernanceSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
+export const GoalShareRecordSchema = z.object({
+  id: z.string().min(1),
+  goalId: z.string().min(1),
+  userId: z.string().min(1),
+  workspaceId: z.string().min(1).nullable().default(null),
+  tokenFingerprint: z.string().regex(/^[a-f0-9]{12,64}$/),
+  status: GoalShareStatusSchema,
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+  expiresAt: z.string().datetime(),
+  lastViewedAt: z.string().datetime().nullable().default(null),
+  revokedAt: z.string().datetime().nullable().default(null),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+export const PrivacyOperationSchema = z.object({
+  id: z.string().min(1),
+  workspaceId: z.string().min(1),
+  userId: z.string().min(1),
+  kind: PrivacyOperationKindSchema,
+  status: PrivacyOperationStatusSchema,
+  requestedBy: z.string().min(1),
+  actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+  jobId: z.string().min(1).nullable().default(null),
+  details: z.record(z.string(), z.unknown()).default({}),
+  result: z.record(z.string(), z.unknown()).default({}),
+  startedAt: z.string().datetime().nullable().default(null),
+  completedAt: z.string().datetime().nullable().default(null),
+  error: z.string().max(1000).nullable().default(null),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
 export const BriefingScheduleEntrySchema = z.object({
   type: BriefingTypeSchema,
   enabled: z.boolean(),
@@ -616,9 +655,20 @@ export const AutopilotProcessJobPayloadSchema = z
   })
   .strict();
 
+export const PrivacyOperationJobPayloadSchema = z
+  .object({
+    type: z.literal("privacy_operation"),
+    operationId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    kind: PrivacyOperationKindSchema,
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
 export const JobPayloadSchema = z.discriminatedUnion("type", [
   GoalCreateJobPayloadSchema,
-  AutopilotProcessJobPayloadSchema
+  AutopilotProcessJobPayloadSchema,
+  PrivacyOperationJobPayloadSchema
 ]);
 
 export const JobRecordSchema = z
@@ -657,6 +707,14 @@ export const JobRecordSchema = z
         code: z.ZodIssueCode.custom,
         path: ["payload", "type"],
         message: 'Autopilot jobs must carry an "autopilot_process" payload.'
+      });
+    }
+
+    if (value.kind === "privacy_operation" && value.payload.type !== "privacy_operation") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'Privacy-operation jobs must carry a "privacy_operation" payload.'
       });
     }
 
@@ -1397,6 +1455,11 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 export type WorkspaceMember = z.infer<typeof WorkspaceMemberSchema>;
 export type WorkspaceSelection = z.infer<typeof WorkspaceSelectionSchema>;
 export type WorkspaceGovernance = z.infer<typeof WorkspaceGovernanceSchema>;
+export type GoalShareStatus = z.infer<typeof GoalShareStatusSchema>;
+export type GoalShareRecord = z.infer<typeof GoalShareRecordSchema>;
+export type PrivacyOperationKind = z.infer<typeof PrivacyOperationKindSchema>;
+export type PrivacyOperationStatus = z.infer<typeof PrivacyOperationStatusSchema>;
+export type PrivacyOperation = z.infer<typeof PrivacyOperationSchema>;
 export type ActorKind = z.infer<typeof ActorKindSchema>;
 export type ActorIdentity = z.infer<typeof ActorIdentitySchema>;
 export type ActorContext = z.infer<typeof ActorContextSchema>;
@@ -1407,6 +1470,7 @@ export type AutopilotSettings = z.infer<typeof AutopilotSettingsSchema>;
 export type AutopilotEvent = z.infer<typeof AutopilotEventSchema>;
 export type GoalCreateJobPayload = z.infer<typeof GoalCreateJobPayloadSchema>;
 export type AutopilotProcessJobPayload = z.infer<typeof AutopilotProcessJobPayloadSchema>;
+export type PrivacyOperationJobPayload = z.infer<typeof PrivacyOperationJobPayloadSchema>;
 export type JobPayload = z.infer<typeof JobPayloadSchema>;
 export type JobRecord = z.infer<typeof JobRecordSchema>;
 export type WatcherFrequency = z.infer<typeof WatcherFrequencySchema>;

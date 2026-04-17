@@ -352,7 +352,7 @@ describe("goal route", () => {
       userId: SYSTEM_USER_ID,
       runnerId: "worker-dead-letter-test",
       leaseMs: 1_000,
-      now: "2026-04-16T10:00:00.000Z"
+      now: new Date(Date.parse(queued.availableAt) + 1_000).toISOString()
     });
 
     expect(claimed?.id).toBe(queued.id);

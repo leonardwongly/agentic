@@ -130,6 +130,15 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       updatedAt: timestamp
     }),
     saveWorkspaceGovernance: async (governance) => governance,
+    listGoalShares: async () => [],
+    getGoalShare: async () => null,
+    getGoalShareByTokenFingerprint: async () => null,
+    saveGoalShare: async (share) => share,
+    listPrivacyOperations: async () => [],
+    getPrivacyOperation: async () => null,
+    savePrivacyOperation: async (operation) => operation,
+    enforceWorkspaceRetention: async () => ({}),
+    deleteWorkspaceData: async () => ({}),
     exportWorkspaceAudit: async (workspaceId) => ({
       workspaceId,
       fileName: `${workspaceId}-audit.json`,
@@ -242,6 +251,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       goals: [],
       approvals: [],
       commitments: [],
+      goalShares: [],
+      privacyOperations: [],
       briefingPreferences: {
         userId: SYSTEM_USER_ID,
         timezone: "Asia/Singapore",

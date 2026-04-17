@@ -42,15 +42,16 @@ describe("goal share helpers", () => {
   });
 
   it("creates and verifies signed goal share tokens", () => {
-    const token = createGoalShareToken("goal-123", "2026-04-09T00:00:00.000Z");
+    const token = createGoalShareToken("share-123", "goal-123", "2026-04-09T00:00:00.000Z");
 
     expect(verifyGoalShareToken(token, Date.parse("2026-04-02T00:00:00.000Z"))).toMatchObject({
+      shareId: "share-123",
       goalId: "goal-123"
     });
   });
 
   it("rejects tampered or expired goal share tokens", () => {
-    const token = createGoalShareToken("goal-123", "2026-04-03T00:00:00.000Z");
+    const token = createGoalShareToken("share-123", "goal-123", "2026-04-03T00:00:00.000Z");
     const [encodedPayload, signature] = token.split(".");
     const tampered = `${encodedPayload}.${signature?.slice(0, -1)}x`;
 
@@ -139,20 +140,22 @@ describe("goal share helpers", () => {
     expect(sharedView).not.toHaveProperty("request");
     expect(sharedView).not.toHaveProperty("approvals");
     expect(sharedView).not.toHaveProperty("actionLogs");
+    expect(sharedView).not.toHaveProperty("watchers");
     expect(sharedView.tasks[0]).not.toHaveProperty("id");
     expect(sharedView.artifacts[0]).not.toHaveProperty("id");
-    expect(sharedView.watchers[0]).not.toHaveProperty("id");
   });
 
   it("deduplicates repeated public share views within the cooldown window", async () => {
     const bundle = await buildBundle();
-    const token = createGoalShareToken(bundle.goal.id, "2026-04-09T00:00:00.000Z");
-    const createdLog = createGoalShareCreatedLog(bundle, token, "2026-04-09T00:00:00.000Z");
+    const shareId = "share-dedupe";
+    const token = createGoalShareToken(shareId, bundle.goal.id, "2026-04-09T00:00:00.000Z");
+    const createdLog = createGoalShareCreatedLog(bundle, shareId, token, "2026-04-09T00:00:00.000Z");
     const firstViewLog = createGoalShareViewedLog(
       {
         ...bundle,
         actionLogs: [...bundle.actionLogs, createdLog]
       },
+      shareId,
       token,
       Date.parse("2026-04-02T00:00:00.000Z")
     );
@@ -164,6 +167,7 @@ describe("goal share helpers", () => {
         ...bundle,
         actionLogs: [...bundle.actionLogs, createdLog, firstViewLog!]
       },
+      shareId,
       token,
       Date.parse("2026-04-02T00:05:00.000Z")
     );
@@ -173,14 +177,16 @@ describe("goal share helpers", () => {
 
   it("allows another public view after the cooldown window", async () => {
     const bundle = await buildBundle();
-    const token = createGoalShareToken(bundle.goal.id, "2026-04-09T00:00:00.000Z");
-    const createdLog = createGoalShareCreatedLog(bundle, token, "2026-04-09T00:00:00.000Z");
+    const shareId = "share-later-view";
+    const token = createGoalShareToken(shareId, bundle.goal.id, "2026-04-09T00:00:00.000Z");
+    const createdLog = createGoalShareCreatedLog(bundle, shareId, token, "2026-04-09T00:00:00.000Z");
     const earlierViewLog = {
       ...createGoalShareViewedLog(
         {
           ...bundle,
           actionLogs: [...bundle.actionLogs, createdLog]
         },
+        shareId,
         token,
         Date.parse("2026-04-02T00:00:00.000Z")
       )!,
@@ -192,21 +198,26 @@ describe("goal share helpers", () => {
         ...bundle,
         actionLogs: [...bundle.actionLogs, createdLog, earlierViewLog]
       },
+      shareId,
       token,
       Date.parse("2026-04-02T00:20:00.000Z")
     );
 
     expect(laterViewLog).not.toBeNull();
+    expect(laterViewLog?.details.shareId).toBe(shareId);
     expect(laterViewLog?.details.tokenFingerprint).toBe(fingerprintGoalShareToken(token));
   });
 
   it("records token fingerprints without storing raw tokens in logs", async () => {
     const bundle = await buildBundle();
-    const token = createGoalShareToken(bundle.goal.id, "2026-04-09T00:00:00.000Z");
-    const createdLog = createGoalShareCreatedLog(bundle, token, "2026-04-09T00:00:00.000Z");
-    const viewedLog = createGoalShareViewedLog(bundle, token, Date.parse("2026-04-02T00:00:00.000Z"));
+    const shareId = "share-fingerprint";
+    const token = createGoalShareToken(shareId, bundle.goal.id, "2026-04-09T00:00:00.000Z");
+    const createdLog = createGoalShareCreatedLog(bundle, shareId, token, "2026-04-09T00:00:00.000Z");
+    const viewedLog = createGoalShareViewedLog(bundle, shareId, token, Date.parse("2026-04-02T00:00:00.000Z"));
 
+    expect(createdLog.details.shareId).toBe(shareId);
     expect(createdLog.details.tokenFingerprint).toBe(fingerprintGoalShareToken(token));
+    expect(viewedLog?.details.shareId).toBe(shareId);
     expect(viewedLog?.details.tokenFingerprint).toBe(fingerprintGoalShareToken(token));
     expect(JSON.stringify(createdLog.details)).not.toContain(token);
     expect(JSON.stringify(viewedLog?.details ?? {})).not.toContain(token);
@@ -264,7 +275,7 @@ describe("goal share helpers", () => {
     expect(sharedView.watcherCount).toBe(250);
     expect(sharedView.tasks).toHaveLength(250);
     expect(sharedView.artifacts).toHaveLength(250);
-    expect(sharedView.watchers).toHaveLength(250);
+    expect(sharedView).not.toHaveProperty("watchers");
   });
 
   it("selects the correct share success message for clipboard and fallback flows", () => {
