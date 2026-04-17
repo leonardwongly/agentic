@@ -1,5 +1,16 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import {
+  appendCorrelationHeaders,
+  getOrCreateRequestId,
+  getTelemetryContext,
+  logError,
+  logInfo,
+  recordCounter,
+  recordHistogram,
+  withSpan,
+  withTelemetryContext
+} from "@agentic/observability";
 import { formatValidationError, isContentTypeError } from "./api-errors";
 import { isAuthError } from "./auth";
 import { AuthRuntimeStateConfigurationError } from "./auth-runtime-state";
@@ -32,24 +43,24 @@ function mergeHeaders(init?: ResponseInit, additionalHeaders?: HeadersInit): Hea
 export function authenticatedJson<T>(body: T, init?: ResponseInit) {
   return NextResponse.json(body, {
     ...init,
-    headers: mergeHeaders(init, {
+    headers: appendCorrelationHeaders(mergeHeaders(init, {
       "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0",
       Vary: "Cookie, X-Agentic-Access-Key"
-    })
+    }))
   });
 }
 
 export function authenticatedRedirect(url: string | URL, init?: ResponseInit & { status?: number }) {
   return NextResponse.redirect(url, {
     ...init,
-    headers: mergeHeaders(init, {
+    headers: appendCorrelationHeaders(mergeHeaders(init, {
       "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0",
       Vary: "Cookie, X-Agentic-Access-Key"
-    })
+    }))
   });
 }
 
@@ -100,6 +111,89 @@ export function handleApiError(error: unknown, fallbackMessage: string) {
     return authenticatedError(415, "Content-Type must be application/json.");
   }
 
-  console.error(fallbackMessage, error);
+  logError("api.request.unhandled_error", error, {
+    fallbackMessage
+  });
   return authenticatedError(500, fallbackMessage);
+}
+
+type ApiTelemetryHandler = () => Promise<Response> | Response;
+
+export async function withApiTelemetry(
+  request: Request,
+  route: string,
+  handler: ApiTelemetryHandler
+): Promise<Response> {
+  const url = new URL(request.url);
+  const started = Date.now();
+
+  return withTelemetryContext(
+    {
+      requestId: getOrCreateRequestId(request.headers.get("x-request-id")),
+      route,
+      method: request.method,
+      path: url.pathname
+    },
+    async () =>
+      withSpan(
+        "http.request",
+        {
+          route,
+          method: request.method,
+          path: url.pathname
+        },
+        async () => {
+          logInfo("api.request.started", {
+            route,
+            method: request.method,
+            path: url.pathname
+          });
+
+          const response = await handler();
+          const durationMs = Math.max(0, Date.now() - started);
+          const headers = appendCorrelationHeaders(response.headers);
+          const finalized = new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers
+          });
+          const requestId = getTelemetryContext()?.requestId ?? null;
+
+          recordCounter("http.request.total", 1, {
+            route,
+            method: request.method,
+            path: url.pathname,
+            statusCode: finalized.status
+          });
+          recordHistogram("http.request.duration_ms", durationMs, {
+            route,
+            method: request.method,
+            path: url.pathname,
+            statusCode: finalized.status
+          });
+
+          if (finalized.status >= 500) {
+            logError("api.request.completed_with_server_error", undefined, {
+              route,
+              method: request.method,
+              path: url.pathname,
+              statusCode: finalized.status,
+              durationMs,
+              requestId
+            });
+          } else {
+            logInfo("api.request.completed", {
+              route,
+              method: request.method,
+              path: url.pathname,
+              statusCode: finalized.status,
+              durationMs,
+              requestId
+            });
+          }
+
+          return finalized;
+        }
+      )
+  );
 }

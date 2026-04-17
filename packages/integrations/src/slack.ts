@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
 
 // ---------------------------------------------------------------------------
 // Environment helpers
@@ -21,6 +22,16 @@ export function isSlackReady(): boolean {
 // ---------------------------------------------------------------------------
 
 const SLACK_API_BASE = "https://slack.com/api";
+const SLACK_API_TIMEOUT_MS = 5_000;
+
+function summarizeSlackBody(body: Record<string, unknown>) {
+  return {
+    hasBlocks: Array.isArray(body.blocks),
+    textLength: typeof body.text === "string" ? body.text.length : 0,
+    hasThreadTs: typeof body.thread_ts === "string",
+    hasTs: typeof body.ts === "string"
+  };
+}
 
 async function slackPost<T = unknown>(
   method: string,
@@ -31,21 +42,55 @@ async function slackPost<T = unknown>(
     throw new Error("Slack not configured. Set SLACK_BOT_TOKEN.");
   }
 
-  const response = await fetch(`${SLACK_API_BASE}/${method}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json; charset=utf-8"
+  return withTelemetryContext(
+    {
+      provider: "slack"
     },
-    body: JSON.stringify(body)
-  });
+    async () =>
+      withSpan(
+        "integration.slack.call",
+        {
+          provider: "slack",
+          operation: method,
+          ...summarizeSlackBody(body)
+        },
+        async () => {
+          try {
+            const response = await fetch(`${SLACK_API_BASE}/${method}`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json; charset=utf-8"
+              },
+              body: JSON.stringify(body),
+              signal: AbortSignal.timeout(SLACK_API_TIMEOUT_MS)
+            });
 
-  if (!response.ok) {
-    throw new Error(`Slack API ${method} returned HTTP ${response.status}`);
-  }
+            if (!response.ok) {
+              throw new Error(`Slack API ${method} returned HTTP ${response.status}`);
+            }
 
-  const data = (await response.json()) as T;
-  return data;
+            const data = (await response.json()) as T;
+            recordCounter("integration.call.total", 1, {
+              provider: "slack",
+              operation: method,
+              outcome: "success"
+            });
+            return data;
+          } catch (error) {
+            recordCounter("integration.call.total", 1, {
+              provider: "slack",
+              operation: method,
+              outcome: "error"
+            });
+            logError("integration.slack.call_failed", error, {
+              operation: method
+            });
+            throw error;
+          }
+        }
+      )
+  );
 }
 
 // ---------------------------------------------------------------------------

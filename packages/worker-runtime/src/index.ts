@@ -26,6 +26,14 @@ import {
   type JobRetryPolicy
 } from "@agentic/execution";
 import {
+  logError,
+  logInfo,
+  logWarn,
+  recordCounter,
+  withSpan,
+  withTelemetryContext
+} from "@agentic/observability";
+import {
   captureMemoriesFromBundle,
   computeNextRun,
   generateBriefing,
@@ -155,7 +163,10 @@ async function resolveGoalCreateAgentDefinition(
   try {
     return (await repository.getAgent(agentId, userId)) ?? undefined;
   } catch {
-    console.warn(`[goal-jobs] Agent ${agentId} was not found for user ${userId}; proceeding without override.`);
+    logWarn("goal_job.agent_override_missing", {
+      agentId,
+      userId
+    });
     return undefined;
   }
 }
@@ -193,7 +204,10 @@ async function persistCapturedMemories(params: {
       }
     }
   } catch (error) {
-    console.error(`[goal-jobs] Failed to persist captured memories for job ${params.jobId}:`, error);
+    logError("goal_job.memory_capture_failed", error, {
+      jobId: params.jobId,
+      userId: params.userId
+    });
     throw error;
   }
 }
@@ -543,14 +557,35 @@ export async function enqueueGoalCreateJob(params: {
     agentId: params.agentId
   });
 
-  return params.repository.enqueueJob(createJobRecord({
-    userId: params.userId,
-    kind: "goal_create",
-    payload,
-    actorContext: params.actorContext,
-    idempotencyKey: params.idempotencyKey ?? null,
-    maxAttempts: 3
-  })) as Promise<JobRecord & { payload: GoalCreateJobPayload }>;
+  return withSpan(
+    "worker.job.enqueue.goal_create",
+    {
+      jobKind: "goal_create",
+      userId: params.userId,
+      workspaceId: params.workspaceId
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "goal_create",
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey: params.idempotencyKey ?? null,
+        maxAttempts: 3
+      })) as JobRecord & { payload: GoalCreateJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId,
+        workspaceId: params.workspaceId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
 }
 
 export async function enqueueAutopilotProcessJob(params: {
@@ -561,14 +596,33 @@ export async function enqueueAutopilotProcessJob(params: {
     autopilotEvent: params.autopilotEvent
   });
 
-  return params.repository.enqueueJob(createJobRecord({
-    userId: params.autopilotEvent.userId,
-    kind: "autopilot_process",
-    payload,
-    actorContext: params.autopilotEvent.actorContext,
-    idempotencyKey: buildAutopilotProcessJobIdempotencyKey(params.autopilotEvent.id),
-    maxAttempts: 3
-  })) as Promise<JobRecord & { payload: AutopilotProcessJobPayload }>;
+  return withSpan(
+    "worker.job.enqueue.autopilot_process",
+    {
+      jobKind: "autopilot_process",
+      userId: params.autopilotEvent.userId
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.autopilotEvent.userId,
+        kind: "autopilot_process",
+        payload,
+        actorContext: params.autopilotEvent.actorContext,
+        idempotencyKey: buildAutopilotProcessJobIdempotencyKey(params.autopilotEvent.id),
+        maxAttempts: 3
+      })) as JobRecord & { payload: AutopilotProcessJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
 }
 
 export async function enqueuePrivacyOperationJob(params: {
@@ -587,14 +641,35 @@ export async function enqueuePrivacyOperationJob(params: {
     kind: params.operation.kind
   });
 
-  return params.repository.enqueueJob(createJobRecord({
-    userId: params.operation.userId,
-    kind: "privacy_operation",
-    payload,
-    actorContext: params.operation.actorContext,
-    idempotencyKey: buildPrivacyOperationJobIdempotencyKey(params.operation.id),
-    maxAttempts: 3
-  })) as Promise<JobRecord & { payload: PrivacyOperationJobPayload }>;
+  return withSpan(
+    "worker.job.enqueue.privacy_operation",
+    {
+      jobKind: "privacy_operation",
+      userId: params.operation.userId,
+      workspaceId: params.operation.workspaceId
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.operation.userId,
+        kind: "privacy_operation",
+        payload,
+        actorContext: params.operation.actorContext,
+        idempotencyKey: buildPrivacyOperationJobIdempotencyKey(params.operation.id),
+        maxAttempts: 3
+      })) as JobRecord & { payload: PrivacyOperationJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId,
+        workspaceId: params.operation.workspaceId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
 }
 
 export async function executeGoalCreateJob(params: {
@@ -842,27 +917,84 @@ export async function executePrivacyOperationJob(params: {
 export function createWorkerJobHandlers(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
+  runnerId: string;
   retryPolicy?: Partial<JobRetryPolicy>;
 }): JobHandlerMap {
+  const wrapHandler = (jobKind: JobKind, execute: (job: JobRecord) => Promise<void>) => {
+    return (job: JobRecord) =>
+      withTelemetryContext(
+        {
+          jobId: job.id,
+          jobKind,
+          runnerId: params.runnerId,
+          userId: job.userId
+        },
+        async () =>
+          withSpan(
+            "worker.job.execute",
+            {
+              jobId: job.id,
+              jobKind,
+              runnerId: params.runnerId,
+              userId: job.userId
+            },
+            async () => {
+              logInfo("worker.job.started", {
+                jobId: job.id,
+                jobKind,
+                runnerId: params.runnerId,
+                attemptCount: job.attemptCount
+              });
+
+              try {
+                await execute(job);
+                recordCounter("worker.job.succeeded.total", 1, {
+                  jobKind,
+                  runnerId: params.runnerId
+                });
+                logInfo("worker.job.completed", {
+                  jobId: job.id,
+                  jobKind,
+                  runnerId: params.runnerId,
+                  attemptCount: job.attemptCount
+                });
+              } catch (error) {
+                recordCounter("worker.job.failed.total", 1, {
+                  jobKind,
+                  runnerId: params.runnerId
+                });
+                logError("worker.job.failed", error, {
+                  jobId: job.id,
+                  jobKind,
+                  runnerId: params.runnerId,
+                  attemptCount: job.attemptCount
+                });
+                throw error;
+              }
+            }
+          )
+      );
+  };
+
   return {
-    goal_create: (job) =>
+    goal_create: wrapHandler("goal_create", (job) =>
       executeGoalCreateJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
         job
-      }),
-    autopilot_process: (job) =>
+      })),
+    autopilot_process: wrapHandler("autopilot_process", (job) =>
       executeAutopilotProcessJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
         job,
         retryPolicy: params.retryPolicy
-      }),
-    privacy_operation: (job) =>
+      })),
+    privacy_operation: wrapHandler("privacy_operation", (job) =>
       executePrivacyOperationJob({
         repository: params.repository,
         job
-      })
+      }))
   };
 }
 
@@ -911,48 +1043,60 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<WorkerRuntimeResult> {
-  const queue = createDurableJobQueue(options.repository, {
-    runnerId: options.runnerId,
-    leaseMs: options.leaseMs,
-    retryPolicy: options.retryPolicy
-  });
-  const handlers = createWorkerJobHandlers({
-    repository: options.repository,
-    selfImprovementRepository: options.selfImprovementRepository,
-    retryPolicy: options.retryPolicy
-  });
-  const pollIntervalMs = Math.max(50, options.pollIntervalMs ?? 1_000);
-  let processedCount = 0;
+  return withTelemetryContext(
+    {
+      runnerId: options.runnerId
+    },
+    async () => {
+      const queue = createDurableJobQueue(options.repository, {
+        runnerId: options.runnerId,
+        leaseMs: options.leaseMs,
+        retryPolicy: options.retryPolicy
+      });
+      const handlers = createWorkerJobHandlers({
+        repository: options.repository,
+        selfImprovementRepository: options.selfImprovementRepository,
+        runnerId: options.runnerId,
+        retryPolicy: options.retryPolicy
+      });
+      const pollIntervalMs = Math.max(50, options.pollIntervalMs ?? 1_000);
+      let processedCount = 0;
 
-  while (!options.signal?.aborted) {
-    const result = await processNextDurableJob({
-      queue,
-      handlers,
-      claim: options.claim
-    });
+      while (!options.signal?.aborted) {
+        const result = await processNextDurableJob({
+          queue,
+          handlers,
+          claim: options.claim
+        });
 
-    if (result.claimedJob) {
-      if (!shouldClaimJob(result.claimedJob.kind, options.claim?.kinds)) {
-        throw new Error(`Worker claimed unexpected job kind "${result.claimedJob.kind}".`);
+        if (result.claimedJob) {
+          if (!shouldClaimJob(result.claimedJob.kind, options.claim?.kinds)) {
+            throw new Error(`Worker claimed unexpected job kind "${result.claimedJob.kind}".`);
+          }
+
+          processedCount += 1;
+          recordCounter("worker.loop.processed.total", 1, {
+            runnerId: options.runnerId,
+            jobKind: result.claimedJob.kind
+          });
+
+          if (options.maxJobs && processedCount >= options.maxJobs) {
+            return {
+              processedCount,
+              stopReason: "max_jobs"
+            };
+          }
+
+          continue;
+        }
+
+        await delay(pollIntervalMs, options.signal);
       }
 
-      processedCount += 1;
-
-      if (options.maxJobs && processedCount >= options.maxJobs) {
-        return {
-          processedCount,
-          stopReason: "max_jobs"
-        };
-      }
-
-      continue;
+      return {
+        processedCount,
+        stopReason: "aborted"
+      };
     }
-
-    await delay(pollIntervalMs, options.signal);
-  }
-
-  return {
-    processedCount,
-    stopReason: "aborted"
-  };
+  );
 }

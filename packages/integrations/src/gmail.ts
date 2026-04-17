@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { z } from "zod";
+import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
 import { createGoogleOAuthClient } from "./google-oauth";
 
 const EmailMessageSchema = z.object({
@@ -90,43 +91,93 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
     return gmail;
   };
 
+  const instrumentGmailCall = <T>(
+    operation: string,
+    attributes: Record<string, unknown>,
+    handler: () => Promise<T>
+  ) =>
+    withTelemetryContext(
+      {
+        provider: "gmail"
+      },
+      async () =>
+        withSpan(
+          "integration.gmail.call",
+          {
+            provider: "gmail",
+            operation,
+            ...attributes
+          },
+          async () => {
+            try {
+              const result = await handler();
+              recordCounter("integration.call.total", 1, {
+                provider: "gmail",
+                operation,
+                outcome: "success"
+              });
+              return result;
+            } catch (error) {
+              recordCounter("integration.call.total", 1, {
+                provider: "gmail",
+                operation,
+                outcome: "error"
+              });
+              logError("integration.gmail.call_failed", error, {
+                operation
+              });
+              throw error;
+            }
+          }
+        )
+    );
+
   const listMessages = async (maxResults = 10, query?: string) => {
-    const gmail = getClient();
+    return instrumentGmailCall(
+      "messages.list",
+      {
+        maxResults,
+        hasQuery: Boolean(query)
+      },
+      async () => {
+        const gmail = getClient();
 
-    const listResponse = await gmail.users.messages.list({
-      userId: "me",
-      maxResults,
-      q: query ?? "in:inbox"
-    });
+        const listResponse = await gmail.users.messages.list({
+          userId: "me",
+          maxResults,
+          q: query ?? "in:inbox"
+        });
 
-    const messageIds = listResponse.data.messages ?? [];
-    const messages: EmailMessage[] = [];
+        const messageIds = listResponse.data.messages ?? [];
+        const messages: EmailMessage[] = [];
 
-    for (const msg of messageIds.slice(0, maxResults)) {
-      const detail = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id!,
-        format: "full"
-      });
+        for (const msg of messageIds.slice(0, maxResults)) {
+          const detail = await gmail.users.messages.get({
+            userId: "me",
+            id: msg.id!,
+            format: "full"
+          });
 
-      const headers = (detail.data.payload?.headers ?? []) as Array<{ name: string; value: string }>;
-      const body = extractBody(detail.data.payload);
+          const headers = (detail.data.payload?.headers ?? []) as Array<{ name: string; value: string }>;
+          const body = extractBody(detail.data.payload);
 
-      messages.push(EmailMessageSchema.parse({
-        id: detail.data.id!,
-        threadId: detail.data.threadId!,
-        from: extractHeader(headers, "From"),
-        to: extractHeader(headers, "To"),
-        subject: extractHeader(headers, "Subject"),
-        snippet: detail.data.snippet ?? "",
-        body: body.slice(0, 2000),
-        date: extractHeader(headers, "Date"),
-        isUnread: (detail.data.labelIds ?? []).includes("UNREAD"),
-        labels: detail.data.labelIds ?? []
-      }));
-    }
+          messages.push(EmailMessageSchema.parse({
+            id: detail.data.id!,
+            threadId: detail.data.threadId!,
+            from: extractHeader(headers, "From"),
+            to: extractHeader(headers, "To"),
+            subject: extractHeader(headers, "Subject"),
+            snippet: detail.data.snippet ?? "",
+            body: body.slice(0, 2000),
+            date: extractHeader(headers, "Date"),
+            isUnread: (detail.data.labelIds ?? []).includes("UNREAD"),
+            labels: detail.data.labelIds ?? []
+          }));
+        }
 
-    return messages;
+        return messages;
+      }
+    );
   };
 
   return {
@@ -135,43 +186,59 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
       return listMessages(maxResults, query);
     },
     async createDraft(paramsDraft: { to: string; subject: string; body: string; threadId?: string }) {
-      const gmail = getClient();
-      const rawMessage = [
-        `To: ${paramsDraft.to}`,
-        `Subject: ${paramsDraft.subject}`,
-        "Content-Type: text/plain; charset=utf-8",
-        "",
-        paramsDraft.body
-      ].join("\r\n");
+      return instrumentGmailCall(
+        "drafts.create",
+        {
+          hasThreadId: Boolean(paramsDraft.threadId),
+          subjectLength: paramsDraft.subject.length,
+          bodyLength: paramsDraft.body.length
+        },
+        async () => {
+          const gmail = getClient();
+          const rawMessage = [
+            `To: ${paramsDraft.to}`,
+            `Subject: ${paramsDraft.subject}`,
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            paramsDraft.body
+          ].join("\r\n");
 
-      const encodedMessage = Buffer.from(rawMessage).toString("base64url");
+          const encodedMessage = Buffer.from(rawMessage).toString("base64url");
 
-      const response = await gmail.users.drafts.create({
-        userId: "me",
-        requestBody: {
-          message: {
-            raw: encodedMessage,
-            threadId: paramsDraft.threadId ?? undefined
-          }
+          const response = await gmail.users.drafts.create({
+            userId: "me",
+            requestBody: {
+              message: {
+                raw: encodedMessage,
+                threadId: paramsDraft.threadId ?? undefined
+              }
+            }
+          });
+
+          return DraftResultSchema.parse({
+            id: response.data.id!,
+            threadId: paramsDraft.threadId ?? null,
+            to: paramsDraft.to,
+            subject: paramsDraft.subject,
+            body: paramsDraft.body
+          });
         }
-      });
-
-      return DraftResultSchema.parse({
-        id: response.data.id!,
-        threadId: paramsDraft.threadId ?? null,
-        to: paramsDraft.to,
-        subject: paramsDraft.subject,
-        body: paramsDraft.body
-      });
+      );
     },
     async sendDraft(draftId: string) {
-      const gmail = getClient();
-      const response = await gmail.users.drafts.send({
-        userId: "me",
-        requestBody: { id: draftId }
-      });
+      return instrumentGmailCall(
+        "drafts.send",
+        {},
+        async () => {
+          const gmail = getClient();
+          const response = await gmail.users.drafts.send({
+            userId: "me",
+            requestBody: { id: draftId }
+          });
 
-      return { messageId: response.data.id! };
+          return { messageId: response.data.id! };
+        }
+      );
     }
   };
 }

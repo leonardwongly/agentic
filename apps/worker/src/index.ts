@@ -1,4 +1,5 @@
 import { prepareDefaultIntegrations } from "@agentic/integrations";
+import { logError, logInfo, withTelemetryContext } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { runWorkerRuntime } from "@agentic/worker-runtime";
@@ -32,7 +33,10 @@ async function main() {
       return;
     }
 
-    console.info(`[worker] Received ${signal}; draining and stopping worker loop.`);
+    logInfo("worker.shutdown_requested", {
+      signal,
+      runnerId
+    });
     controller.abort();
   };
 
@@ -45,23 +49,36 @@ async function main() {
     selfImprovementRepository.seed()
   ]);
 
-  console.info(`[worker] Starting durable worker ${runnerId}.`);
+  await withTelemetryContext(
+    {
+      runnerId
+    },
+    async () => {
+      logInfo("worker.starting", {
+        runnerId,
+        pollIntervalMs,
+        leaseMs
+      });
 
-  const result = await runWorkerRuntime({
-    repository,
-    selfImprovementRepository,
-    runnerId,
-    pollIntervalMs,
-    leaseMs,
-    signal: controller.signal
-  });
+      const result = await runWorkerRuntime({
+        repository,
+        selfImprovementRepository,
+        runnerId,
+        pollIntervalMs,
+        leaseMs,
+        signal: controller.signal
+      });
 
-  console.info(
-    `[worker] Worker ${runnerId} stopped after processing ${result.processedCount} job(s); reason=${result.stopReason}.`
+      logInfo("worker.stopped", {
+        runnerId,
+        processedCount: result.processedCount,
+        stopReason: result.stopReason
+      });
+    }
   );
 }
 
 main().catch((error) => {
-  console.error("[worker] Fatal worker startup failure.", error);
+  logError("worker.fatal_startup_failure", error);
   process.exitCode = 1;
 });

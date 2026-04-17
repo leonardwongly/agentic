@@ -20,6 +20,11 @@ import {
   type Watcher,
   type WorkflowState
 } from "@agentic/contracts";
+import {
+  recordCounter,
+  withSpan,
+  withTelemetryContext
+} from "@agentic/observability";
 
 const legalTaskTransitions: Record<TaskState, readonly TaskState[]> = {
   queued: ["running", "waiting", "blocked", "failed", "completed"],
@@ -250,48 +255,128 @@ export function createDurableJobQueue(
   };
 
   return {
-    enqueue(job) {
-      return store.enqueueJob(job);
+    async enqueue(job) {
+      return withSpan(
+        "durable_job.enqueue",
+        {
+          jobId: job.id,
+          jobKind: job.kind
+        },
+        async () => {
+          const created = await store.enqueueJob(job);
+          recordCounter("durable_job.enqueue.total", 1, {
+            jobKind: created.kind
+          });
+          return created;
+        }
+      );
     },
-    claimNext(params) {
-      return store.claimNextJob({
-        userId: params?.userId,
-        kinds: params?.kinds,
-        runnerId: options.runnerId,
-        leaseMs,
-        now: params?.now
-      });
+    async claimNext(params) {
+      return withSpan(
+        "durable_job.claim",
+        {
+          runnerId: options.runnerId,
+          requestedJobKinds: params?.kinds?.join(",") ?? null
+        },
+        async () => {
+          const claimed = await store.claimNextJob({
+            userId: params?.userId,
+            kinds: params?.kinds,
+            runnerId: options.runnerId,
+            leaseMs,
+            now: params?.now
+          });
+
+          recordCounter("durable_job.claim.total", 1, {
+            runnerId: options.runnerId,
+            claimResult: claimed ? "hit" : "miss",
+            jobKind: claimed?.kind ?? null
+          });
+
+          return claimed;
+        }
+      );
     },
-    acknowledge(params) {
-      return store.completeJob({
-        jobId: params.jobId,
-        runnerId: options.runnerId,
-        completedAt: params.now ?? nowIso()
-      });
+    async acknowledge(params) {
+      return withSpan(
+        "durable_job.acknowledge",
+        {
+          jobId: params.jobId,
+          runnerId: options.runnerId
+        },
+        async () => {
+          const acknowledged = await store.completeJob({
+            jobId: params.jobId,
+            runnerId: options.runnerId,
+            completedAt: params.now ?? nowIso()
+          });
+
+          recordCounter("durable_job.completed.total", 1, {
+            runnerId: options.runnerId,
+            jobKind: acknowledged.kind
+          });
+
+          return acknowledged;
+        }
+      );
     },
     async fail(params) {
       const timestamp = params.now ?? nowIso();
       const error = normalizeJobError(params.error);
 
       if (params.job.attemptCount >= params.job.maxAttempts) {
-        return store.deadLetterJob({
-          jobId: params.job.id,
-          runnerId: options.runnerId,
-          deadLetteredAt: timestamp,
-          error
-        });
+        return withSpan(
+          "durable_job.dead_letter",
+          {
+            jobId: params.job.id,
+            jobKind: params.job.kind,
+            runnerId: options.runnerId
+          },
+          async () => {
+            const deadLettered = await store.deadLetterJob({
+              jobId: params.job.id,
+              runnerId: options.runnerId,
+              deadLetteredAt: timestamp,
+              error
+            });
+
+            recordCounter("durable_job.dead_letter.total", 1, {
+              runnerId: options.runnerId,
+              jobKind: deadLettered.kind
+            });
+
+            return deadLettered;
+          }
+        );
       }
 
       const nextAvailableAt = new Date(
         Date.parse(timestamp) + computeJobRetryDelayMs(params.job.attemptCount, retryPolicy)
       ).toISOString();
 
-      return store.retryJob({
-        jobId: params.job.id,
-        runnerId: options.runnerId,
-        availableAt: nextAvailableAt,
-        error
-      });
+      return withSpan(
+        "durable_job.retry",
+        {
+          jobId: params.job.id,
+          jobKind: params.job.kind,
+          runnerId: options.runnerId
+        },
+        async () => {
+          const retried = await store.retryJob({
+            jobId: params.job.id,
+            runnerId: options.runnerId,
+            availableAt: nextAvailableAt,
+            error
+          });
+
+          recordCounter("durable_job.retry.total", 1, {
+            runnerId: options.runnerId,
+            jobKind: retried.kind
+          });
+
+          return retried;
+        }
+      );
     }
   };
 }
@@ -323,12 +408,29 @@ export async function processNextDurableJob(params: {
   }
 
   try {
-    await handler(job);
+    await withTelemetryContext(
+      {
+        jobId: job.id,
+        jobKind: job.kind
+      },
+      () =>
+        withSpan(
+          "durable_job.process",
+          {
+            jobId: job.id,
+            jobKind: job.kind
+          },
+          async () => handler(job)
+        )
+    );
     return {
       claimedJob: job,
       finalJob: await params.queue.acknowledge({ jobId: job.id })
     };
   } catch (error) {
+    recordCounter("durable_job.failed.total", 1, {
+      jobKind: job.kind
+    });
     return {
       claimedJob: job,
       finalJob: await params.queue.fail({ job, error: coerceJobFailure(error) })

@@ -12,7 +12,13 @@ import {
   type BriefingType
 } from "@agentic/contracts";
 import { enqueueAutopilotProcessJob } from "@agentic/worker-runtime";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import {
+  ApiRouteError,
+  authenticatedJson,
+  handleApiError,
+  parseJsonBody,
+  withApiTelemetry
+} from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
@@ -180,7 +186,8 @@ async function ensureAutopilotProcessJob(repository: AgenticRepository, event: A
 }
 
 export async function POST(request: Request) {
-  try {
+  return withApiTelemetry(request, "api.autopilot.events.create", async () => {
+    try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
     const actorContext = createActorContextFromPrincipal(principal);
@@ -413,7 +420,8 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
-  } catch (error) {
-    return handleApiError(error, "Failed to trigger autopilot event.");
-  }
+    } catch (error) {
+      return handleApiError(error, "Failed to trigger autopilot event.");
+    }
+  });
 }

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
 
 const TELEGRAM_API_TIMEOUT_MS = 5_000;
 
@@ -25,26 +26,63 @@ async function telegramPost<T>(method: string, body: Record<string, unknown>): P
     throw new Error("Telegram not configured. Set TELEGRAM_BOT_TOKEN.");
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json; charset=utf-8"
+  return withTelemetryContext(
+    {
+      provider: "telegram"
     },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS)
-  });
+    async () =>
+      withSpan(
+        "integration.telegram.call",
+        {
+          provider: "telegram",
+          operation: method,
+          hasMessageId: typeof body.message_id === "number",
+          hasCallbackQueryId: typeof body.callback_query_id === "string",
+          textLength: typeof body.text === "string" ? body.text.length : 0
+        },
+        async () => {
+          try {
+            const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json; charset=utf-8"
+              },
+              body: JSON.stringify(body),
+              signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS)
+            });
 
-  if (!response.ok) {
-    throw new Error(`Telegram API ${method} returned HTTP ${response.status}`);
-  }
+            if (!response.ok) {
+              throw new Error(`Telegram API ${method} returned HTTP ${response.status}`);
+            }
 
-  const data = (await response.json()) as TelegramApiResponse<T>;
+            const data = (await response.json()) as TelegramApiResponse<T>;
 
-  if (!data.ok) {
-    throw new Error(data.description ? `Telegram API ${method} failed: ${data.description}` : `Telegram API ${method} failed.`);
-  }
+            if (!data.ok) {
+              throw new Error(
+                data.description ? `Telegram API ${method} failed: ${data.description}` : `Telegram API ${method} failed.`
+              );
+            }
 
-  return data.result;
+            recordCounter("integration.call.total", 1, {
+              provider: "telegram",
+              operation: method,
+              outcome: "success"
+            });
+            return data.result;
+          } catch (error) {
+            recordCounter("integration.call.total", 1, {
+              provider: "telegram",
+              operation: method,
+              outcome: "error"
+            });
+            logError("integration.telegram.call_failed", error, {
+              operation: method
+            });
+            throw error;
+          }
+        }
+      )
+  );
 }
 
 function buildApprovalText(approval: {

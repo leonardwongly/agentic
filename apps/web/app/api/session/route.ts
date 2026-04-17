@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { AGENTIC_SESSION_COOKIE, checkSessionRateLimit, clearSessionCookie, createSessionCookie, getAuthMode, recordSessionSuccess, revokeSessionToken, verifyAccessKey } from "../../../lib/auth";
-import { authenticatedError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
+import {
+  authenticatedError,
+  authenticatedJson,
+  handleApiError,
+  parseJsonBody,
+  withApiTelemetry
+} from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
 import { validateAuthRuntimeState } from "../../../lib/auth-runtime-state";
 import { getRequestClientKey } from "../../../lib/request-client-identity";
@@ -18,51 +24,33 @@ const SessionRequestSchema = z
   .strict();
 
 export async function POST(request: Request) {
-  try {
-    requireJsonContentType(request);
-    validateAuthRuntimeState();
+  return withApiTelemetry(request, "api.session.create", async () => {
+    try {
+      requireJsonContentType(request);
+      validateAuthRuntimeState();
 
-    const rateLimitKey = getRequestClientKey(request);
-    const rateLimit = await checkSessionRateLimit(rateLimitKey);
+      const rateLimitKey = getRequestClientKey(request);
+      const rateLimit = await checkSessionRateLimit(rateLimitKey);
 
-    if (!rateLimit.allowed) {
-      return NextResponse.json(
-        { error: "Too many login attempts. Please try again later." },
-        {
-          status: 429,
-          headers: { "Retry-After": String(Math.ceil(rateLimit.retryAfterMs / 1000)) }
-        }
-      );
-    }
-
-    const authMode = getAuthMode();
-
-    if (authMode.requiresConfiguredKey) {
-      return authenticatedError(503, "AGENTIC_ACCESS_KEY is not configured.");
-    }
-
-    const rateLimitStatus = await getSessionUnlockRateLimitStatus(request);
-
-    if (rateLimitStatus.throttled) {
-      return authenticatedJson(
-        {
-          error: "Too many failed unlock attempts. Try again later."
-        },
-        {
-          status: 429,
-          headers: {
-            "Retry-After": String(rateLimitStatus.retryAfterSeconds)
+      if (!rateLimit.allowed) {
+        return NextResponse.json(
+          { error: "Too many login attempts. Please try again later." },
+          {
+            status: 429,
+            headers: { "Retry-After": String(Math.ceil(rateLimit.retryAfterMs / 1000)) }
           }
-        }
-      );
-    }
+        );
+      }
 
-    const body = await parseJsonBody(request, SessionRequestSchema);
+      const authMode = getAuthMode();
 
-    if (!verifyAccessKey(body.accessKey)) {
-      const failureStatus = await recordFailedSessionUnlockAttempt(request);
+      if (authMode.requiresConfiguredKey) {
+        return authenticatedError(503, "AGENTIC_ACCESS_KEY is not configured.");
+      }
 
-      if (failureStatus.throttled) {
+      const rateLimitStatus = await getSessionUnlockRateLimitStatus(request);
+
+      if (rateLimitStatus.throttled) {
         return authenticatedJson(
           {
             error: "Too many failed unlock attempts. Try again later."
@@ -70,44 +58,66 @@ export async function POST(request: Request) {
           {
             status: 429,
             headers: {
-              "Retry-After": String(failureStatus.retryAfterSeconds)
+              "Retry-After": String(rateLimitStatus.retryAfterSeconds)
             }
           }
         );
       }
 
-      return authenticatedError(401, "The supplied access key was rejected.");
+      const body = await parseJsonBody(request, SessionRequestSchema);
+
+      if (!verifyAccessKey(body.accessKey)) {
+        const failureStatus = await recordFailedSessionUnlockAttempt(request);
+
+        if (failureStatus.throttled) {
+          return authenticatedJson(
+            {
+              error: "Too many failed unlock attempts. Try again later."
+            },
+            {
+              status: 429,
+              headers: {
+                "Retry-After": String(failureStatus.retryAfterSeconds)
+              }
+            }
+          );
+        }
+
+        return authenticatedError(401, "The supplied access key was rejected.");
+      }
+
+      await clearFailedSessionUnlockAttempts(request);
+      await recordSessionSuccess(rateLimitKey);
+
+      const response = authenticatedJson({
+        ok: true
+      });
+      const cookie = createSessionCookie();
+
+      response.cookies.set(cookie.name, cookie.value, cookie.options);
+      return response;
+    } catch (error) {
+      return handleApiError(error, "Failed to create a session.");
     }
-
-    await clearFailedSessionUnlockAttempts(request);
-    await recordSessionSuccess(rateLimitKey);
-
-    const response = authenticatedJson({
-      ok: true
-    });
-    const cookie = createSessionCookie();
-
-    response.cookies.set(cookie.name, cookie.value, cookie.options);
-    return response;
-  } catch (error) {
-    return handleApiError(error, "Failed to create a session.");
-  }
+  });
 }
 
 export async function DELETE(request: Request) {
-  const existingToken = request.headers.get("cookie")
-    ?.split(";")
-    .map((s) => s.trim())
-    .find((s) => s.startsWith(`${AGENTIC_SESSION_COOKIE}=`))
-    ?.slice(AGENTIC_SESSION_COOKIE.length + 1);
+  return withApiTelemetry(request, "api.session.delete", async () => {
+    const existingToken = request.headers.get("cookie")
+      ?.split(";")
+      .map((s) => s.trim())
+      .find((s) => s.startsWith(`${AGENTIC_SESSION_COOKIE}=`))
+      ?.slice(AGENTIC_SESSION_COOKIE.length + 1);
 
-  if (existingToken) {
-    await revokeSessionToken(existingToken);
-  }
+    if (existingToken) {
+      await revokeSessionToken(existingToken);
+    }
 
-  const response = authenticatedJson({ ok: true });
-  const cookie = clearSessionCookie();
+    const response = authenticatedJson({ ok: true });
+    const cookie = clearSessionCookie();
 
-  response.cookies.set(cookie.name, cookie.value, cookie.options);
-  return response;
+    response.cookies.set(cookie.name, cookie.value, cookie.options);
+    return response;
+  });
 }

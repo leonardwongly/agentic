@@ -1,5 +1,427 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { ActionLogSchema, nowIso, type ActionLog, type AgentDefinition } from "@agentic/contracts";
+
+export type TelemetryPrimitive = string | number | boolean | null;
+
+export type TelemetryAttributes = Record<string, TelemetryPrimitive>;
+
+export type TelemetryContext = {
+  requestId?: string;
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string | null;
+  route?: string;
+  method?: string;
+  path?: string;
+  jobId?: string;
+  jobKind?: string;
+  runnerId?: string;
+  provider?: string;
+  userId?: string;
+  workspaceId?: string | null;
+};
+
+export type StructuredLogLevel = "info" | "warn" | "error";
+
+export type StructuredLogEntry = {
+  timestamp: string;
+  level: StructuredLogLevel;
+  message: string;
+  attributes: TelemetryAttributes;
+  context: TelemetryContext;
+};
+
+export type TelemetryMetric = {
+  timestamp: string;
+  kind: "counter" | "histogram";
+  name: string;
+  value: number;
+  attributes: TelemetryAttributes;
+  context: TelemetryContext;
+};
+
+export type TelemetrySpanStatus = "ok" | "error";
+
+export type TelemetrySpanEntry = {
+  name: string;
+  timestamp: string;
+  endedAt: string;
+  durationMs: number;
+  status: TelemetrySpanStatus;
+  error?: string;
+  attributes: TelemetryAttributes;
+  context: TelemetryContext;
+};
+
+export type TelemetrySnapshot = {
+  logs: StructuredLogEntry[];
+  metrics: TelemetryMetric[];
+  spans: TelemetrySpanEntry[];
+};
+
+const telemetryContextStore = new AsyncLocalStorage<TelemetryContext>();
+const telemetrySnapshot: TelemetrySnapshot = {
+  logs: [],
+  metrics: [],
+  spans: []
+};
+const TELEMETRY_BUFFER_LIMIT = 1_000;
+const REQUEST_ID_HEADER = "x-request-id";
+const TRACE_ID_HEADER = "x-trace-id";
+const TELEMETRY_CONSOLE_ENV = "AGENTIC_TELEMETRY_CONSOLE";
+const SENSITIVE_KEY_PATTERN =
+  /(authorization|cookie|password|secret|token|refresh|access[_-]?key|api[_-]?key|session|signature|raw|body)/iu;
+const SENSITIVE_VALUE_PATTERN =
+  /\b(?:bearer\s+[a-z0-9._-]+|(?:token|secret|password|cookie|session|signature|access[_-]?key|api[_-]?key)\s*[=:]\s*[^\s,;]+)/iu;
+
+function createTelemetryId(): string {
+  return crypto.randomBytes(8).toString("hex");
+}
+
+function copyContext(context: TelemetryContext | undefined): TelemetryContext {
+  return context ? { ...context } : {};
+}
+
+function trimBuffer<T>(buffer: T[]) {
+  if (buffer.length > TELEMETRY_BUFFER_LIMIT) {
+    buffer.splice(0, buffer.length - TELEMETRY_BUFFER_LIMIT);
+  }
+}
+
+function pushLog(entry: StructuredLogEntry) {
+  telemetrySnapshot.logs.push(entry);
+  trimBuffer(telemetrySnapshot.logs);
+}
+
+function pushMetric(entry: TelemetryMetric) {
+  telemetrySnapshot.metrics.push(entry);
+  trimBuffer(telemetrySnapshot.metrics);
+}
+
+function pushSpan(entry: TelemetrySpanEntry) {
+  telemetrySnapshot.spans.push(entry);
+  trimBuffer(telemetrySnapshot.spans);
+}
+
+function toTelemetryPrimitive(value: unknown, key?: string): TelemetryPrimitive {
+  if (key && SENSITIVE_KEY_PATTERN.test(key)) {
+    return "[REDACTED]";
+  }
+
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    if (SENSITIVE_VALUE_PATTERN.test(value)) {
+      return "[REDACTED]";
+    }
+
+    return value.length > 200 ? `${value.slice(0, 197)}...` : value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (value instanceof Error) {
+    return toTelemetryPrimitive(value.message);
+  }
+
+  return JSON.stringify(sanitizeForTelemetry(value));
+}
+
+export function sanitizeForTelemetry(value: unknown, depth = 0): unknown {
+  if (depth > 5) {
+    return "[TRUNCATED]";
+  }
+
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: sanitizeForTelemetry(value.message, depth + 1)
+    };
+  }
+
+  if (typeof value === "string") {
+    return SENSITIVE_VALUE_PATTERN.test(value) ? "[REDACTED]" : value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeForTelemetry(item, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    const result: Record<string, unknown> = {};
+
+    for (const [key, entryValue] of Object.entries(value as Record<string, unknown>)) {
+      if (SENSITIVE_KEY_PATTERN.test(key)) {
+        result[key] = "[REDACTED]";
+        continue;
+      }
+
+      result[key] = sanitizeForTelemetry(entryValue, depth + 1);
+    }
+
+    return result;
+  }
+
+  return value;
+}
+
+export function sanitizeAttributes(attributes?: Record<string, unknown>): TelemetryAttributes {
+  if (!attributes) {
+    return {};
+  }
+
+  const sanitized: TelemetryAttributes = {};
+
+  for (const [key, value] of Object.entries(attributes)) {
+    sanitized[key] = toTelemetryPrimitive(value, key);
+  }
+
+  return sanitized;
+}
+
+function toStructuredLogLine(entry: StructuredLogEntry): string {
+  return JSON.stringify({
+    timestamp: entry.timestamp,
+    level: entry.level,
+    message: entry.message,
+    ...entry.context,
+    ...entry.attributes
+  });
+}
+
+function normalizeTelemetryContext(
+  next: Partial<TelemetryContext>,
+  parent?: TelemetryContext
+): TelemetryContext {
+  return {
+    requestId: next.requestId ?? parent?.requestId,
+    traceId: next.traceId ?? parent?.traceId ?? createTelemetryId(),
+    spanId: next.spanId ?? parent?.spanId,
+    parentSpanId: next.parentSpanId ?? parent?.parentSpanId ?? null,
+    route: next.route ?? parent?.route,
+    method: next.method ?? parent?.method,
+    path: next.path ?? parent?.path,
+    jobId: next.jobId ?? parent?.jobId,
+    jobKind: next.jobKind ?? parent?.jobKind,
+    runnerId: next.runnerId ?? parent?.runnerId,
+    provider: next.provider ?? parent?.provider,
+    userId: next.userId ?? parent?.userId,
+    workspaceId: next.workspaceId ?? parent?.workspaceId
+  };
+}
+
+export function getTelemetryContext(): TelemetryContext | undefined {
+  return telemetryContextStore.getStore();
+}
+
+export async function withTelemetryContext<T>(
+  context: Partial<TelemetryContext>,
+  handler: () => Promise<T> | T
+): Promise<T> {
+  const nextContext = normalizeTelemetryContext(context, getTelemetryContext());
+  return telemetryContextStore.run(nextContext, () => Promise.resolve(handler()));
+}
+
+export function getOrCreateRequestId(candidate?: string | null): string {
+  const trimmed = candidate?.trim();
+
+  if (trimmed) {
+    return trimmed.slice(0, 200);
+  }
+
+  return createTelemetryId();
+}
+
+export function getCorrelationHeaders(): HeadersInit {
+  const context = getTelemetryContext();
+  return {
+    ...(context?.requestId ? { [REQUEST_ID_HEADER]: context.requestId } : {}),
+    ...(context?.traceId ? { [TRACE_ID_HEADER]: context.traceId } : {})
+  };
+}
+
+export function appendCorrelationHeaders(headers?: HeadersInit): Headers {
+  const next = new Headers(headers);
+
+  for (const [key, value] of new Headers(getCorrelationHeaders()).entries()) {
+    next.set(key, value);
+  }
+
+  return next;
+}
+
+export function recordCounter(name: string, value = 1, attributes?: Record<string, unknown>) {
+  pushMetric({
+    timestamp: nowIso(),
+    kind: "counter",
+    name,
+    value,
+    attributes: sanitizeAttributes(attributes),
+    context: copyContext(getTelemetryContext())
+  });
+}
+
+export function recordHistogram(name: string, value: number, attributes?: Record<string, unknown>) {
+  pushMetric({
+    timestamp: nowIso(),
+    kind: "histogram",
+    name,
+    value,
+    attributes: sanitizeAttributes(attributes),
+    context: copyContext(getTelemetryContext())
+  });
+}
+
+function writeStructuredLog(level: StructuredLogLevel, message: string, attributes?: Record<string, unknown>) {
+  const entry: StructuredLogEntry = {
+    timestamp: nowIso(),
+    level,
+    message,
+    attributes: sanitizeAttributes(attributes),
+    context: copyContext(getTelemetryContext())
+  };
+
+  pushLog(entry);
+
+  const consoleMode = process.env[TELEMETRY_CONSOLE_ENV]?.trim().toLowerCase();
+
+  if (consoleMode === "off" || (process.env.NODE_ENV === "test" && consoleMode !== "on")) {
+    return;
+  }
+
+  const line = toStructuredLogLine(entry);
+
+  if (level === "error") {
+    console.error(line);
+  } else if (level === "warn") {
+    console.warn(line);
+  } else {
+    console.info(line);
+  }
+}
+
+export function logInfo(message: string, attributes?: Record<string, unknown>) {
+  writeStructuredLog("info", message, attributes);
+}
+
+export function logWarn(message: string, attributes?: Record<string, unknown>) {
+  writeStructuredLog("warn", message, attributes);
+}
+
+export function logError(message: string, error?: unknown, attributes?: Record<string, unknown>) {
+  writeStructuredLog("error", message, {
+    ...attributes,
+    errorName: error instanceof Error ? error.name : undefined,
+    errorMessage: error instanceof Error ? error.message : typeof error === "string" ? error : undefined
+  });
+}
+
+export async function withSpan<T>(
+  name: string,
+  attributes: Record<string, unknown> | undefined,
+  handler: () => Promise<T> | T
+): Promise<T> {
+  const parent = getTelemetryContext();
+  const startedAt = nowIso();
+  const started = Date.now();
+  const spanContext = normalizeTelemetryContext(
+    {
+      traceId: parent?.traceId ?? createTelemetryId(),
+      requestId: parent?.requestId,
+      spanId: createTelemetryId(),
+      parentSpanId: parent?.spanId ?? null
+    },
+    parent
+  );
+
+  return telemetryContextStore.run(spanContext, async () => {
+    try {
+      const result = await handler();
+      const endedAt = nowIso();
+      const durationMs = Math.max(0, Date.now() - started);
+      const sanitizedAttributes = sanitizeAttributes(attributes);
+
+      pushSpan({
+        name,
+        timestamp: startedAt,
+        endedAt,
+        durationMs,
+        status: "ok",
+        attributes: sanitizedAttributes,
+        context: copyContext(spanContext)
+      });
+      recordHistogram("telemetry.span.duration_ms", durationMs, {
+        spanName: name,
+        spanStatus: "ok",
+        ...sanitizedAttributes
+      });
+      return result;
+    } catch (error) {
+      const endedAt = nowIso();
+      const durationMs = Math.max(0, Date.now() - started);
+      const sanitizedAttributes = sanitizeAttributes(attributes);
+      const sanitizedError = toTelemetryPrimitive(
+        error instanceof Error ? error.message : typeof error === "string" ? error : "Unknown error"
+      );
+
+      pushSpan({
+        name,
+        timestamp: startedAt,
+        endedAt,
+        durationMs,
+        status: "error",
+        error: typeof sanitizedError === "string" ? sanitizedError : JSON.stringify(sanitizedError),
+        attributes: sanitizedAttributes,
+        context: copyContext(spanContext)
+      });
+      recordHistogram("telemetry.span.duration_ms", durationMs, {
+        spanName: name,
+        spanStatus: "error",
+        ...sanitizedAttributes
+      });
+      recordCounter("telemetry.span.errors_total", 1, {
+        spanName: name,
+        ...sanitizedAttributes
+      });
+      throw error;
+    }
+  });
+}
+
+export function resetTelemetrySnapshot() {
+  telemetrySnapshot.logs.length = 0;
+  telemetrySnapshot.metrics.length = 0;
+  telemetrySnapshot.spans.length = 0;
+}
+
+export function getTelemetrySnapshot(): TelemetrySnapshot {
+  return {
+    logs: telemetrySnapshot.logs.map((entry) => ({
+      ...entry,
+      attributes: { ...entry.attributes },
+      context: { ...entry.context }
+    })),
+    metrics: telemetrySnapshot.metrics.map((entry) => ({
+      ...entry,
+      attributes: { ...entry.attributes },
+      context: { ...entry.context }
+    })),
+    spans: telemetrySnapshot.spans.map((entry) => ({
+      ...entry,
+      attributes: { ...entry.attributes },
+      context: { ...entry.context }
+    }))
+  };
+}
 
 export function hashActionLog(log: ActionLog): string {
   const stable = JSON.stringify({
@@ -101,12 +523,14 @@ export function emitActivityEvent(
     timestamp: nowIso()
   };
 
-  // Notify all handlers
+  // Notify all handlers.
   for (const handler of eventHandlers) {
     try {
       handler(event);
-    } catch (e) {
-      console.error("[activity] Event handler error:", e);
+    } catch (error) {
+      logError("activity.event_handler_failed", error, {
+        activityEventType: event.type
+      });
     }
   }
 
@@ -148,7 +572,7 @@ export function instrumentAgentComplete(
     agentName,
     goalId,
     taskId,
-    message: success 
+    message: success
       ? `Agent ${agentName} completed in ${durationMs}ms`
       : `Agent ${agentName} failed: ${error}`,
     details: { durationMs, success, error },
@@ -272,4 +696,3 @@ export function activityEventToLog(event: ActivityEvent): ActionLog {
     details: event.details
   });
 }
-
