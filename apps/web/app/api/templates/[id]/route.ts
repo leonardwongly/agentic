@@ -4,6 +4,7 @@ import { computeNextRun } from "@agentic/orchestrator";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import { requireUpdatedAtPrecondition } from "../../../../lib/mutation-preconditions";
 import { getSeededRepository } from "../../../../lib/server";
 
 const TemplateIdSchema = z.string().trim().min(1).max(200);
@@ -31,6 +32,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
       throw new ApiRouteError(404, `Template ${templateId} was not found.`);
     }
 
+    requireUpdatedAtPrecondition(request, existing.updatedAt);
+
     await repository.deleteTemplate(templateId);
 
     return authenticatedJson({
@@ -56,6 +59,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (!existing) {
       throw new ApiRouteError(404, `Template ${templateId} was not found.`);
     }
+
+    requireUpdatedAtPrecondition(request, existing.updatedAt);
 
     const nextRunAt = body.schedule.enabled && body.schedule.cron
       ? computeNextRun(body.schedule.cron, body.schedule.timezone)

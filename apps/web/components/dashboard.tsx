@@ -159,6 +159,27 @@ type GoalJobStatusApiResponse = {
   error: string | null;
 };
 
+type BriefingCreateApiResponse = {
+  job: {
+    id: string;
+    kind: "briefing_create";
+    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
+    goalId: string;
+    briefingType: BriefingType;
+    attemptCount: number;
+    maxAttempts: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+  statusUrl: string;
+};
+
+type BriefingJobStatusApiResponse = {
+  job: BriefingCreateApiResponse["job"];
+  result: GoalJobStatusApiResponse["result"];
+  error: string | null;
+};
+
 const GOAL_JOB_POLL_INTERVAL_MS = 500;
 const GOAL_JOB_POLL_TIMEOUT_MS = 60_000;
 
@@ -213,6 +234,12 @@ async function readJson<T>(response: Response): Promise<T> {
 
 async function waitForDelay(ms: number): Promise<void> {
   await new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function buildClientIdempotencyKey(): string {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 const commitmentInboxSections: Array<{
@@ -609,20 +636,36 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     return null;
   }, []);
 
+  const pollBriefingJobUntilSettled = useCallback(async (statusUrl: string) => {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
+      const payload = await readJson<BriefingJobStatusApiResponse>(
+        await fetch(statusUrl, {
+          cache: "no-store"
+        })
+      );
+
+      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
+        return payload;
+      }
+
+      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
+    }
+
+    return null;
+  }, []);
+
   const submitGoalRequest = useCallback(async (nextRequest: string, agentId?: string) => {
     setIsPending(true);
 
     try {
-      const idempotencyKey =
-        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const queued = await readJson<GoalCreateApiResponse>(
         await fetch("/api/goals", {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "x-idempotency-key": idempotencyKey
+            "x-idempotency-key": buildClientIdempotencyKey()
           },
           body: JSON.stringify({
             request: nextRequest,
@@ -747,12 +790,17 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     );
   }, [refreshDashboard]);
 
-  const updateCommitment = useCallback(async (commitmentId: string, action: "complete" | "dismiss" | "reopen") => {
+  const updateCommitment = useCallback(async (
+    commitmentId: string,
+    updatedAt: string,
+    action: "complete" | "dismiss" | "reopen"
+  ) => {
     await refreshDashboard(
       fetch(`/api/commitments/${commitmentId}`, {
         method: "PATCH",
         headers: {
-          "content-type": "application/json"
+          "content-type": "application/json",
+          "if-match": `"${updatedAt}"`
         },
         body: JSON.stringify({ action })
       }),
@@ -1142,22 +1190,51 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const generateBriefing = async (type: BriefingType = "startup") => {
     const label = briefingTypeLabels[type];
 
-    await refreshDashboard(
-      fetch("/api/briefing", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({ type })
-      }),
-      `Generated ${label.toLowerCase()}.`
-    );
-    setBriefingState({ kind: "success", message: `Generated ${label.toLowerCase()}.` });
-    recentActions.addAction({
-      type: "create",
-      label,
-      undoable: false
-    });
+    setIsPending(true);
+
+    try {
+      const queued = await readJson<BriefingCreateApiResponse>(
+        await fetch("/api/briefing", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-idempotency-key": buildClientIdempotencyKey()
+          },
+          body: JSON.stringify({ type })
+        })
+      );
+      const settled = await pollBriefingJobUntilSettled(queued.statusUrl);
+
+      if (!settled) {
+        const timeoutMessage = `${label} queued and still processing. Refresh in a moment for the final briefing.`;
+        setBriefingState({ kind: "success", message: timeoutMessage });
+        toast.success(timeoutMessage);
+        return;
+      }
+
+      if (settled.job.status === "dead_letter") {
+        throw new Error(settled.error ?? "Briefing generation failed.");
+      }
+
+      const payload = await loadDashboardSnapshot();
+      startTransition(() => {
+        setData(payload.dashboard);
+        setBriefingState({ kind: "success", message: `Generated ${label.toLowerCase()}.` });
+        toast.success(`Generated ${label.toLowerCase()}.`);
+        statsBar.updateSync();
+      });
+      recentActions.addAction({
+        type: "create",
+        label,
+        undoable: false
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to generate briefing.";
+      setBriefingState({ kind: "error", message: errorMessage });
+      toast.error("Action failed", errorMessage);
+    } finally {
+      setIsPending(false);
+    }
   };
 
   const shareGoal = async (goalId: string, title: string) => {
@@ -1673,13 +1750,16 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     }
   };
 
-  const deleteTemplate = async (templateId: string) => {
+  const deleteTemplate = async (templateId: string, updatedAt: string) => {
     setIsPending(true);
 
     try {
       const payload = await readJson<{ deleted: string; dashboard: DashboardData }>(
         await fetch(`/api/templates/${encodeURIComponent(templateId)}`, {
-          method: "DELETE"
+          method: "DELETE",
+          headers: {
+            "if-match": `"${updatedAt}"`
+          }
         })
       );
       startTransition(() => {
@@ -1959,7 +2039,15 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                       <button
                         type="button"
                         className="secondary-button"
-                        onClick={() => void updateCommitment(item.commitmentId, "reopen")}
+                        onClick={() => {
+                          const currentCommitment = data.commitments.find((candidate) => candidate.id === item.commitmentId);
+
+                          if (!currentCommitment) {
+                            return;
+                          }
+
+                          void updateCommitment(item.commitmentId, currentCommitment.updatedAt, "reopen");
+                        }}
                         disabled={isPending}
                       >
                         Reopen
@@ -1978,7 +2066,15 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                         <button
                           type="button"
                           className="secondary-button"
-                          onClick={() => void updateCommitment(item.commitmentId, "complete")}
+                          onClick={() => {
+                            const currentCommitment = data.commitments.find((candidate) => candidate.id === item.commitmentId);
+
+                            if (!currentCommitment) {
+                              return;
+                            }
+
+                            void updateCommitment(item.commitmentId, currentCommitment.updatedAt, "complete");
+                          }}
                           disabled={isPending}
                         >
                           Complete
@@ -2257,7 +2353,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                       <button
                         type="button"
                         className="secondary-button"
-                        onClick={() => void updateCommitment(commitment.id, "reopen")}
+                        onClick={() => void updateCommitment(commitment.id, commitment.updatedAt, "reopen")}
                         disabled={isPending}
                       >
                         Reopen
@@ -2267,7 +2363,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                         <button
                           type="button"
                           className="secondary-button"
-                          onClick={() => void updateCommitment(commitment.id, "complete")}
+                          onClick={() => void updateCommitment(commitment.id, commitment.updatedAt, "complete")}
                           disabled={isPending}
                         >
                           Complete
@@ -2275,7 +2371,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                         <button
                           type="button"
                           className="secondary-button"
-                          onClick={() => void updateCommitment(commitment.id, "dismiss")}
+                          onClick={() => void updateCommitment(commitment.id, commitment.updatedAt, "dismiss")}
                           disabled={isPending}
                         >
                           Dismiss
@@ -3143,7 +3239,12 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                   <button type="button" className="primary-button" onClick={() => runTemplate(template.id)} disabled={isPending}>
                     Run now
                   </button>
-                  <button type="button" className="secondary-button" onClick={() => deleteTemplate(template.id)} disabled={isPending}>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => deleteTemplate(template.id, template.updatedAt)}
+                    disabled={isPending}
+                  >
                     Delete
                   </button>
                 </div>

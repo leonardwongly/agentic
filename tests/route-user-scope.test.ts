@@ -70,6 +70,18 @@ function buildAuthorizedPatchRequest(url: string, body: unknown): Request {
   });
 }
 
+function buildAuthorizedPatchRequestWithIfMatch(url: string, updatedAt: string, body: unknown): Request {
+  return new Request(url, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+      [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+      "if-match": `"${updatedAt}"`
+    },
+    body: JSON.stringify(body)
+  });
+}
+
 function buildDashboardData(): DashboardData {
   const timestamp = "2024-01-01T00:00:00.000Z";
   const workspace = {
@@ -841,17 +853,25 @@ describe("route user scoping", () => {
     );
 
     const completeResponse = await commitmentUpdateRoute(
-      buildAuthorizedPatchRequest(`http://localhost/api/commitments/${commitment.id}`, {
-        action: "complete"
-      }),
+      buildAuthorizedPatchRequestWithIfMatch(
+        `http://localhost/api/commitments/${commitment.id}`,
+        commitment.updatedAt,
+        {
+          action: "complete"
+        }
+      ),
       {
         params: Promise.resolve({ id: commitment.id })
       }
     );
     const reopenResponse = await commitmentUpdateRoute(
-      buildAuthorizedPatchRequest(`http://localhost/api/commitments/${commitment.id}`, {
-        action: "reopen"
-      }),
+      buildAuthorizedPatchRequestWithIfMatch(
+        `http://localhost/api/commitments/${commitment.id}`,
+        commitment.updatedAt,
+        {
+          action: "reopen"
+        }
+      ),
       {
         params: Promise.resolve({ id: commitment.id })
       }

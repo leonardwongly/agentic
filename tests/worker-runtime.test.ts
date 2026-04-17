@@ -12,10 +12,12 @@ import * as orchestrator from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { EpisodeRecordSchema, createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import {
+  enqueueBriefingCreateJob,
   enqueueAutopilotProcessJob,
   enqueueGoalCreateJob,
   enqueuePrivacyOperationJob,
   executeAutopilotProcessJob,
+  executeBriefingCreateJob,
   executeGoalCreateJob,
   executePrivacyOperationJob,
   runWorkerRuntime
@@ -243,6 +245,98 @@ describe("worker runtime", () => {
     const episodesAfterFirstAttempt = await selfImprovementRepository.listEpisodes();
 
     await executeGoalCreateJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterSecondAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const memoriesAfterSecondAttempt = await repository.listMemory(SYSTEM_USER_ID);
+    const episodesAfterSecondAttempt = await selfImprovementRepository.listEpisodes();
+
+    expect(goalsAfterFirstAttempt).toHaveLength(1);
+    expect(goalsAfterSecondAttempt).toHaveLength(1);
+    expect(goalsAfterSecondAttempt[0]?.goal.id).toBe(job.payload.goalId);
+    expect(memoriesAfterSecondAttempt.map((memory) => memory.id)).toEqual(
+      memoriesAfterFirstAttempt.map((memory) => memory.id)
+    );
+    expect(episodesAfterSecondAttempt.map((episode) => episode.id)).toEqual(
+      episodesAfterFirstAttempt.map((episode) => episode.id)
+    );
+  });
+
+  it("processes queued briefing jobs through the worker loop and persists the generated briefing bundle", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const currentPreferences = await repository.getBriefingPreferences(SYSTEM_USER_ID);
+
+    await repository.saveBriefingPreferences({
+      ...currentPreferences,
+      focus: "urgent",
+      timezone: "America/New_York"
+    });
+
+    const queued = await enqueueBriefingCreateJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      goalId: "goal-briefing-runtime-test",
+      workflowId: "workflow-briefing-runtime-test",
+      briefingType: "midday",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-briefing-1"
+    });
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-briefing-test",
+      maxJobs: 1,
+      pollIntervalMs: 50
+    });
+    const persistedJob = await repository.getJob(queued.id, SYSTEM_USER_ID);
+    const persistedBundle = await repository.getGoalBundleForUser(queued.payload.goalId, SYSTEM_USER_ID);
+
+    expect(result).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(persistedJob).toMatchObject({
+      id: queued.id,
+      status: "completed",
+      attemptCount: 1
+    });
+    expect(persistedBundle?.goal.id).toBe(queued.payload.goalId);
+    expect(persistedBundle?.goal.intent).toBe("briefing:midday");
+    expect(persistedBundle?.goal.explanation).toContain("urgent");
+  });
+
+  it("keeps briefing persistence, memory capture, and self-improvement episodes idempotent across retries", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const job = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "briefing_create",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      payload: {
+        type: "briefing_create",
+        goalId: "goal-briefing-idempotent-retry",
+        workflowId: "workflow-briefing-idempotent-retry",
+        briefingType: "startup",
+        workspaceId: null,
+        metadata: {}
+      }
+    });
+
+    await executeBriefingCreateJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterFirstAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const memoriesAfterFirstAttempt = await repository.listMemory(SYSTEM_USER_ID);
+    const episodesAfterFirstAttempt = await selfImprovementRepository.listEpisodes();
+
+    await executeBriefingCreateJob({
       repository,
       selfImprovementRepository,
       job

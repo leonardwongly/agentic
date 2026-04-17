@@ -4,7 +4,7 @@ import path from "node:path";
 import { GoalTemplateSchema, SYSTEM_USER_ID, createHumanActorContext, createSystemActorContext, nowIso } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PATCH as updateTemplateRoute } from "../apps/web/app/api/templates/[id]/route";
+import { DELETE as deleteTemplateRoute, PATCH as updateTemplateRoute } from "../apps/web/app/api/templates/[id]/route";
 import { POST as runTemplateRoute } from "../apps/web/app/api/templates/[id]/run/route";
 import { GET as listTemplatesRoute, POST as createTemplateRoute } from "../apps/web/app/api/templates/route";
 import * as authModule from "../apps/web/lib/auth";
@@ -21,14 +21,30 @@ function buildAuthorizedGetRequest(url: string): Request {
   });
 }
 
-function buildAuthorizedJsonRequest(url: string, method: "POST" | "PATCH", body?: unknown): Request {
+function buildAuthorizedJsonRequest(
+  url: string,
+  method: "POST" | "PATCH",
+  body?: unknown,
+  options?: { ifMatch?: string | null }
+): Request {
   return new Request(url, {
     method,
     headers: {
       "content-type": "application/json",
-      [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+      [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+      ...(options?.ifMatch ? { "if-match": `"${options.ifMatch}"` } : {})
     },
     body: body === undefined ? undefined : JSON.stringify(body)
+  });
+}
+
+function buildAuthorizedDeleteRequest(url: string, options?: { ifMatch?: string | null }): Request {
+  return new Request(url, {
+    method: "DELETE",
+    headers: {
+      [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+      ...(options?.ifMatch ? { "if-match": `"${options.ifMatch}"` } : {})
+    }
   });
 }
 
@@ -103,8 +119,7 @@ describe("templates routes", () => {
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(secondaryUserId);
-    await repository.saveTemplate(
-      GoalTemplateSchema.parse({
+    const savedTemplate = GoalTemplateSchema.parse({
         id: "template-session-update",
         userId: secondaryUserId,
         name: "Session template",
@@ -121,8 +136,8 @@ describe("templates routes", () => {
         actorContext: null,
         createdAt: nowIso(),
         updatedAt: nowIso()
-      })
-    );
+      });
+    await repository.saveTemplate(savedTemplate);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
@@ -136,19 +151,18 @@ describe("templates routes", () => {
     let payload: { template: { actorContext: unknown } };
     try {
       response = await updateTemplateRoute(
-        new Request("http://localhost/api/templates/template-session-update", {
-          method: "PATCH",
-          headers: {
-            "content-type": "application/json"
-          },
-          body: JSON.stringify({
+        buildAuthorizedJsonRequest(
+          "http://localhost/api/templates/template-session-update",
+          "PATCH",
+          {
             schedule: {
               enabled: true,
               cron: "0 11 * * *",
               timezone: "Asia/Singapore"
             }
-          })
-        }),
+          },
+          { ifMatch: savedTemplate.updatedAt }
+        ),
         { params: Promise.resolve({ id: "template-session-update" }) }
       );
       payload = (await response.json()) as { template: { actorContext: unknown } };
@@ -164,5 +178,136 @@ describe("templates routes", () => {
     expect(payload.template.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
     expect(persisted?.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
     expect(persisted?.schedule.nextRunAt).toBeTruthy();
+  });
+
+  it("rejects template schedule updates without an If-Match precondition", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveTemplate(
+      GoalTemplateSchema.parse({
+        id: "template-missing-precondition",
+        userId: SYSTEM_USER_ID,
+        name: "Missing precondition",
+        description: "",
+        request: "Review the inbox.",
+        parameters: {},
+        schedule: {
+          enabled: false,
+          cron: "",
+          timezone: "UTC",
+          lastRunAt: null,
+          nextRunAt: null
+        },
+        actorContext: null,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await updateTemplateRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/templates/template-missing-precondition", "PATCH", {
+        schedule: {
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC"
+        }
+      }),
+      { params: Promise.resolve({ id: "template-missing-precondition" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(428);
+    expect(payload.error).toContain("If-Match");
+  });
+
+  it("rejects stale template schedule preconditions", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveTemplate(
+      GoalTemplateSchema.parse({
+        id: "template-stale-precondition",
+        userId: SYSTEM_USER_ID,
+        name: "Stale precondition",
+        description: "",
+        request: "Review the inbox.",
+        parameters: {},
+        schedule: {
+          enabled: false,
+          cron: "",
+          timezone: "UTC",
+          lastRunAt: null,
+          nextRunAt: null
+        },
+        actorContext: null,
+        createdAt: "2026-04-18T00:00:00.000Z",
+        updatedAt: "2026-04-18T00:00:00.000Z"
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await updateTemplateRoute(
+      buildAuthorizedJsonRequest(
+        "http://localhost/api/templates/template-stale-precondition",
+        "PATCH",
+        {
+          schedule: {
+            enabled: true,
+            cron: "0 9 * * *",
+            timezone: "UTC"
+          }
+        },
+        { ifMatch: "2026-01-01T00:00:00.000Z" }
+      ),
+      { params: Promise.resolve({ id: "template-stale-precondition" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(412);
+    expect(payload.error).toContain("changed before this action was applied");
+  });
+
+  it("requires an If-Match precondition when deleting templates", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveTemplate(
+      GoalTemplateSchema.parse({
+        id: "template-delete-precondition",
+        userId: SYSTEM_USER_ID,
+        name: "Delete precondition",
+        description: "",
+        request: "Review the inbox.",
+        parameters: {},
+        schedule: {
+          enabled: false,
+          cron: "",
+          timezone: "UTC",
+          lastRunAt: null,
+          nextRunAt: null
+        },
+        actorContext: null,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await deleteTemplateRoute(
+      buildAuthorizedDeleteRequest("http://localhost/api/templates/template-delete-precondition"),
+      { params: Promise.resolve({ id: "template-delete-precondition" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(428);
+    expect(payload.error).toContain("If-Match");
   });
 });

@@ -10,9 +10,8 @@ import {
   withApiTelemetry
 } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
+import { parseIdempotencyKey } from "../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../lib/server";
-
-const GOAL_IDEMPOTENCY_KEY_HEADER = "x-idempotency-key";
 
 const GoalRequestSchema = z
   .object({
@@ -29,20 +28,6 @@ async function resolveActiveWorkspaceContext(userId: string) {
     repository,
     workspaceId: dashboard.activeWorkspace?.id ?? null
   };
-}
-
-function parseGoalIdempotencyKey(request: Request): string | null {
-  const candidate = request.headers.get(GOAL_IDEMPOTENCY_KEY_HEADER)?.trim() ?? "";
-
-  if (!candidate) {
-    return null;
-  }
-
-  if (!/^[A-Za-z0-9:_-]{1,200}$/u.test(candidate)) {
-    throw new ApiRouteError(400, `${GOAL_IDEMPOTENCY_KEY_HEADER} must be 1-200 URL-safe characters.`);
-  }
-
-  return candidate;
 }
 
 export async function GET(request: Request) {
@@ -75,7 +60,7 @@ export async function POST(request: Request) {
         workspaceId,
         agentId: body.agentId ?? null,
         actorContext,
-        idempotencyKey: parseGoalIdempotencyKey(request)
+        idempotencyKey: parseIdempotencyKey(request)
       });
       return authenticatedJson(
         {

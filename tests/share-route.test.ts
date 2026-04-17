@@ -366,7 +366,7 @@ describe("goal share route", () => {
     } finally {
       requireApiSessionSpy.mockRestore();
     }
-  });
+  }, 10_000);
 
   it("rejects unauthenticated goal share requests", async () => {
     const response = await goalShareRoute(

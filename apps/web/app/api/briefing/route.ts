@@ -1,10 +1,17 @@
+import crypto from "node:crypto";
 import { z } from "zod";
 import { BriefingTypeSchema } from "@agentic/contracts";
-import { captureMemoriesFromBundle, generateBriefing } from "@agentic/orchestrator";
+import { enqueueBriefingCreateJob } from "@agentic/worker-runtime";
 import { requireApiSession } from "../../../lib/auth";
-import { ApiRouteError, authenticatedJson, handleApiError } from "../../../lib/api-response";
+import {
+  ApiRouteError,
+  authenticatedJson,
+  handleApiError,
+  withApiTelemetry
+} from "../../../lib/api-response";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
-import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../lib/server";
+import { parseIdempotencyKey } from "../../../lib/request-idempotency";
+import { getSeededRepository } from "../../../lib/server";
 
 const BriefingRequestSchema = z
   .object({
@@ -51,61 +58,42 @@ async function resolveActiveWorkspaceContext(userId: string) {
 }
 
 export async function POST(request: Request) {
-  try {
-    const principal = await requireApiSession(request);
-    const actorContext = createActorContextFromPrincipal(principal);
-    const { repository, workspaceId, workspaceGovernance } = await resolveActiveWorkspaceContext(principal.userId);
-    const body = await parseBriefingRequest(request);
+  return withApiTelemetry(request, "api.briefing.create", async () => {
+    try {
+      const principal = await requireApiSession(request);
+      const actorContext = createActorContextFromPrincipal(principal);
+      const { repository, workspaceId } = await resolveActiveWorkspaceContext(principal.userId);
+      const body = await parseBriefingRequest(request);
+      const job = await enqueueBriefingCreateJob({
+        repository,
+        userId: principal.userId,
+        goalId: crypto.randomUUID(),
+        workflowId: crypto.randomUUID(),
+        briefingType: body.type,
+        workspaceId,
+        actorContext,
+        idempotencyKey: parseIdempotencyKey(request)
+      });
 
-    const [preferences, memories, integrations, allApprovals, watchers] = await Promise.all([
-      repository.getBriefingPreferences(principal.userId),
-      repository.listMemory(principal.userId),
-      repository.listIntegrations(principal.userId),
-      repository.listApprovals(principal.userId),
-      repository.listWatchers({ userId: principal.userId })
-    ]);
-
-    const pendingApprovals = allApprovals.filter((approval) => approval.decision === "pending");
-    const activeWatchers = watchers.filter((watcher) => watcher.status === "active");
-
-    const bundle = await generateBriefing({
-      type: body.type,
-      userId: principal.userId,
-      workspaceId,
-      governance: workspaceGovernance,
-      memories,
-      integrations,
-      pendingApprovals,
-      activeWatchers,
-      preferences,
-      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", principal.userId)
-    });
-
-    await repository.saveGoalBundle(bundle);
-
-    if (bundle.goal.status === "completed") {
-      try {
-        const captured = captureMemoriesFromBundle(bundle, principal.userId, actorContext);
-        const selfImprovement = await getSeededSelfImprovementRepository();
-
-        await Promise.all([
-          ...captured.memories.map((memory) => repository.saveMemory(memory)),
-          ...captured.episodes.map((episode) => selfImprovement.appendEpisode(episode))
-        ]);
-
-        console.log(
-          `[auto-capture] Briefing "${bundle.goal.id}" completed — persisted ${captured.memories.length} memory record(s) and ${captured.episodes.length} episode(s).`
-        );
-      } catch (captureError) {
-        console.error("[auto-capture] Failed to persist captured memories after briefing:", captureError);
-      }
+      return authenticatedJson(
+        {
+          job: {
+            id: job.id,
+            kind: job.kind,
+            status: job.status,
+            goalId: job.payload.goalId,
+            briefingType: job.payload.briefingType,
+            attemptCount: job.attemptCount,
+            maxAttempts: job.maxAttempts,
+            createdAt: job.createdAt,
+            updatedAt: job.updatedAt
+          },
+          statusUrl: `/api/briefing/jobs/${job.id}`
+        },
+        { status: 202 }
+      );
+    } catch (error) {
+      return handleApiError(error, "Failed to generate briefing.");
     }
-
-    return authenticatedJson({
-      bundle,
-      dashboard: await repository.getDashboardData(principal.userId)
-    });
-  } catch (error) {
-    return handleApiError(error, "Failed to generate briefing.");
-  }
+  });
 }

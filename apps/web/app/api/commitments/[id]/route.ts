@@ -3,6 +3,7 @@ import { CommitmentSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
+import { requireUpdatedAtPrecondition } from "../../../../lib/mutation-preconditions";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { getSeededRepository } from "../../../../lib/server";
 
@@ -28,6 +29,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (!existing) {
       throw new ApiRouteError(404, `Commitment ${commitmentId} was not found.`);
     }
+
+    requireUpdatedAtPrecondition(request, existing.updatedAt);
 
     if (body.action === "reopen") {
       await repository.deleteCommitment(commitmentId, principal.userId);

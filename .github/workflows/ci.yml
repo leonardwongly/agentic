@@ -51,6 +51,12 @@ jobs:
       - name: Validate feature capability contracts
         run: npm run test:smoke:capabilities
 
+      - name: Validate architecture fitness
+        run: npm run test:architecture:fitness
+
+      - name: Validate performance fitness
+        run: npm run test:performance:fitness
+
       - name: Run async execution smoke
         run: npm run test:smoke:observability
 

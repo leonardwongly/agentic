@@ -43,12 +43,13 @@ describe("commitments route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
-  function buildPatchRequest(commitmentId: string, body: unknown) {
+  function buildPatchRequest(commitmentId: string, updatedAt: string | null, body: unknown) {
     return new Request(`http://localhost/api/commitments/${commitmentId}`, {
       method: "PATCH",
       headers: {
         "content-type": "application/json",
-        [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+        ...(updatedAt ? { "if-match": `"${updatedAt}"` } : {})
       },
       body: JSON.stringify(body)
     });
@@ -155,9 +156,12 @@ describe("commitments route", () => {
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const response = await commitmentUpdateRoute(buildPatchRequest(commitment!.id, { action: "complete" }), {
+    const response = await commitmentUpdateRoute(
+      buildPatchRequest(commitment!.id, commitment!.updatedAt, { action: "complete" }),
+      {
       params: Promise.resolve({ id: commitment!.id })
-    });
+      }
+    );
     const payload = (await response.json()) as {
       commitment: { id: string; status: string; actorContext: unknown };
       dashboard: { commitments: Array<{ id: string; status: string }> };
@@ -199,16 +203,20 @@ describe("commitments route", () => {
 
     expect(commitment).toBeDefined();
 
+    const reopenedOverrideUpdatedAt = new Date().toISOString();
     await repository.saveCommitment({
       ...commitment!,
       status: "completed",
-      updatedAt: new Date().toISOString()
+      updatedAt: reopenedOverrideUpdatedAt
     });
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const response = await commitmentUpdateRoute(buildPatchRequest(commitment!.id, { action: "reopen" }), {
+    const response = await commitmentUpdateRoute(
+      buildPatchRequest(commitment!.id, reopenedOverrideUpdatedAt, { action: "reopen" }),
+      {
       params: Promise.resolve({ id: commitment!.id })
-    });
+      }
+    );
     const payload = (await response.json()) as {
       commitment: { id: string; status: string } | null;
       dashboard: { commitments: Array<{ id: string; status: string }> };
@@ -262,12 +270,67 @@ describe("commitments route", () => {
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const response = await commitmentUpdateRoute(buildPatchRequest("commitment-secondary-only", { action: "dismiss" }), {
+    const response = await commitmentUpdateRoute(
+      buildPatchRequest("commitment-secondary-only", "2026-04-16T00:00:00.000Z", { action: "dismiss" }),
+      {
       params: Promise.resolve({ id: "commitment-secondary-only" })
-    });
+      }
+    );
     const payload = (await response.json()) as { error?: string };
 
     expect(response.status).toBe(404);
     expect(payload.error).toContain("Commitment commitment-secondary-only was not found.");
+  });
+
+  it("rejects commitment updates without an If-Match precondition", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const initialDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const commitment = initialDashboard.commitments.find((candidate) => candidate.goalId === bundle.goal.id);
+
+    expect(commitment).toBeDefined();
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await commitmentUpdateRoute(
+      buildPatchRequest(commitment!.id, null, { action: "complete" }),
+      {
+        params: Promise.resolve({ id: commitment!.id })
+      }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(428);
+    expect(payload.error).toContain("If-Match");
+  });
+
+  it("rejects stale commitment update preconditions", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const initialDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const commitment = initialDashboard.commitments.find((candidate) => candidate.goalId === bundle.goal.id);
+
+    expect(commitment).toBeDefined();
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await commitmentUpdateRoute(
+      buildPatchRequest(commitment!.id, "2026-01-01T00:00:00.000Z", { action: "complete" }),
+      {
+        params: Promise.resolve({ id: commitment!.id })
+      }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(412);
+    expect(payload.error).toContain("changed before this action was applied");
   });
 });

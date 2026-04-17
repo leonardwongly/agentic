@@ -59,7 +59,7 @@ export const autopilotEventStatusValues = ["pending", "simulated", "notified", "
 export const goalShareStatusValues = ["active", "revoked"] as const;
 export const privacyOperationKindValues = ["retention_enforcement", "workspace_export", "workspace_delete"] as const;
 export const privacyOperationStatusValues = ["queued", "running", "completed", "failed"] as const;
-export const jobKindValues = ["goal_create", "autopilot_process", "privacy_operation"] as const;
+export const jobKindValues = ["goal_create", "briefing_create", "autopilot_process", "privacy_operation"] as const;
 export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
 export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
@@ -655,6 +655,17 @@ export const GoalCreateJobPayloadSchema = z
   })
   .strict();
 
+export const BriefingCreateJobPayloadSchema = z
+  .object({
+    type: z.literal("briefing_create"),
+    goalId: z.string().min(1),
+    workflowId: z.string().min(1),
+    briefingType: BriefingTypeSchema,
+    workspaceId: z.string().min(1).nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
 export const AutopilotProcessJobPayloadSchema = z
   .object({
     type: z.literal("autopilot_process"),
@@ -678,6 +689,7 @@ export const PrivacyOperationJobPayloadSchema = z
 
 export const JobPayloadSchema = z.discriminatedUnion("type", [
   GoalCreateJobPayloadSchema,
+  BriefingCreateJobPayloadSchema,
   AutopilotProcessJobPayloadSchema,
   PrivacyOperationJobPayloadSchema
 ]);
@@ -710,6 +722,14 @@ export const JobRecordSchema = z
         code: z.ZodIssueCode.custom,
         path: ["payload", "type"],
         message: 'Goal-create jobs must carry a "goal_create" payload.'
+      });
+    }
+
+    if (value.kind === "briefing_create" && value.payload.type !== "briefing_create") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'Briefing-create jobs must carry a "briefing_create" payload.'
       });
     }
 
@@ -1491,6 +1511,7 @@ export type BriefingHistoryItem = z.infer<typeof BriefingHistoryItemSchema>;
 export type AutopilotSettings = z.infer<typeof AutopilotSettingsSchema>;
 export type AutopilotEvent = z.infer<typeof AutopilotEventSchema>;
 export type GoalCreateJobPayload = z.infer<typeof GoalCreateJobPayloadSchema>;
+export type BriefingCreateJobPayload = z.infer<typeof BriefingCreateJobPayloadSchema>;
 export type AutopilotProcessJobPayload = z.infer<typeof AutopilotProcessJobPayloadSchema>;
 export type PrivacyOperationJobPayload = z.infer<typeof PrivacyOperationJobPayloadSchema>;
 export type JobPayload = z.infer<typeof JobPayloadSchema>;

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   createSystemActorContext,
+  type BriefingCreateJobPayload,
   GoalTemplateSchema,
   nowIso,
   type ActorContext,
@@ -46,7 +47,7 @@ import {
   type SelfImprovementRepository
 } from "@agentic/self-improvement-memory";
 
-export const workerJobKindValues = ["goal_create", "autopilot_process", "privacy_operation"] as const;
+export const workerJobKindValues = ["goal_create", "briefing_create", "autopilot_process", "privacy_operation"] as const;
 
 export type GoalJobResultSummary = {
   goalId: string;
@@ -109,6 +110,22 @@ function buildAutopilotProcessPayload(params: {
   };
 }
 
+function buildBriefingCreatePayload(params: {
+  goalId: string;
+  workflowId: string;
+  briefingType: BriefingType;
+  workspaceId: string | null;
+}): BriefingCreateJobPayload {
+  return {
+    type: "briefing_create",
+    goalId: params.goalId,
+    workflowId: params.workflowId,
+    briefingType: params.briefingType,
+    workspaceId: params.workspaceId,
+    metadata: {}
+  };
+}
+
 function buildAutopilotGoalId(eventId: string): string {
   return `autopilot-goal-${eventId}`;
 }
@@ -137,6 +154,10 @@ function buildPrivacyOperationPayload(params: {
 
 function buildPrivacyOperationJobIdempotencyKey(operationId: string): string {
   return `privacy-operation:${operationId}`;
+}
+
+function buildBriefingCreateJobIdempotencyKey(goalId: string, briefingType: BriefingType): string {
+  return `briefing-create:${briefingType}:${goalId}`;
 }
 
 async function resolveGoalCreateGovernance(
@@ -530,6 +551,12 @@ export function isGoalCreateJob(job: JobRecord | null): job is JobRecord & { pay
   return job?.kind === "goal_create" && job.payload.type === "goal_create";
 }
 
+export function isBriefingCreateJob(
+  job: JobRecord | null
+): job is JobRecord & { payload: BriefingCreateJobPayload } {
+  return job?.kind === "briefing_create" && job.payload.type === "briefing_create";
+}
+
 export function isAutopilotProcessJob(
   job: JobRecord | null
 ): job is JobRecord & { payload: AutopilotProcessJobPayload } {
@@ -579,6 +606,57 @@ export async function enqueueGoalCreateJob(params: {
         jobKind: job.kind,
         userId: job.userId,
         workspaceId: params.workspaceId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
+}
+
+export async function enqueueBriefingCreateJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  goalId: string;
+  workflowId: string;
+  briefingType: BriefingType;
+  workspaceId: string | null;
+  actorContext: ActorContext | null;
+  idempotencyKey?: string | null;
+}): Promise<JobRecord & { payload: BriefingCreateJobPayload }> {
+  const payload = buildBriefingCreatePayload({
+    goalId: params.goalId,
+    workflowId: params.workflowId,
+    briefingType: params.briefingType,
+    workspaceId: params.workspaceId
+  });
+
+  return withSpan(
+    "worker.job.enqueue.briefing_create",
+    {
+      jobKind: "briefing_create",
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      briefingType: params.briefingType
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "briefing_create",
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey:
+          params.idempotencyKey ?? buildBriefingCreateJobIdempotencyKey(params.goalId, params.briefingType),
+        maxAttempts: 3
+      })) as JobRecord & { payload: BriefingCreateJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId,
+        workspaceId: params.workspaceId,
+        briefingType: params.briefingType
       });
       recordCounter("worker.job.enqueued.total", 1, {
         jobKind: job.kind
@@ -697,6 +775,53 @@ export async function executeGoalCreateJob(params: {
     memories,
     integrations,
     agentDefinition,
+    goalId: job.payload.goalId,
+    workflowId: job.payload.workflowId,
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId)
+  });
+
+  await repository.saveGoalBundle(bundle);
+  await persistCapturedMemories({
+    repository,
+    selfImprovementRepository: params.selfImprovementRepository,
+    userId: job.userId,
+    actorContext: job.actorContext,
+    jobId: job.id,
+    bundle
+  });
+}
+
+export async function executeBriefingCreateJob(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  job: JobRecord;
+}) {
+  const { job, repository } = params;
+
+  if (!isBriefingCreateJob(job)) {
+    throw new Error(`Expected a briefing_create payload for job ${job.id}.`);
+  }
+
+  const governance = job.payload.workspaceId
+    ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
+    : null;
+  const [preferences, memories, integrations, approvals, watchers] = await Promise.all([
+    repository.getBriefingPreferences(job.userId),
+    repository.listMemory(job.userId),
+    repository.listIntegrations(job.userId),
+    repository.listApprovals(job.userId),
+    repository.listWatchers({ userId: job.userId })
+  ]);
+  const bundle = await generateBriefing({
+    type: job.payload.briefingType,
+    userId: job.userId,
+    workspaceId: job.payload.workspaceId,
+    governance,
+    preferences,
+    memories,
+    integrations,
+    pendingApprovals: approvals.filter((approval) => approval.decision === "pending"),
+    activeWatchers: watchers.filter((watcher) => watcher.status === "active"),
     goalId: job.payload.goalId,
     workflowId: job.payload.workflowId,
     resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId)
@@ -979,6 +1104,12 @@ export function createWorkerJobHandlers(params: {
   return {
     goal_create: wrapHandler("goal_create", (job) =>
       executeGoalCreateJob({
+        repository: params.repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        job
+      })),
+    briefing_create: wrapHandler("briefing_create", (job) =>
+      executeBriefingCreateJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
         job
