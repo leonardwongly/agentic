@@ -1,4 +1,4 @@
-import { getDatabaseSchemaStatus } from "@agentic/db";
+import { getDatabaseSchemaStatus } from "@agentic/db/migration-runtime";
 
 function requiresReadyStatus(args: string[]): boolean {
   return args.includes("--require-ready");
@@ -20,4 +20,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : "Database status check failed.");
   process.exitCode = 1;
 });
-

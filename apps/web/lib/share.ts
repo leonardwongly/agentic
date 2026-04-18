@@ -6,7 +6,7 @@ import { getServerSigningSecret } from "./auth";
 
 const GOAL_SHARE_TOKEN_VERSION = 1;
 const GOAL_SHARE_TTL_MS = 1000 * 60 * 60 * 24 * 7;
-const SHARE_VIEW_DEDUP_WINDOW_MS = 1000 * 60 * 15;
+export const SHARE_VIEW_DEDUP_WINDOW_MS = 1000 * 60 * 15;
 const MAX_GOAL_SHARE_TOKEN_LENGTH = 4096;
 
 const GoalShareTokenPayloadSchema = z
@@ -141,8 +141,12 @@ export function createGoalShareCreatedLog(
   });
 }
 
-export function createGoalShareViewedLog(bundle: GoalBundle, shareId: string, token: string, now = Date.now()) {
-  const tokenFingerprint = fingerprintGoalShareToken(token);
+export function createGoalShareViewedLogFromFingerprint(
+  bundle: GoalBundle,
+  shareId: string,
+  tokenFingerprint: string,
+  now = Date.now()
+) {
   const dedupeThreshold = now - SHARE_VIEW_DEDUP_WINDOW_MS;
   const alreadyTracked = bundle.actionLogs.some((log) => {
     if (log.kind !== "share.page_viewed") {
@@ -171,6 +175,10 @@ export function createGoalShareViewedLog(bundle: GoalBundle, shareId: string, to
       tokenFingerprint
     }
   });
+}
+
+export function createGoalShareViewedLog(bundle: GoalBundle, shareId: string, token: string, now = Date.now()) {
+  return createGoalShareViewedLogFromFingerprint(bundle, shareId, fingerprintGoalShareToken(token), now);
 }
 
 export function createGoalShareRevokedLog(

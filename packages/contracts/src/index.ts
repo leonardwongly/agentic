@@ -59,7 +59,7 @@ export const autopilotEventStatusValues = ["pending", "simulated", "notified", "
 export const goalShareStatusValues = ["active", "revoked"] as const;
 export const privacyOperationKindValues = ["retention_enforcement", "workspace_export", "workspace_delete"] as const;
 export const privacyOperationStatusValues = ["queued", "running", "completed", "failed"] as const;
-export const jobKindValues = ["goal_create", "briefing_create", "autopilot_process", "privacy_operation"] as const;
+export const jobKindValues = ["goal_create", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
 export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
 export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
@@ -666,6 +666,24 @@ export const BriefingCreateJobPayloadSchema = z
   })
   .strict();
 
+export const TemplateRunJobPayloadSchema = z
+  .object({
+    type: z.literal("template_run"),
+    templateId: z.string().min(1),
+    goalId: z.string().min(1),
+    workflowId: z.string().min(1),
+    workspaceId: z.string().min(1).nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
+export const DocsRenderJobPayloadSchema = z
+  .object({
+    type: z.literal("docs_render"),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
 export const AutopilotProcessJobPayloadSchema = z
   .object({
     type: z.literal("autopilot_process"),
@@ -687,11 +705,25 @@ export const PrivacyOperationJobPayloadSchema = z
   })
   .strict();
 
+export const PublicShareViewJobPayloadSchema = z
+  .object({
+    type: z.literal("public_share_view"),
+    shareId: z.string().min(1),
+    goalId: z.string().min(1),
+    tokenFingerprint: z.string().regex(/^[a-f0-9]{12}$/u),
+    viewedAt: z.string().datetime(),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
 export const JobPayloadSchema = z.discriminatedUnion("type", [
   GoalCreateJobPayloadSchema,
   BriefingCreateJobPayloadSchema,
+  TemplateRunJobPayloadSchema,
+  DocsRenderJobPayloadSchema,
   AutopilotProcessJobPayloadSchema,
-  PrivacyOperationJobPayloadSchema
+  PrivacyOperationJobPayloadSchema,
+  PublicShareViewJobPayloadSchema
 ]);
 
 export const JobRecordSchema = z
@@ -733,6 +765,22 @@ export const JobRecordSchema = z
       });
     }
 
+    if (value.kind === "template_run" && value.payload.type !== "template_run") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'Template-run jobs must carry a "template_run" payload.'
+      });
+    }
+
+    if (value.kind === "docs_render" && value.payload.type !== "docs_render") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'Docs-render jobs must carry a "docs_render" payload.'
+      });
+    }
+
     if (value.kind === "autopilot_process" && value.payload.type !== "autopilot_process") {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -746,6 +794,14 @@ export const JobRecordSchema = z
         code: z.ZodIssueCode.custom,
         path: ["payload", "type"],
         message: 'Privacy-operation jobs must carry a "privacy_operation" payload.'
+      });
+    }
+
+    if (value.kind === "public_share_view" && value.payload.type !== "public_share_view") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'Public-share-view jobs must carry a "public_share_view" payload.'
       });
     }
 
@@ -1512,8 +1568,11 @@ export type AutopilotSettings = z.infer<typeof AutopilotSettingsSchema>;
 export type AutopilotEvent = z.infer<typeof AutopilotEventSchema>;
 export type GoalCreateJobPayload = z.infer<typeof GoalCreateJobPayloadSchema>;
 export type BriefingCreateJobPayload = z.infer<typeof BriefingCreateJobPayloadSchema>;
+export type TemplateRunJobPayload = z.infer<typeof TemplateRunJobPayloadSchema>;
+export type DocsRenderJobPayload = z.infer<typeof DocsRenderJobPayloadSchema>;
 export type AutopilotProcessJobPayload = z.infer<typeof AutopilotProcessJobPayloadSchema>;
 export type PrivacyOperationJobPayload = z.infer<typeof PrivacyOperationJobPayloadSchema>;
+export type PublicShareViewJobPayload = z.infer<typeof PublicShareViewJobPayloadSchema>;
 export type JobPayload = z.infer<typeof JobPayloadSchema>;
 export type JobRecord = z.infer<typeof JobRecordSchema>;
 export type WatcherFrequency = z.infer<typeof WatcherFrequencySchema>;

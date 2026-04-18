@@ -1,3 +1,4 @@
+import { assertDatabaseSchemaReady } from "@agentic/db/migration-runtime";
 import { prepareDefaultIntegrations } from "@agentic/integrations";
 import { logError, logInfo, withTelemetryContext } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
@@ -20,7 +21,18 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+async function ensureWorkerRepositoryReady(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+
+  if (!databaseUrl) {
+    return;
+  }
+
+  await assertDatabaseSchemaReady({ databaseUrl });
+}
+
 async function main() {
+  await ensureWorkerRepositoryReady();
   const repository = createRepository();
   const selfImprovementRepository = createSelfImprovementRepository();
   const controller = new AbortController();

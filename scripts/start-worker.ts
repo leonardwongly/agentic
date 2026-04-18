@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { assertDatabaseSchemaReady } from "@agentic/db";
+import { assertDatabaseSchemaReady } from "@agentic/db/migration-runtime";
 
 async function main() {
   await assertDatabaseSchemaReady({
@@ -27,4 +27,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : "Worker startup validation failed.");
   process.exitCode = 1;
 });
-

@@ -20,12 +20,20 @@ function assertFileExists(relativePath: string, message: string) {
 function main() {
   const goalsRoutePath = "apps/web/app/api/goals/route.ts";
   const briefingRoutePath = "apps/web/app/api/briefing/route.ts";
+  const templateRunRoutePath = "apps/web/app/api/templates/[id]/run/route.ts";
+  const docsRenderRoutePath = "apps/web/app/api/docs/render/route.ts";
+  const publicShareViewRoutePath = "apps/web/app/api/share/view/route.ts";
   const dashboardPath = "apps/web/components/dashboard.tsx";
   const goalsStatusRoutePath = "apps/web/app/api/goals/jobs/[id]/route.ts";
   const briefingStatusRoutePath = "apps/web/app/api/briefing/jobs/[id]/route.ts";
+  const templateRunStatusRoutePath = "apps/web/app/api/templates/jobs/[id]/route.ts";
+  const docsRenderStatusRoutePath = "apps/web/app/api/docs/jobs/[id]/route.ts";
 
   const goalsRoute = readRepoFile(goalsRoutePath);
   const briefingRoute = readRepoFile(briefingRoutePath);
+  const templateRunRoute = readRepoFile(templateRunRoutePath);
+  const docsRenderRoute = readRepoFile(docsRenderRoutePath);
+  const publicShareViewRoute = readRepoFile(publicShareViewRoutePath);
   const dashboard = readRepoFile(dashboardPath);
 
   assertContains(
@@ -50,6 +58,38 @@ function main() {
     `${briefingRoutePath} must return a briefing status route for queued work.`
   );
 
+  assertContains(
+    templateRunRoute,
+    "idempotencyKey: parseIdempotencyKey(request)",
+    `${templateRunRoutePath} must parse and pass idempotency keys for template execution.`
+  );
+  assertContains(
+    templateRunRoute,
+    "statusUrl: `/api/templates/jobs/${job.id}`",
+    `${templateRunRoutePath} must return a template status route for queued work.`
+  );
+  assertContains(
+    docsRenderRoute,
+    "idempotencyKey: parseIdempotencyKey(request)",
+    `${docsRenderRoutePath} must parse and pass idempotency keys for docs rendering.`
+  );
+  assertContains(
+    docsRenderRoute,
+    "statusUrl: `/api/docs/jobs/${job.id}`",
+    `${docsRenderRoutePath} must return a docs status route for queued work.`
+  );
+  assertContains(
+    publicShareViewRoute,
+    "enqueuePublicShareViewJob",
+    `${publicShareViewRoutePath} must enqueue public share tracking instead of writing inline state.`
+  );
+  if (publicShareViewRoute.includes("repository.saveGoalShare(")) {
+    throw new Error(`${publicShareViewRoutePath} must not persist share state on the anonymous request path.`);
+  }
+  if (publicShareViewRoute.includes("repository.saveGoalBundle(")) {
+    throw new Error(`${publicShareViewRoutePath} must not append share activity logs on the anonymous request path.`);
+  }
+
   assertFileExists(
     goalsStatusRoutePath,
     `${goalsStatusRoutePath} must exist so clients can poll queued goal jobs.`
@@ -57,6 +97,14 @@ function main() {
   assertFileExists(
     briefingStatusRoutePath,
     `${briefingStatusRoutePath} must exist so clients can poll queued briefing jobs.`
+  );
+  assertFileExists(
+    templateRunStatusRoutePath,
+    `${templateRunStatusRoutePath} must exist so clients can poll queued template jobs.`
+  );
+  assertFileExists(
+    docsRenderStatusRoutePath,
+    `${docsRenderStatusRoutePath} must exist so clients can poll queued docs jobs.`
   );
 
   assertContains(
@@ -76,6 +124,16 @@ function main() {
   );
   assertContains(
     dashboard,
+    'const queued = await readJson<TemplateRunApiResponse>(',
+    `${dashboardPath} must treat template execution as a queued async flow.`
+  );
+  assertContains(
+    dashboard,
+    'const queued = await readJson<DocsRenderApiResponse>(',
+    `${dashboardPath} must treat docs rendering as a queued async flow.`
+  );
+  assertContains(
+    dashboard,
     'const settled = await pollGoalJobUntilSettled(queued.statusUrl);',
     `${dashboardPath} must poll goal job completion before refreshing dashboard data.`
   );
@@ -84,9 +142,19 @@ function main() {
     'const settled = await pollBriefingJobUntilSettled(queued.statusUrl);',
     `${dashboardPath} must poll briefing job completion before refreshing dashboard data.`
   );
+  assertContains(
+    dashboard,
+    'const settled = await pollTemplateRunJobUntilSettled(queued.statusUrl);',
+    `${dashboardPath} must poll template job completion before refreshing dashboard data.`
+  );
+  assertContains(
+    dashboard,
+    'const settled = await pollDocsRenderJobUntilSettled(queued.statusUrl);',
+    `${dashboardPath} must poll docs job completion before surfacing the build result.`
+  );
   const idempotencyHeaderCount = dashboard.match(/"x-idempotency-key": buildClientIdempotencyKey\(\)/gu)?.length ?? 0;
-  if (idempotencyHeaderCount < 2) {
-    throw new Error(`${dashboardPath} must send idempotency keys for both goal and briefing job creation.`);
+  if (idempotencyHeaderCount < 4) {
+    throw new Error(`${dashboardPath} must send idempotency keys for goal creation, briefing creation, template execution, and docs rendering.`);
   }
 
   console.log("Performance fitness checks passed.");

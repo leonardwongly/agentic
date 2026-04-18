@@ -1,6 +1,6 @@
 import { buildWebReadinessReport } from "../apps/web/lib/runtime-readiness";
 import type { AuthRuntimeStateStatus } from "../apps/web/lib/auth-runtime-state";
-import type { DatabaseSchemaStatus } from "@agentic/db";
+import type { DatabaseSchemaStatus } from "@agentic/db/schema-status";
 import type { ReadinessCheck } from "../apps/web/lib/runtime-readiness";
 
 function buildAuthRuntimeState(

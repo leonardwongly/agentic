@@ -1,7 +1,8 @@
-import { getDatabaseSchemaStatus, type DatabaseSchemaStatus } from "@agentic/db";
 import { createRepository } from "@agentic/repository";
 import { getAuthMode } from "./auth";
 import { getAuthRuntimeStateStatus, type AuthRuntimeStateStatus } from "./auth-runtime-state";
+
+type DatabaseSchemaStatus = import("@agentic/db/schema-status").DatabaseSchemaStatus;
 
 export type ReadinessCheck = {
   name: "access_key" | "database" | "auth_runtime_state" | "async_execution";
@@ -33,6 +34,13 @@ type ReadinessEvaluationParams = {
 };
 
 const DEFAULT_MAX_PENDING_JOB_AGE_MS = 15 * 60 * 1000;
+
+async function loadDatabaseSchemaStatus(options?: {
+  databaseUrl?: string;
+}): Promise<DatabaseSchemaStatus> {
+  const runtime = await import("@agentic/db/schema-status");
+  return runtime.getDatabaseSchemaStatus(options);
+}
 
 function normalizeRuntime(nodeEnv: string | undefined): WebReadinessReport["runtime"] {
   if (nodeEnv === "production") {
@@ -311,7 +319,7 @@ export async function getWebReadinessReport(): Promise<WebReadinessReport> {
     authMode: getAuthMode({ emitDevelopmentWarning: false }),
     authRuntimeState: getAuthRuntimeStateStatus(),
     databaseStatus: databaseConfigured
-      ? await getDatabaseSchemaStatus({
+      ? await loadDatabaseSchemaStatus({
           databaseUrl: process.env.DATABASE_URL
         })
       : null,

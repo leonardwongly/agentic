@@ -180,6 +180,48 @@ type BriefingJobStatusApiResponse = {
   error: string | null;
 };
 
+type TemplateRunApiResponse = {
+  job: {
+    id: string;
+    kind: "template_run";
+    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
+    templateId: string;
+    goalId: string;
+    attemptCount: number;
+    maxAttempts: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+  statusUrl: string;
+};
+
+type TemplateRunJobStatusApiResponse = {
+  job: TemplateRunApiResponse["job"];
+  result: GoalJobStatusApiResponse["result"];
+  error: string | null;
+};
+
+type DocsRenderApiResponse = {
+  job: {
+    id: string;
+    kind: "docs_render";
+    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
+    attemptCount: number;
+    maxAttempts: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+  statusUrl: string;
+};
+
+type DocsRenderJobStatusApiResponse = {
+  job: DocsRenderApiResponse["job"];
+  result: {
+    message: string;
+  } | null;
+  error: string | null;
+};
+
 const GOAL_JOB_POLL_INTERVAL_MS = 500;
 const GOAL_JOB_POLL_TIMEOUT_MS = 60_000;
 
@@ -616,6 +658,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     );
   }, []);
 
+  const loadTemplatesSnapshot = useCallback(async () => {
+    return readJson<{ templates: GoalTemplate[] }>(
+      await fetch("/api/templates", {
+        cache: "no-store"
+      })
+    );
+  }, []);
+
   const pollGoalJobUntilSettled = useCallback(async (statusUrl: string) => {
     const startedAt = Date.now();
 
@@ -641,6 +691,46 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
     while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
       const payload = await readJson<BriefingJobStatusApiResponse>(
+        await fetch(statusUrl, {
+          cache: "no-store"
+        })
+      );
+
+      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
+        return payload;
+      }
+
+      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
+    }
+
+    return null;
+  }, []);
+
+  const pollTemplateRunJobUntilSettled = useCallback(async (statusUrl: string) => {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
+      const payload = await readJson<TemplateRunJobStatusApiResponse>(
+        await fetch(statusUrl, {
+          cache: "no-store"
+        })
+      );
+
+      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
+        return payload;
+      }
+
+      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
+    }
+
+    return null;
+  }, []);
+
+  const pollDocsRenderJobUntilSettled = useCallback(async (statusUrl: string) => {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
+      const payload = await readJson<DocsRenderJobStatusApiResponse>(
         await fetch(statusUrl, {
           cache: "no-store"
         })
@@ -1454,16 +1544,31 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     setDocsState({ kind: "idle", message: "" });
 
     try {
-      const payload = await readJson<{ result: { stdout: string; stderr: string }; dashboard: DashboardData }>(
+      const queued = await readJson<DocsRenderApiResponse>(
         await fetch("/api/docs/render", {
-          method: "POST"
+          method: "POST",
+          headers: {
+            "x-idempotency-key": buildClientIdempotencyKey()
+          }
         })
       );
+      const settled = await pollDocsRenderJobUntilSettled(queued.statusUrl);
+
+      if (!settled) {
+        const timeoutMessage = "Document build queued and still processing. Refresh in a moment for the final result.";
+        setDocsState({ kind: "success", message: timeoutMessage });
+        toast.success(timeoutMessage);
+        return;
+      }
+
+      if (settled.job.status === "dead_letter") {
+        throw new Error(settled.error ?? "The document build failed.");
+      }
+
       startTransition(() => {
-        setData(payload.dashboard);
         setDocsState({
           kind: "success",
-          message: payload.result.stdout || "Rendered and validated build/agentic.docx."
+          message: settled.result?.message ?? "Rendered and validated build/agentic.docx."
         });
       });
     } catch (error) {
@@ -1731,20 +1836,45 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     setIsPending(true);
 
     try {
-      const payload = await readJson<{ bundle: unknown; dashboard: DashboardData }>(
+      const queued = await readJson<TemplateRunApiResponse>(
         await fetch(`/api/templates/${encodeURIComponent(templateId)}/run`, {
-          method: "POST"
+          method: "POST",
+          headers: {
+            "x-idempotency-key": buildClientIdempotencyKey()
+          }
         })
       );
+      const settled = await pollTemplateRunJobUntilSettled(queued.statusUrl);
+
+      if (!settled) {
+        const timeoutMessage = "Template queued and still processing. Refresh in a moment for the final bundle.";
+        setTemplateState({ kind: "success", message: timeoutMessage });
+        toast.success(timeoutMessage);
+        return;
+      }
+
+      if (settled.job.status === "dead_letter") {
+        throw new Error(settled.error ?? "Template execution failed.");
+      }
+
+      const [dashboardPayload, templatesPayload] = await Promise.all([
+        loadDashboardSnapshot(),
+        loadTemplatesSnapshot()
+      ]);
+
       startTransition(() => {
-        setData(payload.dashboard);
+        setData(dashboardPayload.dashboard);
+        setTemplates(templatesPayload.templates);
         setTemplateState({ kind: "success", message: "Template executed successfully." });
+        toast.success("Template executed successfully.");
+        statsBar.updateSync();
       });
     } catch (error) {
       setTemplateState({
         kind: "error",
         message: error instanceof Error ? error.message : "Failed to run template."
       });
+      toast.error("Action failed", error instanceof Error ? error.message : "Failed to run template.");
     } finally {
       setIsPending(false);
     }

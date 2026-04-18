@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
+import { runDocsBuild } from "@agentic/docs-runtime";
 import {
   createSystemActorContext,
   type BriefingCreateJobPayload,
+  type DocsRenderJobPayload,
   GoalTemplateSchema,
   nowIso,
   type ActorContext,
@@ -14,6 +16,8 @@ import {
   type JobKind,
   type JobRecord,
   type PrivacyOperationJobPayload,
+  type PublicShareViewJobPayload,
+  type TemplateRunJobPayload,
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
@@ -27,6 +31,7 @@ import {
   type JobRetryPolicy
 } from "@agentic/execution";
 import {
+  createActionLog,
   logError,
   logInfo,
   logWarn,
@@ -47,7 +52,7 @@ import {
   type SelfImprovementRepository
 } from "@agentic/self-improvement-memory";
 
-export const workerJobKindValues = ["goal_create", "briefing_create", "autopilot_process", "privacy_operation"] as const;
+export const workerJobKindValues = ["goal_create", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
 
 export type GoalJobResultSummary = {
   goalId: string;
@@ -79,6 +84,44 @@ export type WorkerRuntimeOptions = {
 
 class AutopilotExecutionError extends Error {
   readonly safeForUsers = true;
+}
+
+const SHARE_VIEW_DEDUP_WINDOW_MS = 1000 * 60 * 15;
+
+function createPublicShareViewedLog(
+  bundle: GoalBundle,
+  shareId: string,
+  tokenFingerprint: string,
+  now = Date.now()
+) {
+  const dedupeThreshold = now - SHARE_VIEW_DEDUP_WINDOW_MS;
+  const alreadyTracked = bundle.actionLogs.some((log) => {
+    if (log.kind !== "share.page_viewed") {
+      return false;
+    }
+
+    const createdAt = Date.parse(log.createdAt);
+    const loggedFingerprint = typeof log.details.tokenFingerprint === "string" ? log.details.tokenFingerprint : null;
+
+    return loggedFingerprint === tokenFingerprint && Number.isFinite(createdAt) && createdAt >= dedupeThreshold;
+  });
+
+  if (alreadyTracked) {
+    return null;
+  }
+
+  return createActionLog({
+    goalId: bundle.goal.id,
+    taskId: null,
+    workflowId: bundle.workflow.id,
+    actor: "public-share",
+    kind: "share.page_viewed",
+    message: `Opened the public share page for "${bundle.goal.title}".`,
+    details: {
+      shareId,
+      tokenFingerprint
+    }
+  });
 }
 
 function buildGoalCreatePayload(params: {
@@ -126,6 +169,29 @@ function buildBriefingCreatePayload(params: {
   };
 }
 
+function buildTemplateRunPayload(params: {
+  templateId: string;
+  goalId: string;
+  workflowId: string;
+  workspaceId: string | null;
+}): TemplateRunJobPayload {
+  return {
+    type: "template_run",
+    templateId: params.templateId,
+    goalId: params.goalId,
+    workflowId: params.workflowId,
+    workspaceId: params.workspaceId,
+    metadata: {}
+  };
+}
+
+function buildDocsRenderPayload(): DocsRenderJobPayload {
+  return {
+    type: "docs_render",
+    metadata: {}
+  };
+}
+
 function buildAutopilotGoalId(eventId: string): string {
   return `autopilot-goal-${eventId}`;
 }
@@ -152,12 +218,32 @@ function buildPrivacyOperationPayload(params: {
   };
 }
 
+function buildPublicShareViewPayload(params: {
+  shareId: string;
+  goalId: string;
+  tokenFingerprint: string;
+  viewedAt: string;
+}): PublicShareViewJobPayload {
+  return {
+    type: "public_share_view",
+    shareId: params.shareId,
+    goalId: params.goalId,
+    tokenFingerprint: params.tokenFingerprint,
+    viewedAt: params.viewedAt,
+    metadata: {}
+  };
+}
+
 function buildPrivacyOperationJobIdempotencyKey(operationId: string): string {
   return `privacy-operation:${operationId}`;
 }
 
 function buildBriefingCreateJobIdempotencyKey(goalId: string, briefingType: BriefingType): string {
   return `briefing-create:${briefingType}:${goalId}`;
+}
+
+function buildDocsRenderJobIdempotencyKey(userId: string): string {
+  return `docs-render:${userId}`;
 }
 
 async function resolveGoalCreateGovernance(
@@ -444,32 +530,31 @@ async function executeWatcherEvent(params: {
   return bundle;
 }
 
-async function executeTemplateEvent(params: {
+async function runTemplateExecution(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
   userId: string;
   actorContext: ActorContext | null;
   template: GoalTemplate;
-  eventId: string;
+  goalId: string;
+  workflowId: string;
+  workspaceId: string | null;
+  workspaceGovernance: WorkspaceGovernance | null;
   jobId: string;
 }) {
   const [memories, integrations] = await Promise.all([
     params.repository.listMemory(params.userId),
     params.repository.listIntegrations(params.userId)
   ]);
-  const { workspaceId, workspaceGovernance } = await resolveDashboardWorkspaceContext(
-    params.repository,
-    params.userId
-  );
   const bundle = await processUserRequest({
     userId: params.userId,
-    workspaceId,
-    governance: workspaceGovernance,
+    workspaceId: params.workspaceId,
+    governance: params.workspaceGovernance,
     request: interpolateTemplate(params.template),
     memories,
     integrations,
-    goalId: buildAutopilotGoalId(params.eventId),
-    workflowId: buildAutopilotWorkflowId(params.eventId),
+    goalId: params.goalId,
+    workflowId: params.workflowId,
     resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
   });
 
@@ -498,6 +583,33 @@ async function executeTemplateEvent(params: {
     bundle
   });
   return bundle;
+}
+
+async function executeTemplateEvent(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  userId: string;
+  actorContext: ActorContext | null;
+  template: GoalTemplate;
+  eventId: string;
+  jobId: string;
+}) {
+  const { workspaceId, workspaceGovernance } = await resolveDashboardWorkspaceContext(
+    params.repository,
+    params.userId
+  );
+  return runTemplateExecution({
+    repository: params.repository,
+    selfImprovementRepository: params.selfImprovementRepository,
+    userId: params.userId,
+    actorContext: params.actorContext,
+    template: params.template,
+    goalId: buildAutopilotGoalId(params.eventId),
+    workflowId: buildAutopilotWorkflowId(params.eventId),
+    workspaceId,
+    workspaceGovernance,
+    jobId: params.jobId
+  });
 }
 
 async function executeBriefingEvent(params: {
@@ -557,6 +669,14 @@ export function isBriefingCreateJob(
   return job?.kind === "briefing_create" && job.payload.type === "briefing_create";
 }
 
+export function isTemplateRunJob(job: JobRecord | null): job is JobRecord & { payload: TemplateRunJobPayload } {
+  return job?.kind === "template_run" && job.payload.type === "template_run";
+}
+
+export function isDocsRenderJob(job: JobRecord | null): job is JobRecord & { payload: DocsRenderJobPayload } {
+  return job?.kind === "docs_render" && job.payload.type === "docs_render";
+}
+
 export function isAutopilotProcessJob(
   job: JobRecord | null
 ): job is JobRecord & { payload: AutopilotProcessJobPayload } {
@@ -567,6 +687,12 @@ export function isPrivacyOperationJob(
   job: JobRecord | null
 ): job is JobRecord & { payload: PrivacyOperationJobPayload } {
   return job?.kind === "privacy_operation" && job.payload.type === "privacy_operation";
+}
+
+export function isPublicShareViewJob(
+  job: JobRecord | null
+): job is JobRecord & { payload: PublicShareViewJobPayload } {
+  return job?.kind === "public_share_view" && job.payload.type === "public_share_view";
 }
 
 export async function enqueueGoalCreateJob(params: {
@@ -666,6 +792,93 @@ export async function enqueueBriefingCreateJob(params: {
   );
 }
 
+export async function enqueueTemplateRunJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  templateId: string;
+  goalId: string;
+  workflowId: string;
+  workspaceId: string | null;
+  actorContext: ActorContext | null;
+  idempotencyKey?: string | null;
+}): Promise<JobRecord & { payload: TemplateRunJobPayload }> {
+  const payload = buildTemplateRunPayload({
+    templateId: params.templateId,
+    goalId: params.goalId,
+    workflowId: params.workflowId,
+    workspaceId: params.workspaceId
+  });
+
+  return withSpan(
+    "worker.job.enqueue.template_run",
+    {
+      jobKind: "template_run",
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      templateId: params.templateId
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "template_run",
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey: params.idempotencyKey ?? null,
+        maxAttempts: 3
+      })) as JobRecord & { payload: TemplateRunJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId,
+        workspaceId: params.workspaceId,
+        templateId: params.templateId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
+}
+
+export async function enqueueDocsRenderJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  actorContext: ActorContext | null;
+  idempotencyKey?: string | null;
+}): Promise<JobRecord & { payload: DocsRenderJobPayload }> {
+  const payload = buildDocsRenderPayload();
+
+  return withSpan(
+    "worker.job.enqueue.docs_render",
+    {
+      jobKind: "docs_render",
+      userId: params.userId
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "docs_render",
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey: params.idempotencyKey ?? buildDocsRenderJobIdempotencyKey(params.userId),
+        maxAttempts: 3
+      })) as JobRecord & { payload: DocsRenderJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
+}
+
 export async function enqueueAutopilotProcessJob(params: {
   repository: AgenticRepository;
   autopilotEvent: AutopilotEvent;
@@ -741,6 +954,56 @@ export async function enqueuePrivacyOperationJob(params: {
         jobKind: job.kind,
         userId: job.userId,
         workspaceId: params.operation.workspaceId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
+}
+
+export async function enqueuePublicShareViewJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  shareId: string;
+  goalId: string;
+  tokenFingerprint: string;
+  viewedAt: string;
+  actorContext: ActorContext | null;
+  idempotencyKey: string;
+}): Promise<JobRecord & { payload: PublicShareViewJobPayload }> {
+  const payload = buildPublicShareViewPayload({
+    shareId: params.shareId,
+    goalId: params.goalId,
+    tokenFingerprint: params.tokenFingerprint,
+    viewedAt: params.viewedAt
+  });
+
+  return withSpan(
+    "worker.job.enqueue.public_share_view",
+    {
+      jobKind: "public_share_view",
+      userId: params.userId,
+      goalId: params.goalId,
+      shareId: params.shareId
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "public_share_view",
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey: params.idempotencyKey,
+        maxAttempts: 3
+      })) as JobRecord & { payload: PublicShareViewJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId,
+        goalId: params.goalId,
+        shareId: params.shareId
       });
       recordCounter("worker.job.enqueued.total", 1, {
         jobKind: job.kind
@@ -836,6 +1099,51 @@ export async function executeBriefingCreateJob(params: {
     jobId: job.id,
     bundle
   });
+}
+
+export async function executeTemplateRunJob(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  job: JobRecord;
+}) {
+  const { job, repository } = params;
+
+  if (!isTemplateRunJob(job)) {
+    throw new Error(`Expected a template_run payload for job ${job.id}.`);
+  }
+
+  const templates = await repository.listTemplates(job.userId);
+  const template = templates.find((candidate) => candidate.id === job.payload.templateId);
+
+  if (!template) {
+    throw new Error(`Template ${job.payload.templateId} was not found.`);
+  }
+
+  await runTemplateExecution({
+    repository,
+    selfImprovementRepository: params.selfImprovementRepository,
+    userId: job.userId,
+    actorContext: job.actorContext,
+    template,
+    goalId: job.payload.goalId,
+    workflowId: job.payload.workflowId,
+    workspaceId: job.payload.workspaceId,
+    workspaceGovernance:
+      job.payload.workspaceId ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId) : null,
+    jobId: job.id
+  });
+}
+
+export async function executeDocsRenderJob(params: {
+  job: JobRecord;
+}) {
+  const { job } = params;
+
+  if (!isDocsRenderJob(job)) {
+    throw new Error(`Expected a docs_render payload for job ${job.id}.`);
+  }
+
+  await runDocsBuild();
 }
 
 export async function executeAutopilotProcessJob(params: {
@@ -1039,6 +1347,79 @@ export async function executePrivacyOperationJob(params: {
   }
 }
 
+function shouldAdvanceLastViewedAt(current: string | null, candidate: string): boolean {
+  if (!current) {
+    return true;
+  }
+
+  const currentTimestamp = Date.parse(current);
+  const candidateTimestamp = Date.parse(candidate);
+
+  if (!Number.isFinite(currentTimestamp) || !Number.isFinite(candidateTimestamp)) {
+    return true;
+  }
+
+  return candidateTimestamp >= currentTimestamp;
+}
+
+export async function executePublicShareViewJob(params: {
+  repository: AgenticRepository;
+  job: JobRecord;
+}) {
+  const { job, repository } = params;
+
+  if (!isPublicShareViewJob(job)) {
+    throw new Error(`Expected a public_share_view payload for job ${job.id}.`);
+  }
+
+  const share = await repository.getGoalShare(job.payload.shareId, job.userId);
+
+  if (!share || share.goalId !== job.payload.goalId || share.status !== "active" || Date.parse(share.expiresAt) <= Date.now()) {
+    return;
+  }
+
+  const bundle = await repository.getGoalBundle(job.payload.goalId);
+
+  if (!bundle) {
+    return;
+  }
+
+  const viewedLog = createPublicShareViewedLog(
+    bundle,
+    job.payload.shareId,
+    job.payload.tokenFingerprint,
+    Date.parse(job.payload.viewedAt)
+  );
+  const shouldUpdateShare = shouldAdvanceLastViewedAt(share.lastViewedAt, job.payload.viewedAt);
+
+  if (!viewedLog && !shouldUpdateShare) {
+    return;
+  }
+
+  const writes: Array<Promise<unknown>> = [];
+
+  if (shouldUpdateShare) {
+    writes.push(
+      repository.saveGoalShare({
+        ...share,
+        lastViewedAt: job.payload.viewedAt,
+        updatedAt: nowIso()
+      })
+    );
+  }
+
+  if (viewedLog) {
+    writes.push(
+      repository.saveGoalBundle({
+        ...bundle,
+        actionLogs: [...bundle.actionLogs, viewedLog]
+      })
+    );
+  }
+
+  await Promise.all(writes);
+}
+
 export function createWorkerJobHandlers(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
@@ -1107,11 +1488,21 @@ export function createWorkerJobHandlers(params: {
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
         job
-      })),
+    })),
     briefing_create: wrapHandler("briefing_create", (job) =>
       executeBriefingCreateJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
+        job
+      })),
+    template_run: wrapHandler("template_run", (job) =>
+      executeTemplateRunJob({
+        repository: params.repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        job
+      })),
+    docs_render: wrapHandler("docs_render", (job) =>
+      executeDocsRenderJob({
         job
       })),
     autopilot_process: wrapHandler("autopilot_process", (job) =>
@@ -1123,6 +1514,11 @@ export function createWorkerJobHandlers(params: {
       })),
     privacy_operation: wrapHandler("privacy_operation", (job) =>
       executePrivacyOperationJob({
+        repository: params.repository,
+        job
+      })),
+    public_share_view: wrapHandler("public_share_view", (job) =>
+      executePublicShareViewJob({
         repository: params.repository,
         job
       }))

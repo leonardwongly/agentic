@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import { z } from "zod";
+import { enqueuePublicShareViewJob } from "@agentic/worker-runtime";
 import { checkSessionRateLimit } from "../../../../lib/auth";
 import {
   handleOperationalApiError,
@@ -8,7 +10,7 @@ import {
 } from "../../../../lib/api-response";
 import { getRequestClientKey } from "../../../../lib/request-client-identity";
 import {
-  createGoalShareViewedLog,
+  SHARE_VIEW_DEDUP_WINDOW_MS,
   fingerprintGoalShareToken,
   verifyGoalShareToken
 } from "../../../../lib/share";
@@ -33,11 +35,34 @@ function acceptedNoOp(init?: ResponseInit): Response {
   );
 }
 
+function buildPublicShareViewJobIdempotencyKey(params: {
+  shareId: string;
+  requestClientKey: string;
+  viewedAt: number;
+}): string {
+  const bucket = Math.floor(params.viewedAt / SHARE_VIEW_DEDUP_WINDOW_MS);
+
+  // Align the queue dedupe window with share-view log dedupe so repeated refreshes
+  // from the same client do not flood the worker or overwrite fresher state.
+  return `public-share-view:${crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        shareId: params.shareId,
+        requestClientKey: params.requestClientKey,
+        bucket
+      })
+    )
+    .digest("hex")
+    .slice(0, 32)}`;
+}
+
 export async function POST(request: Request) {
   return withApiTelemetry(request, "api.share.view.track", async () => {
     try {
       const { token } = await parseJsonBody(request, TrackShareViewRequestSchema);
-      const rateLimitKey = `public-share-view:${getRequestClientKey(request)}`;
+      const requestClientKey = getRequestClientKey(request);
+      const rateLimitKey = `public-share-view:${requestClientKey}`;
       const rateLimit = await checkSessionRateLimit(rateLimitKey);
 
       if (!rateLimit.allowed) {
@@ -55,7 +80,8 @@ export async function POST(request: Request) {
       }
 
       const repository = await getSeededRepository();
-      const share = await repository.getGoalShareByTokenFingerprint(fingerprintGoalShareToken(token));
+      const tokenFingerprint = fingerprintGoalShareToken(token);
+      const share = await repository.getGoalShareByTokenFingerprint(tokenFingerprint);
 
       if (
         !share ||
@@ -66,39 +92,33 @@ export async function POST(request: Request) {
       ) {
         return acceptedNoOp();
       }
-
-      const bundle = await repository.getGoalBundle(verifiedToken.goalId);
-
-      if (!bundle) {
-        return acceptedNoOp();
-      }
-
       const viewedAt = new Date().toISOString();
-      const viewedLog = createGoalShareViewedLog(bundle, share.id, token, Date.parse(viewedAt));
-      const writes: Array<Promise<unknown>> = [
-        repository.saveGoalShare({
-          ...share,
-          lastViewedAt: viewedAt,
-          updatedAt: viewedAt
+      const job = await enqueuePublicShareViewJob({
+        repository,
+        userId: share.userId,
+        shareId: share.id,
+        goalId: share.goalId,
+        tokenFingerprint,
+        viewedAt,
+        actorContext: null,
+        idempotencyKey: buildPublicShareViewJobIdempotencyKey({
+          shareId: share.id,
+          requestClientKey,
+          viewedAt: Date.parse(viewedAt)
         })
-      ];
-
-      if (viewedLog) {
-        writes.push(
-          repository.saveGoalBundle({
-            ...bundle,
-            actionLogs: [...bundle.actionLogs, viewedLog]
-          })
-        );
-      }
-
-      await Promise.all(writes);
-
-      return operationalJson({
-        accepted: true,
-        tracked: true,
-        deduplicated: viewedLog === null
       });
+
+      return operationalJson(
+        {
+          accepted: true,
+          tracked: true,
+          queued: true,
+          jobId: job.id
+        },
+        {
+          status: 202
+        }
+      );
     } catch (error) {
       return handleOperationalApiError(error, "Failed to track the public share view.");
     }

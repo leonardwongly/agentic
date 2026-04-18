@@ -22,11 +22,15 @@ function main() {
   const briefingRoutePath = "apps/web/app/api/briefing/route.ts";
   const commitmentsRoutePath = "apps/web/app/api/commitments/[id]/route.ts";
   const templatesRoutePath = "apps/web/app/api/templates/[id]/route.ts";
+  const repositoryPath = "packages/repository/src/index.ts";
+  const workerEntryPath = "apps/worker/src/index.ts";
 
   const goalsRoute = readRepoFile(goalsRoutePath);
   const briefingRoute = readRepoFile(briefingRoutePath);
   const commitmentsRoute = readRepoFile(commitmentsRoutePath);
   const templatesRoute = readRepoFile(templatesRoutePath);
+  const repository = readRepoFile(repositoryPath);
+  const workerEntry = readRepoFile(workerEntryPath);
 
   assertContains(
     goalsRoute,
@@ -75,6 +79,22 @@ function main() {
   if (templatePreconditionCalls.length < 2) {
     throw new Error(`${templatesRoutePath} must enforce preconditions for both delete and patch mutations.`);
   }
+
+  assertNotContains(
+    repository,
+    '@agentic/db/migration-runtime',
+    `${repositoryPath} must not pull migration runtime into the shared repository implementation.`
+  );
+  assertContains(
+    workerEntry,
+    'import { assertDatabaseSchemaReady } from "@agentic/db/migration-runtime";',
+    `${workerEntryPath} must validate schema readiness before starting the worker loop.`
+  );
+  assertContains(
+    readRepoFile("apps/web/lib/runtime-readiness.ts"),
+    'const runtime = await import("@agentic/db/schema-status");',
+    "apps/web/lib/runtime-readiness.ts must use the lightweight schema-status module instead of the migration runner."
+  );
 
   console.log("Architecture fitness checks passed.");
 }

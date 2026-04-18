@@ -47,11 +47,20 @@
       "@agentic/db": [
         "packages/db/src/index.ts"
       ],
+      "@agentic/db/migration-runtime": [
+        "packages/db/src/migration-runtime.ts"
+      ],
+      "@agentic/db/schema-status": [
+        "packages/db/src/schema-status.ts"
+      ],
       "@agentic/repository": [
         "packages/repository/src/index.ts"
       ],
       "@agentic/worker-runtime": [
         "packages/worker-runtime/src/index.ts"
+      ],
+      "@agentic/docs-runtime": [
+        "packages/docs-runtime/src/index.ts"
       ],
       "@agentic/self-improvement-memory": [
         "packages/self-improvement-memory/src/index.ts"

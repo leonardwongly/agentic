@@ -1,4 +1,4 @@
-import { runDatabaseMigrations } from "@agentic/db";
+import { runDatabaseMigrations } from "@agentic/db/migration-runtime";
 
 async function main() {
   const status = await runDatabaseMigrations({
@@ -23,4 +23,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : "Database migration failed.");
   process.exitCode = 1;
 });
-

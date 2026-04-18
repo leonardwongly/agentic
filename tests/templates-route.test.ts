@@ -3,8 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { GoalTemplateSchema, SYSTEM_USER_ID, createHumanActorContext, createSystemActorContext, nowIso } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
+import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
+import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DELETE as deleteTemplateRoute, PATCH as updateTemplateRoute } from "../apps/web/app/api/templates/[id]/route";
+import { GET as templateJobRoute } from "../apps/web/app/api/templates/jobs/[id]/route";
 import { POST as runTemplateRoute } from "../apps/web/app/api/templates/[id]/run/route";
 import { GET as listTemplatesRoute, POST as createTemplateRoute } from "../apps/web/app/api/templates/route";
 import * as authModule from "../apps/web/lib/auth";
@@ -52,6 +55,28 @@ describe("templates routes", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 
+  async function processQueuedTemplateJobs(maxJobs = 1) {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const selfImprovementRepository = createSelfImprovementRepository({
+      baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-template-route-memory-"))
+    });
+
+    await Promise.all([
+      repository.seedDefaults(SYSTEM_USER_ID),
+      selfImprovementRepository.seed()
+    ]);
+
+    return runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-template-route-test",
+      maxJobs,
+      pollIntervalMs: 50
+    });
+  }
+
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
@@ -96,11 +121,56 @@ describe("templates routes", () => {
       { params: Promise.resolve({ id: createPayload.template.id }) }
     );
     const runPayload = (await runResponse.json()) as {
-      bundle: { goal: { id: string } };
+      job: { id: string; kind: string; status: string; templateId: string; goalId: string };
+      statusUrl: string;
     };
 
-    expect(runResponse.status).toBe(200);
-    expect(runPayload.bundle.goal.id).toBeTruthy();
+    expect(runResponse.status).toBe(202);
+    expect(runPayload.job.kind).toBe("template_run");
+    expect(runPayload.job.status).toBe("queued");
+    expect(runPayload.job.templateId).toBe(createPayload.template.id);
+    expect(runPayload.statusUrl).toBe(`/api/templates/jobs/${runPayload.job.id}`);
+
+    const queuedStatusResponse = await templateJobRoute(
+      buildAuthorizedGetRequest(`http://localhost${runPayload.statusUrl}`),
+      { params: Promise.resolve({ id: runPayload.job.id }) }
+    );
+    const queuedStatusPayload = (await queuedStatusResponse.json()) as {
+      job: { id: string; status: string; templateId: string; goalId: string };
+      result: null;
+      error: null;
+    };
+
+    expect(queuedStatusResponse.status).toBe(202);
+    expect(queuedStatusPayload.job.id).toBe(runPayload.job.id);
+    expect(queuedStatusPayload.job.status).toBe("queued");
+    expect(queuedStatusPayload.job.templateId).toBe(createPayload.template.id);
+    expect(queuedStatusPayload.result).toBeNull();
+    expect(queuedStatusPayload.error).toBeNull();
+
+    const workerResult = await processQueuedTemplateJobs();
+    const completedStatusResponse = await templateJobRoute(
+      buildAuthorizedGetRequest(`http://localhost${runPayload.statusUrl}`),
+      { params: Promise.resolve({ id: runPayload.job.id }) }
+    );
+    const completedStatusPayload = (await completedStatusResponse.json()) as {
+      job: { id: string; status: string; templateId: string; goalId: string };
+      result: { goalId: string; taskCount: number; completedTaskCount: number };
+      error: null;
+    };
+
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(completedStatusResponse.status).toBe(200);
+    expect(completedStatusPayload.job.id).toBe(runPayload.job.id);
+    expect(completedStatusPayload.job.status).toBe("completed");
+    expect(completedStatusPayload.job.templateId).toBe(createPayload.template.id);
+    expect(completedStatusPayload.result.goalId).toBe(runPayload.job.goalId);
+    expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.error).toBeNull();
 
     const persistedListResponse = await listTemplatesRoute(buildAuthorizedGetRequest("http://localhost/api/templates"));
     const persistedListPayload = (await persistedListResponse.json()) as {
@@ -110,6 +180,53 @@ describe("templates routes", () => {
 
     expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(persisted?.schedule.lastRunAt).toBeTruthy();
+  });
+
+  it("deduplicates retried template runs when the same idempotency key is reused", async () => {
+    const createResponse = await createTemplateRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/templates", "POST", {
+        name: "Retry-safe template",
+        description: "Exercise template-run idempotency.",
+        request: "Review the inbox and produce a durable plan."
+      })
+    );
+    const createPayload = (await createResponse.json()) as {
+      template: { id: string };
+    };
+    const buildRunRequest = () =>
+      new Request(`http://localhost/api/templates/${createPayload.template.id}/run`, {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "x-idempotency-key": "template-run-retry-1"
+        }
+      });
+
+    const firstResponse = await runTemplateRoute(buildRunRequest(), {
+      params: Promise.resolve({ id: createPayload.template.id })
+    });
+    const secondResponse = await runTemplateRoute(buildRunRequest(), {
+      params: Promise.resolve({ id: createPayload.template.id })
+    });
+    const firstPayload = (await firstResponse.json()) as {
+      job: { id: string; templateId: string; goalId: string };
+      statusUrl: string;
+    };
+    const secondPayload = (await secondResponse.json()) as {
+      job: { id: string; templateId: string; goalId: string };
+      statusUrl: string;
+    };
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(202);
+    expect(secondPayload.job.id).toBe(firstPayload.job.id);
+    expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
+    expect(secondPayload.job.templateId).toBe(firstPayload.job.templateId);
+    expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
+    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
   });
 
   it("stamps the human actor when a session principal updates a template schedule", async () => {

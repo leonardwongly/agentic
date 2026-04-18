@@ -11,22 +11,45 @@ import { createJobRecord } from "@agentic/execution";
 import * as orchestrator from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { EpisodeRecordSchema, createSelfImprovementRepository } from "@agentic/self-improvement-memory";
+import { vi } from "vitest";
+
+const { runDocsBuildMock } = vi.hoisted(() => ({
+  runDocsBuildMock: vi.fn(async () => ({
+    stdout: "docs ok",
+    stderr: ""
+  }))
+}));
+
+vi.mock("@agentic/docs-runtime", () => ({
+  runDocsBuild: runDocsBuildMock
+}));
+
 import {
   enqueueBriefingCreateJob,
   enqueueAutopilotProcessJob,
+  enqueueDocsRenderJob,
   enqueueGoalCreateJob,
   enqueuePrivacyOperationJob,
+  enqueuePublicShareViewJob,
+  enqueueTemplateRunJob,
   executeAutopilotProcessJob,
   executeBriefingCreateJob,
+  executeDocsRenderJob,
   executeGoalCreateJob,
   executePrivacyOperationJob,
+  executePublicShareViewJob,
+  executeTemplateRunJob,
   runWorkerRuntime
 } from "@agentic/worker-runtime";
-import { vi } from "vitest";
 
 describe("worker runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    runDocsBuildMock.mockReset();
+    runDocsBuildMock.mockResolvedValue({
+      stdout: "docs ok",
+      stderr: ""
+    });
   });
 
   async function createTestRuntime() {
@@ -123,6 +146,36 @@ describe("worker runtime", () => {
       watchers: [],
       actionLogs: []
     });
+  }
+
+  async function createPublicShareFixture(repository: Awaited<ReturnType<typeof createTestRuntime>>["repository"]) {
+    const bundle = await orchestrator.processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Share a reviewer-safe operating summary with the public link flow.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+
+    await repository.saveGoalBundle(bundle);
+    const share = await repository.saveGoalShare({
+      id: "share-worker-runtime-public-view",
+      goalId: bundle.goal.id,
+      userId: SYSTEM_USER_ID,
+      workspaceId: null,
+      tokenFingerprint: "0123456789ab",
+      status: "active",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      expiresAt: "2099-04-16T00:00:00.000Z",
+      lastViewedAt: null,
+      revokedAt: null,
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    return {
+      bundle,
+      share
+    };
   }
 
   async function createWatcherAutopilotFixture() {
@@ -349,6 +402,276 @@ describe("worker runtime", () => {
     expect(goalsAfterFirstAttempt).toHaveLength(1);
     expect(goalsAfterSecondAttempt).toHaveLength(1);
     expect(goalsAfterSecondAttempt[0]?.goal.id).toBe(job.payload.goalId);
+    expect(memoriesAfterSecondAttempt.map((memory) => memory.id)).toEqual(
+      memoriesAfterFirstAttempt.map((memory) => memory.id)
+    );
+    expect(episodesAfterSecondAttempt.map((episode) => episode.id)).toEqual(
+      episodesAfterFirstAttempt.map((episode) => episode.id)
+    );
+  });
+
+  it("processes queued docs-render jobs through the worker loop", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const queued = await enqueueDocsRenderJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-docs-1"
+    });
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-docs-test",
+      maxJobs: 1,
+      pollIntervalMs: 50
+    });
+    const persistedJob = await repository.getJob(queued.id, SYSTEM_USER_ID);
+
+    expect(result).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(runDocsBuildMock).toHaveBeenCalledTimes(1);
+    expect(persistedJob).toMatchObject({
+      id: queued.id,
+      status: "completed",
+      attemptCount: 1
+    });
+  });
+
+  it("keeps docs-render execution idempotent across retries", async () => {
+    const job = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "docs_render",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      }
+    });
+
+    await executeDocsRenderJob({
+      job
+    });
+    await executeDocsRenderJob({
+      job
+    });
+
+    expect(runDocsBuildMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("processes queued public-share-view jobs through the worker loop and persists deduplicated share activity", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const { bundle, share } = await createPublicShareFixture(repository);
+    const viewedAt = "2026-04-16T00:10:00.000Z";
+    const queued = await enqueuePublicShareViewJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      shareId: share.id,
+      goalId: bundle.goal.id,
+      tokenFingerprint: share.tokenFingerprint,
+      viewedAt,
+      actorContext: null,
+      idempotencyKey: "worker-runtime-public-share-1"
+    });
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-public-share-test",
+      maxJobs: 1,
+      pollIntervalMs: 50
+    });
+    const persistedJob = await repository.getJob(queued.id, SYSTEM_USER_ID);
+    const persistedShare = await repository.getGoalShare(share.id, SYSTEM_USER_ID);
+    const persistedBundle = await repository.getGoalBundle(bundle.goal.id);
+    const viewedLogs = persistedBundle?.actionLogs.filter((log) => log.kind === "share.page_viewed") ?? [];
+
+    expect(result).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(persistedJob).toMatchObject({
+      id: queued.id,
+      status: "completed",
+      attemptCount: 1
+    });
+    expect(persistedShare?.lastViewedAt).toBe(viewedAt);
+    expect(viewedLogs).toHaveLength(1);
+    expect(viewedLogs[0]?.details.shareId).toBe(share.id);
+    expect(viewedLogs[0]?.details.tokenFingerprint).toBe(share.tokenFingerprint);
+  });
+
+  it("keeps public-share-view execution idempotent across retries and does not regress fresher share timestamps", async () => {
+    const { repository } = await createTestRuntime();
+    const { bundle, share } = await createPublicShareFixture(repository);
+
+    await repository.saveGoalShare({
+      ...share,
+      lastViewedAt: "2026-04-16T00:20:00.000Z",
+      updatedAt: "2026-04-16T00:20:00.000Z"
+    });
+
+    const job = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "public_share_view",
+      actorContext: null,
+      payload: {
+        type: "public_share_view",
+        shareId: share.id,
+        goalId: bundle.goal.id,
+        tokenFingerprint: share.tokenFingerprint,
+        viewedAt: "2026-04-16T00:10:00.000Z",
+        metadata: {}
+      }
+    });
+
+    await executePublicShareViewJob({
+      repository,
+      job
+    });
+    await executePublicShareViewJob({
+      repository,
+      job
+    });
+
+    const persistedShare = await repository.getGoalShare(share.id, SYSTEM_USER_ID);
+    const persistedBundle = await repository.getGoalBundle(bundle.goal.id);
+    const viewedLogs = persistedBundle?.actionLogs.filter((log) => log.kind === "share.page_viewed") ?? [];
+
+    expect(persistedShare?.lastViewedAt).toBe("2026-04-16T00:20:00.000Z");
+    expect(viewedLogs).toHaveLength(1);
+    expect(viewedLogs[0]?.details.tokenFingerprint).toBe(share.tokenFingerprint);
+  });
+
+  it("processes queued template-run jobs through the worker loop and updates the template schedule", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const template = await repository.saveTemplate({
+      id: "template-runtime-run",
+      userId: SYSTEM_USER_ID,
+      name: "Template runtime run",
+      description: "Queue a manual template run.",
+      request: "Review the inbox and prepare the next plan.",
+      parameters: {},
+      schedule: {
+        enabled: true,
+        cron: "0 9 * * *",
+        timezone: "UTC",
+        lastRunAt: null,
+        nextRunAt: null
+      },
+      actorContext: null,
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    const queued = await enqueueTemplateRunJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      templateId: template.id,
+      goalId: "goal-template-runtime-test",
+      workflowId: "workflow-template-runtime-test",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-template-1"
+    });
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-template-test",
+      maxJobs: 1,
+      pollIntervalMs: 50
+    });
+    const persistedJob = await repository.getJob(queued.id, SYSTEM_USER_ID);
+    const persistedBundle = await repository.getGoalBundleForUser(queued.payload.goalId, SYSTEM_USER_ID);
+    const persistedTemplate = (await repository.listTemplates(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === template.id
+    );
+
+    expect(result).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(persistedJob).toMatchObject({
+      id: queued.id,
+      status: "completed",
+      attemptCount: 1
+    });
+    expect(persistedBundle?.goal.id).toBe(queued.payload.goalId);
+    expect(persistedBundle?.goal.request).toContain("Review the inbox");
+    expect(persistedTemplate?.schedule.lastRunAt).toBeTruthy();
+    expect(persistedTemplate?.schedule.nextRunAt).toBeTruthy();
+    expect(persistedTemplate?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+  });
+
+  it("keeps template-run persistence, schedule updates, and self-improvement episodes idempotent across retries", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+
+    await repository.saveTemplate({
+      id: "template-idempotent-retry",
+      userId: SYSTEM_USER_ID,
+      name: "Template idempotent retry",
+      description: "Ensure template-run retries do not duplicate state.",
+      request: "Prepare a retry-safe operating plan.",
+      parameters: {},
+      schedule: {
+        enabled: true,
+        cron: "0 9 * * *",
+        timezone: "UTC",
+        lastRunAt: null,
+        nextRunAt: null
+      },
+      actorContext: null,
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    const job = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "template_run",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      payload: {
+        type: "template_run",
+        templateId: "template-idempotent-retry",
+        goalId: "goal-template-idempotent-retry",
+        workflowId: "workflow-template-idempotent-retry",
+        workspaceId: null,
+        metadata: {}
+      }
+    });
+
+    await executeTemplateRunJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterFirstAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const templatesAfterFirstAttempt = await repository.listTemplates(SYSTEM_USER_ID);
+    const memoriesAfterFirstAttempt = await repository.listMemory(SYSTEM_USER_ID);
+    const episodesAfterFirstAttempt = await selfImprovementRepository.listEpisodes();
+
+    await executeTemplateRunJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterSecondAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const templatesAfterSecondAttempt = await repository.listTemplates(SYSTEM_USER_ID);
+    const memoriesAfterSecondAttempt = await repository.listMemory(SYSTEM_USER_ID);
+    const episodesAfterSecondAttempt = await selfImprovementRepository.listEpisodes();
+    const firstTemplate = templatesAfterFirstAttempt.find((candidate) => candidate.id === "template-idempotent-retry");
+    const secondTemplate = templatesAfterSecondAttempt.find((candidate) => candidate.id === "template-idempotent-retry");
+
+    expect(goalsAfterFirstAttempt).toHaveLength(1);
+    expect(goalsAfterSecondAttempt).toHaveLength(1);
+    expect(goalsAfterSecondAttempt[0]?.goal.id).toBe(job.payload.goalId);
+    expect(firstTemplate?.schedule.lastRunAt).toBeTruthy();
+    expect(secondTemplate?.schedule.lastRunAt).toBeTruthy();
+    expect(secondTemplate?.schedule.nextRunAt).toBe(firstTemplate?.schedule.nextRunAt);
     expect(memoriesAfterSecondAttempt.map((memory) => memory.id)).toEqual(
       memoriesAfterFirstAttempt.map((memory) => memory.id)
     );

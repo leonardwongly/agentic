@@ -1,0 +1,6 @@
+{
+  "name": "@agentic/docs-runtime",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts"
+}

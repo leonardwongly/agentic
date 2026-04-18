@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { assertDatabaseSchemaReady, runDatabaseMigrations } from "@agentic/db";
+import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 import { z } from "zod";
 import {
@@ -510,6 +510,10 @@ const DASHBOARD_GOAL_LIMIT = 40;
 const DASHBOARD_AUTOPILOT_EVENT_LIMIT = 24;
 const DASHBOARD_MEMORY_LIMIT = 40;
 const DASHBOARD_INTEGRATION_LIMIT = 24;
+const DEFAULT_RUNTIME_STORE_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../.agentic/runtime-store.json"
+);
 
 function resolveDefaultStorePath(): string {
   const configured = process.env.AGENTIC_RUNTIME_STORE_PATH?.trim();
@@ -518,7 +522,7 @@ function resolveDefaultStorePath(): string {
     return path.resolve(configured);
   }
 
-  return path.join(/* turbopackIgnore: true */ process.cwd(), ".agentic", "runtime-store.json");
+  return DEFAULT_RUNTIME_STORE_PATH;
 }
 
 function createEmptyStore(): RuntimeStore {
@@ -2402,6 +2406,8 @@ function isJobScopedToWorkspace(
     case "goal_create":
       return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
     case "briefing_create":
+      return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
+    case "template_run":
       return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
     case "autopilot_process":
       return params.watcherIds.has(job.payload.sourceId);
@@ -4431,18 +4437,10 @@ class FileRepository implements AgenticRepository {
 class PostgresRepository implements AgenticRepository {
   backend = "postgres" as const;
   private readonly pool: Pool;
-  private readonly ready: Promise<void>;
+  private readonly ready = Promise.resolve();
 
-  constructor(
-    url: string,
-    options?: {
-      autoMigrate?: boolean;
-    }
-  ) {
+  constructor(url: string) {
     this.pool = new Pool({ connectionString: url });
-    this.ready = options?.autoMigrate
-      ? runDatabaseMigrations({ pool: this.pool }).then(() => undefined)
-      : assertDatabaseSchemaReady({ pool: this.pool }).then(() => undefined);
   }
 
   private async withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -7083,6 +7081,12 @@ class PostgresRepository implements AgenticRepository {
               or payload ->> 'goalId' = any($2::text[])
             )
           ) or (
+            payload ->> 'type' = 'template_run'
+            and (
+              payload ->> 'workspaceId' = $1
+              or payload ->> 'goalId' = any($2::text[])
+            )
+          ) or (
             payload ->> 'type' = 'autopilot_process'
             and payload ->> 'sourceId' = any($3::text[])
           ) or (
@@ -8939,9 +8943,7 @@ export function createRepository(options?: { storePath?: string; databaseUrl?: s
   const databaseUrl = options?.databaseUrl ?? process.env.DATABASE_URL;
 
   if (databaseUrl) {
-    return new PostgresRepository(databaseUrl, {
-      autoMigrate: shouldAutoMigratePostgresSchema()
-    });
+    return new PostgresRepository(databaseUrl);
   }
 
   if (process.env.NODE_ENV === "production") {
@@ -8951,18 +8953,4 @@ export function createRepository(options?: { storePath?: string; databaseUrl?: s
   }
 
   return new FileRepository(options?.storePath);
-}
-
-function shouldAutoMigratePostgresSchema(): boolean {
-  const configured = process.env.AGENTIC_AUTO_MIGRATE?.trim().toLowerCase();
-
-  if (configured === "true") {
-    return true;
-  }
-
-  if (configured === "false") {
-    return false;
-  }
-
-  return process.env.NODE_ENV === "test";
 }
