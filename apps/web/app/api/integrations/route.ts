@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { describeIntegrationReadiness } from "@agentic/integrations";
 import { IntegrationAccountSchema, nowIso } from "@agentic/contracts";
+import type { AgenticRepository } from "@agentic/repository";
 import { requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
@@ -14,10 +15,33 @@ const UpdateIntegrationSchema = z
   })
   .strict();
 
-function serializeIntegration(account: z.infer<typeof IntegrationAccountSchema>) {
+async function serializeIntegration(
+  account: z.infer<typeof IntegrationAccountSchema>,
+  repository: AgenticRepository,
+  providerCredentialsById?: Map<string, Awaited<ReturnType<AgenticRepository["listProviderCredentials"]>>[number]>
+) {
+  const providerCredentialId =
+    account.metadata.provider === "google" &&
+    account.metadata.managed === true &&
+    typeof account.metadata.providerCredentialId === "string"
+      ? account.metadata.providerCredentialId
+      : null;
+
+  const providerCredential = providerCredentialId ? providerCredentialsById?.get(providerCredentialId) ?? null : null;
+  const providerSecret = providerCredential
+    ? await repository.getProviderCredentialSecret(providerCredential.id, "oauth_refresh_token", account.userId)
+    : null;
+
   return {
     ...account,
-    readiness: describeIntegrationReadiness(account)
+    readiness: describeIntegrationReadiness(account, {
+      providerCredential: providerCredential
+        ? {
+            credential: providerCredential,
+            hasRefreshTokenSecret: Boolean(providerSecret)
+          }
+        : undefined
+    })
   };
 }
 
@@ -25,8 +49,14 @@ export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
     const repository = await getSeededRepository();
+    const integrations = await repository.listIntegrations(principal.userId);
+    const providerCredentials = await repository.listProviderCredentials(principal.userId);
+    const providerCredentialsById = new Map(providerCredentials.map((credential) => [credential.id, credential]));
+
     return authenticatedJson({
-      integrations: (await repository.listIntegrations(principal.userId)).map(serializeIntegration)
+      integrations: await Promise.all(
+        integrations.map((integration) => serializeIntegration(integration, repository, providerCredentialsById))
+      )
     });
   } catch (error) {
     return handleApiError(error, "Failed to list integrations.");
@@ -63,7 +93,7 @@ export async function POST(request: Request) {
     await repository.upsertIntegration(integration);
 
     return authenticatedJson({
-      integration: serializeIntegration(integration),
+      integration: await serializeIntegration(integration, repository),
       dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {

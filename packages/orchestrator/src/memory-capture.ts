@@ -20,6 +20,87 @@ function taskOutcome(task: Task): "success" | "partial" | "failure" {
   return "partial";
 }
 
+function normalizeCapabilities(task: Task): string[] {
+  return [...new Set(task.toolCapabilities)].sort((left, right) => left.localeCompare(right));
+}
+
+function inferTaskAction(task: Task, explicitAction: string | null = null): string {
+  if (explicitAction) {
+    return explicitAction;
+  }
+
+  const capabilities = normalizeCapabilities(task);
+
+  if (capabilities.includes("send")) return "send_message";
+  if (capabilities.includes("schedule")) return "schedule_event";
+  if (capabilities.includes("create")) return "create_record";
+  if (capabilities.includes("delete")) return "destructive_change";
+  if (capabilities.includes("write")) return "write_record";
+  if (capabilities.includes("search")) return "search_records";
+  if (capabilities.includes("read")) return "read_records";
+
+  return "task_execution";
+}
+
+function buildRecommendationKey(task: Task, action: string, kind: "task_plan" | "execution_path"): string {
+  const capabilities = normalizeCapabilities(task).join(",");
+  return `${kind}:${task.assignedAgent}:${action}:${task.riskClass}:${capabilities}`;
+}
+
+function buildRecommendationConfidence(task: Task, successOverride?: boolean): number {
+  if (successOverride === true) return 0.92;
+  if (successOverride === false) return 0.38;
+
+  switch (task.state) {
+    case "completed":
+      return 0.86;
+    case "blocked":
+    case "failed":
+      return 0.34;
+    default:
+      return 0.61;
+  }
+}
+
+function buildTaskFallbackMode(task: Task, approvalDecision: "approved" | "rejected" | null): "normal" | "review_required" | "draft_only" {
+  if (approvalDecision === "rejected" || task.state === "blocked" || task.state === "failed") {
+    return "review_required";
+  }
+
+  if (task.requiresApproval && approvalDecision !== "approved") {
+    return "draft_only";
+  }
+
+  return "normal";
+}
+
+function buildExecutionFallbackMode(result: ExecutionResult): "normal" | "review_required" | "draft_only" {
+  return result.success ? "normal" : "review_required";
+}
+
+function buildEvidenceHint(params: {
+  artifactCount?: number;
+  approvalDecision?: "approved" | "rejected" | null;
+  success?: boolean;
+  partial?: boolean;
+}): "none" | "sparse" | "established" {
+  if (params.success || (params.approvalDecision === "approved" && (params.artifactCount ?? 0) > 0)) {
+    return "established";
+  }
+
+  if ((params.artifactCount ?? 0) > 0 || params.approvalDecision !== null || params.partial) {
+    return "sparse";
+  }
+
+  return "none";
+}
+
+function buildOutcomeScore(outcome: "success" | "partial" | "failure"): number {
+  if (outcome === "success") return 1;
+  if (outcome === "partial") return 0.2;
+  return -1;
+}
+
 function buildDeterministicId(...parts: Array<string | null | undefined>): string {
   return crypto
     .createHash("sha256")
@@ -129,6 +210,8 @@ function buildEpisodes(bundle: GoalBundle): EpisodeRecord[] {
     const artifacts = bundle.artifacts.filter((a) => a.taskId === task.id);
     const approval = bundle.approvals.find((a) => a.taskId === task.id);
     const outcome = taskOutcome(task);
+    const action = inferTaskAction(task, approval?.actionIntent?.type ?? null);
+    const approvalDecision = approval?.decision === "approved" || approval?.decision === "rejected" ? approval.decision : null;
 
     const situationParts = [
       `Goal: "${bundle.goal.title}"`,
@@ -167,6 +250,37 @@ function buildEpisodes(bundle: GoalBundle): EpisodeRecord[] {
       rootCause: outcome === "failure" ? (approval?.decision === "rejected" ? "User rejected the proposed action." : "Task blocked or failed during execution.") : null,
       solution: solutionParts.join(" "),
       lesson,
+      recommendation: {
+        key: buildRecommendationKey(task, action, "task_plan"),
+        kind: "task_plan",
+        agent: task.assignedAgent,
+        action,
+        confidence: buildRecommendationConfidence(task),
+        rationale: approval?.rationale ?? null,
+        riskClass: task.riskClass,
+        capabilities: normalizeCapabilities(task),
+        sourceGoalId: bundle.goal.id,
+        sourceTaskId: task.id,
+        fallbackMode: buildTaskFallbackMode(task, approvalDecision),
+        evidenceHint: buildEvidenceHint({
+          artifactCount: artifacts.length,
+          approvalDecision,
+          success: outcome === "success",
+          partial: outcome === "partial"
+        })
+      },
+      outcomeLink: {
+        goalId: bundle.goal.id,
+        workflowId: bundle.workflow.id,
+        taskId: task.id,
+        goalStatus: bundle.goal.status,
+        taskState: task.state,
+        approvalDecision,
+        executionKind: task.state === "completed" ? "completed" : task.state === "blocked" || task.state === "failed" ? "failed" : "not_run",
+        outcomeScore: buildOutcomeScore(outcome),
+        userCorrection: approvalDecision === "rejected",
+        notes: artifacts.length > 0 ? `${artifacts.length} artifact(s) produced.` : null
+      },
       relatedPatternId: null,
       userFeedback: null,
       metadata: {
@@ -253,6 +367,8 @@ function buildExecutionEpisodes(bundle: GoalBundle, results: ExecutionResult[]):
   return results.map((result) => {
     const task = bundle.tasks.find((candidate) => candidate.id === result.taskId);
     const taskTitle = task?.title ?? result.taskId;
+    const approval = bundle.approvals.find((candidate) => candidate.taskId === result.taskId);
+    const approvalDecision = approval?.decision === "approved" || approval?.decision === "rejected" ? approval.decision : null;
     const situationParts = [
       `Goal: "${bundle.goal.title}"`,
       `Approved task: "${taskTitle}"`,
@@ -273,6 +389,38 @@ function buildExecutionEpisodes(bundle: GoalBundle, results: ExecutionResult[]):
       lesson: result.success
         ? `This approved action executed cleanly with the current adapter path.`
         : `This approved action needs adapter, payload, or policy follow-up before similar executions should be trusted.`,
+      recommendation: task
+        ? {
+            key: buildRecommendationKey(task, result.action, "execution_path"),
+            kind: "execution_path",
+            agent: task.assignedAgent,
+            action: result.action,
+            confidence: buildRecommendationConfidence(task, result.success),
+            rationale: approval?.rationale ?? null,
+            riskClass: task.riskClass,
+            capabilities: normalizeCapabilities(task),
+            sourceGoalId: bundle.goal.id,
+            sourceTaskId: task.id,
+            fallbackMode: buildExecutionFallbackMode(result),
+            evidenceHint: buildEvidenceHint({
+              approvalDecision,
+              success: result.success,
+              partial: !result.success
+            })
+          }
+        : null,
+      outcomeLink: {
+        goalId: bundle.goal.id,
+        workflowId: bundle.workflow.id,
+        taskId: result.taskId,
+        goalStatus: bundle.goal.status,
+        taskState: task?.state ?? null,
+        approvalDecision,
+        executionKind: result.success ? "completed" : "failed",
+        outcomeScore: result.success ? 1 : -1,
+        userCorrection: false,
+        notes: summarizeExecutionDetail(result.detail)
+      },
       relatedPatternId: null,
       userFeedback: null,
       metadata: {

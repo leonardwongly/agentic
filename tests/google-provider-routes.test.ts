@@ -8,6 +8,7 @@ import { createRepository, type AgenticRepository } from "@agentic/repository";
 import { buildOAuthStateToken, parseAuthorizedOAuthStateToken } from "../apps/web/lib/auth";
 import { GET as googleConnectRoute } from "../apps/web/app/api/integrations/google/connect/route";
 import { GET as googleCallbackRoute } from "../apps/web/app/api/integrations/google/callback/route";
+import { GET as integrationsRouteGet } from "../apps/web/app/api/integrations/route";
 import { POST as integrationsRoutePost } from "../apps/web/app/api/integrations/route";
 import { buildAuthorizedGetRequest, buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-helpers";
 
@@ -354,5 +355,81 @@ describe("google provider routes", () => {
     expect(response.status).toBe(409);
     expect(payload.error).toContain("managed by Google provider credentials");
     expectNoStoreHeaders(response);
+  });
+
+  it("reports managed Google readiness per integration based on provider scopes and refresh state", async () => {
+    const repository = await buildRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const credential = createGoogleCredential({
+      scopes: ["https://www.googleapis.com/auth/gmail.modify"]
+    });
+    await repository.saveProviderCredential(credential);
+    await repository.saveProviderCredentialSecret({
+      credentialId: credential.id,
+      userId: SYSTEM_USER_ID,
+      kind: "oauth_refresh_token",
+      secret: createProviderCredentialSecretStore().encrypt("persisted-refresh-token"),
+      createdAt: credential.createdAt,
+      updatedAt: credential.updatedAt
+    });
+    await repository.upsertIntegration({
+      ...(await repository.listIntegrations(SYSTEM_USER_ID)).find((integration) => integration.id === "gmail")!,
+      status: "ready",
+      metadata: {
+        provider: "google",
+        managed: true,
+        providerCredentialId: credential.id
+      }
+    });
+    await repository.upsertIntegration({
+      ...(await repository.listIntegrations(SYSTEM_USER_ID)).find((integration) => integration.id === "google-calendar")!,
+      status: "ready",
+      metadata: {
+        provider: "google",
+        managed: true,
+        providerCredentialId: credential.id
+      }
+    });
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await integrationsRouteGet(buildAuthorizedGetRequest("http://localhost/api/integrations"));
+    const payload = (await response.json()) as {
+      integrations: Array<{
+        id: string;
+        readiness: {
+          tier: string;
+          managedProvider: {
+            credentialStatus: string;
+            hasRefreshToken: boolean;
+            missingScopes: string[];
+          } | null;
+        };
+      }>;
+    };
+    const gmail = payload.integrations.find((integration) => integration.id === "gmail");
+    const calendar = payload.integrations.find((integration) => integration.id === "google-calendar");
+
+    expect(response.status).toBe(200);
+    expectNoStoreHeaders(response);
+    expect(gmail).toMatchObject({
+      readiness: {
+        tier: "approval-grade",
+        managedProvider: {
+          credentialStatus: "connected",
+          hasRefreshToken: true,
+          missingScopes: []
+        }
+      }
+    });
+    expect(calendar).toMatchObject({
+      readiness: {
+        tier: "experimental",
+        managedProvider: {
+          credentialStatus: "connected",
+          hasRefreshToken: true,
+          missingScopes: ["https://www.googleapis.com/auth/calendar"]
+        }
+      }
+    });
   });
 });

@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   buildComplianceEvidenceBundle,
   renderComplianceEvidenceMarkdown,
+  renderComplianceReviewerSummary,
   type ComplianceEvidenceBundle,
   type ComplianceReferenceStatus
 } from "../scripts/collect-compliance-evidence";
@@ -68,8 +69,12 @@ describe("compliance evidence collector", () => {
     );
 
     expect(bundle.summary.totalControls).toBe(1);
+    expect(bundle.summary.readyControls).toBe(1);
+    expect(bundle.summary.failingControls).toBe(0);
     expect(bundle.summary.totalRequiredArtifacts).toBe(1);
     expect(bundle.summary.missingRequiredArtifacts).toBe(0);
+    expect(bundle.controls[0]?.status).toBe("ready");
+    expect(bundle.controls[0]?.missingRequiredArtifactPaths).toEqual([]);
     expect(bundle.controls[0]?.codePaths[0]).toEqual(
       expect.objectContaining({
         path: "apps/web/lib/auth-runtime-state.ts",
@@ -138,7 +143,10 @@ describe("compliance evidence collector", () => {
       }
     );
 
+    expect(bundle.summary.failingControls).toBe(1);
     expect(bundle.summary.missingRequiredArtifacts).toBe(1);
+    expect(bundle.controls[0]?.status).toBe("missing-artifacts");
+    expect(bundle.controls[0]?.missingRequiredArtifactPaths).toEqual(["artifacts/compliance/control-matrix.json"]);
   });
 
   it("fails when required artifacts are missing in strict mode", () => {
@@ -254,6 +262,8 @@ describe("compliance evidence collector", () => {
       owners: ["platform-security"],
       summary: {
         totalControls: 1,
+        readyControls: 1,
+        failingControls: 0,
         totalRequiredArtifacts: 1,
         missingReferences: 0,
         missingRequiredArtifacts: 0
@@ -310,6 +320,9 @@ describe("compliance evidence collector", () => {
           ],
           risks: ["shipping vulnerable deps"],
           metrics: ["blocking vulnerability count"]
+          ,
+          status: "ready",
+          missingRequiredArtifactPaths: []
         }
       ]
     };
@@ -320,5 +333,65 @@ describe("compliance evidence collector", () => {
     expect(markdown).toContain("## SUPPLY-01 Dependency gate");
     expect(markdown).toContain("Command: npm run security:audit-runtime");
     expect(markdown).toContain("SHA-256: 456");
+  });
+
+  it("renders a reviewer summary that highlights controls missing required evidence", () => {
+    const bundle: ComplianceEvidenceBundle = {
+      generatedAt: "2026-04-18T12:00:00.000Z",
+      reviewedAt: "2026-04-18T00:00:00.000Z",
+      registryVersion: 1,
+      owners: ["platform-security"],
+      summary: {
+        totalControls: 2,
+        readyControls: 1,
+        failingControls: 1,
+        totalRequiredArtifacts: 2,
+        missingReferences: 0,
+        missingRequiredArtifacts: 1
+      },
+      controls: [
+        {
+          id: "OPS-01",
+          family: "Operations",
+          title: "Incident response runbook",
+          objective: "Keep the incident workflow documented.",
+          owner: "platform-security",
+          trustBoundaries: ["operator to incident queue"],
+          productSurfaces: ["runbooks"],
+          codePaths: [],
+          runbooks: [],
+          automatedChecks: [],
+          evidenceArtifacts: [],
+          risks: ["slow incident response"],
+          metrics: ["time to acknowledge"],
+          status: "ready",
+          missingRequiredArtifactPaths: []
+        },
+        {
+          id: "SUPPLY-02",
+          family: "Supply Chain",
+          title: "Runtime audit evidence",
+          objective: "Retain vulnerability-gate evidence.",
+          owner: "platform-security",
+          trustBoundaries: ["ci to artifact store"],
+          productSurfaces: ["build pipeline"],
+          codePaths: [],
+          runbooks: [],
+          automatedChecks: [],
+          evidenceArtifacts: [],
+          risks: ["missing audit evidence"],
+          metrics: ["evidence freshness"],
+          status: "missing-artifacts",
+          missingRequiredArtifactPaths: ["artifacts/security/runtime-audit-report.json"]
+        }
+      ]
+    };
+
+    const summary = renderComplianceReviewerSummary(bundle);
+
+    expect(summary).toContain("# Compliance Evidence Reviewer Summary");
+    expect(summary).toContain("Controls ready: 1/2");
+    expect(summary).toContain("SUPPLY-02 Runtime audit evidence");
+    expect(summary).toContain("Missing artifact: artifacts/security/runtime-audit-report.json");
   });
 });

@@ -2,7 +2,9 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  buildRecommendationReplayReport,
   createSelfImprovementRepository,
+  deriveRecommendationInsights,
   EpisodeRecordSchema,
   SemanticPatternSchema,
   SelfImprovementConflictError,
@@ -287,5 +289,200 @@ describe("self improvement memory repository", () => {
     await expect(context.repository.readSemanticPatterns()).resolves.toMatchObject({
       version: 1
     });
+  });
+});
+
+describe("recommendation replay analytics", () => {
+  function buildReplayEpisode(
+    id: string,
+    overrides: Partial<ReturnType<typeof EpisodeRecordSchema.parse>> = {}
+  ) {
+    return buildEpisode({
+      id,
+      recommendation: {
+        key: "execution_path:communications:send_message:R3:send",
+        kind: "execution_path",
+        agent: "communications",
+        action: "send_message",
+        confidence: 0.9,
+        rationale: "Observed governed outbound send flow.",
+        riskClass: "R3",
+        capabilities: ["send"],
+        sourceGoalId: `goal-${id}`,
+        sourceTaskId: `task-${id}`,
+        fallbackMode: "normal",
+        evidenceHint: "established"
+      },
+      outcomeLink: {
+        goalId: `goal-${id}`,
+        workflowId: `workflow-${id}`,
+        taskId: `task-${id}`,
+        goalStatus: "completed",
+        taskState: "completed",
+        approvalDecision: "approved",
+        executionKind: "completed",
+        outcomeScore: 1,
+        userCorrection: false,
+        notes: "Validated outbound send."
+      },
+      ...overrides
+    });
+  }
+
+  it("downgrades replay mode when negative outcomes and corrections accumulate", () => {
+    const insights = deriveRecommendationInsights([
+      buildReplayEpisode("safe-1"),
+      buildReplayEpisode("safe-2"),
+      buildReplayEpisode("unsafe-1", {
+        outcome: "failure",
+        recommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          kind: "execution_path",
+          agent: "communications",
+          action: "send_message",
+          confidence: 0.62,
+          rationale: "Observed governed outbound send flow.",
+          riskClass: "R3",
+          capabilities: ["send"],
+          sourceGoalId: "goal-unsafe-1",
+          sourceTaskId: "task-unsafe-1",
+          fallbackMode: "review_required",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-unsafe-1",
+          workflowId: "workflow-unsafe-1",
+          taskId: "task-unsafe-1",
+          goalStatus: "blocked",
+          taskState: "failed",
+          approvalDecision: "rejected",
+          executionKind: "failed",
+          outcomeScore: -1,
+          userCorrection: true,
+          notes: "User corrected the send target after failure."
+        }
+      })
+    ]);
+
+    expect(insights).toHaveLength(1);
+    expect(insights[0]).toMatchObject({
+      evidenceCount: 3,
+      failureCount: 1,
+      rejectionCount: 1,
+      userCorrectionCount: 1,
+      replayMode: "review_required"
+    });
+    expect(insights[0]?.rationale).toContain("keep human review");
+  });
+
+  it("builds a replay report with safe suggestion precision from proven patterns", () => {
+    const report = buildRecommendationReplayReport([
+      buildReplayEpisode("suggest-1"),
+      buildReplayEpisode("suggest-2"),
+      buildReplayEpisode("suggest-3"),
+      buildReplayEpisode("guarded-1", {
+        recommendation: {
+          key: "task_plan:workflow:create_record:R2:create,update",
+          kind: "task_plan",
+          agent: "workflow",
+          action: "create_record",
+          confidence: 0.75,
+          rationale: "Observed internal drafting flow.",
+          riskClass: "R2",
+          capabilities: ["create", "update"],
+          sourceGoalId: "goal-guarded-1",
+          sourceTaskId: "task-guarded-1",
+          fallbackMode: "normal",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-guarded-1",
+          workflowId: "workflow-guarded-1",
+          taskId: "task-guarded-1",
+          goalStatus: "active",
+          taskState: "in_progress",
+          approvalDecision: null,
+          executionKind: "not_run",
+          outcomeScore: 0.2,
+          userCorrection: false,
+          notes: "Draft-only path."
+        },
+        outcome: "partial"
+      }),
+      buildReplayEpisode("guarded-2", {
+        recommendation: {
+          key: "task_plan:workflow:create_record:R2:create,update",
+          kind: "task_plan",
+          agent: "workflow",
+          action: "create_record",
+          confidence: 0.76,
+          rationale: "Observed internal drafting flow.",
+          riskClass: "R2",
+          capabilities: ["create", "update"],
+          sourceGoalId: "goal-guarded-2",
+          sourceTaskId: "task-guarded-2",
+          fallbackMode: "normal",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-guarded-2",
+          workflowId: "workflow-guarded-2",
+          taskId: "task-guarded-2",
+          goalStatus: "completed",
+          taskState: "completed",
+          approvalDecision: null,
+          executionKind: "completed",
+          outcomeScore: 1,
+          userCorrection: false,
+          notes: "Completed after review."
+        }
+      }),
+      buildReplayEpisode("guarded-3", {
+        recommendation: {
+          key: "task_plan:workflow:create_record:R2:create,update",
+          kind: "task_plan",
+          agent: "workflow",
+          action: "create_record",
+          confidence: 0.74,
+          rationale: "Observed internal drafting flow.",
+          riskClass: "R2",
+          capabilities: ["create", "update"],
+          sourceGoalId: "goal-guarded-3",
+          sourceTaskId: "task-guarded-3",
+          fallbackMode: "normal",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-guarded-3",
+          workflowId: "workflow-guarded-3",
+          taskId: "task-guarded-3",
+          goalStatus: "completed",
+          taskState: "completed",
+          approvalDecision: null,
+          executionKind: "completed",
+          outcomeScore: 1,
+          userCorrection: false,
+          notes: "Completed after review."
+        }
+      })
+    ]);
+
+    expect(report.consideredEpisodes).toBe(6);
+    expect(report.suggestedPatterns).toBe(1);
+    expect(report.guardedPatterns).toBe(1);
+    expect(report.safeSuggestionPrecision).toBe(1);
+    expect(report.cases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "execution_path:communications:send_message:R3:send",
+          predictedMode: "suggest",
+          observedRisk: "safe"
+        }),
+        expect.objectContaining({
+          key: "task_plan:workflow:create_record:R2:create,update",
+          predictedMode: "approval_required"
+        })
+      ])
+    );
   });
 });

@@ -1,4 +1,5 @@
-import type { IntegrationAccount } from "@agentic/contracts";
+import type { IntegrationAccount, ProviderCredentialStatus } from "@agentic/contracts";
+import { assessManagedGoogleCredential, type GoogleCredentialIssue } from "./google-managed-readiness";
 
 export const integrationReadinessTierValues = [
   "experimental",
@@ -17,6 +18,15 @@ export type IntegrationReadinessProfile = {
   label: string;
   reason: string;
   supportedModes: IntegrationExecutionMode[];
+  modeSupport: Record<IntegrationExecutionMode, boolean>;
+  issues: GoogleCredentialIssue[];
+  managedProvider: {
+    provider: "google";
+    providerCredentialId: string | null;
+    credentialStatus: ProviderCredentialStatus | "missing";
+    hasRefreshToken: boolean;
+    missingScopes: string[];
+  } | null;
 };
 
 const READINESS_LABELS: Record<IntegrationReadinessTier, string> = {
@@ -33,16 +43,47 @@ const READINESS_MODES: Record<IntegrationReadinessTier, IntegrationExecutionMode
   "autonomous-grade": ["draft", "approval", "autonomous"]
 };
 
-function buildReadinessProfile(tier: IntegrationReadinessTier, reason: string): IntegrationReadinessProfile {
+function buildModeSupport(tier: IntegrationReadinessTier): Record<IntegrationExecutionMode, boolean> {
+  const supportedModes = READINESS_MODES[tier];
+  return {
+    draft: supportedModes.includes("draft"),
+    approval: supportedModes.includes("approval"),
+    autonomous: supportedModes.includes("autonomous")
+  };
+}
+
+function buildReadinessProfile(
+  tier: IntegrationReadinessTier,
+  reason: string,
+  options?: {
+    issues?: GoogleCredentialIssue[];
+    managedProvider?: IntegrationReadinessProfile["managedProvider"];
+  }
+): IntegrationReadinessProfile {
   return {
     tier,
     label: READINESS_LABELS[tier],
     reason,
-    supportedModes: READINESS_MODES[tier]
+    supportedModes: READINESS_MODES[tier],
+    modeSupport: buildModeSupport(tier),
+    issues: options?.issues ?? [],
+    managedProvider: options?.managedProvider ?? null
   };
 }
 
-export function describeIntegrationReadiness(account: IntegrationAccount): IntegrationReadinessProfile {
+export function describeIntegrationReadiness(
+  account: IntegrationAccount,
+  options?: {
+    providerCredential?: {
+      credential?: {
+        id: string;
+        status: ProviderCredentialStatus;
+        scopes: string[];
+      } | null;
+      hasRefreshTokenSecret?: boolean;
+    };
+  }
+): IntegrationReadinessProfile {
   switch (account.status) {
     case "disabled":
       return buildReadinessProfile(
@@ -61,6 +102,25 @@ export function describeIntegrationReadiness(account: IntegrationAccount): Integ
       );
     case "ready":
     default: {
+      const googleAssessment = assessManagedGoogleCredential({
+        account,
+        credential: options?.providerCredential?.credential ?? null,
+        hasRefreshTokenSecret: options?.providerCredential?.hasRefreshTokenSecret ?? false
+      });
+
+      if (googleAssessment && !googleAssessment.ready) {
+        return buildReadinessProfile("experimental", googleAssessment.issues[0]?.message ?? `${account.name} is not ready.`, {
+          issues: googleAssessment.issues,
+          managedProvider: {
+            provider: "google",
+            providerCredentialId: googleAssessment.providerCredentialId,
+            credentialStatus: googleAssessment.credentialStatus,
+            hasRefreshToken: googleAssessment.hasRefreshToken,
+            missingScopes: googleAssessment.missingScopes
+          }
+        });
+      }
+
       switch (account.system) {
         case "notes":
           return buildReadinessProfile(
@@ -71,7 +131,18 @@ export function describeIntegrationReadiness(account: IntegrationAccount): Integ
         case "calendar":
           return buildReadinessProfile(
             "approval-grade",
-            `${account.name} is live and can support governed execution, but autonomous execution should stay gated until the vertical quality bar is higher.`
+            `${account.name} is live and can support governed execution, but autonomous execution should stay gated until the vertical quality bar is higher.`,
+            googleAssessment
+              ? {
+                  managedProvider: {
+                    provider: "google",
+                    providerCredentialId: googleAssessment.providerCredentialId,
+                    credentialStatus: googleAssessment.credentialStatus,
+                    hasRefreshToken: googleAssessment.hasRefreshToken,
+                    missingScopes: googleAssessment.missingScopes
+                  }
+                }
+              : undefined
           );
         case "messaging":
           return buildReadinessProfile(

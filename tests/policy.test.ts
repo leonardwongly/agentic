@@ -1,5 +1,12 @@
 import type { AgentMetrics, WorkspaceGovernance } from "@agentic/contracts";
-import { evaluateTaskPolicy, riskFromCapabilities } from "@agentic/policy";
+import {
+  assessWorkspaceGovernanceConformance,
+  buildGovernanceSimulationScenarios,
+  evaluateTaskPolicy,
+  riskFromCapabilities,
+  simulateGovernanceScenarios,
+  simulateTaskPolicy
+} from "@agentic/policy";
 import { createMemoryRecord } from "@agentic/memory";
 
 describe("policy", () => {
@@ -293,5 +300,132 @@ describe("policy", () => {
     expect(decision.outcome).toBe("allowed_with_confirmation");
     expect(decision.requiresApproval).toBe(true);
     expect(decision.rationale).toContain("limits autonomous execution to R1");
+  });
+
+  it("classifies governance conformance drift across pass, warn, and fail checks", () => {
+    const conformant = assessWorkspaceGovernanceConformance(
+      buildGovernance({
+        requireAuditExports: true,
+        externalSendRequiresApproval: true,
+        calendarWriteRequiresApproval: true,
+        maxAutoRunRiskClass: "R2"
+      })
+    );
+    const needsAttention = assessWorkspaceGovernanceConformance(
+      buildGovernance({
+        requireAuditExports: true,
+        externalSendRequiresApproval: true,
+        calendarWriteRequiresApproval: false,
+        maxAutoRunRiskClass: "R3"
+      })
+    );
+    const nonConformant = assessWorkspaceGovernanceConformance(buildGovernance());
+
+    expect(conformant).toMatchObject({
+      status: "conformant"
+    });
+    expect(conformant?.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "audit-exports", status: "pass" }),
+        expect.objectContaining({ id: "risk-ceiling", status: "pass" })
+      ])
+    );
+    expect(needsAttention).toMatchObject({
+      status: "needs_attention"
+    });
+    expect(needsAttention?.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "calendar-write-approval", status: "warn" }),
+        expect.objectContaining({ id: "risk-ceiling", status: "warn" })
+      ])
+    );
+    expect(nonConformant).toMatchObject({
+      status: "non_conformant"
+    });
+    expect(nonConformant?.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "audit-exports", status: "fail" }),
+        expect.objectContaining({ id: "external-send-approval", status: "fail" })
+      ])
+    );
+  });
+
+  it("builds the default governance simulation scenarios for the operator loop", () => {
+    const scenarios = buildGovernanceSimulationScenarios();
+
+    expect(scenarios.map((scenario) => scenario.id)).toEqual([
+      "low-risk-read",
+      "draft-update",
+      "external-send",
+      "calendar-write",
+      "destructive-action"
+    ]);
+  });
+
+  it("simulates governance scenarios with conformance context and decision traces", () => {
+    const scenarios = simulateGovernanceScenarios({
+      governance: buildGovernance({
+        requireAuditExports: true,
+        externalSendRequiresApproval: true,
+        calendarWriteRequiresApproval: true,
+        maxAutoRunRiskClass: "R2"
+      })
+    });
+    const lowRiskRead = scenarios.find((scenario) => scenario.id === "low-risk-read");
+    const externalSend = scenarios.find((scenario) => scenario.id === "external-send");
+    const destructiveAction = scenarios.find((scenario) => scenario.id === "destructive-action");
+
+    expect(lowRiskRead?.result.decision).toMatchObject({
+      outcome: "allowed",
+      requiresApproval: false
+    });
+    expect(lowRiskRead?.result.conformance?.status).toBe("conformant");
+    expect(externalSend?.result.decision).toMatchObject({
+      outcome: "allowed_with_confirmation",
+      requiresApproval: true
+    });
+    expect(externalSend?.result.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "governance-gate",
+          stage: "governance",
+          status: "warn"
+        })
+      ])
+    );
+    expect(destructiveAction?.result.decision).toMatchObject({
+      outcome: "blocked",
+      requiresApproval: true
+    });
+  });
+
+  it("returns full simulation detail when low confidence downgrades the task to draft mode", () => {
+    const simulation = simulateTaskPolicy({
+      capabilities: ["send"],
+      confidence: 0.4,
+      title: "Send the ambiguous external update",
+      governance: buildGovernance({
+        requireAuditExports: true,
+        externalSendRequiresApproval: true,
+        calendarWriteRequiresApproval: true,
+        maxAutoRunRiskClass: "R2"
+      })
+    });
+
+    expect(simulation.decision).toMatchObject({
+      outcome: "downgrade_to_draft",
+      requiresApproval: false,
+      riskClass: "R3"
+    });
+    expect(simulation.conformance?.status).toBe("conformant");
+    expect(simulation.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "confidence-threshold",
+          stage: "input",
+          status: "warn"
+        })
+      ])
+    );
   });
 });

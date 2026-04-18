@@ -223,7 +223,7 @@ describe("observability", () => {
       },
       attributes: {
         operation: "chat.postMessage",
-        errorName: "Error",
+        errorName: "ConnectorFailureError",
         errorMessage: "[REDACTED]"
       }
     });

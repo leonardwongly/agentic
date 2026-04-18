@@ -21,6 +21,7 @@ const TrackShareViewRequestSchema = z
     token: z.string().trim().min(1).max(4096)
   })
   .strict();
+const MAX_PUBLIC_SHARE_VIEW_CONTENT_LENGTH_BYTES = 8_192;
 
 function acceptedNoOp(init?: ResponseInit): Response {
   return operationalJson(
@@ -57,9 +58,32 @@ function buildPublicShareViewJobIdempotencyKey(params: {
     .slice(0, 32)}`;
 }
 
+function buildPublicShareTokenRateLimitKey(tokenFingerprint: string): string {
+  return `public-share-view:token:${tokenFingerprint}`;
+}
+
+function getPublicShareViewContentLength(request: Request): number | null {
+  const raw = request.headers.get("content-length");
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+
+  return parsed;
+}
+
 export async function POST(request: Request) {
   return withApiTelemetry(request, "api.share.view.track", async () => {
     try {
+      const contentLength = getPublicShareViewContentLength(request);
+      if (contentLength !== null && contentLength > MAX_PUBLIC_SHARE_VIEW_CONTENT_LENGTH_BYTES) {
+        return acceptedNoOp();
+      }
+
       const { token } = await parseJsonBody(request, TrackShareViewRequestSchema);
       const requestClientKey = getRequestClientKey(request);
       const rateLimitKey = `public-share-view:${requestClientKey}`;
@@ -79,8 +103,18 @@ export async function POST(request: Request) {
         return acceptedNoOp();
       }
 
-      const repository = await getSeededRepository();
       const tokenFingerprint = fingerprintGoalShareToken(token);
+      const tokenRateLimit = await checkSessionRateLimit(buildPublicShareTokenRateLimitKey(tokenFingerprint));
+
+      if (!tokenRateLimit.allowed) {
+        return acceptedNoOp({
+          headers: {
+            "Retry-After": String(Math.ceil(tokenRateLimit.retryAfterMs / 1000))
+          }
+        });
+      }
+
+      const repository = await getSeededRepository();
       const share = await repository.getGoalShareByTokenFingerprint(tokenFingerprint);
 
       if (

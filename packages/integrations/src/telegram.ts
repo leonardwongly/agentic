@@ -1,11 +1,18 @@
 import crypto from "node:crypto";
 import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
+import {
+  ConnectorFailureError,
+  createHttpConnectorError,
+  createNotConfiguredConnectorError,
+  normalizeConnectorThrownError,
+  parseRetryAfterSeconds
+} from "./connector-errors";
 
 const TELEGRAM_API_TIMEOUT_MS = 5_000;
 
 type TelegramApiResponse<T> =
   | { ok: true; result: T }
-  | { ok: false; error_code?: number; description?: string };
+  | { ok: false; error_code?: number; description?: string; parameters?: { retry_after?: number } };
 
 function getTelegramBotToken(): string | undefined {
   return process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined;
@@ -23,7 +30,11 @@ async function telegramPost<T>(method: string, body: Record<string, unknown>): P
   const token = getTelegramBotToken();
 
   if (!token) {
-    throw new Error("Telegram not configured. Set TELEGRAM_BOT_TOKEN.");
+    throw createNotConfiguredConnectorError({
+      provider: "telegram",
+      operation: method,
+      envVar: "TELEGRAM_BOT_TOKEN"
+    });
   }
 
   return withTelemetryContext(
@@ -52,14 +63,33 @@ async function telegramPost<T>(method: string, body: Record<string, unknown>): P
             });
 
             if (!response.ok) {
-              throw new Error(`Telegram API ${method} returned HTTP ${response.status}`);
+              throw createHttpConnectorError({
+                provider: "telegram",
+                operation: method,
+                statusCode: response.status,
+                retryAfterSeconds: parseRetryAfterSeconds(response.headers.get("retry-after"))
+              });
             }
 
             const data = (await response.json()) as TelegramApiResponse<T>;
 
             if (!data.ok) {
-              throw new Error(
-                data.description ? `Telegram API ${method} failed: ${data.description}` : `Telegram API ${method} failed.`
+              throw new ConnectorFailureError(
+                "telegram",
+                method,
+                data.error_code === 429
+                  ? "rate_limited"
+                  : data.error_code === 401 || data.error_code === 403
+                    ? "unauthorized"
+                    : "remote_error",
+                data.error_code === 429 || (typeof data.error_code === "number" && data.error_code >= 500),
+                {
+                  statusCode: data.error_code,
+                  retryAfterSeconds: data.parameters?.retry_after,
+                  message: data.description
+                    ? `Telegram API ${method} failed: ${data.description}`
+                    : `Telegram API ${method} failed.`
+                }
               );
             }
 
@@ -75,10 +105,15 @@ async function telegramPost<T>(method: string, body: Record<string, unknown>): P
               operation: method,
               outcome: "error"
             });
-            logError("integration.telegram.call_failed", error, {
+            const normalizedError = normalizeConnectorThrownError({
+              provider: "telegram",
+              operation: method,
+              error
+            });
+            logError("integration.telegram.call_failed", normalizedError, {
               operation: method
             });
-            throw error;
+            throw normalizedError;
           }
         }
       )

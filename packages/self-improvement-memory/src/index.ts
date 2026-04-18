@@ -50,6 +50,39 @@ const MetadataSchema = JsonValueSchema.superRefine((value, context) => {
 });
 
 export const EpisodeOutcomeSchema = z.enum(["success", "partial", "failure"]);
+export const RecommendationFallbackModeSchema = z.enum(["normal", "review_required", "draft_only"]);
+export const RecommendationEvidenceHintSchema = z.enum(["none", "sparse", "established"]);
+export const RecommendationTraceSchema = z
+  .object({
+    key: boundedString(160),
+    kind: z.enum(["task_plan", "approval_path", "execution_path"]),
+    agent: boundedString(80),
+    action: boundedString(120),
+    confidence: z.number().min(0).max(1),
+    rationale: z.string().trim().max(500).nullable().default(null),
+    riskClass: z.string().trim().max(16).nullable().default(null),
+    capabilities: z.array(boundedString(40)).max(20).default([]),
+    sourceGoalId: boundedString(80),
+    sourceTaskId: z.string().trim().max(80).nullable().default(null),
+    fallbackMode: RecommendationFallbackModeSchema,
+    evidenceHint: RecommendationEvidenceHintSchema.default("none")
+  })
+  .strict();
+export const OutcomeExecutionKindSchema = z.enum(["not_run", "completed", "failed"]);
+export const OutcomeLinkSchema = z
+  .object({
+    goalId: boundedString(80),
+    workflowId: z.string().trim().max(80).nullable().default(null),
+    taskId: z.string().trim().max(80).nullable().default(null),
+    goalStatus: z.string().trim().max(80).nullable().default(null),
+    taskState: z.string().trim().max(80).nullable().default(null),
+    approvalDecision: z.enum(["approved", "rejected"]).nullable().default(null),
+    executionKind: OutcomeExecutionKindSchema.default("not_run"),
+    outcomeScore: z.number().min(-1).max(1),
+    userCorrection: z.boolean().default(false),
+    notes: z.string().trim().max(500).nullable().default(null)
+  })
+  .strict();
 export const SemanticPatternSchema = z
   .object({
     id: boundedString(80),
@@ -94,6 +127,8 @@ export const EpisodeRecordSchema = z
     rootCause: z.string().trim().max(2_000).nullable().default(null),
     solution: boundedString(2_000),
     lesson: boundedString(2_000),
+    recommendation: RecommendationTraceSchema.nullable().optional().default(null),
+    outcomeLink: OutcomeLinkSchema.nullable().optional().default(null),
     relatedPatternId: z.string().trim().max(80).nullable().default(null),
     userFeedback: UserFeedbackSchema.nullable().optional().default(null),
     metadata: MetadataSchema.default({})
@@ -151,6 +186,11 @@ export type SemanticPattern = z.infer<typeof SemanticPatternSchema>;
 export type SemanticPatternsFile = z.infer<typeof SemanticPatternsFileSchema>;
 export type UserFeedback = z.infer<typeof UserFeedbackSchema>;
 export type EpisodeOutcome = z.infer<typeof EpisodeOutcomeSchema>;
+export type RecommendationFallbackMode = z.infer<typeof RecommendationFallbackModeSchema>;
+export type RecommendationEvidenceHint = z.infer<typeof RecommendationEvidenceHintSchema>;
+export type RecommendationTrace = z.infer<typeof RecommendationTraceSchema>;
+export type OutcomeExecutionKind = z.infer<typeof OutcomeExecutionKindSchema>;
+export type OutcomeLink = z.infer<typeof OutcomeLinkSchema>;
 export type EpisodeRecord = z.infer<typeof EpisodeRecordSchema>;
 export type CurrentSession = z.infer<typeof CurrentSessionSchema>;
 export type LastError = z.infer<typeof LastErrorSchema>;
@@ -193,6 +233,49 @@ export class SelfImprovementStorageError extends Error {
   }
 }
 
+export type RecommendationReplayMode = "draft_only" | "review_required" | "approval_required" | "suggest";
+
+export type RecommendationInsight = {
+  key: string;
+  kind: RecommendationTrace["kind"];
+  agent: string;
+  action: string;
+  riskClass: string | null;
+  capabilities: string[];
+  evidenceCount: number;
+  averageConfidence: number;
+  successCount: number;
+  partialCount: number;
+  failureCount: number;
+  rejectionCount: number;
+  userCorrectionCount: number;
+  approvalCount: number;
+  lastSeenAt: string;
+  score: number;
+  replayMode: RecommendationReplayMode;
+  rationale: string;
+};
+
+export type RecommendationReplayCase = {
+  key: string;
+  predictedMode: RecommendationReplayMode;
+  observedRisk: "safe" | "caution" | "unsafe";
+  score: number;
+  evidenceCount: number;
+  averageConfidence: number;
+};
+
+export type RecommendationReplayReport = {
+  totalEpisodes: number;
+  consideredEpisodes: number;
+  sparsePatterns: number;
+  suggestedPatterns: number;
+  guardedPatterns: number;
+  safeSuggestionPrecision: number;
+  cases: RecommendationReplayCase[];
+  insights: RecommendationInsight[];
+};
+
 function validateInput<T>(schema: z.ZodType<T>, value: unknown, message: string): T {
   const result = schema.safeParse(value);
 
@@ -206,6 +289,235 @@ function validateInput<T>(schema: z.ZodType<T>, value: unknown, message: string)
 function normalizeOptionalTrimmedString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function buildRecommendationRationale(params: {
+  evidenceCount: number;
+  successCount: number;
+  partialCount: number;
+  failureCount: number;
+  rejectionCount: number;
+  userCorrectionCount: number;
+  averageConfidence: number;
+  replayMode: RecommendationReplayMode;
+}): string {
+  const fragments = [
+    `${params.evidenceCount} observed outcome${params.evidenceCount === 1 ? "" : "s"}`,
+    `${params.successCount} success`,
+    `${params.failureCount} failure`,
+    `${params.rejectionCount} rejection`,
+    `${params.userCorrectionCount} correction`
+  ];
+
+  if (params.partialCount > 0) {
+    fragments.push(`${params.partialCount} partial`);
+  }
+
+  const confidenceLabel = params.averageConfidence >= 0.78 ? "strong" : params.averageConfidence >= 0.6 ? "mixed" : "low";
+  fragments.push(`${confidenceLabel} confidence`);
+
+  if (params.replayMode === "draft_only") {
+    fragments.push("keep to draft-only fallback until more evidence exists");
+  } else if (params.replayMode === "review_required") {
+    fragments.push("keep human review because negative outcomes were observed");
+  } else if (params.replayMode === "approval_required") {
+    fragments.push("approval remains the safe operating mode");
+  } else {
+    fragments.push("eligible for suggestion-first reuse");
+  }
+
+  return fragments.join("; ");
+}
+
+export function deriveRecommendationInsights(
+  episodes: EpisodeRecord[],
+  options?: {
+    minimumEvidence?: number;
+    lowConfidenceThreshold?: number;
+    automationThreshold?: number;
+  }
+): RecommendationInsight[] {
+  const minimumEvidence = Math.max(1, Math.trunc(options?.minimumEvidence ?? 3));
+  const lowConfidenceThreshold = clamp(options?.lowConfidenceThreshold ?? 0.58, 0, 1);
+  const automationThreshold = clamp(options?.automationThreshold ?? 0.78, 0, 1);
+  const grouped = new Map<
+    string,
+    {
+      recommendation: RecommendationTrace;
+      evidenceCount: number;
+      confidenceTotal: number;
+      successCount: number;
+      partialCount: number;
+      failureCount: number;
+      rejectionCount: number;
+      userCorrectionCount: number;
+      approvalCount: number;
+      outcomeScoreTotal: number;
+      lastSeenAt: string;
+    }
+  >();
+
+  for (const episode of episodes) {
+    if (!episode.recommendation || !episode.outcomeLink) {
+      continue;
+    }
+
+    const existing = grouped.get(episode.recommendation.key) ?? {
+      recommendation: episode.recommendation,
+      evidenceCount: 0,
+      confidenceTotal: 0,
+      successCount: 0,
+      partialCount: 0,
+      failureCount: 0,
+      rejectionCount: 0,
+      userCorrectionCount: 0,
+      approvalCount: 0,
+      outcomeScoreTotal: 0,
+      lastSeenAt: episode.timestamp
+    };
+
+    existing.evidenceCount += 1;
+    existing.confidenceTotal += episode.recommendation.confidence;
+    existing.outcomeScoreTotal += episode.outcomeLink.outcomeScore;
+    existing.lastSeenAt = existing.lastSeenAt.localeCompare(episode.timestamp) >= 0 ? existing.lastSeenAt : episode.timestamp;
+
+    if (episode.outcome === "success") {
+      existing.successCount += 1;
+    } else if (episode.outcome === "partial") {
+      existing.partialCount += 1;
+    } else {
+      existing.failureCount += 1;
+    }
+
+    if (episode.outcomeLink.approvalDecision === "approved") {
+      existing.approvalCount += 1;
+    }
+
+    if (episode.outcomeLink.approvalDecision === "rejected") {
+      existing.rejectionCount += 1;
+    }
+
+    if (episode.outcomeLink.userCorrection) {
+      existing.userCorrectionCount += 1;
+    }
+
+    grouped.set(episode.recommendation.key, existing);
+  }
+
+  return [...grouped.values()]
+    .map((entry) => {
+      const averageConfidence = clamp(entry.confidenceTotal / entry.evidenceCount, 0, 1);
+      const normalizedOutcomeScore = clamp((entry.outcomeScoreTotal / entry.evidenceCount + 1) / 2, 0, 1);
+      const successWeight = (entry.successCount + entry.partialCount * 0.5) / entry.evidenceCount;
+      const negativeWeight = (entry.failureCount + entry.rejectionCount + entry.userCorrectionCount) / entry.evidenceCount;
+      const evidenceBonus = Math.min(0.12, Math.log2(entry.evidenceCount + 1) * 0.04);
+      const score = clamp(
+        normalizedOutcomeScore * 0.55 + successWeight * 0.35 + evidenceBonus - negativeWeight * 0.3,
+        0,
+        1
+      );
+
+      let replayMode: RecommendationReplayMode;
+      if (entry.evidenceCount < minimumEvidence || averageConfidence < lowConfidenceThreshold) {
+        replayMode = "draft_only";
+      } else if (entry.rejectionCount > 0 || entry.userCorrectionCount > 0 || negativeWeight >= 0.45 || score < 0.45) {
+        replayMode = "review_required";
+      } else if (entry.failureCount > 0 || entry.partialCount > 0 || score < automationThreshold) {
+        replayMode = "approval_required";
+      } else {
+        replayMode = "suggest";
+      }
+
+      return {
+        key: entry.recommendation.key,
+        kind: entry.recommendation.kind,
+        agent: entry.recommendation.agent,
+        action: entry.recommendation.action,
+        riskClass: entry.recommendation.riskClass,
+        capabilities: [...entry.recommendation.capabilities],
+        evidenceCount: entry.evidenceCount,
+        averageConfidence,
+        successCount: entry.successCount,
+        partialCount: entry.partialCount,
+        failureCount: entry.failureCount,
+        rejectionCount: entry.rejectionCount,
+        userCorrectionCount: entry.userCorrectionCount,
+        approvalCount: entry.approvalCount,
+        lastSeenAt: entry.lastSeenAt,
+        score,
+        replayMode,
+        rationale: buildRecommendationRationale({
+          evidenceCount: entry.evidenceCount,
+          successCount: entry.successCount,
+          partialCount: entry.partialCount,
+          failureCount: entry.failureCount,
+          rejectionCount: entry.rejectionCount,
+          userCorrectionCount: entry.userCorrectionCount,
+          averageConfidence,
+          replayMode
+        })
+      } satisfies RecommendationInsight;
+    })
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      if (right.evidenceCount !== left.evidenceCount) {
+        return right.evidenceCount - left.evidenceCount;
+      }
+
+      return right.lastSeenAt.localeCompare(left.lastSeenAt);
+    });
+}
+
+export function buildRecommendationReplayReport(
+  episodes: EpisodeRecord[],
+  options?: {
+    minimumEvidence?: number;
+    lowConfidenceThreshold?: number;
+    automationThreshold?: number;
+  }
+): RecommendationReplayReport {
+  const insights = deriveRecommendationInsights(episodes, options);
+  const cases = insights.map((insight) => {
+    const observedRisk =
+      insight.rejectionCount > 0 || insight.userCorrectionCount > 0 || insight.failureCount >= Math.ceil(insight.evidenceCount / 2)
+        ? "unsafe"
+        : insight.failureCount > 0 || insight.partialCount > 0
+          ? "caution"
+          : "safe";
+
+    return {
+      key: insight.key,
+      predictedMode: insight.replayMode,
+      observedRisk,
+      score: insight.score,
+      evidenceCount: insight.evidenceCount,
+      averageConfidence: insight.averageConfidence
+    } satisfies RecommendationReplayCase;
+  });
+
+  const suggestedCases = cases.filter((item) => item.predictedMode === "suggest");
+  const safeSuggestionPrecision =
+    suggestedCases.length === 0
+      ? 0
+      : suggestedCases.filter((item) => item.observedRisk === "safe").length / suggestedCases.length;
+
+  return {
+    totalEpisodes: episodes.length,
+    consideredEpisodes: episodes.filter((episode) => episode.recommendation && episode.outcomeLink).length,
+    sparsePatterns: insights.filter((insight) => insight.replayMode === "draft_only").length,
+    suggestedPatterns: suggestedCases.length,
+    guardedPatterns: insights.filter((insight) => insight.replayMode !== "suggest").length,
+    safeSuggestionPrecision,
+    cases,
+    insights
+  };
 }
 
 export type ListEpisodesFilters = {

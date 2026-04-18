@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { WorkspaceGovernanceSchema } from "@agentic/contracts";
+import {
+  assessWorkspaceGovernanceConformance,
+  buildGovernanceSimulationScenarios,
+  simulateGovernanceScenarios
+} from "@agentic/policy";
 import { requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
@@ -29,16 +34,25 @@ async function resolveWorkspaceContext(userId: string) {
   return { repository, dashboard, activeWorkspace };
 }
 
+function buildGovernanceResponse(governance: z.infer<typeof WorkspaceGovernanceSchema> | null, dashboard: unknown) {
+  return {
+    governance,
+    conformance: assessWorkspaceGovernanceConformance(governance),
+    simulations: simulateGovernanceScenarios({
+      governance,
+      scenarios: buildGovernanceSimulationScenarios()
+    }),
+    dashboard
+  };
+}
+
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
     const { repository, dashboard, activeWorkspace } = await resolveWorkspaceContext(principal.userId);
     const governance = dashboard.workspaceGovernance ?? (await repository.getWorkspaceGovernance(activeWorkspace.id, principal.userId));
 
-    return authenticatedJson({
-      governance,
-      dashboard
-    });
+    return authenticatedJson(buildGovernanceResponse(governance, dashboard));
   } catch (error) {
     return handleApiError(error, "Failed to load workspace governance.");
   }
@@ -75,10 +89,7 @@ export async function POST(request: Request) {
 
     await repository.saveWorkspaceGovernance(updated, actor);
 
-    return authenticatedJson({
-      governance: updated,
-      dashboard: await repository.getDashboardData(principal.userId)
-    });
+    return authenticatedJson(buildGovernanceResponse(updated, await repository.getDashboardData(principal.userId)));
   } catch (error) {
     return handleApiError(error, "Failed to update workspace governance.");
   }

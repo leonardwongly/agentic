@@ -212,8 +212,10 @@ export function callWithCapabilityCheck<T>(
 
 export * from "./gmail";
 export * from "./google-calendar";
+export * from "./google-managed-readiness";
 export * from "./google-oauth";
 export * from "./provider-credential-secrets";
 export * from "./readiness";
+export * from "./connector-errors";
 export * from "./slack";
 export * from "./telegram";

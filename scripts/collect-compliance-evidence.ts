@@ -50,6 +50,8 @@ export interface ComplianceArtifactStatus extends ComplianceReferenceStatus {
   required: boolean;
 }
 
+export type ComplianceControlStatus = "ready" | "missing-artifacts";
+
 export interface ComplianceControlEvidence {
   id: string;
   family: string;
@@ -68,6 +70,8 @@ export interface ComplianceControlEvidence {
   evidenceArtifacts: ComplianceArtifactStatus[];
   risks: string[];
   metrics: string[];
+  status: ComplianceControlStatus;
+  missingRequiredArtifactPaths: string[];
 }
 
 export interface ComplianceEvidenceBundle {
@@ -77,6 +81,8 @@ export interface ComplianceEvidenceBundle {
   owners: string[];
   summary: {
     totalControls: number;
+    readyControls: number;
+    failingControls: number;
     totalRequiredArtifacts: number;
     missingReferences: number;
     missingRequiredArtifacts: number;
@@ -88,7 +94,8 @@ function expectedGeneratedArtifactPaths(outputDir: string): string[] {
   return [
     path.posix.join(outputDir, "control-matrix.json"),
     path.posix.join(outputDir, "control-matrix.md"),
-    path.posix.join(outputDir, "evidence-manifest.json")
+    path.posix.join(outputDir, "evidence-manifest.json"),
+    path.posix.join(outputDir, "reviewer-summary.md")
   ];
 }
 
@@ -217,6 +224,8 @@ export function buildComplianceEvidenceBundle(
   let missingReferences = 0;
   let missingRequiredArtifacts = 0;
   let totalRequiredArtifacts = 0;
+  let readyControls = 0;
+  let failingControls = 0;
 
   const controls = registry.controls.map<ComplianceControlEvidence>((control) => {
     const codePaths = control.codePaths.map((entry) => inspectReference(cwd, entry));
@@ -251,6 +260,17 @@ export function buildComplianceEvidenceBundle(
       }
     }
 
+    const missingRequiredArtifactPaths = evidenceArtifacts
+      .filter((artifact) => !artifact.exists && artifact.required && !generatedArtifactPaths.has(artifact.path))
+      .map((artifact) => artifact.path);
+    const status: ComplianceControlStatus = missingRequiredArtifactPaths.length === 0 ? "ready" : "missing-artifacts";
+
+    if (status === "ready") {
+      readyControls += 1;
+    } else {
+      failingControls += 1;
+    }
+
     return {
       id: control.id,
       family: control.family,
@@ -264,7 +284,9 @@ export function buildComplianceEvidenceBundle(
       automatedChecks,
       evidenceArtifacts,
       risks: control.risks,
-      metrics: control.metrics
+      metrics: control.metrics,
+      status,
+      missingRequiredArtifactPaths
     };
   });
 
@@ -283,6 +305,8 @@ export function buildComplianceEvidenceBundle(
     owners: registry.owners,
     summary: {
       totalControls: controls.length,
+      readyControls,
+      failingControls,
       totalRequiredArtifacts,
       missingReferences,
       missingRequiredArtifacts
@@ -303,13 +327,25 @@ export function renderComplianceEvidenceMarkdown(bundle: ComplianceEvidenceBundl
     "## Summary",
     "",
     `- Controls: ${bundle.summary.totalControls}`,
+    `- Ready controls: ${bundle.summary.readyControls}`,
+    `- Controls needing evidence: ${bundle.summary.failingControls}`,
     `- Required evidence artifacts: ${bundle.summary.totalRequiredArtifacts}`,
     `- Missing references: ${bundle.summary.missingReferences}`,
     `- Missing required artifacts: ${bundle.summary.missingRequiredArtifacts}`
   ];
 
   for (const control of bundle.controls) {
-    lines.push("", `## ${control.id} ${control.title}`, "", `Family: ${control.family}`, `Owner: ${control.owner}`, "", control.objective, "");
+    lines.push(
+      "",
+      `## ${control.id} ${control.title}`,
+      "",
+      `Family: ${control.family}`,
+      `Owner: ${control.owner}`,
+      `Status: ${control.status}`,
+      "",
+      control.objective,
+      ""
+    );
     lines.push("### Trust boundaries", "", ...control.trustBoundaries.map((entry) => `- ${entry}`));
     lines.push("", "### Product surfaces", "", ...control.productSurfaces.map((entry) => `- ${entry}`));
     lines.push("", "### Code paths", "", ...control.codePaths.map((entry) => `- ${entry.path} (${entry.kind})`));
@@ -331,11 +367,60 @@ export function renderComplianceEvidenceMarkdown(bundle: ComplianceEvidenceBundl
         lines.push(`  SHA-256: ${artifact.sha256}`);
       }
     }
+    if (control.missingRequiredArtifactPaths.length > 0) {
+      lines.push("", "### Missing required artifacts", "", ...control.missingRequiredArtifactPaths.map((entry) => `- ${entry}`));
+    }
     lines.push("", "### Risks", "", ...control.risks.map((entry) => `- ${entry}`));
     lines.push("", "### Metrics", "", ...control.metrics.map((entry) => `- ${entry}`));
   }
 
   return `${lines.join("\n")}\n`;
+}
+
+export function renderComplianceReviewerSummary(bundle: ComplianceEvidenceBundle): string {
+  const lines: string[] = [
+    "# Compliance Evidence Reviewer Summary",
+    "",
+    `Generated at: ${bundle.generatedAt}`,
+    `Reviewed at: ${bundle.reviewedAt}`,
+    "",
+    "## Status",
+    "",
+    `- Controls ready: ${bundle.summary.readyControls}/${bundle.summary.totalControls}`,
+    `- Controls missing evidence: ${bundle.summary.failingControls}`,
+    `- Missing references: ${bundle.summary.missingReferences}`,
+    `- Missing required artifacts: ${bundle.summary.missingRequiredArtifacts}`
+  ];
+
+  const failingControls = bundle.controls.filter((control) => control.status !== "ready");
+
+  if (failingControls.length === 0) {
+    lines.push("", "All controls have the required evidence artifacts for this bundle.");
+    return `${lines.join("\n")}\n`;
+  }
+
+  lines.push("", "## Controls needing follow-up", "");
+  for (const control of failingControls) {
+    lines.push(`- ${control.id} ${control.title}`);
+    lines.push(`  Owner: ${control.owner}`);
+    for (const artifactPath of control.missingRequiredArtifactPaths) {
+      lines.push(`  Missing artifact: ${artifactPath}`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function appendGitHubStepSummary(markdown: string) {
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) {
+    return;
+  }
+
+  writeFileSync(summaryPath, markdown, {
+    encoding: "utf8",
+    flag: "a"
+  });
 }
 
 function writeOutputFiles(outputDir: string, bundle: ComplianceEvidenceBundle) {
@@ -345,6 +430,7 @@ function writeOutputFiles(outputDir: string, bundle: ComplianceEvidenceBundle) {
   const controlMatrixJsonPath = path.join(resolvedOutputDir, "control-matrix.json");
   const controlMatrixMarkdownPath = path.join(resolvedOutputDir, "control-matrix.md");
   const evidenceManifestPath = path.join(resolvedOutputDir, "evidence-manifest.json");
+  const reviewerSummaryPath = path.join(resolvedOutputDir, "reviewer-summary.md");
 
   writeFileSync(controlMatrixJsonPath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
   writeFileSync(controlMatrixMarkdownPath, renderComplianceEvidenceMarkdown(bundle), "utf8");
@@ -354,6 +440,13 @@ function writeOutputFiles(outputDir: string, bundle: ComplianceEvidenceBundle) {
       {
         generatedAt: bundle.generatedAt,
         summary: bundle.summary,
+        controls: bundle.controls.map((control) => ({
+          id: control.id,
+          title: control.title,
+          owner: control.owner,
+          status: control.status,
+          missingRequiredArtifactPaths: control.missingRequiredArtifactPaths
+        })),
         evidenceArtifacts: bundle.controls.flatMap((control) =>
           control.evidenceArtifacts.map((artifact) => ({
             controlId: control.id,
@@ -370,6 +463,8 @@ function writeOutputFiles(outputDir: string, bundle: ComplianceEvidenceBundle) {
     )}\n`,
     "utf8"
   );
+  writeFileSync(reviewerSummaryPath, renderComplianceReviewerSummary(bundle), "utf8");
+  appendGitHubStepSummary(`${renderComplianceReviewerSummary(bundle)}\n`);
 }
 
 function main() {

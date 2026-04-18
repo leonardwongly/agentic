@@ -209,6 +209,29 @@ describe("public share view route", () => {
     expectOperationalNoStoreHeaders(response);
   });
 
+  it("short-circuits oversized anonymous payloads before parsing the body", async () => {
+    const response = await publicShareViewRoute(
+      buildPublicShareViewRequest(
+        { token: "ignored" },
+        {
+          "content-length": "9000",
+          "user-agent": "Agentic Oversized Share Test"
+        }
+      )
+    );
+    const payload = (await response.json()) as {
+      accepted: boolean;
+      tracked: boolean;
+    };
+
+    expect(response.status).toBe(202);
+    expect(payload).toEqual({
+      accepted: true,
+      tracked: false
+    });
+    expectOperationalNoStoreHeaders(response);
+  });
+
   it("rate limits public share tracking with a namespaced client key", async () => {
     const seenKeys: string[] = [];
     const store: AuthSessionStateStore = {
@@ -252,6 +275,91 @@ describe("public share view route", () => {
     expect(response.headers.get("retry-after")).toBe("30");
     expect(seenKeys).toHaveLength(1);
     expect(seenKeys[0]).toMatch(/^public-share-view:fp:\/api\/share\/view:[0-9a-f]{24}$/);
+    expectOperationalNoStoreHeaders(response);
+  });
+
+  it("rate limits repeated access to the same shared token before repository lookup", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        if (key.startsWith("public-share-view:token:")) {
+          return {
+            allowed: false,
+            retryAfterMs: 45_000
+          };
+        }
+
+        return {
+          allowed: true,
+          retryAfterMs: 0
+        };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a goal with a reviewer.");
+    const shareResponse = await goalShareRoute(
+      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const sharePayload = (await shareResponse.json()) as {
+      shareId: string;
+      shareUrl: string;
+    };
+    const token = decodeURIComponent(sharePayload.shareUrl.split("/share/")[1] ?? "");
+
+    const response = await publicShareViewRoute(
+      buildPublicShareViewRequest(
+        { token },
+        {
+          "user-agent": "Agentic Share Token Flood Test",
+          "accept-language": "en-SG"
+        }
+      )
+    );
+    const payload = (await response.json()) as {
+      accepted: boolean;
+      tracked: boolean;
+    };
+    const reloadedRepository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const queuedJobs = await reloadedRepository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["public_share_view"]
+    });
+
+    expect(response.status).toBe(202);
+    expect(payload).toEqual({
+      accepted: true,
+      tracked: false
+    });
+    expect(response.headers.get("retry-after")).toBe("45");
+    expect(seenKeys).toHaveLength(2);
+    expect(seenKeys[0]).toMatch(/^public-share-view:fp:\/api\/share\/view:[0-9a-f]{24}$/);
+    expect(seenKeys[1]).toMatch(/^public-share-view:token:[0-9a-f]{12}$/);
+    expect(queuedJobs).toHaveLength(0);
     expectOperationalNoStoreHeaders(response);
   });
 });

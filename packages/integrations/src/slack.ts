@@ -1,5 +1,12 @@
 import crypto from "node:crypto";
 import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
+import {
+  ConnectorFailureError,
+  createHttpConnectorError,
+  createNotConfiguredConnectorError,
+  normalizeConnectorThrownError,
+  parseRetryAfterSeconds
+} from "./connector-errors";
 
 // ---------------------------------------------------------------------------
 // Environment helpers
@@ -24,6 +31,11 @@ export function isSlackReady(): boolean {
 const SLACK_API_BASE = "https://slack.com/api";
 const SLACK_API_TIMEOUT_MS = 5_000;
 
+type SlackApiResponse<T> = T & {
+  ok?: boolean;
+  error?: string;
+};
+
 function summarizeSlackBody(body: Record<string, unknown>) {
   return {
     hasBlocks: Array.isArray(body.blocks),
@@ -39,7 +51,11 @@ async function slackPost<T = unknown>(
 ): Promise<T> {
   const token = getSlackBotToken();
   if (!token) {
-    throw new Error("Slack not configured. Set SLACK_BOT_TOKEN.");
+    throw createNotConfiguredConnectorError({
+      provider: "slack",
+      operation: method,
+      envVar: "SLACK_BOT_TOKEN"
+    });
   }
 
   return withTelemetryContext(
@@ -67,10 +83,43 @@ async function slackPost<T = unknown>(
             });
 
             if (!response.ok) {
-              throw new Error(`Slack API ${method} returned HTTP ${response.status}`);
+              throw createHttpConnectorError({
+                provider: "slack",
+                operation: method,
+                statusCode: response.status,
+                retryAfterSeconds: parseRetryAfterSeconds(response.headers.get("retry-after"))
+              });
             }
 
-            const data = (await response.json()) as T;
+            const data = (await response.json()) as SlackApiResponse<T>;
+
+            if (data.ok === false) {
+              const statusCode = data.error === "ratelimited" ? 429 : 400;
+              const retryAfterSeconds =
+                data.error === "ratelimited" ? parseRetryAfterSeconds(response.headers.get("retry-after")) : undefined;
+
+              throw new ConnectorFailureError(
+                "slack",
+                method,
+                data.error === "ratelimited"
+                  ? "rate_limited"
+                  : data.error === "invalid_auth" ||
+                      data.error === "account_inactive" ||
+                      data.error === "token_revoked" ||
+                      data.error === "not_authed"
+                    ? "unauthorized"
+                    : "remote_error",
+                data.error === "ratelimited",
+                {
+                  statusCode,
+                  retryAfterSeconds,
+                  message: data.error
+                    ? `Slack API ${method} failed: ${data.error}.`
+                    : `Slack API ${method} failed.`
+                }
+              );
+            }
+
             recordCounter("integration.call.total", 1, {
               provider: "slack",
               operation: method,
@@ -83,10 +132,15 @@ async function slackPost<T = unknown>(
               operation: method,
               outcome: "error"
             });
-            logError("integration.slack.call_failed", error, {
+            const normalizedError = normalizeConnectorThrownError({
+              provider: "slack",
+              operation: method,
+              error
+            });
+            logError("integration.slack.call_failed", normalizedError, {
               operation: method
             });
-            throw error;
+            throw normalizedError;
           }
         }
       )

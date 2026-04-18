@@ -16,6 +16,11 @@ import { buildAuthorizedGetRequest, expectNoStoreHeaders } from "./route-test-he
 
 type AuditExportPayload = {
   workspace: { id: string };
+  governance?: {
+    approvalMode?: string;
+    requireAuditExports?: boolean;
+    externalSendRequiresApproval?: boolean;
+  } | null;
   members: Array<{ userId: string }>;
   privacyOperations: Array<{ id: string }>;
   integrity: {
@@ -108,6 +113,9 @@ describe("governance audit route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-disposition")).toContain(dashboard.activeWorkspace!.slug);
+    expect(response.headers.get("x-agentic-audit-digest")).toBe(payload.integrity.digest);
+    expect(response.headers.get("x-agentic-governance-mode")).toBe(payload.governance?.approvalMode ?? null);
+    expect(response.headers.get("x-agentic-governance-conformance")).toBe("non_conformant");
     expectNoStoreHeaders(response);
     expect(payload.workspace.id).toBe(dashboard.activeWorkspace!.id);
     expect(payload.privacyOperations).not.toEqual(
