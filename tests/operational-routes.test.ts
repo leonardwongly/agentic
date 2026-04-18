@@ -39,13 +39,20 @@ describe("operational routes", () => {
       runtime: "production",
       storageBackend: "postgres",
       generatedAt: "2026-04-17T00:00:00.000Z",
-      checks: []
+      checks: [
+        {
+          name: "connector_health",
+          status: "pass",
+          message: "Connector health checks passed."
+        }
+      ]
     });
 
     const response = await readyRoute(new Request("http://localhost/api/ready"));
     const payload = (await response.json()) as {
       ok: boolean;
       status: string;
+      checks: Array<{ name: string; status: string }>;
     };
 
     expect(response.status).toBe(200);
@@ -53,6 +60,12 @@ describe("operational routes", () => {
       ok: true,
       status: "ready"
     });
+    expect(payload.checks).toContainEqual(
+      expect.objectContaining({
+        name: "connector_health",
+        status: "pass"
+      })
+    );
     expectOperationalNoStoreHeaders(response);
   });
 

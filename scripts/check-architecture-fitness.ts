@@ -24,6 +24,9 @@ function main() {
   const templatesRoutePath = "apps/web/app/api/templates/[id]/route.ts";
   const repositoryPath = "packages/repository/src/index.ts";
   const workerEntryPath = "apps/worker/src/index.ts";
+  const runtimeReadinessPath = "apps/web/lib/runtime-readiness.ts";
+  const dashboardPath = "apps/web/components/dashboard.tsx";
+  const dashboardSurfacePath = "apps/web/lib/dashboard-surface.ts";
 
   const goalsRoute = readRepoFile(goalsRoutePath);
   const briefingRoute = readRepoFile(briefingRoutePath);
@@ -31,6 +34,9 @@ function main() {
   const templatesRoute = readRepoFile(templatesRoutePath);
   const repository = readRepoFile(repositoryPath);
   const workerEntry = readRepoFile(workerEntryPath);
+  const runtimeReadiness = readRepoFile(runtimeReadinessPath);
+  const dashboard = readRepoFile(dashboardPath);
+  const dashboardSurface = readRepoFile(dashboardSurfacePath);
 
   assertContains(
     goalsRoute,
@@ -91,9 +97,34 @@ function main() {
     `${workerEntryPath} must validate schema readiness before starting the worker loop.`
   );
   assertContains(
-    readRepoFile("apps/web/lib/runtime-readiness.ts"),
+    runtimeReadiness,
     'const runtime = await import("@agentic/db/schema-status");',
-    "apps/web/lib/runtime-readiness.ts must use the lightweight schema-status module instead of the migration runner."
+    `${runtimeReadinessPath} must use the lightweight schema-status module instead of the migration runner.`
+  );
+  assertContains(
+    runtimeReadiness,
+    "buildConnectorHealthCheckSnapshot(",
+    `${runtimeReadinessPath} must aggregate connector health into readiness.`
+  );
+  assertContains(
+    runtimeReadiness,
+    "name: \"connector_health\"",
+    `${runtimeReadinessPath} must expose a connector_health readiness check.`
+  );
+  assertContains(
+    runtimeReadiness,
+    "await repository.listProviderCredentials()",
+    `${runtimeReadinessPath} must inspect provider credentials when computing readiness.`
+  );
+  assertContains(
+    dashboard,
+    "DashboardOperationsTowerCard",
+    `${dashboardPath} must render the operations control tower surface.`
+  );
+  assertContains(
+    dashboardSurface,
+    "\"operations\"",
+    `${dashboardSurfacePath} must expose the operations section to the advanced dashboard surface.`
   );
 
   console.log("Architecture fitness checks passed.");
