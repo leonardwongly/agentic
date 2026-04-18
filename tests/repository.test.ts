@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -2508,6 +2509,7 @@ describe("repository", () => {
     );
     const audit = await repository.exportWorkspaceAudit(workspace.id, SYSTEM_USER_ID);
     const parsedAudit = JSON.parse(audit.content) as {
+      generatedAt: string;
       workspace: { id: string };
       governance: { approvalMode: string; requireAuditExports: boolean };
       goals: Array<{
@@ -2515,7 +2517,24 @@ describe("repository", () => {
         approvals: Array<{ id: string }>;
         actionLogs: Array<{ kind: string }>;
       }>;
+      goalShares: Array<unknown>;
+      privacyOperations: Array<unknown>;
+      members: Array<unknown>;
+      integrity: {
+        version: string;
+        algorithm: string;
+        canonicalization: string;
+        digest: string;
+        recordCounts: {
+          members: number;
+          goalShares: number;
+          privacyOperations: number;
+          goals: number;
+        };
+      };
     };
+    const { integrity, ...auditPayload } = parsedAudit;
+    const expectedDigest = createHash("sha256").update(JSON.stringify(auditPayload)).digest("hex");
 
     expect(governance).toMatchObject({
       workspaceId: workspace.id,
@@ -2530,6 +2549,7 @@ describe("repository", () => {
       approvalMode: "always_review",
       requireAuditExports: true
     });
+    expect(parsedAudit.generatedAt).toBe(audit.generatedAt);
     expect(parsedAudit.goals).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -2540,6 +2560,18 @@ describe("repository", () => {
       ])
     );
     const auditedGoal = parsedAudit.goals.find((item) => item.goal.id === bundle.goal.id);
+    expect(integrity).toEqual({
+      version: "agentic-workspace-audit-integrity-v1",
+      algorithm: "sha256",
+      canonicalization: "json-stringify-v1",
+      digest: expectedDigest,
+      recordCounts: {
+        members: parsedAudit.members.length,
+        goalShares: parsedAudit.goalShares.length,
+        privacyOperations: parsedAudit.privacyOperations.length,
+        goals: parsedAudit.goals.length
+      }
+    });
     expect(Array.isArray(auditedGoal?.approvals)).toBe(true);
     expect(auditedGoal?.actionLogs.some((log) => log.kind === "goal.created")).toBe(true);
   });
