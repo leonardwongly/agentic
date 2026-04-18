@@ -1,4 +1,5 @@
 import { createRepository } from "@agentic/repository";
+import type { ProviderCredential } from "@agentic/contracts";
 import { getAuthMode } from "./auth";
 import { getAuthRuntimeStateStatus, type AuthRuntimeStateStatus } from "./auth-runtime-state";
 import { getRequestIdentityRuntimeStatus, type RequestIdentityRuntimeStatus } from "./request-client-identity";
@@ -6,7 +7,13 @@ import { getRequestIdentityRuntimeStatus, type RequestIdentityRuntimeStatus } fr
 type DatabaseSchemaStatus = import("@agentic/db/schema-status").DatabaseSchemaStatus;
 
 export type ReadinessCheck = {
-  name: "access_key" | "database" | "auth_runtime_state" | "request_identity" | "async_execution";
+  name:
+    | "access_key"
+    | "database"
+    | "auth_runtime_state"
+    | "request_identity"
+    | "async_execution"
+    | "connector_health";
   status: "pass" | "warn" | "fail";
   message: string;
   details?: Record<string, string | boolean | number | null>;
@@ -23,6 +30,7 @@ export type WebReadinessReport = {
 
 type AuthModeSnapshot = ReturnType<typeof getAuthMode>;
 type AsyncExecutionCheckSnapshot = Omit<ReadinessCheck, "name">;
+type ConnectorHealthCheckSnapshot = Omit<ReadinessCheck, "name">;
 
 type ReadinessEvaluationParams = {
   generatedAt?: string;
@@ -33,9 +41,11 @@ type ReadinessEvaluationParams = {
   requestIdentity: RequestIdentityRuntimeStatus;
   databaseStatus: DatabaseSchemaStatus | null;
   asyncExecution: AsyncExecutionCheckSnapshot;
+  connectorHealth: ConnectorHealthCheckSnapshot;
 };
 
 const DEFAULT_MAX_PENDING_JOB_AGE_MS = 15 * 60 * 1000;
+const DEFAULT_PROVIDER_VALIDATION_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
 async function loadDatabaseSchemaStatus(options?: {
   databaseUrl?: string;
@@ -233,6 +243,22 @@ function buildAsyncExecutionCheck(params: ReadinessEvaluationParams): ReadinessC
   };
 }
 
+function buildConnectorHealthCheck(params: ReadinessEvaluationParams): ReadinessCheck {
+  return {
+    name: "connector_health",
+    ...params.connectorHealth
+  };
+}
+
+function parseTimestampMs(timestamp: string | null | undefined): number | null {
+  if (!timestamp) {
+    return null;
+  }
+
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function getMaxPendingJobAgeMs(): number {
   const configured = Number.parseInt(process.env.AGENTIC_READY_MAX_PENDING_JOB_AGE_MS ?? "", 10);
 
@@ -245,6 +271,152 @@ function getMaxPendingJobAgeMs(): number {
 
 function getAsyncExecutionFailureStatus(runtime: WebReadinessReport["runtime"]): ReadinessCheck["status"] {
   return runtime === "production" ? "fail" : "warn";
+}
+
+function getConnectorHealthFailureStatus(runtime: WebReadinessReport["runtime"]): ReadinessCheck["status"] {
+  return runtime === "production" ? "fail" : "warn";
+}
+
+function getConnectorHealthWarningStatus(runtime: WebReadinessReport["runtime"]): ReadinessCheck["status"] {
+  return runtime === "production" ? "warn" : "pass";
+}
+
+function formatCountLabel(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+export function buildConnectorHealthCheckSnapshot(params: {
+  credentials: ProviderCredential[];
+  runtime: WebReadinessReport["runtime"];
+  now?: number;
+}): ConnectorHealthCheckSnapshot {
+  const now = params.now ?? Date.now();
+  const connectedCount = params.credentials.filter((credential) => credential.status === "connected").length;
+  const reconnectRequiredCount = params.credentials.filter((credential) => credential.status === "reconnect_required").length;
+  const refreshFailedCount = params.credentials.filter((credential) => credential.status === "refresh_failed").length;
+  const revokedCount = params.credentials.filter((credential) => credential.status === "revoked").length;
+  const expiredCount = params.credentials.filter((credential) => {
+    const expiresAtMs = parseTimestampMs(credential.expiresAt);
+    return expiresAtMs !== null && expiresAtMs <= now;
+  }).length;
+  const validationStaleCount = params.credentials.filter((credential) => {
+    if (credential.status !== "connected") {
+      return false;
+    }
+
+    const validationReferenceMs = parseTimestampMs(credential.lastValidatedAt) ?? parseTimestampMs(credential.updatedAt);
+    return validationReferenceMs !== null && now - validationReferenceMs >= DEFAULT_PROVIDER_VALIDATION_STALE_MS;
+  }).length;
+  const degradedCount = params.credentials.filter((credential) => {
+    if (credential.status === "reconnect_required" || credential.status === "refresh_failed" || credential.status === "revoked") {
+      return true;
+    }
+
+    const expiresAtMs = parseTimestampMs(credential.expiresAt);
+
+    if (expiresAtMs !== null && expiresAtMs <= now) {
+      return true;
+    }
+
+    if (credential.status !== "connected") {
+      return false;
+    }
+
+    const validationReferenceMs = parseTimestampMs(credential.lastValidatedAt) ?? parseTimestampMs(credential.updatedAt);
+    return validationReferenceMs !== null && now - validationReferenceMs >= DEFAULT_PROVIDER_VALIDATION_STALE_MS;
+  }).length;
+  const details = {
+    totalCredentials: params.credentials.length,
+    connectedCredentials: connectedCount,
+    degradedCredentials: degradedCount,
+    reconnectRequiredCredentials: reconnectRequiredCount,
+    refreshFailedCredentials: refreshFailedCount,
+    revokedCredentials: revokedCount,
+    expiredCredentials: expiredCount,
+    validationStaleCredentials: validationStaleCount,
+    validationStaleAfterHours: Math.floor(DEFAULT_PROVIDER_VALIDATION_STALE_MS / (60 * 60 * 1000))
+  };
+
+  if (params.credentials.length === 0) {
+    return {
+      status: "pass",
+      message: "No provider credentials are configured, so connector-health checks are idle.",
+      details
+    };
+  }
+
+  const criticalIssues: string[] = [];
+
+  if (reconnectRequiredCount > 0) {
+    criticalIssues.push(
+      formatCountLabel(reconnectRequiredCount, "credential requires re-authentication", "credentials require re-authentication")
+    );
+  }
+
+  if (revokedCount > 0) {
+    criticalIssues.push(formatCountLabel(revokedCount, "credential was revoked", "credentials were revoked"));
+  }
+
+  if (expiredCount > 0) {
+    criticalIssues.push(formatCountLabel(expiredCount, "credential is expired", "credentials are expired"));
+  }
+
+  if (criticalIssues.length > 0) {
+    return {
+      status: getConnectorHealthFailureStatus(params.runtime),
+      message: `Connector health requires attention: ${criticalIssues.join(", ")}.`,
+      details
+    };
+  }
+
+  const warnings: string[] = [];
+
+  if (refreshFailedCount > 0) {
+    warnings.push(
+      formatCountLabel(refreshFailedCount, "credential refresh failed recently", "credentials refresh failed recently")
+    );
+  }
+
+  if (validationStaleCount > 0) {
+    warnings.push(
+      formatCountLabel(validationStaleCount, "credential validation is stale", "credentials validation is stale")
+    );
+  }
+
+  if (warnings.length > 0) {
+    return {
+      status: getConnectorHealthWarningStatus(params.runtime),
+      message: `Connector health is degraded: ${warnings.join(", ")}.`,
+      details
+    };
+  }
+
+  return {
+    status: "pass",
+    message: "Connector health checks passed.",
+    details
+  };
+}
+
+async function getConnectorHealthCheckSnapshot(nodeEnv: string | undefined): Promise<ConnectorHealthCheckSnapshot> {
+  const runtime = normalizeRuntime(nodeEnv);
+
+  try {
+    const repository = createRepository();
+    const credentials = await repository.listProviderCredentials();
+    return buildConnectorHealthCheckSnapshot({
+      credentials,
+      runtime
+    });
+  } catch (error) {
+    return {
+      status: getConnectorHealthFailureStatus(runtime),
+      message: "Connector health readiness checks could not be completed.",
+      details: {
+        error: error instanceof Error ? error.message : "Unknown readiness failure"
+      }
+    };
+  }
 }
 
 async function getAsyncExecutionCheckSnapshot(nodeEnv: string | undefined): Promise<AsyncExecutionCheckSnapshot> {
@@ -340,7 +512,8 @@ export function buildWebReadinessReport(params: ReadinessEvaluationParams): WebR
     buildDatabaseCheck(params),
     buildAuthRuntimeStateCheck(params),
     buildRequestIdentityCheck(params),
-    buildAsyncExecutionCheck(params)
+    buildAsyncExecutionCheck(params),
+    buildConnectorHealthCheck(params)
   ];
   const ok = checks.every((check) => check.status !== "fail");
 
@@ -369,6 +542,7 @@ export async function getWebReadinessReport(): Promise<WebReadinessReport> {
           databaseUrl: process.env.DATABASE_URL
         })
       : null,
-    asyncExecution: await getAsyncExecutionCheckSnapshot(nodeEnv)
+    asyncExecution: await getAsyncExecutionCheckSnapshot(nodeEnv),
+    connectorHealth: await getConnectorHealthCheckSnapshot(nodeEnv)
   });
 }

@@ -1,8 +1,9 @@
-import { buildWebReadinessReport } from "../apps/web/lib/runtime-readiness";
+import { buildConnectorHealthCheckSnapshot, buildWebReadinessReport } from "../apps/web/lib/runtime-readiness";
 import type { AuthRuntimeStateStatus } from "../apps/web/lib/auth-runtime-state";
 import type { DatabaseSchemaStatus } from "@agentic/db/schema-status";
 import type { ReadinessCheck } from "../apps/web/lib/runtime-readiness";
 import type { RequestIdentityRuntimeStatus } from "../apps/web/lib/request-client-identity";
+import type { ProviderCredential } from "@agentic/contracts";
 
 function buildAuthRuntimeState(
   overrides?: Partial<AuthRuntimeStateStatus>
@@ -40,6 +41,25 @@ function buildAsyncExecutionCheck(overrides?: Partial<Omit<ReadinessCheck, "name
   };
 }
 
+function buildConnectorHealthCheck(overrides?: Partial<Omit<ReadinessCheck, "name">>): Omit<ReadinessCheck, "name"> {
+  return {
+    status: "pass",
+    message: "Connector health checks passed.",
+    details: {
+      totalCredentials: 0,
+      connectedCredentials: 0,
+      degradedCredentials: 0,
+      reconnectRequiredCredentials: 0,
+      refreshFailedCredentials: 0,
+      revokedCredentials: 0,
+      expiredCredentials: 0,
+      validationStaleCredentials: 0,
+      validationStaleAfterHours: 168
+    },
+    ...overrides
+  };
+}
+
 function buildRequestIdentityStatus(
   overrides?: Partial<RequestIdentityRuntimeStatus>
 ): RequestIdentityRuntimeStatus {
@@ -70,6 +90,32 @@ function buildDatabaseStatus(
   };
 }
 
+function buildProviderCredential(overrides?: Partial<ProviderCredential>): ProviderCredential {
+  return {
+    id: "google:global:acct-123",
+    userId: "user-primary",
+    workspaceId: null,
+    provider: "google",
+    accountId: "acct-123",
+    accountEmail: "owner@example.com",
+    displayName: "Owner",
+    status: "connected",
+    scopes: ["calendar.read"],
+    lastValidatedAt: "2026-04-17T00:00:00.000Z",
+    lastRotatedAt: null,
+    lastRefreshAt: null,
+    lastRefreshFailureAt: null,
+    reconnectRequiredAt: null,
+    revokedAt: null,
+    expiresAt: null,
+    metadata: {},
+    actorContext: null,
+    createdAt: "2026-04-17T00:00:00.000Z",
+    updatedAt: "2026-04-17T00:00:00.000Z",
+    ...overrides
+  };
+}
+
 describe("runtime readiness", () => {
   it("fails closed in production when the access key, database, and shared auth state are not ready", () => {
     const report = buildWebReadinessReport({
@@ -91,6 +137,7 @@ describe("runtime readiness", () => {
         status: "fail",
         message: "Async execution requires attention: 1 stale pending job(s)."
       }),
+      connectorHealth: buildConnectorHealthCheck(),
       databaseStatus: null,
       generatedAt: "2026-04-17T00:00:00.000Z"
     });
@@ -121,6 +168,10 @@ describe("runtime readiness", () => {
       expect.objectContaining({
         name: "async_execution",
         status: "fail"
+      }),
+      expect.objectContaining({
+        name: "connector_health",
+        status: "pass"
       })
     ]);
   });
@@ -137,6 +188,7 @@ describe("runtime readiness", () => {
       authRuntimeState: buildAuthRuntimeState(),
       requestIdentity: buildRequestIdentityStatus(),
       asyncExecution: buildAsyncExecutionCheck(),
+      connectorHealth: buildConnectorHealthCheck(),
       databaseStatus: null,
       generatedAt: "2026-04-17T00:00:00.000Z"
     });
@@ -167,6 +219,10 @@ describe("runtime readiness", () => {
       expect.objectContaining({
         name: "async_execution",
         status: "pass"
+      }),
+      expect.objectContaining({
+        name: "connector_health",
+        status: "pass"
       })
     ]);
   });
@@ -196,6 +252,7 @@ describe("runtime readiness", () => {
         warnings: []
       }),
       asyncExecution: buildAsyncExecutionCheck(),
+      connectorHealth: buildConnectorHealthCheck(),
       databaseStatus: buildDatabaseStatus(),
       generatedAt: "2026-04-17T00:00:00.000Z"
     });
@@ -233,6 +290,7 @@ describe("runtime readiness", () => {
         warnings: []
       }),
       asyncExecution: buildAsyncExecutionCheck(),
+      connectorHealth: buildConnectorHealthCheck(),
       databaseStatus: buildDatabaseStatus({
         ready: false,
         failureReason: "pending_migrations",
@@ -292,6 +350,7 @@ describe("runtime readiness", () => {
           maxPendingJobAgeSeconds: 900
         }
       }),
+      connectorHealth: buildConnectorHealthCheck(),
       databaseStatus: buildDatabaseStatus(),
       generatedAt: "2026-04-17T00:00:00.000Z"
     });
@@ -332,6 +391,7 @@ describe("runtime readiness", () => {
         identitySource: "request-fingerprint"
       }),
       asyncExecution: buildAsyncExecutionCheck(),
+      connectorHealth: buildConnectorHealthCheck(),
       databaseStatus: buildDatabaseStatus(),
       generatedAt: "2026-04-17T00:00:00.000Z"
     });
@@ -347,5 +407,162 @@ describe("runtime readiness", () => {
         })
       })
     );
+  });
+
+  it("warns in production when connector validation or refresh health is degraded", () => {
+    const report = buildWebReadinessReport({
+      nodeEnv: "production",
+      databaseConfigured: true,
+      authMode: {
+        requiresConfiguredKey: false,
+        usesDevelopmentFallback: false,
+        configured: true
+      },
+      authRuntimeState: buildAuthRuntimeState({
+        production: true,
+        requiresSharedState: true,
+        sessionStateScope: "shared",
+        unlockStateScope: "shared",
+        sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        identitySource: "trusted-ip",
+        warnings: []
+      }),
+      asyncExecution: buildAsyncExecutionCheck(),
+      connectorHealth: buildConnectorHealthCheck({
+        status: "warn",
+        message: "Connector health is degraded: 1 credential refresh failed recently, 1 credential validation is stale.",
+        details: {
+          totalCredentials: 2,
+          connectedCredentials: 1,
+          degradedCredentials: 2,
+          reconnectRequiredCredentials: 0,
+          refreshFailedCredentials: 1,
+          revokedCredentials: 0,
+          expiredCredentials: 0,
+          validationStaleCredentials: 1,
+          validationStaleAfterHours: 168
+        }
+      }),
+      databaseStatus: buildDatabaseStatus(),
+      generatedAt: "2026-04-17T00:00:00.000Z"
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.status).toBe("ready");
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "connector_health",
+        status: "warn",
+        details: expect.objectContaining({
+          refreshFailedCredentials: 1,
+          validationStaleCredentials: 1
+        })
+      })
+    );
+  });
+
+  it("fails readiness in production when connector access is blocked", () => {
+    const report = buildWebReadinessReport({
+      nodeEnv: "production",
+      databaseConfigured: true,
+      authMode: {
+        requiresConfiguredKey: false,
+        usesDevelopmentFallback: false,
+        configured: true
+      },
+      authRuntimeState: buildAuthRuntimeState({
+        production: true,
+        requiresSharedState: true,
+        sessionStateScope: "shared",
+        unlockStateScope: "shared",
+        sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        identitySource: "trusted-ip",
+        warnings: []
+      }),
+      asyncExecution: buildAsyncExecutionCheck(),
+      connectorHealth: buildConnectorHealthCheck({
+        status: "fail",
+        message: "Connector health requires attention: 1 credential requires re-authentication, 1 credential is expired.",
+        details: {
+          totalCredentials: 2,
+          connectedCredentials: 1,
+          degradedCredentials: 2,
+          reconnectRequiredCredentials: 1,
+          refreshFailedCredentials: 0,
+          revokedCredentials: 0,
+          expiredCredentials: 1,
+          validationStaleCredentials: 0,
+          validationStaleAfterHours: 168
+        }
+      }),
+      databaseStatus: buildDatabaseStatus(),
+      generatedAt: "2026-04-17T00:00:00.000Z"
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.status).toBe("not_ready");
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "connector_health",
+        status: "fail",
+        details: expect.objectContaining({
+          reconnectRequiredCredentials: 1,
+          expiredCredentials: 1
+        })
+      })
+    );
+  });
+
+  it("classifies connector health snapshots without exposing credential identities", () => {
+    const snapshot = buildConnectorHealthCheckSnapshot({
+      runtime: "production",
+      now: Date.parse("2026-04-18T00:00:00.000Z"),
+      credentials: [
+        buildProviderCredential({
+          id: "cred-stale",
+          lastValidatedAt: "2026-04-09T00:00:00.000Z"
+        }),
+        buildProviderCredential({
+          id: "cred-refresh-failed",
+          status: "refresh_failed"
+        }),
+        buildProviderCredential({
+          id: "cred-reconnect",
+          status: "reconnect_required"
+        }),
+        buildProviderCredential({
+          id: "cred-expired",
+          expiresAt: "2026-04-17T23:59:59.000Z"
+        })
+      ]
+    });
+
+    expect(snapshot.status).toBe("fail");
+    expect(snapshot.message).toBe(
+      "Connector health requires attention: 1 credential requires re-authentication, 1 credential is expired."
+    );
+    expect(snapshot.details).toEqual({
+      totalCredentials: 4,
+      connectedCredentials: 2,
+      degradedCredentials: 4,
+      reconnectRequiredCredentials: 1,
+      refreshFailedCredentials: 1,
+      revokedCredentials: 0,
+      expiredCredentials: 1,
+      validationStaleCredentials: 1,
+      validationStaleAfterHours: 168
+    });
   });
 });
