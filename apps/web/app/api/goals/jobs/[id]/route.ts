@@ -1,7 +1,7 @@
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../../lib/api-response";
 import { requireApiSession } from "../../../../../lib/auth";
 import { getSeededRepository } from "../../../../../lib/server";
-import { buildGoalJobResultSummary, isGoalCreateJob } from "@agentic/worker-runtime";
+import { buildGoalJobResultSummary, isGoalCreateJob, isGoalRefineJob } from "@agentic/worker-runtime";
 
 type RouteContext = {
   params: Promise<{
@@ -9,7 +9,11 @@ type RouteContext = {
   }>;
 };
 
-const GOAL_JOB_FAILURE_MESSAGE = "Goal creation failed. Retry the request or inspect worker logs.";
+function getGoalJobFailureMessage(job: { payload: { type: "goal_create" | "goal_refine" } }): string {
+  return job.payload.type === "goal_refine"
+    ? "Goal refinement failed. Retry the request or inspect worker logs."
+    : "Goal creation failed. Retry the request or inspect worker logs.";
+}
 
 export async function GET(request: Request, context: RouteContext) {
   try {
@@ -23,7 +27,7 @@ export async function GET(request: Request, context: RouteContext) {
     const repository = await getSeededRepository();
     const job = await repository.getJob(id, principal.userId);
 
-    if (!isGoalCreateJob(job)) {
+    if (!isGoalCreateJob(job) && !isGoalRefineJob(job)) {
       throw new ApiRouteError(404, `Goal job ${id} was not found.`);
     }
 
@@ -58,7 +62,7 @@ export async function GET(request: Request, context: RouteContext) {
       return authenticatedJson({
         ...responseBody,
         result: null,
-        error: GOAL_JOB_FAILURE_MESSAGE
+        error: getGoalJobFailureMessage(job)
       });
     }
 

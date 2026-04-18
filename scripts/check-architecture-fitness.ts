@@ -19,6 +19,7 @@ function assertNotContains(content: string, needle: string, message: string) {
 
 function main() {
   const goalsRoutePath = "apps/web/app/api/goals/route.ts";
+  const goalRefineRoutePath = "apps/web/app/api/goals/[id]/refine/route.ts";
   const briefingRoutePath = "apps/web/app/api/briefing/route.ts";
   const commitmentsRoutePath = "apps/web/app/api/commitments/[id]/route.ts";
   const templatesRoutePath = "apps/web/app/api/templates/[id]/route.ts";
@@ -29,6 +30,7 @@ function main() {
   const dashboardSurfacePath = "apps/web/lib/dashboard-surface.ts";
 
   const goalsRoute = readRepoFile(goalsRoutePath);
+  const goalRefineRoute = readRepoFile(goalRefineRoutePath);
   const briefingRoute = readRepoFile(briefingRoutePath);
   const commitmentsRoute = readRepoFile(commitmentsRoutePath);
   const templatesRoute = readRepoFile(templatesRoutePath);
@@ -47,6 +49,21 @@ function main() {
     goalsRoute,
     "processUserRequest(",
     `${goalsRoutePath} must not execute processUserRequest directly on the request path.`
+  );
+  assertContains(
+    goalRefineRoute,
+    'import { enqueueGoalRefineJob } from "@agentic/worker-runtime";',
+    `${goalRefineRoutePath} must enqueue durable goal-refine jobs through worker runtime.`
+  );
+  assertNotContains(
+    goalRefineRoute,
+    "refineGoal(",
+    `${goalRefineRoutePath} must not execute refinement directly on the request path.`
+  );
+  assertContains(
+    goalRefineRoute,
+    "statusUrl: `/api/goals/jobs/${job.id}`",
+    `${goalRefineRoutePath} must return a pollable goal job status route.`
   );
 
   assertContains(

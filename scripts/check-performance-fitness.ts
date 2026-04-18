@@ -19,6 +19,7 @@ function assertFileExists(relativePath: string, message: string) {
 
 function main() {
   const goalsRoutePath = "apps/web/app/api/goals/route.ts";
+  const goalRefineRoutePath = "apps/web/app/api/goals/[id]/refine/route.ts";
   const briefingRoutePath = "apps/web/app/api/briefing/route.ts";
   const templateRunRoutePath = "apps/web/app/api/templates/[id]/run/route.ts";
   const docsRenderRoutePath = "apps/web/app/api/docs/render/route.ts";
@@ -30,6 +31,7 @@ function main() {
   const docsRenderStatusRoutePath = "apps/web/app/api/docs/jobs/[id]/route.ts";
 
   const goalsRoute = readRepoFile(goalsRoutePath);
+  const goalRefineRoute = readRepoFile(goalRefineRoutePath);
   const briefingRoute = readRepoFile(briefingRoutePath);
   const templateRunRoute = readRepoFile(templateRunRoutePath);
   const docsRenderRoute = readRepoFile(docsRenderRoutePath);
@@ -45,6 +47,16 @@ function main() {
     goalsRoute,
     "statusUrl: `/api/goals/jobs/${job.id}`",
     `${goalsRoutePath} must return a goal status route for queued work.`
+  );
+  assertContains(
+    goalRefineRoute,
+    "idempotencyKey: parseIdempotencyKey(request)",
+    `${goalRefineRoutePath} must parse and pass idempotency keys for goal refinement.`
+  );
+  assertContains(
+    goalRefineRoute,
+    "statusUrl: `/api/goals/jobs/${job.id}`",
+    `${goalRefineRoutePath} must return a goal status route for queued refinements.`
   );
 
   assertContains(
@@ -114,7 +126,7 @@ function main() {
   );
   assertContains(
     dashboard,
-    'const queued = await readJson<GoalCreateApiResponse>(',
+    'const queued = await readJson<GoalQueuedApiResponse>(',
     `${dashboardPath} must treat goal creation as a queued async flow.`
   );
   assertContains(
@@ -139,6 +151,11 @@ function main() {
   );
   assertContains(
     dashboard,
+    'await fetch(`/api/goals/${encodeURIComponent(goalId)}/refine`, {',
+    `${dashboardPath} must refine goals through the queued async route.`
+  );
+  assertContains(
+    dashboard,
     'const settled = await pollBriefingJobUntilSettled(queued.statusUrl);',
     `${dashboardPath} must poll briefing job completion before refreshing dashboard data.`
   );
@@ -153,8 +170,8 @@ function main() {
     `${dashboardPath} must poll docs job completion before surfacing the build result.`
   );
   const idempotencyHeaderCount = dashboard.match(/"x-idempotency-key": buildClientIdempotencyKey\(\)/gu)?.length ?? 0;
-  if (idempotencyHeaderCount < 4) {
-    throw new Error(`${dashboardPath} must send idempotency keys for goal creation, briefing creation, template execution, and docs rendering.`);
+  if (idempotencyHeaderCount < 5) {
+    throw new Error(`${dashboardPath} must send idempotency keys for goal creation, goal refinement, briefing creation, template execution, and docs rendering.`);
   }
 
   console.log("Performance fitness checks passed.");

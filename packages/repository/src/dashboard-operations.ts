@@ -152,6 +152,7 @@ function isJobVisibleInScope(
 ): boolean {
   switch (job.payload.type) {
     case "goal_create":
+    case "goal_refine":
     case "briefing_create":
     case "template_run":
       return scopedGoalIds.has(job.payload.goalId) || matchesWorkspaceScope(job.payload.workspaceId, activeWorkspace);
@@ -169,6 +170,8 @@ function buildJobLabel(job: JobRecord, goalTitleById: Map<string, string>, activ
   switch (job.payload.type) {
     case "goal_create":
       return `Goal queue · ${goalTitleById.get(job.payload.goalId) ?? "new goal draft"}`;
+    case "goal_refine":
+      return `Goal refine · ${goalTitleById.get(job.payload.goalId) ?? "goal refinement"}`;
     case "briefing_create":
       return `Briefing queue · ${goalTitleById.get(job.payload.goalId) ?? "goal briefing"}`;
     case "template_run":
@@ -187,6 +190,7 @@ function buildJobLabel(job: JobRecord, goalTitleById: Map<string, string>, activ
 function buildJobTarget(job: JobRecord, goalTitleById: Map<string, string>): DashboardOperationsTarget | null {
   switch (job.payload.type) {
     case "goal_create":
+    case "goal_refine":
     case "briefing_create":
     case "template_run":
       return {

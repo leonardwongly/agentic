@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { refineGoal } from "@agentic/orchestrator";
+import { enqueueGoalRefineJob } from "@agentic/worker-runtime";
 import { requireApiSession } from "../../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
+import { parseIdempotencyKey } from "../../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../../lib/server";
 
 const GoalIdSchema = z.string().trim().min(1).max(200);
@@ -33,26 +34,33 @@ export async function POST(request: Request, context: RouteContext) {
       throw new ApiRouteError(404, `Goal ${goalId} was not found.`);
     }
 
-    const [memories, governance] = await Promise.all([
-      repository.listMemory(principal.userId),
-      bundle.goal.workspaceId ? repository.getWorkspaceGovernance(bundle.goal.workspaceId, principal.userId) : Promise.resolve(null)
-    ]);
-
-    const updatedBundle = await refineGoal({
-      bundle,
+    const job = await enqueueGoalRefineJob({
+      repository,
+      userId: principal.userId,
+      goalId: bundle.goal.id,
+      workflowId: bundle.workflow.id,
       refinement: body.message,
-      memories,
+      workspaceId: bundle.goal.workspaceId,
       actorContext,
-      governance,
-      resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", principal.userId)
+      idempotencyKey: parseIdempotencyKey(request)
     });
 
-    await repository.saveGoalBundle(updatedBundle);
-
-    return authenticatedJson({
-      bundle: updatedBundle,
-      dashboard: await repository.getDashboardData(principal.userId)
-    });
+    return authenticatedJson(
+      {
+        job: {
+          id: job.id,
+          kind: job.kind,
+          status: job.status,
+          goalId: job.payload.goalId,
+          attemptCount: job.attemptCount,
+          maxAttempts: job.maxAttempts,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt
+        },
+        statusUrl: `/api/goals/jobs/${job.id}`
+      },
+      { status: 202 }
+    );
   } catch (error) {
     return handleApiError(error, "Failed to refine goal.");
   }

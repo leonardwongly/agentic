@@ -204,6 +204,51 @@ describe("goal route", () => {
     expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
   });
 
+  it("deduplicates retried goal refinements when the same idempotency key is reused", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan a reviewer-safe follow-up workflow.");
+    const idempotencyKey = "goal-refine-retry-1";
+    const buildRequest = () =>
+      new Request(`http://localhost/api/goals/${bundle.goal.id}/refine`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "x-idempotency-key": idempotencyKey
+        },
+        body: JSON.stringify({
+          message: "Also include an executive summary for reviewers."
+        })
+      });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const firstResponse = await goalRefineRoute(buildRequest(), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
+    const secondResponse = await goalRefineRoute(buildRequest(), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
+    const firstPayload = (await firstResponse.json()) as {
+      job: { id: string; goalId: string; status: string; kind: string };
+      statusUrl: string;
+    };
+    const secondPayload = (await secondResponse.json()) as {
+      job: { id: string; goalId: string; status: string; kind: string };
+      statusUrl: string;
+    };
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(202);
+    expect(firstPayload.job.kind).toBe("goal_refine");
+    expect(secondPayload.job.id).toBe(firstPayload.job.id);
+    expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
+    expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
+    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+  });
+
   it("rejects malformed goal idempotency keys", async () => {
     const response = await goalsCreateRoute(
       new Request("http://localhost/api/goals", {
@@ -391,6 +436,69 @@ describe("goal route", () => {
     expect(payload.error).not.toContain("SECRET");
   });
 
+  it("returns a sanitized dead-letter failure message for queued goal refinements", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a refined planning bundle.");
+    const queued = await repository.enqueueJob(createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "goal_refine",
+      payload: {
+        type: "goal_refine",
+        goalId: bundle.goal.id,
+        workflowId: bundle.workflow.id,
+        refinement: "Add an executive-ready narrative.",
+        workspaceId: bundle.goal.workspaceId,
+        metadata: {}
+      },
+      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+    }));
+    const claimed = await repository.claimNextJob({
+      userId: SYSTEM_USER_ID,
+      runnerId: "worker-refine-dead-letter-test",
+      leaseMs: 1_000,
+      now: new Date(Date.parse(queued.availableAt) + 1_000).toISOString()
+    });
+
+    expect(claimed?.id).toBe(queued.id);
+
+    await repository.deadLetterJob({
+      jobId: queued.id,
+      runnerId: "worker-refine-dead-letter-test",
+      deadLetteredAt: "2026-04-16T10:01:00.000Z",
+      error: "Connector token SECRET=top-secret-value expired."
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await goalJobRoute(
+      new Request(`http://localhost/api/goals/jobs/${queued.id}`, {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: queued.id })
+      }
+    );
+    const payload = (await response.json()) as {
+      job: { id: string; status: string };
+      result: null;
+      error: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.job.id).toBe(queued.id);
+    expect(payload.job.status).toBe("dead_letter");
+    expect(payload.result).toBeNull();
+    expect(payload.error).toBe("Goal refinement failed. Retry the request or inspect worker logs.");
+    expect(payload.error).not.toContain("SECRET");
+  });
+
   it("stamps access-key actor context onto goal refinement logs", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
@@ -416,10 +524,22 @@ describe("goal route", () => {
         params: Promise.resolve({ id: bundle.goal.id })
       }
     );
-    const payload = (await response.json()) as { bundle: { actionLogs: Array<{ kind: string; details: Record<string, unknown> }> } };
-    const refinementLogs = payload.bundle.actionLogs.filter((log) => log.kind === "goal.refined");
+    const payload = (await response.json()) as {
+      job: { id: string; goalId: string; status: string };
+      statusUrl: string;
+    };
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(202);
+    expect(payload.job.status).toBe("queued");
+
+    const workerResult = await processQueuedGoalJobs();
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const refinementLogs = persistedBundle?.actionLogs.filter((log) => log.kind === "goal.refined") ?? [];
+
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
     expect(refinementLogs.length).toBeGreaterThanOrEqual(1);
     expect(refinementLogs.every((log) => log.details.actorContext)).toBe(true);
     expect(refinementLogs[0]?.details.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
@@ -457,10 +577,22 @@ describe("goal route", () => {
           params: Promise.resolve({ id: bundle.goal.id })
         }
       );
-      const payload = (await response.json()) as { bundle: { actionLogs: Array<{ kind: string; details: Record<string, unknown> }> } };
-      const refinementLogs = payload.bundle.actionLogs.filter((log) => log.kind === "goal.refined");
+      const payload = (await response.json()) as {
+        job: { id: string; goalId: string; status: string };
+        statusUrl: string;
+      };
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(202);
+      expect(payload.job.status).toBe("queued");
+
+      const workerResult = await processQueuedGoalJobs();
+      const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, secondaryUserId);
+      const refinementLogs = persistedBundle?.actionLogs.filter((log) => log.kind === "goal.refined") ?? [];
+
+      expect(workerResult).toEqual({
+        processedCount: 1,
+        stopReason: "max_jobs"
+      });
       expect(refinementLogs.length).toBeGreaterThanOrEqual(1);
       expect(refinementLogs[0]?.details.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
     } finally {

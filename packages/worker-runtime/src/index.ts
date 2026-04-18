@@ -12,6 +12,7 @@ import {
   type BriefingType,
   type GoalBundle,
   type GoalCreateJobPayload,
+  type GoalRefineJobPayload,
   type GoalTemplate,
   type JobKind,
   type JobRecord,
@@ -44,6 +45,7 @@ import {
   computeNextRun,
   generateBriefing,
   interpolateTemplate,
+  refineGoal,
   processUserRequest
 } from "@agentic/orchestrator";
 import type { AgenticRepository } from "@agentic/repository";
@@ -52,7 +54,7 @@ import {
   type SelfImprovementRepository
 } from "@agentic/self-improvement-memory";
 
-export const workerJobKindValues = ["goal_create", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
+export const workerJobKindValues = ["goal_create", "goal_refine", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
 
 export type GoalJobResultSummary = {
   goalId: string;
@@ -136,6 +138,22 @@ function buildGoalCreatePayload(params: {
     request: params.request,
     workspaceId: params.workspaceId,
     agentId: params.agentId,
+    metadata: {}
+  };
+}
+
+function buildGoalRefinePayload(params: {
+  goalId: string;
+  workflowId: string;
+  refinement: string;
+  workspaceId: string | null;
+}): GoalRefineJobPayload {
+  return {
+    type: "goal_refine",
+    goalId: params.goalId,
+    workflowId: params.workflowId,
+    refinement: params.refinement,
+    workspaceId: params.workspaceId,
     metadata: {}
   };
 }
@@ -663,6 +681,10 @@ export function isGoalCreateJob(job: JobRecord | null): job is JobRecord & { pay
   return job?.kind === "goal_create" && job.payload.type === "goal_create";
 }
 
+export function isGoalRefineJob(job: JobRecord | null): job is JobRecord & { payload: GoalRefineJobPayload } {
+  return job?.kind === "goal_refine" && job.payload.type === "goal_refine";
+}
+
 export function isBriefingCreateJob(
   job: JobRecord | null
 ): job is JobRecord & { payload: BriefingCreateJobPayload } {
@@ -731,6 +753,56 @@ export async function enqueueGoalCreateJob(params: {
         jobId: job.id,
         jobKind: job.kind,
         userId: job.userId,
+        workspaceId: params.workspaceId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
+}
+
+export async function enqueueGoalRefineJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  goalId: string;
+  workflowId: string;
+  refinement: string;
+  workspaceId: string | null;
+  actorContext: ActorContext | null;
+  idempotencyKey?: string | null;
+}): Promise<JobRecord & { payload: GoalRefineJobPayload }> {
+  const payload = buildGoalRefinePayload({
+    goalId: params.goalId,
+    workflowId: params.workflowId,
+    refinement: params.refinement,
+    workspaceId: params.workspaceId
+  });
+
+  return withSpan(
+    "worker.job.enqueue.goal_refine",
+    {
+      jobKind: "goal_refine",
+      userId: params.userId,
+      goalId: params.goalId,
+      workspaceId: params.workspaceId
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "goal_refine",
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey: params.idempotencyKey ?? null,
+        maxAttempts: 3
+      })) as JobRecord & { payload: GoalRefineJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId,
+        goalId: params.goalId,
         workspaceId: params.workspaceId
       });
       recordCounter("worker.job.enqueued.total", 1, {
@@ -1052,6 +1124,41 @@ export async function executeGoalCreateJob(params: {
     jobId: job.id,
     bundle
   });
+}
+
+export async function executeGoalRefineJob(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  job: JobRecord;
+}) {
+  const { job, repository } = params;
+
+  if (!isGoalRefineJob(job)) {
+    throw new Error(`Expected a goal_refine payload for job ${job.id}.`);
+  }
+
+  const bundle = await repository.getGoalBundleForUser(job.payload.goalId, job.userId);
+
+  if (!bundle) {
+    throw new Error(`Goal ${job.payload.goalId} was not found.`);
+  }
+
+  const [memories, governance] = await Promise.all([
+    repository.listMemory(job.userId),
+    job.payload.workspaceId
+      ? repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
+      : Promise.resolve(null)
+  ]);
+  const updatedBundle = await refineGoal({
+    bundle,
+    refinement: job.payload.refinement,
+    memories,
+    actorContext: job.actorContext,
+    governance,
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId)
+  });
+
+  await repository.saveGoalBundle(updatedBundle);
 }
 
 export async function executeBriefingCreateJob(params: {
@@ -1489,6 +1596,12 @@ export function createWorkerJobHandlers(params: {
         selfImprovementRepository: params.selfImprovementRepository,
         job
     })),
+    goal_refine: wrapHandler("goal_refine", (job) =>
+      executeGoalRefineJob({
+        repository: params.repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        job
+      })),
     briefing_create: wrapHandler("briefing_create", (job) =>
       executeBriefingCreateJob({
         repository: params.repository,

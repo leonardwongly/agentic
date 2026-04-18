@@ -1707,6 +1707,7 @@ function isJobScopedToWorkspace(
 ): boolean {
   switch (job.payload.type) {
     case "goal_create":
+    case "goal_refine":
       return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
     case "briefing_create":
       return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
@@ -6172,6 +6173,12 @@ class PostgresRepository implements AgenticRepository {
           delete from jobs
           where (
             payload ->> 'type' = 'goal_create'
+            and (
+              payload ->> 'workspaceId' = $1
+              or payload ->> 'goalId' = any($2::text[])
+            )
+          ) or (
+            payload ->> 'type' = 'goal_refine'
             and (
               payload ->> 'workspaceId' = $1
               or payload ->> 'goalId' = any($2::text[])

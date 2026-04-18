@@ -29,6 +29,7 @@ import {
   enqueueAutopilotProcessJob,
   enqueueDocsRenderJob,
   enqueueGoalCreateJob,
+  enqueueGoalRefineJob,
   enqueuePrivacyOperationJob,
   enqueuePublicShareViewJob,
   enqueueTemplateRunJob,
@@ -36,6 +37,7 @@ import {
   executeBriefingCreateJob,
   executeDocsRenderJob,
   executeGoalCreateJob,
+  executeGoalRefineJob,
   executePrivacyOperationJob,
   executePublicShareViewJob,
   executeTemplateRunJob,
@@ -316,6 +318,78 @@ describe("worker runtime", () => {
     expect(episodesAfterSecondAttempt.map((episode) => episode.id)).toEqual(
       episodesAfterFirstAttempt.map((episode) => episode.id)
     );
+  });
+
+  it("processes queued goal-refine jobs through the worker loop and persists the refined bundle", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const bundle = await orchestrator.processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Prepare a weekly operating plan that needs reviewer-specific follow-up.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+
+    await repository.saveGoalBundle(bundle);
+
+    const queued = await enqueueGoalRefineJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      goalId: bundle.goal.id,
+      workflowId: bundle.workflow.id,
+      refinement: "Add a handoff summary and explicit review checkpoints.",
+      workspaceId: bundle.goal.workspaceId,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-goal-refine-1"
+    });
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-goal-refine-test",
+      maxJobs: 1,
+      pollIntervalMs: 50
+    });
+    const persistedJob = await repository.getJob(queued.id, SYSTEM_USER_ID);
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const refinementLogs = persistedBundle?.actionLogs.filter((log) => log.kind === "goal.refined") ?? [];
+
+    expect(result).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(persistedJob).toMatchObject({
+      id: queued.id,
+      status: "completed",
+      attemptCount: 1
+    });
+    expect(persistedBundle?.goal.id).toBe(bundle.goal.id);
+    expect(refinementLogs).not.toHaveLength(0);
+    expect(refinementLogs.at(-1)?.details.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+  });
+
+  it("fails goal-refine execution when the target bundle is missing", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const job = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "goal_refine",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      payload: {
+        type: "goal_refine",
+        goalId: "goal-missing-refine-target",
+        workflowId: "workflow-missing-refine-target",
+        refinement: "Add a reviewer summary.",
+        workspaceId: null,
+        metadata: {}
+      }
+    });
+
+    await expect(
+      executeGoalRefineJob({
+        repository,
+        selfImprovementRepository,
+        job
+      })
+    ).rejects.toThrow("Goal goal-missing-refine-target was not found.");
   });
 
   it("processes queued briefing jobs through the worker loop and persists the generated briefing bundle", async () => {

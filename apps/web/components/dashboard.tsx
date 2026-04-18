@@ -145,10 +145,10 @@ type OperatorProductPayload = {
   templates: GoalTemplate[];
 };
 
-type GoalCreateApiResponse = {
+type GoalQueuedApiResponse = {
   job: {
     id: string;
-    kind: "goal_create";
+    kind: "goal_create" | "goal_refine";
     status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
     goalId: string;
     attemptCount: number;
@@ -159,8 +159,10 @@ type GoalCreateApiResponse = {
   statusUrl: string;
 };
 
+type GoalQueuedJob = GoalQueuedApiResponse["job"];
+
 type GoalJobStatusApiResponse = {
-  job: GoalCreateApiResponse["job"];
+  job: GoalQueuedJob;
   result: {
     goalId: string;
     goalStatus: "planned" | "running" | "waiting" | "completed";
@@ -826,7 +828,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     setIsPending(true);
 
     try {
-      const queued = await readJson<GoalCreateApiResponse>(
+      const queued = await readJson<GoalQueuedApiResponse>(
         await fetch("/api/goals", {
           method: "POST",
           headers: {
@@ -1536,23 +1538,43 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     setRefinementState({ kind: "idle", message: "" });
 
     try {
-      const payload = await readJson<{ dashboard: DashboardData }>(
+      const queued = await readJson<GoalQueuedApiResponse>(
         await fetch(`/api/goals/${encodeURIComponent(goalId)}/refine`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            "x-idempotency-key": buildClientIdempotencyKey()
+          },
           body: JSON.stringify({ message })
         })
       );
+      const settled = await pollGoalJobUntilSettled(queued.statusUrl);
+
+      if (!settled) {
+        const timeoutMessage = "Goal refinement queued and still processing. Refresh in a moment for the updated bundle.";
+        setRefinementState({ kind: "success", message: timeoutMessage });
+        toast.success(timeoutMessage);
+        return;
+      }
+
+      if (settled.job.status === "dead_letter") {
+        throw new Error(settled.error ?? "Goal refinement failed.");
+      }
+
+      const snapshot = await loadDashboardSnapshot();
       startTransition(() => {
-        setData(payload.dashboard);
+        setData(snapshot.dashboard);
         setRefinementInputs((prev) => ({ ...prev, [goalId]: "" }));
         setRefinementState({ kind: "success", message: "Goal refined successfully." });
+        toast.success("Goal refined successfully.");
+        statsBar.updateSync();
       });
     } catch (error) {
       setRefinementState({
         kind: "error",
         message: error instanceof Error ? error.message : "Failed to refine goal."
       });
+      toast.error("Action failed", error instanceof Error ? error.message : "Failed to refine goal.");
     } finally {
       setIsPending(false);
     }

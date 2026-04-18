@@ -59,7 +59,7 @@ export const autopilotEventStatusValues = ["pending", "simulated", "notified", "
 export const goalShareStatusValues = ["active", "revoked"] as const;
 export const privacyOperationKindValues = ["retention_enforcement", "workspace_export", "workspace_delete"] as const;
 export const privacyOperationStatusValues = ["queued", "running", "completed", "failed"] as const;
-export const jobKindValues = ["goal_create", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
+export const jobKindValues = ["goal_create", "goal_refine", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
 export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
 export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
@@ -655,6 +655,17 @@ export const GoalCreateJobPayloadSchema = z
   })
   .strict();
 
+export const GoalRefineJobPayloadSchema = z
+  .object({
+    type: z.literal("goal_refine"),
+    goalId: z.string().min(1),
+    workflowId: z.string().min(1),
+    refinement: z.string().trim().min(1).max(2_000),
+    workspaceId: z.string().min(1).nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
 export const BriefingCreateJobPayloadSchema = z
   .object({
     type: z.literal("briefing_create"),
@@ -718,6 +729,7 @@ export const PublicShareViewJobPayloadSchema = z
 
 export const JobPayloadSchema = z.discriminatedUnion("type", [
   GoalCreateJobPayloadSchema,
+  GoalRefineJobPayloadSchema,
   BriefingCreateJobPayloadSchema,
   TemplateRunJobPayloadSchema,
   DocsRenderJobPayloadSchema,
@@ -754,6 +766,14 @@ export const JobRecordSchema = z
         code: z.ZodIssueCode.custom,
         path: ["payload", "type"],
         message: 'Goal-create jobs must carry a "goal_create" payload.'
+      });
+    }
+
+    if (value.kind === "goal_refine" && value.payload.type !== "goal_refine") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'Goal-refine jobs must carry a "goal_refine" payload.'
       });
     }
 
@@ -1567,6 +1587,7 @@ export type BriefingHistoryItem = z.infer<typeof BriefingHistoryItemSchema>;
 export type AutopilotSettings = z.infer<typeof AutopilotSettingsSchema>;
 export type AutopilotEvent = z.infer<typeof AutopilotEventSchema>;
 export type GoalCreateJobPayload = z.infer<typeof GoalCreateJobPayloadSchema>;
+export type GoalRefineJobPayload = z.infer<typeof GoalRefineJobPayloadSchema>;
 export type BriefingCreateJobPayload = z.infer<typeof BriefingCreateJobPayloadSchema>;
 export type TemplateRunJobPayload = z.infer<typeof TemplateRunJobPayloadSchema>;
 export type DocsRenderJobPayload = z.infer<typeof DocsRenderJobPayloadSchema>;
