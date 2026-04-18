@@ -1,13 +1,16 @@
+import crypto from "node:crypto";
 import { z } from "zod";
 import { BriefingTypeSchema, RiskClassSchema, type ActorContext } from "@agentic/contracts";
-import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, generateBriefing, processUserRequest, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
+import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
 import { createLocalNote } from "@agentic/integrations";
+import { enqueueBriefingCreateJob, enqueueGoalCreateJob } from "@agentic/worker-runtime";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { resolveGoogleWorkspaceAdapters } from "../../../../lib/google-provider-adapters";
 import { buildNlCapabilitySummary } from "../../../../lib/nl-capabilities";
 import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
+import { parseIdempotencyKey } from "../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../lib/server";
 
 const NLSummaryTimeRangeSchema = z.enum(["today", "week", "since-last-login", "custom"]);
@@ -89,6 +92,10 @@ const NLIntentRequestSchema = z.union([
 ]);
 
 type NLIntentRequest = z.infer<typeof NLIntentRequestSchema>;
+type IntentExecutionResult = {
+  body: Record<string, unknown>;
+  status?: number;
+};
 
 async function resolveActiveWorkspaceContext(userId: string) {
   const repository = await getSeededRepository();
@@ -105,7 +112,10 @@ async function resolveActiveWorkspaceContext(userId: string) {
   };
 }
 
-async function queryIntent(userId: string, intent: z.infer<typeof NLQueryIntentSchema>) {
+async function queryIntent(
+  userId: string,
+  intent: z.infer<typeof NLQueryIntentSchema>
+): Promise<IntentExecutionResult> {
   const { repository, dashboard } = await resolveActiveWorkspaceContext(userId);
 
   switch (intent.target) {
@@ -123,8 +133,10 @@ async function queryIntent(userId: string, intent: z.infer<typeof NLQueryIntentS
       });
 
       return {
-        message: `Showing ${approvals.length} recent approval${approvals.length === 1 ? "" : "s"} from the active workspace view.`,
-        data: approvals.slice(0, 10)
+        body: {
+          message: `Showing ${approvals.length} recent approval${approvals.length === 1 ? "" : "s"} from the active workspace view.`,
+          data: approvals.slice(0, 10)
+        }
       };
     }
     case "goals": {
@@ -137,16 +149,20 @@ async function queryIntent(userId: string, intent: z.infer<typeof NLQueryIntentS
       });
 
       return {
-        message: `Showing ${goals.length} recent goal bundle${goals.length === 1 ? "" : "s"} from the active workspace view.`,
-        data: goals.slice(0, 10)
+        body: {
+          message: `Showing ${goals.length} recent goal bundle${goals.length === 1 ? "" : "s"} from the active workspace view.`,
+          data: goals.slice(0, 10)
+        }
       };
     }
     case "agents": {
       const agents = await repository.listAgents(userId);
 
       return {
-        message: `Found ${agents.length} agent definition${agents.length === 1 ? "" : "s"}.`,
-        data: agents.slice(0, 10)
+        body: {
+          message: `Found ${agents.length} agent definition${agents.length === 1 ? "" : "s"}.`,
+          data: agents.slice(0, 10)
+        }
       };
     }
     case "memories":
@@ -154,30 +170,37 @@ async function queryIntent(userId: string, intent: z.infer<typeof NLQueryIntentS
       const memories = dashboard.memories.slice(0, 10);
 
       return {
-        message: `Showing ${memories.length} recent memory record${memories.length === 1 ? "" : "s"}.`,
-        data: memories
+        body: {
+          message: `Showing ${memories.length} recent memory record${memories.length === 1 ? "" : "s"}.`,
+          data: memories
+        }
       };
     }
   }
 }
 
-async function summaryIntent(userId: string, intent: z.infer<typeof NLSummaryIntentSchema>) {
+async function summaryIntent(
+  userId: string,
+  intent: z.infer<typeof NLSummaryIntentSchema>
+): Promise<IntentExecutionResult> {
   const { dashboard } = await resolveActiveWorkspaceContext(userId);
   const pendingApprovals = dashboard.approvals.filter((approval) => approval.decision === "pending").length;
   const runningGoals = dashboard.goals.filter((bundle) => bundle.goal.status === "running").length;
   const recentActivities = dashboard.actionLogs.slice(0, 5).length;
 
   return {
-    message: `${intent.timeRange} summary: ${pendingApprovals} pending approvals, ${runningGoals} running goals, ${recentActivities} recent activities.`,
-    data: {
-      pendingApprovals,
-      runningGoals,
-      recentActivities
+    body: {
+      message: `${intent.timeRange} summary: ${pendingApprovals} pending approvals, ${runningGoals} running goals, ${recentActivities} recent activities.`,
+      data: {
+        pendingApprovals,
+        runningGoals,
+        recentActivities
+      }
     }
   };
 }
 
-async function approveAllR2(userId: string, actor: ActorContext) {
+async function approveAllR2(userId: string, actor: ActorContext): Promise<IntentExecutionResult> {
   const { repository } = await resolveActiveWorkspaceContext(userId);
   const pendingApprovals = (await repository.listApprovals(userId)).filter(
     (approval) => approval.decision === "pending" && approval.riskClass === "R2"
@@ -185,8 +208,10 @@ async function approveAllR2(userId: string, actor: ActorContext) {
 
   if (pendingApprovals.length === 0) {
     return {
-      message: "No R2 approvals pending.",
-      dashboard: await repository.getDashboardData(userId)
+      body: {
+        message: "No R2 approvals pending.",
+        dashboard: await repository.getDashboardData(userId)
+      }
     };
   }
 
@@ -264,101 +289,104 @@ async function approveAllR2(userId: string, actor: ActorContext) {
   }
 
   return {
-    message:
-      failedCount === 0
-        ? `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"}.`
-        : `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"} and failed ${failedCount}.`,
-    dashboard: await repository.getDashboardData(userId)
+    body: {
+      message:
+        failedCount === 0
+          ? `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"}.`
+          : `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"} and failed ${failedCount}.`,
+      dashboard: await repository.getDashboardData(userId)
+    }
   };
 }
 
-async function createGoalFromIntent(userId: string, actor: ActorContext, intent: z.infer<typeof NLCreateGoalCommandSchema>) {
-  const { repository, workspaceId, workspaceGovernance } = await resolveActiveWorkspaceContext(userId);
-  const [memories, integrations] = await Promise.all([
-    repository.listMemory(userId),
-    repository.listIntegrations(userId)
-  ]);
-  const bundle = await processUserRequest({
+async function createGoalFromIntent(
+  userId: string,
+  actor: ActorContext,
+  intent: z.infer<typeof NLCreateGoalCommandSchema>,
+  idempotencyKey: string | null
+): Promise<IntentExecutionResult> {
+  const { repository, workspaceId } = await resolveActiveWorkspaceContext(userId);
+  const job = await enqueueGoalCreateJob({
+    repository,
     userId,
     request: intent.params.request,
     workspaceId,
-    governance: workspaceGovernance,
-    memories,
-    integrations,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
+    agentId: null,
+    actorContext: actor,
+    idempotencyKey
   });
 
-  await repository.saveGoalBundle(bundle);
-
-  if (bundle.goal.status === "completed") {
-    await persistCapturedMemories({
-      repository,
-      captured: captureMemoriesFromBundle(bundle, userId, actor),
-      goalId: bundle.goal.id,
-      label: "nl-intent-auto-capture",
-      actorContext: actor
-    });
-  }
-
   return {
-    message: `Created goal bundle "${bundle.goal.title}".`,
-    data: {
-      goalId: bundle.goal.id,
-      title: bundle.goal.title
-    },
-    dashboard: await repository.getDashboardData(userId)
+    status: 202,
+    body: {
+      message: "Queued goal creation from the NL bar.",
+      data: {
+        goalId: job.payload.goalId,
+        request: intent.params.request
+      },
+      job: {
+        id: job.id,
+        kind: job.kind,
+        status: job.status,
+        goalId: job.payload.goalId,
+        attemptCount: job.attemptCount,
+        maxAttempts: job.maxAttempts,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt
+      },
+      statusUrl: `/api/goals/jobs/${job.id}`
+    }
   };
 }
 
-async function createBriefingFromIntent(userId: string, actor: ActorContext, intent: z.infer<typeof NLBriefingCommandSchema>) {
-  const { repository, workspaceId, workspaceGovernance } = await resolveActiveWorkspaceContext(userId);
-  const [preferences, memories, integrations, allApprovals, watchers] = await Promise.all([
-    repository.getBriefingPreferences(userId),
-    repository.listMemory(userId),
-    repository.listIntegrations(userId),
-    repository.listApprovals(userId),
-    repository.listWatchers({ userId })
-  ]);
+async function createBriefingFromIntent(
+  userId: string,
+  actor: ActorContext,
+  intent: z.infer<typeof NLBriefingCommandSchema>,
+  idempotencyKey: string | null
+): Promise<IntentExecutionResult> {
+  const { repository, workspaceId } = await resolveActiveWorkspaceContext(userId);
   const type = intent.params.type === "morning" ? "startup" : intent.params.type;
-  const bundle = await generateBriefing({
-    type,
+  const job = await enqueueBriefingCreateJob({
+    repository,
     userId,
+    goalId: crypto.randomUUID(),
+    workflowId: crypto.randomUUID(),
+    briefingType: type,
     workspaceId,
-    governance: workspaceGovernance,
-    memories,
-    integrations,
-    pendingApprovals: allApprovals.filter((approval) => approval.decision === "pending"),
-    activeWatchers: watchers.filter((watcher) => watcher.status === "active"),
-    preferences,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", userId)
+    actorContext: actor,
+    idempotencyKey
   });
 
-  await repository.saveGoalBundle(bundle);
-
-  if (bundle.goal.status === "completed") {
-    await persistCapturedMemories({
-      repository,
-      captured: captureMemoriesFromBundle(bundle, userId, actor),
-      goalId: bundle.goal.id,
-      label: "nl-intent-auto-capture",
-      actorContext: actor
-    });
-  }
-
   return {
-    message: `Generated ${bundle.goal.title}.`,
-    data: {
-      goalId: bundle.goal.id,
-      type
-    },
-    dashboard: await repository.getDashboardData(userId)
+    status: 202,
+    body: {
+      message: `Queued ${type === "startup" ? "startup" : type} briefing generation from the NL bar.`,
+      data: {
+        goalId: job.payload.goalId,
+        type
+      },
+      job: {
+        id: job.id,
+        kind: job.kind,
+        status: job.status,
+        goalId: job.payload.goalId,
+        briefingType: job.payload.briefingType,
+        attemptCount: job.attemptCount,
+        maxAttempts: job.maxAttempts,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt
+      },
+      statusUrl: `/api/briefing/jobs/${job.id}`
+    }
   };
 }
 
 async function commandIntent(
   userId: string,
   actor: ActorContext,
-  intent: z.infer<typeof NLApproveCommandSchema> | z.infer<typeof NLRejectCommandSchema> | z.infer<typeof NLCreateGoalCommandSchema> | z.infer<typeof NLBriefingCommandSchema>
+  intent: z.infer<typeof NLApproveCommandSchema> | z.infer<typeof NLRejectCommandSchema> | z.infer<typeof NLCreateGoalCommandSchema> | z.infer<typeof NLBriefingCommandSchema>,
+  idempotencyKey: string | null
 ) {
   switch (intent.action) {
     case "approve":
@@ -376,23 +404,30 @@ async function commandIntent(
         });
 
         return {
-          message: "Only the bounded batch command 'approve all R2' is available from the NL bar right now.",
-          dashboard: context.dashboard,
-          capabilities: capabilitySummary
+          body: {
+            message: "Only the bounded batch command 'approve all R2' is available from the NL bar right now.",
+            dashboard: context.dashboard,
+            capabilities: capabilitySummary
+          }
         };
       }
 
     case "create-goal":
-      return createGoalFromIntent(userId, actor, intent);
+      return createGoalFromIntent(userId, actor, intent, idempotencyKey);
     case "briefing":
-      return createBriefingFromIntent(userId, actor, intent);
+      return createBriefingFromIntent(userId, actor, intent, idempotencyKey);
     case "reject":
     default:
       throw new ApiRouteError(400, "Reject commands require selecting an approval in the approvals queue.");
   }
 }
 
-async function executeIntent(userId: string, actor: ActorContext, intent: NLIntentRequest) {
+async function executeIntent(
+  userId: string,
+  actor: ActorContext,
+  intent: NLIntentRequest,
+  idempotencyKey: string | null
+) {
   if (intent.type === "query") {
     return queryIntent(userId, intent);
   }
@@ -401,7 +436,7 @@ async function executeIntent(userId: string, actor: ActorContext, intent: NLInte
     return summaryIntent(userId, intent);
   }
 
-  return commandIntent(userId, actor, intent);
+  return commandIntent(userId, actor, intent, idempotencyKey);
 }
 
 export async function POST(request: Request) {
@@ -409,9 +444,10 @@ export async function POST(request: Request) {
     const principal = await requireApiSession(request);
     const actor = createActorContextFromPrincipal(principal);
     const intent = await parseJsonBody(request, NLIntentRequestSchema);
-    const result = await executeIntent(principal.userId, actor, intent);
+    const idempotencyKey = intent.type === "command" ? parseIdempotencyKey(request) : null;
+    const result = await executeIntent(principal.userId, actor, intent, idempotencyKey);
 
-    return authenticatedJson(result);
+    return authenticatedJson(result.body, result.status ? { status: result.status } : undefined);
   } catch (error) {
     return handleApiError(error, "Failed to execute NL intent.");
   }

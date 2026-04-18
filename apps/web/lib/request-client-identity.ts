@@ -6,6 +6,13 @@ export type RequestClientIdentity = {
   source: "trusted-ip" | "request-fingerprint";
 };
 
+export type RequestIdentityRuntimeStatus = {
+  production: boolean;
+  trustProxyHeaders: boolean;
+  identitySource: RequestClientIdentity["source"];
+  warnings: string[];
+};
+
 const REQUEST_FINGERPRINT_PREFIX = "fp:";
 const TRUSTED_IP_PREFIX = "ip:";
 const MAX_USER_AGENT_LENGTH = 200;
@@ -18,6 +25,24 @@ function isTrue(value: string | undefined): boolean {
 
 function shouldTrustProxyHeaders(): boolean {
   return isTrue(process.env.AGENTIC_TRUST_PROXY_HEADERS);
+}
+
+export function getRequestIdentityRuntimeStatus(): RequestIdentityRuntimeStatus {
+  const production = process.env.NODE_ENV === "production";
+  const trustProxyHeaders = shouldTrustProxyHeaders();
+  const identitySource = trustProxyHeaders ? "trusted-ip" : "request-fingerprint";
+  const warnings = trustProxyHeaders
+    ? []
+    : [
+        "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."
+      ];
+
+  return {
+    production,
+    trustProxyHeaders,
+    identitySource,
+    warnings
+  };
 }
 
 function normalizeIpCandidate(candidate: string | null | undefined): string | null {

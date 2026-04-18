@@ -2,6 +2,7 @@ import { buildWebReadinessReport } from "../apps/web/lib/runtime-readiness";
 import type { AuthRuntimeStateStatus } from "../apps/web/lib/auth-runtime-state";
 import type { DatabaseSchemaStatus } from "@agentic/db/schema-status";
 import type { ReadinessCheck } from "../apps/web/lib/runtime-readiness";
+import type { RequestIdentityRuntimeStatus } from "../apps/web/lib/request-client-identity";
 
 function buildAuthRuntimeState(
   overrides?: Partial<AuthRuntimeStateStatus>
@@ -39,6 +40,20 @@ function buildAsyncExecutionCheck(overrides?: Partial<Omit<ReadinessCheck, "name
   };
 }
 
+function buildRequestIdentityStatus(
+  overrides?: Partial<RequestIdentityRuntimeStatus>
+): RequestIdentityRuntimeStatus {
+  return {
+    production: false,
+    trustProxyHeaders: false,
+    identitySource: "request-fingerprint",
+    warnings: [
+      "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."
+    ],
+    ...overrides
+  };
+}
+
 function buildDatabaseStatus(
   overrides?: Partial<DatabaseSchemaStatus>
 ): DatabaseSchemaStatus {
@@ -69,6 +84,9 @@ describe("runtime readiness", () => {
         production: true,
         requiresSharedState: true
       }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true
+      }),
       asyncExecution: buildAsyncExecutionCheck({
         status: "fail",
         message: "Async execution requires attention: 1 stale pending job(s)."
@@ -97,6 +115,10 @@ describe("runtime readiness", () => {
         status: "fail"
       }),
       expect.objectContaining({
+        name: "request_identity",
+        status: "fail"
+      }),
+      expect.objectContaining({
         name: "async_execution",
         status: "fail"
       })
@@ -113,6 +135,7 @@ describe("runtime readiness", () => {
         configured: true
       },
       authRuntimeState: buildAuthRuntimeState(),
+      requestIdentity: buildRequestIdentityStatus(),
       asyncExecution: buildAsyncExecutionCheck(),
       databaseStatus: null,
       generatedAt: "2026-04-17T00:00:00.000Z"
@@ -138,6 +161,10 @@ describe("runtime readiness", () => {
         status: "pass"
       }),
       expect.objectContaining({
+        name: "request_identity",
+        status: "pass"
+      }),
+      expect.objectContaining({
         name: "async_execution",
         status: "pass"
       })
@@ -160,6 +187,12 @@ describe("runtime readiness", () => {
         unlockStateScope: "shared",
         sharedStateConfigured: true,
         allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        identitySource: "trusted-ip",
         warnings: []
       }),
       asyncExecution: buildAsyncExecutionCheck(),
@@ -191,6 +224,12 @@ describe("runtime readiness", () => {
         unlockStateScope: "shared",
         sharedStateConfigured: true,
         allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        identitySource: "trusted-ip",
         warnings: []
       }),
       asyncExecution: buildAsyncExecutionCheck(),
@@ -233,6 +272,12 @@ describe("runtime readiness", () => {
         allowsProcessLocalStateException: false,
         warnings: []
       }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        identitySource: "trusted-ip",
+        warnings: []
+      }),
       asyncExecution: buildAsyncExecutionCheck({
         status: "fail",
         message: "Async execution requires attention: 1 dead-letter job(s).",
@@ -258,6 +303,47 @@ describe("runtime readiness", () => {
         status: "fail",
         details: expect.objectContaining({
           deadLetterJobs: 1
+        })
+      })
+    );
+  });
+
+  it("fails readiness in production when request identity still falls back to fingerprints", () => {
+    const report = buildWebReadinessReport({
+      nodeEnv: "production",
+      databaseConfigured: true,
+      authMode: {
+        requiresConfiguredKey: false,
+        usesDevelopmentFallback: false,
+        configured: true
+      },
+      authRuntimeState: buildAuthRuntimeState({
+        production: true,
+        requiresSharedState: true,
+        sessionStateScope: "shared",
+        unlockStateScope: "shared",
+        sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: false,
+        identitySource: "request-fingerprint"
+      }),
+      asyncExecution: buildAsyncExecutionCheck(),
+      databaseStatus: buildDatabaseStatus(),
+      generatedAt: "2026-04-17T00:00:00.000Z"
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "request_identity",
+        status: "fail",
+        details: expect.objectContaining({
+          identitySource: "request-fingerprint",
+          trustProxyHeaders: false
         })
       })
     );

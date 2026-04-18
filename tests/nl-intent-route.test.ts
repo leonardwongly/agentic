@@ -4,6 +4,11 @@ import path from "node:path";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
+import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
+import { runWorkerRuntime } from "@agentic/worker-runtime";
+import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import { GET as briefingJobRoute } from "../apps/web/app/api/briefing/jobs/[id]/route";
+import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
 import { GET as nlIntentCapabilitiesRoute, POST as nlIntentRoute } from "../apps/web/app/api/nl/intent/route";
 import { buildAuthorizedGetRequest, buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-helpers";
 
@@ -52,6 +57,28 @@ describe("nl intent route", () => {
     return normalizedBundle;
   }
 
+  async function processQueuedNlIntentJobs(maxJobs = 1) {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const selfImprovementRepository = createSelfImprovementRepository({
+      baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-nl-intent-route-memory-"))
+    });
+
+    await Promise.all([
+      repository.seedDefaults(SYSTEM_USER_ID),
+      selfImprovementRepository.seed()
+    ]);
+
+    return runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-nl-intent-route-test",
+      maxJobs,
+      pollIntervalMs: 50
+    });
+  }
+
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
@@ -59,12 +86,14 @@ describe("nl intent route", () => {
       "runtime-store.json"
     );
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
   });
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
   });
 
   it("returns filtered approval results through the server boundary", async () => {
@@ -178,32 +207,276 @@ describe("nl intent route", () => {
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     const response = await nlIntentRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/nl/intent", {
-        type: "command",
-        action: "create-goal",
-        params: {
-          request: "Draft a Q2 operating plan"
-        }
+      new Request("http://localhost/api/nl/intent", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "x-idempotency-key": "nl-create-goal-1"
+        },
+        body: JSON.stringify({
+          type: "command",
+          action: "create-goal",
+          params: {
+            request: "Draft a Q2 operating plan"
+          }
+        })
       })
     );
     const payload = (await response.json()) as {
       message: string;
-      data: { goalId: string; title: string };
-      dashboard: { goals: Array<{ goal: { id: string; title: string } }> };
+      data: { goalId: string; request: string };
+      job: { id: string; kind: string; status: string; goalId: string };
+      statusUrl: string;
+    };
+    const queuedStatusResponse = await goalJobRoute(
+      new Request(`http://localhost${payload.statusUrl}`, {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: payload.job.id })
+      }
+    );
+    const queuedStatusPayload = (await queuedStatusResponse.json()) as {
+      job: { id: string; status: string; goalId: string };
+      result: null;
+      error: null;
     };
 
-    expect(response.status).toBe(200);
-    expect(payload.message).toContain("Created goal bundle");
+    expect(response.status).toBe(202);
+    expect(payload.message).toContain("Queued goal creation");
     expect(payload.data.goalId).toBeTruthy();
-    expect(payload.dashboard.goals).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          goal: expect.objectContaining({
-            id: payload.data.goalId
-          })
-        })
-      ])
+    expect(payload.job.kind).toBe("goal_create");
+    expect(payload.job.status).toBe("queued");
+    expect(payload.job.goalId).toBe(payload.data.goalId);
+    expect(payload.statusUrl).toBe(`/api/goals/jobs/${payload.job.id}`);
+    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(queuedStatusResponse.status).toBe(202);
+    expect(queuedStatusPayload.job.id).toBe(payload.job.id);
+    expect(queuedStatusPayload.job.status).toBe("queued");
+    expect(queuedStatusPayload.result).toBeNull();
+    expect(queuedStatusPayload.error).toBeNull();
+
+    const workerResult = await processQueuedNlIntentJobs();
+    const completedStatusResponse = await goalJobRoute(
+      new Request(`http://localhost${payload.statusUrl}`, {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: payload.job.id })
+      }
     );
+    const completedStatusPayload = (await completedStatusResponse.json()) as {
+      job: { id: string; status: string; goalId: string };
+      result: {
+        goalId: string;
+        taskCount: number;
+        completedTaskCount: number;
+      };
+      error: null;
+    };
+
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(completedStatusResponse.status).toBe(200);
+    expect(completedStatusPayload.job.id).toBe(payload.job.id);
+    expect(completedStatusPayload.job.status).toBe("completed");
+    expect(completedStatusPayload.result.goalId).toBe(payload.job.goalId);
+    expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.error).toBeNull();
+    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
+    expect(await repository.getGoalBundleForUser(payload.job.goalId, SYSTEM_USER_ID)).toEqual(
+      expect.objectContaining({
+        goal: expect.objectContaining({
+          id: payload.job.goalId
+        })
+      })
+    );
+    expectNoStoreHeaders(response);
+  });
+
+  it("queues briefing generation from the NL command boundary and persists the completed bundle", async () => {
+    const repository = await buildRepository();
+
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await nlIntentRoute(
+      new Request("http://localhost/api/nl/intent", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "x-idempotency-key": "nl-briefing-1"
+        },
+        body: JSON.stringify({
+          type: "command",
+          action: "briefing",
+          params: {
+            type: "morning"
+          }
+        })
+      })
+    );
+    const payload = (await response.json()) as {
+      message: string;
+      data: { goalId: string; type: string };
+      job: { id: string; kind: string; status: string; goalId: string; briefingType: string };
+      statusUrl: string;
+    };
+    const queuedStatusResponse = await briefingJobRoute(
+      new Request(`http://localhost${payload.statusUrl}`, {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: payload.job.id })
+      }
+    );
+    const queuedStatusPayload = (await queuedStatusResponse.json()) as {
+      job: { id: string; status: string; goalId: string; briefingType: string };
+      result: null;
+      error: null;
+    };
+
+    expect(response.status).toBe(202);
+    expect(payload.message).toContain("Queued startup briefing generation");
+    expect(payload.data.type).toBe("startup");
+    expect(payload.job.kind).toBe("briefing_create");
+    expect(payload.job.status).toBe("queued");
+    expect(payload.job.goalId).toBe(payload.data.goalId);
+    expect(payload.job.briefingType).toBe("startup");
+    expect(payload.statusUrl).toBe(`/api/briefing/jobs/${payload.job.id}`);
+    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(queuedStatusResponse.status).toBe(202);
+    expect(queuedStatusPayload.job.id).toBe(payload.job.id);
+    expect(queuedStatusPayload.job.status).toBe("queued");
+    expect(queuedStatusPayload.job.briefingType).toBe("startup");
+    expect(queuedStatusPayload.result).toBeNull();
+    expect(queuedStatusPayload.error).toBeNull();
+
+    const workerResult = await processQueuedNlIntentJobs();
+    const completedStatusResponse = await briefingJobRoute(
+      new Request(`http://localhost${payload.statusUrl}`, {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: payload.job.id })
+      }
+    );
+    const completedStatusPayload = (await completedStatusResponse.json()) as {
+      job: { id: string; status: string; goalId: string; briefingType: string };
+      result: {
+        goalId: string;
+        taskCount: number;
+        completedTaskCount: number;
+      };
+      error: null;
+    };
+    const persistedBundle = await repository.getGoalBundleForUser(payload.job.goalId, SYSTEM_USER_ID);
+
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(completedStatusResponse.status).toBe(200);
+    expect(completedStatusPayload.job.id).toBe(payload.job.id);
+    expect(completedStatusPayload.job.status).toBe("completed");
+    expect(completedStatusPayload.job.briefingType).toBe("startup");
+    expect(completedStatusPayload.result.goalId).toBe(payload.job.goalId);
+    expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.error).toBeNull();
+    expect(persistedBundle?.goal.intent).toBe("briefing:startup");
+    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
+    expectNoStoreHeaders(response);
+  });
+
+  it("deduplicates retried NL goal submissions when the same idempotency key is reused", async () => {
+    const repository = await buildRepository();
+    const idempotencyKey = "nl-create-goal-retry-1";
+    const buildRequest = () =>
+      new Request("http://localhost/api/nl/intent", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "x-idempotency-key": idempotencyKey
+        },
+        body: JSON.stringify({
+          type: "command",
+          action: "create-goal",
+          params: {
+            request: "Draft a Q2 operating plan"
+          }
+        })
+      });
+
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const firstResponse = await nlIntentRoute(buildRequest());
+    const secondResponse = await nlIntentRoute(buildRequest());
+    const firstPayload = (await firstResponse.json()) as {
+      job: { id: string; goalId: string; status: string };
+      statusUrl: string;
+    };
+    const secondPayload = (await secondResponse.json()) as {
+      job: { id: string; goalId: string; status: string };
+      statusUrl: string;
+    };
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(202);
+    expect(secondPayload.job.id).toBe(firstPayload.job.id);
+    expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
+    expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
+    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expectNoStoreHeaders(firstResponse);
+    expectNoStoreHeaders(secondResponse);
+  });
+
+  it("rejects malformed NL idempotency keys", async () => {
+    const repository = await buildRepository();
+
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await nlIntentRoute(
+      new Request("http://localhost/api/nl/intent", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "x-idempotency-key": "bad key"
+        },
+        body: JSON.stringify({
+          type: "command",
+          action: "create-goal",
+          params: {
+            request: "Draft a Q2 operating plan"
+          }
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("x-idempotency-key");
     expectNoStoreHeaders(response);
   });
 

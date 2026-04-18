@@ -20,7 +20,7 @@ import {
   getSessionUnlockRateLimitStatus,
   recordFailedSessionUnlockAttempt
 } from "../apps/web/lib/session-unlock-rate-limit";
-import { getRequestClientIdentity } from "../apps/web/lib/request-client-identity";
+import { getRequestClientIdentity, getRequestIdentityRuntimeStatus } from "../apps/web/lib/request-client-identity";
 import {
   resetSessionUnlockStateStoreForTesting,
   setSessionUnlockStateStoreForTesting,
@@ -354,6 +354,28 @@ describe("auth helpers", () => {
     expect(getRequestClientIdentity(request)).toEqual({
       key: "ip:203.0.113.10",
       source: "trusted-ip"
+    });
+  });
+
+  it("reports request identity runtime warnings until trusted proxy headers are enabled", () => {
+    process.env.NODE_ENV = "production";
+
+    expect(getRequestIdentityRuntimeStatus()).toEqual({
+      production: true,
+      trustProxyHeaders: false,
+      identitySource: "request-fingerprint",
+      warnings: [
+        "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."
+      ]
+    });
+
+    process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+
+    expect(getRequestIdentityRuntimeStatus()).toEqual({
+      production: true,
+      trustProxyHeaders: true,
+      identitySource: "trusted-ip",
+      warnings: []
     });
   });
 

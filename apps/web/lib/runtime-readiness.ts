@@ -1,11 +1,12 @@
 import { createRepository } from "@agentic/repository";
 import { getAuthMode } from "./auth";
 import { getAuthRuntimeStateStatus, type AuthRuntimeStateStatus } from "./auth-runtime-state";
+import { getRequestIdentityRuntimeStatus, type RequestIdentityRuntimeStatus } from "./request-client-identity";
 
 type DatabaseSchemaStatus = import("@agentic/db/schema-status").DatabaseSchemaStatus;
 
 export type ReadinessCheck = {
-  name: "access_key" | "database" | "auth_runtime_state" | "async_execution";
+  name: "access_key" | "database" | "auth_runtime_state" | "request_identity" | "async_execution";
   status: "pass" | "warn" | "fail";
   message: string;
   details?: Record<string, string | boolean | number | null>;
@@ -29,6 +30,7 @@ type ReadinessEvaluationParams = {
   databaseConfigured: boolean;
   authMode: AuthModeSnapshot;
   authRuntimeState: AuthRuntimeStateStatus;
+  requestIdentity: RequestIdentityRuntimeStatus;
   databaseStatus: DatabaseSchemaStatus | null;
   asyncExecution: AsyncExecutionCheckSnapshot;
 };
@@ -182,6 +184,48 @@ function buildAuthRuntimeStateCheck(params: ReadinessEvaluationParams): Readines
   };
 }
 
+function buildRequestIdentityCheck(params: ReadinessEvaluationParams): ReadinessCheck {
+  const runtime = normalizeRuntime(params.nodeEnv);
+
+  if (runtime === "production" && !params.requestIdentity.trustProxyHeaders) {
+    return {
+      name: "request_identity",
+      status: "fail",
+      message: "Trusted proxy headers must be enabled in production so abuse controls can key off canonical client IPs.",
+      details: {
+        identitySource: params.requestIdentity.identitySource,
+        trustProxyHeaders: params.requestIdentity.trustProxyHeaders
+      }
+    };
+  }
+
+  if (params.requestIdentity.warnings.length > 0) {
+    return {
+      name: "request_identity",
+      status: runtime === "production" ? "warn" : "pass",
+      message:
+        runtime === "production"
+          ? "Request identity fallback is active; enable trusted proxy headers before exposing this runtime externally."
+          : "Request identity fallback is acceptable for non-production startup.",
+      details: {
+        identitySource: params.requestIdentity.identitySource,
+        trustProxyHeaders: params.requestIdentity.trustProxyHeaders,
+        warningCount: params.requestIdentity.warnings.length
+      }
+    };
+  }
+
+  return {
+    name: "request_identity",
+    status: "pass",
+    message: "Request identity controls are configured to trust canonical proxy IP headers.",
+    details: {
+      identitySource: params.requestIdentity.identitySource,
+      trustProxyHeaders: params.requestIdentity.trustProxyHeaders
+    }
+  };
+}
+
 function buildAsyncExecutionCheck(params: ReadinessEvaluationParams): ReadinessCheck {
   return {
     name: "async_execution",
@@ -295,6 +339,7 @@ export function buildWebReadinessReport(params: ReadinessEvaluationParams): WebR
     buildAccessKeyCheck(params),
     buildDatabaseCheck(params),
     buildAuthRuntimeStateCheck(params),
+    buildRequestIdentityCheck(params),
     buildAsyncExecutionCheck(params)
   ];
   const ok = checks.every((check) => check.status !== "fail");
@@ -318,6 +363,7 @@ export async function getWebReadinessReport(): Promise<WebReadinessReport> {
     databaseConfigured,
     authMode: getAuthMode({ emitDevelopmentWarning: false }),
     authRuntimeState: getAuthRuntimeStateStatus(),
+    requestIdentity: getRequestIdentityRuntimeStatus(),
     databaseStatus: databaseConfigured
       ? await loadDatabaseSchemaStatus({
           databaseUrl: process.env.DATABASE_URL

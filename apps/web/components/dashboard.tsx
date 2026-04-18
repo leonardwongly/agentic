@@ -117,10 +117,24 @@ type RequestState = {
   message: string;
 };
 
+type NLIntentQueuedJob = {
+  id: string;
+  kind: "goal_create" | "briefing_create";
+  status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
+  goalId: string;
+  briefingType?: BriefingType;
+  attemptCount: number;
+  maxAttempts: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type NLIntentApiResponse = {
   message: string;
   data?: unknown;
   dashboard?: DashboardData;
+  job?: NLIntentQueuedJob;
+  statusUrl?: string;
 };
 
 type OperatorProductPayload = {
@@ -381,11 +395,72 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         await fetch("/api/nl/intent", {
           method: "POST",
           headers: {
-            "content-type": "application/json"
+            "content-type": "application/json",
+            ...(intent.type === "command"
+              ? {
+                  "x-idempotency-key": buildClientIdempotencyKey()
+                }
+              : {})
           },
           body: JSON.stringify(intent)
         })
       );
+
+      if (payload.statusUrl && payload.job?.kind === "goal_create") {
+        const settled = await pollGoalJobUntilSettled(payload.statusUrl);
+
+        if (!settled) {
+          return {
+            ...payload,
+            message: "Goal queued and still processing. Refresh in a moment for the final bundle."
+          };
+        }
+
+        if (settled.job.status === "dead_letter") {
+          throw new Error(settled.error ?? "Goal creation failed.");
+        }
+
+        const snapshot = await loadDashboardSnapshot();
+        startTransition(() => {
+          setData(snapshot.dashboard);
+          statsBar.updateSync();
+        });
+
+        return {
+          ...payload,
+          dashboard: snapshot.dashboard,
+          message: "Created a new goal bundle."
+        };
+      }
+
+      if (payload.statusUrl && payload.job?.kind === "briefing_create") {
+        const settled = await pollBriefingJobUntilSettled(payload.statusUrl);
+
+        if (!settled) {
+          const label = payload.job.briefingType ? briefingTypeLabels[payload.job.briefingType] : "Briefing";
+          return {
+            ...payload,
+            message: `${label} queued and still processing. Refresh in a moment for the final briefing.`
+          };
+        }
+
+        if (settled.job.status === "dead_letter") {
+          throw new Error(settled.error ?? "Briefing generation failed.");
+        }
+
+        const snapshot = await loadDashboardSnapshot();
+        const label = payload.job.briefingType ? briefingTypeLabels[payload.job.briefingType] : "Briefing";
+        startTransition(() => {
+          setData(snapshot.dashboard);
+          statsBar.updateSync();
+        });
+
+        return {
+          ...payload,
+          dashboard: snapshot.dashboard,
+          message: `Generated ${label.toLowerCase()}.`
+        };
+      }
 
       if (payload.dashboard) {
         startTransition(() => {
