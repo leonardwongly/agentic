@@ -6,7 +6,26 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+  actions: read
+  attestations: write
+  id-token: write
+
 jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
   validate:
     runs-on: ubuntu-latest
     services:
@@ -37,8 +56,11 @@ jobs:
 
       - run: npm ci
 
+      - name: Create security artifact directories
+        run: mkdir -p artifacts/security artifacts/build
+
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: npm run security:audit-runtime -- --report artifacts/security/runtime-audit-report.json
 
       - name: Validate migrations
         run: |
@@ -63,6 +85,9 @@ jobs:
       - name: Build applications
         run: npm run build
 
+      - name: Generate runtime SBOM
+        run: npm run security:sbom -- --output artifacts/security/agentic-sbom.spdx.json
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
@@ -71,3 +96,38 @@ jobs:
 
       - name: Build container image
         run: docker build -t agentic-ci:${{ github.sha }} .
+
+      - name: Package deployable build artifacts
+        run: |
+          tar -czf artifacts/build/agentic-runtime-bundle.tgz \
+            apps/web/.next \
+            apps/web/package.json \
+            apps/worker/package.json \
+            package.json \
+            package-lock.json \
+            packages \
+            scripts
+          docker save agentic-ci:${{ github.sha }} -o artifacts/build/agentic-image.tar
+
+      - name: Upload supply-chain evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentic-supply-chain-evidence
+          path: |
+            artifacts/security
+            artifacts/build
+          if-no-files-found: error
+
+      - name: Attest security evidence
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: artifacts/security/agentic-sbom.spdx.json
+
+      - name: Attest deployable build artifacts
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artifacts/build/agentic-runtime-bundle.tgz
+            artifacts/build/agentic-image.tar

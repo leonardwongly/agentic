@@ -3,6 +3,12 @@ name: Staging Deploy
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
+  attestations: write
+  id-token: write
+
 concurrency:
   group: staging-deploy
   cancel-in-progress: false
@@ -42,11 +48,17 @@ jobs:
 
       - run: npm ci
 
+      - name: Create security artifact directories
+        run: mkdir -p artifacts/security artifacts/build
+
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: npm run security:audit-runtime -- --report artifacts/security/runtime-audit-report.json
 
       - name: Build deployable artifacts
         run: npm run build
+
+      - name: Generate runtime SBOM
+        run: npm run security:sbom -- --output artifacts/security/agentic-sbom.spdx.json
 
       - name: Validate staging database readiness
         run: npm run db:status -- --require-ready
@@ -66,6 +78,18 @@ jobs:
       - name: Build staging image
         run: docker build -t "$AGENTIC_STAGING_IMAGE_TAG" .
 
+      - name: Package staging build artifacts
+        run: |
+          tar -czf artifacts/build/agentic-runtime-bundle.tgz \
+            apps/web/.next \
+            apps/web/package.json \
+            apps/worker/package.json \
+            package.json \
+            package-lock.json \
+            packages \
+            scripts
+          docker save "$AGENTIC_STAGING_IMAGE_TAG" -o artifacts/build/agentic-image.tar
+
       - name: Run provider staging deploy
         run: npm run deploy:staging:provider
 
@@ -82,3 +106,25 @@ jobs:
           name: agentic-staging-telemetry
           path: ${{ env.AGENTIC_TELEMETRY_RETENTION_DIR }}
           if-no-files-found: warn
+
+      - name: Upload staging supply-chain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentic-staging-supply-chain
+          path: |
+            artifacts/security
+            artifacts/build
+          if-no-files-found: error
+
+      - name: Attest staging security evidence
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: artifacts/security/agentic-sbom.spdx.json
+
+      - name: Attest staging deployable build artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artifacts/build/agentic-runtime-bundle.tgz
+            artifacts/build/agentic-image.tar
