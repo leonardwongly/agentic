@@ -37,7 +37,9 @@
     "worker:start": "npm run start -w @agentic/worker",
     "docs:render": "node scripts/render-docs.mjs",
     "docs:validate": "node scripts/validate-docs.mjs",
-    "docs:build": "npm run docs:render && npm run docs:validate"
+    "docs:build": "npm run docs:render && npm run docs:validate",
+    "worktree:setup": "tsx scripts/setup-parallel-worktrees.ts",
+    "worktree:status": "tsx scripts/worktree-status.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

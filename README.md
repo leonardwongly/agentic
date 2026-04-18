@@ -157,6 +157,16 @@ Goal creation, autopilot processing, and privacy lifecycle operations are durabl
 
 For realistic local validation of these flows, run both `npm run dev` and `npm run worker:start`.
 
+## Parallel Delivery
+
+Agentic supports a checked-in parallel worktree model for roadmap slices that need multiple low-conflict streams at once.
+
+- `npm run worktree:setup -- --print-only`: preview the standard stream layout
+- `npm run worktree:setup`: create sibling worktrees for the standard streams
+- `npm run worktree:status`: inspect branch, head, and dirty-state across planned worktrees
+
+See [docs/runbooks/parallel-worktrees.md](/Users/leonardwongly/Developer/Agentic/docs/runbooks/parallel-worktrees.md) for ownership rules, merge order, and validation requirements.
+
 ## Production Bootstrap
 
 Production startup is intentionally split into explicit migration, readiness, and process-launch steps so the app does not silently mutate schema state during request handling.
