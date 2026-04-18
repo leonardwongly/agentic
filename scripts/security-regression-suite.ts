@@ -30,7 +30,8 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
     description: "Preserve tenant isolation, scoped access, and governed route behavior.",
     files: [
       "tests/route-user-scope.test.ts",
-      "tests/governance-privacy-route.test.ts"
+      "tests/governance-privacy-route.test.ts",
+      "tests/governance-audit-route.test.ts"
     ]
   },
   {
@@ -41,7 +42,8 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
       "tests/briefing-route.test.ts",
       "tests/templates-route.test.ts",
       "tests/nl-intent-route.test.ts",
-      "tests/share-route.test.ts"
+      "tests/share-route.test.ts",
+      "tests/public-share-view-route.test.ts"
     ]
   },
   {

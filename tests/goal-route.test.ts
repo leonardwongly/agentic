@@ -10,6 +10,11 @@ import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import { GET as goalRoute } from "../apps/web/app/api/goals/[id]/route";
 import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
 import { POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
@@ -72,6 +77,7 @@ describe("goal route", () => {
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
+    resetAuthSessionStateStoreForTesting();
   });
 
   it("queues goal creation, exposes a pollable status route, and completes through the worker runtime", async () => {
@@ -247,6 +253,51 @@ describe("goal route", () => {
     expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
     expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
     expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+  });
+
+  it("rate limits queued goal creation with a route-scoped abuse key", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return {
+          allowed: false,
+          retryAfterMs: 30_000
+        };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await goalsCreateRoute(
+      new Request("http://localhost/api/goals", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "user-agent": "Agentic Goal Rate Limit Test",
+          "accept-language": "en-SG"
+        },
+        body: JSON.stringify({
+          request: "Plan a reviewer-safe weekly operating cadence."
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(429);
+    expect(payload.error).toBe("Too many goal creation requests. Try again later.");
+    expect(response.headers.get("retry-after")).toBe("30");
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain("goal-create:user:");
+    expect(seenKeys[0]).toContain(":fp:/api/goals:");
   });
 
   it("rejects malformed goal idempotency keys", async () => {

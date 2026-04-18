@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { enqueueGoalCreateJob } from "@agentic/worker-runtime";
+import { checkAbuseRateLimit } from "../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import {
   ApiRouteError,
   authenticatedJson,
   handleApiError,
+  authenticatedRateLimitError,
   parseJsonBody,
   withApiTelemetry
 } from "../../../lib/api-response";
@@ -50,6 +52,16 @@ export async function POST(request: Request) {
     try {
       requireJsonContentType(request);
       const principal = await requireApiSession(request);
+      const rateLimit = await checkAbuseRateLimit({
+        namespace: "goal-create",
+        request,
+        principal
+      });
+
+      if (!rateLimit.allowed) {
+        return authenticatedRateLimitError("Too many goal creation requests. Try again later.", rateLimit.retryAfterSeconds);
+      }
+
       const actorContext = createActorContextFromPrincipal(principal);
       const body = await parseJsonBody(request, GoalRequestSchema);
       const { repository, workspaceId } = await resolveActiveWorkspaceContext(principal.userId);

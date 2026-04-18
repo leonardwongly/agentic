@@ -14,6 +14,7 @@ import {
 import { enqueueAutopilotProcessJob } from "@agentic/worker-runtime";
 import {
   ApiRouteError,
+  authenticatedRateLimitError,
   authenticatedJson,
   handleApiError,
   parseJsonBody,
@@ -22,6 +23,7 @@ import {
 import { requireJsonContentType } from "../../../../lib/api-errors";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
+import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { getSeededRepository } from "../../../../lib/server";
 import type { AgenticRepository } from "@agentic/repository";
 
@@ -188,149 +190,228 @@ async function ensureAutopilotProcessJob(repository: AgenticRepository, event: A
 export async function POST(request: Request) {
   return withApiTelemetry(request, "api.autopilot.events.create", async () => {
     try {
-    requireJsonContentType(request);
-    const principal = await requireApiSession(request);
-    const actorContext = createActorContextFromPrincipal(principal);
-    const repository = await getSeededRepository();
-    const settings = await repository.getAutopilotSettings(principal.userId);
-    const body = await parseJsonBody(request, TriggerAutopilotEventSchema);
-    const effectiveMode = body.mode ?? settings.mode;
-    let summary = body.summary?.trim() ?? "";
+      requireJsonContentType(request);
+      const principal = await requireApiSession(request);
+      const rateLimit = await checkAbuseRateLimit({
+        request,
+        principal,
+        namespace: "autopilot-event"
+      });
 
-    if (effectiveMode === "auto_run" && repository.backend !== "postgres") {
-      return authenticatedJson(
-        {
-          error: "Autopilot auto-run requires Postgres-backed persistence.",
-          backend: repository.backend
-        },
-        { status: 409 }
-      );
-    }
+      if (!rateLimit.allowed) {
+        return authenticatedRateLimitError("Too many autopilot event requests. Try again later.", rateLimit.retryAfterSeconds);
+      }
 
-    if (body.kind === "watcher_triggered") {
-      const { watcher } = await resolveWatcherSource(body.sourceId, principal.userId);
-      summary ||= `Watcher triggered: ${watcher.targetEntity}`;
+      const actorContext = createActorContextFromPrincipal(principal);
+      const repository = await getSeededRepository();
+      const settings = await repository.getAutopilotSettings(principal.userId);
+      const body = await parseJsonBody(request, TriggerAutopilotEventSchema);
+      const effectiveMode = body.mode ?? settings.mode;
+      let summary = body.summary?.trim() ?? "";
 
-      if (body.dryRun) {
-        const event = AutopilotEventSchema.parse({
-          ...buildPendingEvent({
-            userId: principal.userId,
-            kind: body.kind,
-            sourceId: body.sourceId,
-            mode: effectiveMode,
-            summary,
-            details: {
-              ...(body.details ?? {}),
-              watcherId: watcher.id,
-              dryRun: true
-            },
-            idempotencyKey: body.idempotencyKey,
-            actorContext
-          }),
-          status: "simulated"
-        });
+      if (effectiveMode === "auto_run" && repository.backend !== "postgres") {
+        return authenticatedJson(
+          {
+            error: "Autopilot auto-run requires Postgres-backed persistence.",
+            backend: repository.backend
+          },
+          { status: 409 }
+        );
+      }
+
+      if (body.kind === "watcher_triggered") {
+        const { watcher } = await resolveWatcherSource(body.sourceId, principal.userId);
+        summary ||= `Watcher triggered: ${watcher.targetEntity}`;
+
+        if (body.dryRun) {
+          const event = AutopilotEventSchema.parse({
+            ...buildPendingEvent({
+              userId: principal.userId,
+              kind: body.kind,
+              sourceId: body.sourceId,
+              mode: effectiveMode,
+              summary,
+              details: {
+                ...(body.details ?? {}),
+                watcherId: watcher.id,
+                dryRun: true
+              },
+              idempotencyKey: body.idempotencyKey,
+              actorContext
+            }),
+            status: "simulated"
+          });
+
+          return authenticatedJson({
+            event,
+            simulated: true,
+            dashboard: await repository.getDashboardData(principal.userId)
+          });
+        }
+      }
+
+      if (body.kind === "template_due") {
+        const { template } = await resolveTemplateSource(body.sourceId, principal.userId);
+        summary ||= `Template due: ${template.name}`;
+
+        if (body.dryRun) {
+          const event = AutopilotEventSchema.parse({
+            ...buildPendingEvent({
+              userId: principal.userId,
+              kind: body.kind,
+              sourceId: body.sourceId,
+              mode: effectiveMode,
+              summary,
+              details: {
+                ...(body.details ?? {}),
+                templateId: template.id,
+                dryRun: true
+              },
+              idempotencyKey: body.idempotencyKey,
+              actorContext
+            }),
+            status: "simulated"
+          });
+
+          return authenticatedJson({
+            event,
+            simulated: true,
+            dashboard: await repository.getDashboardData(principal.userId)
+          });
+        }
+      }
+
+      if (body.kind === "briefing_due") {
+        const { type } = await resolveBriefingSource(body.sourceId, principal.userId);
+        summary ||= `Briefing due: ${type}`;
+
+        if (body.dryRun) {
+          const event = AutopilotEventSchema.parse({
+            ...buildPendingEvent({
+              userId: principal.userId,
+              kind: body.kind,
+              sourceId: body.sourceId,
+              mode: effectiveMode,
+              summary,
+              details: {
+                ...(body.details ?? {}),
+                briefingType: type,
+                dryRun: true
+              },
+              idempotencyKey: body.idempotencyKey,
+              actorContext
+            }),
+            status: "simulated"
+          });
+
+          return authenticatedJson({
+            event,
+            simulated: true,
+            dashboard: await repository.getDashboardData(principal.userId)
+          });
+        }
+      }
+
+      const claim = await repository.claimAutopilotEvent({
+        userId: principal.userId,
+        kind: body.kind,
+        sourceId: body.sourceId,
+        idempotencyKey: body.idempotencyKey ?? null,
+        mode: effectiveMode,
+        summary,
+        details: body.details,
+        actorContext,
+        debounceMinutes: settings.debounceMinutes
+      });
+
+      if (claim.outcome === "duplicate" || claim.outcome === "debounced") {
+        if (claim.outcome === "duplicate" && shouldEnsureAutopilotJob(claim.event)) {
+          try {
+            const { job } = await ensureAutopilotProcessJob(repository, claim.event);
+
+            return authenticatedJson(
+              {
+                event: claim.event,
+                job,
+                duplicate: true,
+                queued: true,
+                debounced: false,
+                dashboard: await repository.getDashboardData(principal.userId)
+              },
+              { status: 202 }
+            );
+          } catch {
+            const processedAt = nowIso();
+            const failedEvent = await repository.saveAutopilotEvent({
+              ...claim.event,
+              status: "failed",
+              processedAt,
+              details: {
+                ...claim.event.details,
+                ...summarizeEnqueueFailure(claim.event.createdAt, processedAt)
+              },
+              error: "Autopilot execution failed."
+            });
+
+            return authenticatedJson(
+              {
+                event: failedEvent,
+                duplicate: true,
+                queued: false,
+                error: failedEvent.error,
+                dashboard: await repository.getDashboardData(principal.userId)
+              },
+              { status: 500 }
+            );
+          }
+        }
 
         return authenticatedJson({
-          event,
-          simulated: true,
+          event: claim.event,
+          duplicate: claim.outcome === "duplicate",
+          debounced: claim.outcome === "debounced",
           dashboard: await repository.getDashboardData(principal.userId)
         });
       }
-    }
 
-    if (body.kind === "template_due") {
-      const { template } = await resolveTemplateSource(body.sourceId, principal.userId);
-      summary ||= `Template due: ${template.name}`;
-
-      if (body.dryRun) {
-        const event = AutopilotEventSchema.parse({
-          ...buildPendingEvent({
-            userId: principal.userId,
-            kind: body.kind,
-            sourceId: body.sourceId,
-            mode: effectiveMode,
-            summary,
+      if (effectiveMode === "notify_only") {
+        const processedAt = nowIso();
+        const event = await repository.saveAutopilotEvent(
+          AutopilotEventSchema.parse({
+            ...claim.event,
+            status: "notified",
+            processedAt,
             details: {
-              ...(body.details ?? {}),
-              templateId: template.id,
-              dryRun: true
-            },
-            idempotencyKey: body.idempotencyKey,
-            actorContext
-          }),
-          status: "simulated"
-        });
+              ...claim.event.details,
+              requiresReview: true,
+              recoveryAction: "await_operator_review",
+              processingLatencyMs: measureProcessingLatencyMs(claim.event.createdAt, processedAt)
+            }
+          })
+        );
 
         return authenticatedJson({
           event,
-          simulated: true,
           dashboard: await repository.getDashboardData(principal.userId)
         });
       }
-    }
 
-    if (body.kind === "briefing_due") {
-      const { type } = await resolveBriefingSource(body.sourceId, principal.userId);
-      summary ||= `Briefing due: ${type}`;
+      try {
+        const { job } = await ensureAutopilotProcessJob(repository, claim.event);
 
-      if (body.dryRun) {
-        const event = AutopilotEventSchema.parse({
-          ...buildPendingEvent({
-            userId: principal.userId,
-            kind: body.kind,
-            sourceId: body.sourceId,
-            mode: effectiveMode,
-            summary,
-            details: {
-              ...(body.details ?? {}),
-              briefingType: type,
-              dryRun: true
-            },
-            idempotencyKey: body.idempotencyKey,
-            actorContext
-          }),
-          status: "simulated"
-        });
-
-        return authenticatedJson({
-          event,
-          simulated: true,
-          dashboard: await repository.getDashboardData(principal.userId)
-        });
-      }
-    }
-
-    const claim = await repository.claimAutopilotEvent({
-      userId: principal.userId,
-      kind: body.kind,
-      sourceId: body.sourceId,
-      idempotencyKey: body.idempotencyKey ?? null,
-      mode: effectiveMode,
-      summary,
-      details: body.details,
-      actorContext,
-      debounceMinutes: settings.debounceMinutes
-    });
-
-    if (claim.outcome === "duplicate" || claim.outcome === "debounced") {
-      if (claim.outcome === "duplicate" && shouldEnsureAutopilotJob(claim.event)) {
-        try {
-          const { job } = await ensureAutopilotProcessJob(repository, claim.event);
-
-          return authenticatedJson(
-            {
-              event: claim.event,
-              job,
-              duplicate: true,
-              queued: true,
-              debounced: false,
-              dashboard: await repository.getDashboardData(principal.userId)
-            },
-            { status: 202 }
-          );
-        } catch {
-          const processedAt = nowIso();
-          const failedEvent = await repository.saveAutopilotEvent({
+        return authenticatedJson(
+          {
+            event: claim.event,
+            job,
+            queued: true,
+            dashboard: await repository.getDashboardData(principal.userId)
+          },
+          { status: 202 }
+        );
+      } catch {
+        const processedAt = nowIso();
+        const failedEvent = await repository.saveAutopilotEvent(
+          AutopilotEventSchema.parse({
             ...claim.event,
             status: "failed",
             processedAt,
@@ -339,87 +420,18 @@ export async function POST(request: Request) {
               ...summarizeEnqueueFailure(claim.event.createdAt, processedAt)
             },
             error: "Autopilot execution failed."
-          });
+          })
+        );
 
-          return authenticatedJson(
-            {
-              event: failedEvent,
-              duplicate: true,
-              queued: false,
-              error: failedEvent.error,
-              dashboard: await repository.getDashboardData(principal.userId)
-            },
-            { status: 500 }
-          );
-        }
-      }
-
-      return authenticatedJson({
-        event: claim.event,
-        duplicate: claim.outcome === "duplicate",
-        debounced: claim.outcome === "debounced",
-        dashboard: await repository.getDashboardData(principal.userId)
-      });
-    }
-
-    if (effectiveMode === "notify_only") {
-      const processedAt = nowIso();
-      const event = await repository.saveAutopilotEvent(
-        AutopilotEventSchema.parse({
-          ...claim.event,
-          status: "notified",
-          processedAt,
-          details: {
-            ...claim.event.details,
-            requiresReview: true,
-            recoveryAction: "await_operator_review",
-            processingLatencyMs: measureProcessingLatencyMs(claim.event.createdAt, processedAt)
-          }
-        })
-      );
-
-      return authenticatedJson({
-        event,
-        dashboard: await repository.getDashboardData(principal.userId)
-      });
-    }
-
-    try {
-      const { job } = await ensureAutopilotProcessJob(repository, claim.event);
-
-      return authenticatedJson(
-        {
-          event: claim.event,
-          job,
-          queued: true,
-          dashboard: await repository.getDashboardData(principal.userId)
-        },
-        { status: 202 }
-      );
-    } catch {
-      const processedAt = nowIso();
-      const failedEvent = await repository.saveAutopilotEvent(
-        AutopilotEventSchema.parse({
-          ...claim.event,
-          status: "failed",
-          processedAt,
-          details: {
-            ...claim.event.details,
-            ...summarizeEnqueueFailure(claim.event.createdAt, processedAt)
+        return authenticatedJson(
+          {
+            event: failedEvent,
+            error: failedEvent.error,
+            dashboard: await repository.getDashboardData(principal.userId)
           },
-          error: "Autopilot execution failed."
-        })
-      );
-
-      return authenticatedJson(
-        {
-          event: failedEvent,
-          error: failedEvent.error,
-          dashboard: await repository.getDashboardData(principal.userId)
-        },
-        { status: 500 }
-      );
-    }
+          { status: 500 }
+        );
+      }
     } catch (error) {
       return handleApiError(error, "Failed to trigger autopilot event.");
     }

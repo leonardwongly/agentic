@@ -8,6 +8,11 @@ import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import { GET as briefingJobRoute } from "../apps/web/app/api/briefing/jobs/[id]/route";
 import { POST as briefingRoute } from "../apps/web/app/api/briefing/route";
 
@@ -52,6 +57,7 @@ describe("briefing route", () => {
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
+    resetAuthSessionStateStoreForTesting();
   });
 
   it("queues briefing creation, exposes a pollable status route, and completes through the worker runtime", async () => {
@@ -292,5 +298,48 @@ describe("briefing route", () => {
 
     expect(response.status).toBe(400);
     expect(payload.error).toContain("x-idempotency-key");
+  });
+
+  it("rate limits briefing creation with a route-scoped abuse key", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return {
+          allowed: false,
+          retryAfterMs: 30_000
+        };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await briefingRoute(
+      new Request("http://localhost/api/briefing", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "user-agent": "Agentic Briefing Rate Limit Test",
+          "accept-language": "en-SG"
+        },
+        body: JSON.stringify({ type: "midday" })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(429);
+    expect(payload.error).toBe("Too many briefing requests. Try again later.");
+    expect(response.headers.get("retry-after")).toBe("30");
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain("briefing-create:user:");
+    expect(seenKeys[0]).toContain(":fp:/api/briefing:");
   });
 });

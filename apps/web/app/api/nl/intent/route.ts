@@ -4,9 +4,16 @@ import { BriefingTypeSchema, RiskClassSchema, type ActorContext } from "@agentic
 import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
 import { createLocalNote } from "@agentic/integrations";
 import { enqueueBriefingCreateJob, enqueueGoalCreateJob } from "@agentic/worker-runtime";
+import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import {
+  ApiRouteError,
+  authenticatedJson,
+  authenticatedRateLimitError,
+  handleApiError,
+  parseJsonBody
+} from "../../../../lib/api-response";
 import { resolveGoogleWorkspaceAdapters } from "../../../../lib/google-provider-adapters";
 import { buildNlCapabilitySummary } from "../../../../lib/nl-capabilities";
 import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
@@ -444,6 +451,19 @@ export async function POST(request: Request) {
     const principal = await requireApiSession(request);
     const actor = createActorContextFromPrincipal(principal);
     const intent = await parseJsonBody(request, NLIntentRequestSchema);
+
+    if (intent.type === "command") {
+      const rateLimit = await checkAbuseRateLimit({
+        namespace: "nl-command",
+        request,
+        principal
+      });
+
+      if (!rateLimit.allowed) {
+        return authenticatedRateLimitError("Too many NL command requests. Try again later.", rateLimit.retryAfterSeconds);
+      }
+    }
+
     const idempotencyKey = intent.type === "command" ? parseIdempotencyKey(request) : null;
     const result = await executeIntent(principal.userId, actor, intent, idempotencyKey);
 

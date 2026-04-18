@@ -84,6 +84,27 @@ export function operationalError(status: number, error: string) {
   return operationalJson({ error }, { status });
 }
 
+export function authenticatedRateLimitError(error: string, retryAfterSeconds: number) {
+  return authenticatedJson(
+    { error },
+    {
+      status: 429,
+      headers: {
+        "Retry-After": String(retryAfterSeconds)
+      }
+    }
+  );
+}
+
+export function operationalRateLimitResponse<T>(body: T, retryAfterSeconds: number, init?: ResponseInit) {
+  return operationalJson(body, {
+    ...init,
+    headers: mergeHeaders(init, {
+      "Retry-After": String(retryAfterSeconds)
+    })
+  });
+}
+
 export async function parseJsonBody<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
 

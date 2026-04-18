@@ -2,10 +2,12 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { BriefingTypeSchema } from "@agentic/contracts";
 import { enqueueBriefingCreateJob } from "@agentic/worker-runtime";
+import { checkAbuseRateLimit } from "../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../lib/auth";
 import {
   ApiRouteError,
   authenticatedJson,
+  authenticatedRateLimitError,
   handleApiError,
   withApiTelemetry
 } from "../../../lib/api-response";
@@ -61,6 +63,16 @@ export async function POST(request: Request) {
   return withApiTelemetry(request, "api.briefing.create", async () => {
     try {
       const principal = await requireApiSession(request);
+      const rateLimit = await checkAbuseRateLimit({
+        namespace: "briefing-create",
+        request,
+        principal
+      });
+
+      if (!rateLimit.allowed) {
+        return authenticatedRateLimitError("Too many briefing requests. Try again later.", rateLimit.retryAfterSeconds);
+      }
+
       const actorContext = createActorContextFromPrincipal(principal);
       const { repository, workspaceId } = await resolveActiveWorkspaceContext(principal.userId);
       const body = await parseBriefingRequest(request);

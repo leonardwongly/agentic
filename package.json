@@ -23,7 +23,7 @@
     "test:e2e": "playwright test",
     "deploy:staging:provider": "tsx scripts/staging-provider-deploy.ts",
     "test:architecture:fitness": "tsx scripts/check-architecture-fitness.ts",
-    "test:performance:fitness": "tsx scripts/check-performance-fitness.ts",
+    "test:performance:fitness": "tsx scripts/check-performance-fitness.ts && vitest run tests/performance-fitness.test.ts",
     "test:smoke:capabilities": "tsx scripts/feature-capability-report.ts",
     "test:smoke:observability": "tsx scripts/observability-smoke.ts",
     "test:smoke:observability-export": "tsx scripts/observability-export-smoke.ts",

@@ -1,9 +1,16 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { enqueueTemplateRunJob } from "@agentic/worker-runtime";
+import { checkAbuseRateLimit } from "../../../../../lib/abuse-rate-limit";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { requireApiSession } from "../../../../../lib/auth";
-import { ApiRouteError, authenticatedJson, handleApiError, withApiTelemetry } from "../../../../../lib/api-response";
+import {
+  ApiRouteError,
+  authenticatedJson,
+  authenticatedRateLimitError,
+  handleApiError,
+  withApiTelemetry
+} from "../../../../../lib/api-response";
 import { parseIdempotencyKey } from "../../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../../lib/server";
 
@@ -13,6 +20,16 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   return withApiTelemetry(request, "api.templates.run", async () => {
     try {
       const principal = await requireApiSession(request);
+      const rateLimit = await checkAbuseRateLimit({
+        namespace: "template-run",
+        request,
+        principal
+      });
+
+      if (!rateLimit.allowed) {
+        return authenticatedRateLimitError("Too many template run requests. Try again later.", rateLimit.retryAfterSeconds);
+      }
+
       const actorContext = createActorContextFromPrincipal(principal);
       const { id } = await context.params;
       const templateId = TemplateIdSchema.parse(id);

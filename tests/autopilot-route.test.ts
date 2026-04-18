@@ -14,6 +14,11 @@ import { processUserRequest } from "@agentic/orchestrator";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { vi } from "vitest";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { POST as autopilotEventsRoute } from "../apps/web/app/api/autopilot/events/route";
@@ -37,6 +42,7 @@ describe("autopilot events route", () => {
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
+    resetAuthSessionStateStoreForTesting();
   });
 
   function buildRequest(body: unknown) {
@@ -134,6 +140,45 @@ describe("autopilot events route", () => {
     expect(payload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
     await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+  });
+
+  it("rate limits autopilot event creation with a route-scoped abuse key", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return {
+          allowed: false,
+          retryAfterMs: 30_000
+        };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await autopilotEventsRoute(
+      buildRequest({
+        kind: "watcher_triggered",
+        sourceId: "watcher-autopilot-rate-limit"
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("30");
+    expect(payload).toEqual({
+      error: "Too many autopilot event requests. Try again later."
+    });
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain("autopilot-event:user:");
+    expect(seenKeys[0]).toContain(":fp:/api/autopilot/events:");
   });
 
   it("queues watcher-triggered events, reuses the same durable job for duplicates, and completes execution in the worker", async () => {

@@ -1,10 +1,26 @@
 import { requireApiSession } from "../../../../lib/auth";
-import { ApiRouteError, AUTHENTICATED_API_CACHE_CONTROL, handleApiError } from "../../../../lib/api-response";
+import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
+import {
+  ApiRouteError,
+  AUTHENTICATED_API_CACHE_CONTROL,
+  authenticatedRateLimitError,
+  handleApiError
+} from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
 
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
+    const rateLimit = await checkAbuseRateLimit({
+      request,
+      principal,
+      namespace: "governance-audit"
+    });
+
+    if (!rateLimit.allowed) {
+      return authenticatedRateLimitError("Too many audit export requests. Try again later.", rateLimit.retryAfterSeconds);
+    }
+
     const repository = await getSeededRepository();
     const dashboard = await repository.getDashboardData(principal.userId);
     const activeWorkspace = dashboard.activeWorkspace;

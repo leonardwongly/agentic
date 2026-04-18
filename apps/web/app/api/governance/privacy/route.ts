@@ -2,9 +2,16 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { PrivacyOperationKindSchema, PrivacyOperationSchema } from "@agentic/contracts";
 import { enqueuePrivacyOperationJob } from "@agentic/worker-runtime";
+import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import {
+  ApiRouteError,
+  authenticatedJson,
+  authenticatedRateLimitError,
+  handleApiError,
+  parseJsonBody
+} from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
 import { getSeededRepository } from "../../../../lib/server";
 
@@ -64,6 +71,16 @@ export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
+    const rateLimit = await checkAbuseRateLimit({
+      namespace: "privacy-operation",
+      request,
+      principal
+    });
+
+    if (!rateLimit.allowed) {
+      return authenticatedRateLimitError("Too many privacy operation requests. Try again later.", rateLimit.retryAfterSeconds);
+    }
+
     const actorContext = createActorContextFromPrincipal(principal);
     const body = await parseJsonBody(request, TriggerPrivacyOperationSchema);
     const { repository, dashboard, activeWorkspace } = await resolveWorkspaceContext(principal.userId);

@@ -5,6 +5,11 @@ import path from "node:path";
 import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { vi } from "vitest";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import * as authModule from "../apps/web/lib/auth";
 import { GET as governanceAuditRouteGet } from "../apps/web/app/api/governance/audit/route";
 import { buildAuthorizedGetRequest, expectNoStoreHeaders } from "./route-test-helpers";
@@ -62,6 +67,7 @@ describe("governance audit route", () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    resetAuthSessionStateStoreForTesting();
   });
 
   it("exports the active workspace with tamper-evident integrity metadata and excludes other tenants", async () => {
@@ -112,6 +118,40 @@ describe("governance audit route", () => {
       ])
     );
     expectAuditIntegrity(payload);
+  });
+
+  it("rate limits audit exports with a route-scoped abuse key", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return {
+          allowed: false,
+          retryAfterMs: 30_000
+        };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await governanceAuditRouteGet(buildAuthorizedGetRequest("http://localhost/api/governance/audit"));
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("30");
+    expect(payload).toEqual({
+      error: "Too many audit export requests. Try again later."
+    });
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain("governance-audit:user:");
+    expect(seenKeys[0]).toContain(":fp:/api/governance/audit:");
   });
 
   it("limits collaborators to the selected shared workspace and excludes the owner's personal workspace data", async () => {

@@ -7,6 +7,11 @@ import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import { GET as briefingJobRoute } from "../apps/web/app/api/briefing/jobs/[id]/route";
 import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
 import { GET as nlIntentCapabilitiesRoute, POST as nlIntentRoute } from "../apps/web/app/api/nl/intent/route";
@@ -94,6 +99,7 @@ describe("nl intent route", () => {
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
+    resetAuthSessionStateStoreForTesting();
   });
 
   it("returns filtered approval results through the server boundary", async () => {
@@ -405,6 +411,55 @@ describe("nl intent route", () => {
     expect(persistedBundle?.goal.intent).toBe("briefing:startup");
     expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
     expectNoStoreHeaders(response);
+  });
+
+  it("rate limits NL command execution with a route-scoped abuse key", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return {
+          allowed: false,
+          retryAfterMs: 30_000
+        };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const commandResponse = await nlIntentRoute(
+      new Request("http://localhost/api/nl/intent", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "user-agent": "Agentic NL Rate Limit Test",
+          "accept-language": "en-SG"
+        },
+        body: JSON.stringify({
+          type: "command",
+          action: "create-goal",
+          params: {
+            request: "Draft a weekly operating cadence."
+          }
+        })
+      })
+    );
+    const commandPayload = (await commandResponse.json()) as { error?: string };
+
+    expect(commandResponse.status).toBe(429);
+    expect(commandPayload.error).toBe("Too many NL command requests. Try again later.");
+    expect(commandResponse.headers.get("retry-after")).toBe("30");
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain("nl-command:user:");
+    expect(seenKeys[0]).toContain(":fp:/api/nl/intent:");
   });
 
   it("deduplicates retried NL goal submissions when the same idempotency key is reused", async () => {

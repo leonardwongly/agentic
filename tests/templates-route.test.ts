@@ -12,6 +12,11 @@ import { POST as runTemplateRoute } from "../apps/web/app/api/templates/[id]/run
 import { GET as listTemplatesRoute, POST as createTemplateRoute } from "../apps/web/app/api/templates/route";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import { resetSessionUnlockRateLimit } from "../apps/web/lib/session-unlock-rate-limit";
 import { expectNoStoreHeaders } from "./route-test-helpers";
 
@@ -93,6 +98,7 @@ describe("templates routes", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
     await resetSessionUnlockRateLimit();
+    resetAuthSessionStateStoreForTesting();
   });
 
   it("stamps the system actor when creating and running a template with the access key", async () => {
@@ -227,6 +233,58 @@ describe("templates routes", () => {
     expect(secondPayload.job.templateId).toBe(firstPayload.job.templateId);
     expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
     expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+  });
+
+  it("rate limits template runs with a route-scoped abuse key", async () => {
+    const createResponse = await createTemplateRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/templates", "POST", {
+        name: "Template rate limit",
+        description: "Exercise abuse protection on template execution.",
+        request: "Review the inbox and produce a durable execution plan."
+      })
+    );
+    const createPayload = (await createResponse.json()) as {
+      template: { id: string };
+    };
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return {
+          allowed: false,
+          retryAfterMs: 30_000
+        };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await runTemplateRoute(
+      new Request(`http://localhost/api/templates/${createPayload.template.id}/run`, {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "user-agent": "Agentic Template Rate Limit Test",
+          "accept-language": "en-SG"
+        }
+      }),
+      { params: Promise.resolve({ id: createPayload.template.id }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(429);
+    expect(payload.error).toBe("Too many template run requests. Try again later.");
+    expect(response.headers.get("retry-after")).toBe("30");
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain("template-run:user:");
+    expect(seenKeys[0]).toContain(`:fp:/api/templates/${createPayload.template.id}/run:`);
   });
 
   it("stamps the human actor when a session principal updates a template schedule", async () => {

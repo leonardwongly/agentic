@@ -9,6 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as docsJobRoute } from "../apps/web/app/api/docs/jobs/[id]/route";
 import { POST as docsRenderRoute } from "../apps/web/app/api/docs/render/route";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import { expectNoStoreHeaders } from "./route-test-helpers";
 
 const { runDocsBuildMock } = vi.hoisted(() => ({
@@ -97,6 +102,7 @@ describe("docs render route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
     Reflect.set(globalThis, "__agenticDocsBuild", undefined);
+    resetAuthSessionStateStoreForTesting();
   });
 
   it("queues docs builds and exposes a pollable status endpoint", async () => {
@@ -216,5 +222,46 @@ describe("docs render route", () => {
     expect(failedStatusPayload.error).toBe("Document build failed. Retry the request or inspect worker logs.");
     expect(failedStatusPayload.error).not.toContain("spawn /bin/node EACCES");
     expectNoStoreHeaders(failedStatusResponse);
+  });
+
+  it("rate limits docs renders with a route-scoped abuse key", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return {
+          allowed: false,
+          retryAfterMs: 30_000
+        };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await docsRenderRoute(
+      new Request("http://localhost/api/docs/render", {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "user-agent": "Agentic Docs Rate Limit Test",
+          "accept-language": "en-SG"
+        }
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(429);
+    expect(payload.error).toBe("Too many document render requests. Try again later.");
+    expect(response.headers.get("retry-after")).toBe("30");
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain("docs-render:user:");
+    expect(seenKeys[0]).toContain(":fp:/api/docs/render:");
   });
 });

@@ -6,6 +6,11 @@ import { createRepository } from "@agentic/repository";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import { expectNoStoreHeaders } from "./route-test-helpers";
 
 const { enqueuePrivacyOperationJobMock } = vi.hoisted(() => ({
@@ -58,6 +63,7 @@ describe("governance privacy route", () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    resetAuthSessionStateStoreForTesting();
   });
 
   it("queues a new retention-enforcement operation with owner-scoped governance defaults", async () => {
@@ -248,5 +254,55 @@ describe("governance privacy route", () => {
     } finally {
       requireApiSessionSpy.mockRestore();
     }
+  });
+
+  it("rate limits privacy operation queueing with a route-scoped abuse key", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return {
+          allowed: false,
+          retryAfterMs: 30_000
+        };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    await repository.seedDefaults();
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await governancePrivacyPostRoute(
+      new Request("http://localhost/api/governance/privacy", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "user-agent": "Agentic Privacy Rate Limit Test",
+          "accept-language": "en-SG"
+        },
+        body: JSON.stringify({
+          kind: "workspace_export"
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(429);
+    expect(payload.error).toBe("Too many privacy operation requests. Try again later.");
+    expect(response.headers.get("retry-after")).toBe("30");
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain("privacy-operation:user:");
+    expect(seenKeys[0]).toContain(":fp:/api/governance/privacy:");
+    expect(enqueuePrivacyOperationJobMock).not.toHaveBeenCalled();
   });
 });
