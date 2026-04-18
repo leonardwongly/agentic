@@ -16,6 +16,7 @@
     "db:status": "tsx scripts/db-status.ts",
     "security:audit-runtime": "tsx scripts/runtime-vulnerability-gate.ts",
     "security:sbom": "tsx scripts/generate-sbom.ts",
+    "security:collect-evidence": "tsx scripts/collect-compliance-evidence.ts",
     "test": "vitest run",
     "test:security:regression": "tsx scripts/security-regression-suite.ts",
     "test:watch": "vitest",

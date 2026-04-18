@@ -57,7 +57,7 @@ jobs:
       - run: npm ci
 
       - name: Create security artifact directories
-        run: mkdir -p artifacts/security artifacts/build
+        run: mkdir -p artifacts/security artifacts/build artifacts/compliance
 
       - name: Audit production dependencies
         run: npm run security:audit-runtime -- --report artifacts/security/runtime-audit-report.json
@@ -112,6 +112,9 @@ jobs:
             scripts
           docker save agentic-ci:${{ github.sha }} -o artifacts/build/agentic-image.tar
 
+      - name: Collect compliance evidence bundle
+        run: npm run security:collect-evidence -- --require-artifacts --output-dir artifacts/compliance
+
       - name: Upload supply-chain evidence
         uses: actions/upload-artifact@v4
         with:
@@ -119,6 +122,7 @@ jobs:
           path: |
             artifacts/security
             artifacts/build
+            artifacts/compliance
           if-no-files-found: error
 
       - name: Attest security evidence

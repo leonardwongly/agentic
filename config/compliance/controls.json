@@ -1,0 +1,403 @@
+{
+  "version": 1,
+  "reviewedAt": "2026-04-18T00:00:00.000Z",
+  "owners": [
+    "platform",
+    "platform-security"
+  ],
+  "controls": [
+    {
+      "id": "AUTH-01",
+      "family": "Identity and Access",
+      "title": "Shared authentication runtime state is enforced",
+      "objective": "Reject unsafe single-process authentication assumptions in multi-instance environments.",
+      "owner": "platform-security",
+      "trustBoundaries": [
+        "Browser to web runtime",
+        "Web runtime to session store"
+      ],
+      "productSurfaces": [
+        "Authenticated web dashboard",
+        "Session bootstrap"
+      ],
+      "codePaths": [
+        "apps/web/lib/auth-runtime-state.ts",
+        "apps/web/lib/runtime-readiness.ts"
+      ],
+      "runbooks": [
+        "docs/runbooks/deployment.md",
+        "docs/runbooks/security-incident-response.md"
+      ],
+      "automatedChecks": [
+        {
+          "id": "CHECK-AUTH-READINESS",
+          "title": "Runtime readiness validates auth state",
+          "command": "npm test -- runtime-readiness.test.ts auth.test.ts",
+          "sourcePaths": [
+            "tests/runtime-readiness.test.ts",
+            "tests/auth.test.ts"
+          ]
+        }
+      ],
+      "evidenceArtifacts": [
+        {
+          "path": "artifacts/security/runtime-audit-report.json",
+          "description": "Runtime dependency audit report captured by CI.",
+          "required": true
+        },
+        {
+          "path": "artifacts/compliance/control-matrix.json",
+          "description": "Generated control-to-evidence mapping bundle.",
+          "required": true
+        }
+      ],
+      "risks": [
+        "Session inconsistency across replicas",
+        "Fail-open auth runtime state during deploy"
+      ],
+      "metrics": [
+        "Readiness pass rate",
+        "Authentication bootstrap failures"
+      ]
+    },
+    {
+      "id": "AUTH-02",
+      "family": "Identity and Access",
+      "title": "Request identity extraction defaults to trusted proxy posture",
+      "objective": "Prevent spoofed client identity on public or high-cost surfaces.",
+      "owner": "platform-security",
+      "trustBoundaries": [
+        "External client to web runtime",
+        "Proxy headers to application logic"
+      ],
+      "productSurfaces": [
+        "Public share tracking",
+        "Rate-limited API routes"
+      ],
+      "codePaths": [
+        "apps/web/lib/request-client-identity.ts",
+        "apps/web/app/api/share/view/route.ts",
+        "apps/web/lib/runtime-readiness.ts"
+      ],
+      "runbooks": [
+        "docs/runbooks/deployment.md",
+        "docs/runbooks/security-incident-response.md"
+      ],
+      "automatedChecks": [
+        {
+          "id": "CHECK-REQUEST-IDENTITY",
+          "title": "Proxy posture and share-view protection regressions",
+          "command": "npm test -- public-share-view-route.test.ts share-route.test.ts runtime-readiness.test.ts",
+          "sourcePaths": [
+            "tests/public-share-view-route.test.ts",
+            "tests/share-route.test.ts",
+            "tests/runtime-readiness.test.ts"
+          ]
+        }
+      ],
+      "evidenceArtifacts": [
+        {
+          "path": "artifacts/compliance/evidence-manifest.json",
+          "description": "Generated compliance evidence manifest with hashed references.",
+          "required": true
+        }
+      ],
+      "risks": [
+        "Rate-limit bypass through spoofed headers",
+        "Anonymous abuse surface amplification"
+      ],
+      "metrics": [
+        "Rejected invalid identity contexts",
+        "Public share dedupe rate"
+      ]
+    },
+    {
+      "id": "ASYNC-01",
+      "family": "Service Resilience",
+      "title": "Heavy request-path work is queued into durable async execution",
+      "objective": "Keep user-facing latency stable by moving non-interactive work behind explicit job contracts.",
+      "owner": "platform",
+      "trustBoundaries": [
+        "Web runtime to worker runtime",
+        "Queue to durable storage"
+      ],
+      "productSurfaces": [
+        "Goal creation",
+        "Briefing generation",
+        "Template generation",
+        "Document rendering",
+        "Public share tracking"
+      ],
+      "codePaths": [
+        "apps/web/app/api/goals/route.ts",
+        "apps/web/app/api/briefing/route.ts",
+        "apps/web/app/api/templates/[id]/run/route.ts",
+        "apps/web/app/api/docs/render/route.ts",
+        "apps/web/app/api/share/view/route.ts",
+        "packages/worker-runtime/src/index.ts",
+        "apps/web/lib/runtime-readiness.ts"
+      ],
+      "runbooks": [
+        "docs/runbooks/deployment.md",
+        "docs/runbooks/security-incident-response.md"
+      ],
+      "automatedChecks": [
+        {
+          "id": "CHECK-ASYNC-FITNESS",
+          "title": "Performance fitness blocks synchronous regressions",
+          "command": "npm run test:performance:fitness",
+          "sourcePaths": [
+            "scripts/check-performance-fitness.ts",
+            "tests/deployment-async-canary.test.ts"
+          ]
+        },
+        {
+          "id": "CHECK-ASYNC-CANARY",
+          "title": "Deployment async canary validates live queue and worker path",
+          "command": "npm run test:smoke:deployment-async",
+          "sourcePaths": [
+            "scripts/deployment-async-canary.ts",
+            "tests/deployment-async-canary.test.ts"
+          ]
+        }
+      ],
+      "evidenceArtifacts": [
+        {
+          "path": "artifacts/compliance/control-matrix.md",
+          "description": "Human-readable control matrix generated in CI.",
+          "required": true
+        },
+        {
+          "path": "artifacts/build/agentic-runtime-bundle.tgz",
+          "description": "Packaged deployable runtime bundle.",
+          "required": true
+        }
+      ],
+      "risks": [
+        "P95 and P99 latency spikes under bursty load",
+        "Timeouts and duplicate user retries"
+      ],
+      "metrics": [
+        "Queue backlog health",
+        "Async job completion rate"
+      ]
+    },
+    {
+      "id": "DATA-01",
+      "family": "Data Governance",
+      "title": "Workspace authorization, audit export integrity, and privacy lifecycle are enforced",
+      "objective": "Ensure sensitive workspace data is visible, exportable, and deletable only within authorized scope.",
+      "owner": "platform-security",
+      "trustBoundaries": [
+        "Workspace member to workspace data",
+        "Audit export to operator evidence"
+      ],
+      "productSurfaces": [
+        "Workspace governance APIs",
+        "Audit export",
+        "Privacy operations"
+      ],
+      "codePaths": [
+        "packages/repository/src/index.ts",
+        "apps/web/app/api/governance/audit/route.ts",
+        "apps/web/app/api/governance/privacy/route.ts"
+      ],
+      "runbooks": [
+        "docs/runbooks/security-incident-response.md",
+        "docs/runbooks/vulnerability-management.md"
+      ],
+      "automatedChecks": [
+        {
+          "id": "CHECK-GOVERNANCE-SCOPE",
+          "title": "Governance audit and privacy routes stay scoped and tamper-evident",
+          "command": "npm test -- governance-audit-route.test.ts governance-privacy-route.test.ts repository.test.ts",
+          "sourcePaths": [
+            "tests/governance-audit-route.test.ts",
+            "tests/governance-privacy-route.test.ts",
+            "tests/repository.test.ts"
+          ]
+        }
+      ],
+      "evidenceArtifacts": [
+        {
+          "path": "artifacts/security/agentic-sbom.spdx.json",
+          "description": "Runtime SBOM describing shipped dependencies.",
+          "required": true
+        }
+      ],
+      "risks": [
+        "Unauthorized workspace data exposure",
+        "Non-verifiable audit export tampering"
+      ],
+      "metrics": [
+        "Workspace authorization failures",
+        "Privacy operation completion time"
+      ]
+    },
+    {
+      "id": "DEPLOY-01",
+      "family": "Release Safety",
+      "title": "Deployments are gated by readiness, smoke tests, and rollout telemetry",
+      "objective": "Prevent unsafe releases from being treated as healthy without post-deploy proof.",
+      "owner": "platform",
+      "trustBoundaries": [
+        "CI to deploy provider",
+        "Released runtime to operator health checks"
+      ],
+      "productSurfaces": [
+        "Staging deploy pipeline",
+        "Production rollout checks"
+      ],
+      "codePaths": [
+        ".github/workflows/staging-deploy.yml",
+        "scripts/staging-provider-deploy.ts",
+        "scripts/deployment-smoke.ts",
+        "scripts/deployment-async-canary.ts",
+        "scripts/observability-rollout-gate.ts"
+      ],
+      "runbooks": [
+        "docs/runbooks/deployment.md",
+        "docs/runbooks/security-incident-response.md"
+      ],
+      "automatedChecks": [
+        {
+          "id": "CHECK-DEPLOYMENT-SMOKE",
+          "title": "Deployment smoke and rollout gate remain scripted and reviewable",
+          "command": "npm run test:smoke:deployment && npm run telemetry:rollout-gate -- --dir .agentic/telemetry",
+          "sourcePaths": [
+            "scripts/deployment-smoke.ts",
+            "scripts/observability-rollout-gate.ts",
+            "tests/staging-provider-deploy.test.ts"
+          ]
+        }
+      ],
+      "evidenceArtifacts": [
+        {
+          "path": "artifacts/build/agentic-image.tar",
+          "description": "Packaged container image archive.",
+          "required": true
+        }
+      ],
+      "risks": [
+        "Green build but unhealthy live async path",
+        "Rollback without sufficient evidence"
+      ],
+      "metrics": [
+        "Readiness failure rate after deploy",
+        "Rollout gate threshold breaches"
+      ]
+    },
+    {
+      "id": "SUPPLY-01",
+      "family": "Supply Chain",
+      "title": "Dependency review, runtime vulnerability gating, SBOM, and provenance are mandatory",
+      "objective": "Ensure deployable artifacts are traceable and known-vulnerable runtime dependencies fail closed.",
+      "owner": "platform-security",
+      "trustBoundaries": [
+        "Source changes to CI",
+        "CI outputs to deployable artifacts"
+      ],
+      "productSurfaces": [
+        "Pull request review",
+        "Build and release pipeline"
+      ],
+      "codePaths": [
+        ".github/workflows/ci.yml",
+        "scripts/runtime-vulnerability-gate.ts",
+        "scripts/generate-sbom.ts",
+        "docs/security/supply-chain-controls.md",
+        ".github/security/runtime-vulnerability-exceptions.json"
+      ],
+      "runbooks": [
+        "docs/security/supply-chain-controls.md",
+        "docs/runbooks/vulnerability-management.md"
+      ],
+      "automatedChecks": [
+        {
+          "id": "CHECK-SUPPLY-CHAIN",
+          "title": "Supply-chain automation stays enforced in CI",
+          "command": "npm run security:audit-runtime && npm run security:sbom",
+          "sourcePaths": [
+            "scripts/runtime-vulnerability-gate.ts",
+            "scripts/generate-sbom.ts",
+            "tests/runtime-vulnerability-gate.test.ts",
+            "tests/generate-sbom.test.ts"
+          ]
+        }
+      ],
+      "evidenceArtifacts": [
+        {
+          "path": "artifacts/security/runtime-audit-report.json",
+          "description": "Runtime vulnerability evaluation JSON.",
+          "required": true
+        },
+        {
+          "path": "artifacts/security/agentic-sbom.spdx.json",
+          "description": "Generated SPDX SBOM JSON.",
+          "required": true
+        }
+      ],
+      "risks": [
+        "Shipping known-vulnerable runtime packages",
+        "Untraceable release artifacts"
+      ],
+      "metrics": [
+        "Blocking vulnerability findings",
+        "Expired vulnerability exceptions"
+      ]
+    },
+    {
+      "id": "OPS-01",
+      "family": "Security Operations",
+      "title": "Security incident response and vulnerability management follow a codified operating model",
+      "objective": "Give operators explicit severity, escalation, containment, and disclosure steps for production security events.",
+      "owner": "platform-security",
+      "trustBoundaries": [
+        "On-call operator to production systems",
+        "Security reporter to intake workflow"
+      ],
+      "productSurfaces": [
+        "Security incident handling",
+        "Vulnerability disclosure and patch workflow"
+      ],
+      "codePaths": [
+        "config/security/incident-severity.json",
+        ".github/ISSUE_TEMPLATE/security-vulnerability-report.yml"
+      ],
+      "runbooks": [
+        "docs/runbooks/security-incident-response.md",
+        "docs/runbooks/vulnerability-management.md",
+        "docs/runbooks/security-disclosure.md",
+        "docs/runbooks/templates/security-incident-retrospective.md"
+      ],
+      "automatedChecks": [
+        {
+          "id": "CHECK-COMPLIANCE-EVIDENCE",
+          "title": "Compliance collector validates control references and evidence inventory",
+          "command": "npm run security:collect-evidence -- --require-artifacts",
+          "sourcePaths": [
+            "scripts/collect-compliance-evidence.ts",
+            "tests/collect-compliance-evidence.test.ts"
+          ]
+        }
+      ],
+      "evidenceArtifacts": [
+        {
+          "path": "artifacts/compliance/evidence-manifest.json",
+          "description": "Evidence manifest with reference hashes and missing-reference status.",
+          "required": true
+        }
+      ],
+      "risks": [
+        "Unowned security incidents",
+        "Inconsistent vulnerability response urgency",
+        "Ad hoc disclosure handling"
+      ],
+      "metrics": [
+        "Time to acknowledge security reports",
+        "Time to patch by severity",
+        "Incident retrospective completion rate"
+      ]
+    }
+  ]
+}

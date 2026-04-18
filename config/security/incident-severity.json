@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "reviewedAt": "2026-04-18T00:00:00.000Z",
+  "levels": [
+    {
+      "severity": "sev1",
+      "name": "Critical platform compromise",
+      "description": "Active compromise, data exfiltration, or broad authentication or authorization bypass affecting production.",
+      "acknowledgeWithinMinutes": 15,
+      "containmentWithinMinutes": 60,
+      "executiveEscalation": true,
+      "requireWarRoom": true,
+      "patchOrMitigationWithinHours": 4,
+      "retrospectiveWithinBusinessDays": 2
+    },
+    {
+      "severity": "sev2",
+      "name": "High-risk exploitable vulnerability",
+      "description": "Credible exploit path with significant user or operator impact, but no confirmed active compromise.",
+      "acknowledgeWithinMinutes": 30,
+      "containmentWithinMinutes": 240,
+      "executiveEscalation": true,
+      "requireWarRoom": true,
+      "patchOrMitigationWithinHours": 24,
+      "retrospectiveWithinBusinessDays": 3
+    },
+    {
+      "severity": "sev3",
+      "name": "Moderate production security issue",
+      "description": "Scoped security weakness requiring engineering action without urgent platform-wide containment.",
+      "acknowledgeWithinMinutes": 240,
+      "containmentWithinMinutes": 1440,
+      "executiveEscalation": false,
+      "requireWarRoom": false,
+      "patchOrMitigationWithinHours": 72,
+      "retrospectiveWithinBusinessDays": 5
+    },
+    {
+      "severity": "sev4",
+      "name": "Low-risk hardening or process issue",
+      "description": "Defense-in-depth gap, policy drift, or low-impact defect best handled through normal backlog flow.",
+      "acknowledgeWithinMinutes": 1440,
+      "containmentWithinMinutes": 4320,
+      "executiveEscalation": false,
+      "requireWarRoom": false,
+      "patchOrMitigationWithinHours": 336,
+      "retrospectiveWithinBusinessDays": 10
+    }
+  ]
+}
