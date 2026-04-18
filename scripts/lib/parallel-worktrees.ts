@@ -44,6 +44,31 @@ export type ParsedParallelWorktreeArgs = {
   json: boolean;
 };
 
+export type ParsedParallelWorktreeCleanupArgs = ParsedParallelWorktreeArgs & {
+  keepBranches: boolean;
+};
+
+export type ParallelWorktreeProtectionViolationReason =
+  | "shared-spine-only"
+  | "owned-by-other-stream"
+  | "protected-requires-owned-stream";
+
+export type ParallelWorktreeProtectionViolation = {
+  file: string;
+  ownerStreamIds: ParallelWorktreeStreamId[];
+  reason: ParallelWorktreeProtectionViolationReason;
+};
+
+export type ParallelWorktreeProtectionEvaluation = {
+  ok: boolean;
+  branchName: string;
+  branchStreamId?: ParallelWorktreeStreamId;
+  baseBranch: string;
+  changedFiles: string[];
+  protectedFiles: string[];
+  violations: ParallelWorktreeProtectionViolation[];
+};
+
 const DEFAULT_BRANCH_PREFIX = "feat/parallel";
 const DEFAULT_BASE_BRANCH = "main";
 
@@ -172,9 +197,116 @@ function resolveRoot(input: string | undefined, repoRoot: string) {
   return path.resolve(repoRoot, input);
 }
 
+function normalizeRepoRelativePath(relativePath: string) {
+  const normalized = relativePath.replaceAll("\\", "/").trim();
+  const stripped = normalized.replace(/^\.\/+/u, "");
+  const posixPath = path.posix.normalize(stripped);
+
+  if (!posixPath || posixPath === ".") {
+    throw new Error("relativePath must not be empty.");
+  }
+
+  return posixPath;
+}
+
 export function getParallelWorktreeDefinitions(options?: { includeSpine?: boolean }) {
   const includeSpine = options?.includeSpine ?? true;
   return STREAM_DEFINITIONS.filter((definition) => includeSpine || definition.id !== "spine");
+}
+
+export function getParallelWorktreeDefinition(
+  streamId: ParallelWorktreeStreamId,
+  options?: { includeSpine?: boolean }
+) {
+  return getParallelWorktreeDefinitions(options).find(definition => definition.id === streamId);
+}
+
+export function resolveParallelWorktreeStreamFromBranch(
+  branchName: string,
+  options?: { includeSpine?: boolean; branchPrefix?: string }
+): ParallelWorktreeStreamId | undefined {
+  const trimmedBranchName = branchName.trim();
+  const branchPrefix = options?.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
+  const definitions = getParallelWorktreeDefinitions({ includeSpine: options?.includeSpine ?? true });
+
+  for (const definition of definitions) {
+    if (trimmedBranchName === `${branchPrefix}-${definition.id}`) {
+      return definition.id;
+    }
+  }
+
+  return undefined;
+}
+
+export function getProtectedFileOwners(
+  relativePath: string,
+  options?: { includeSpine?: boolean }
+): ParallelWorktreeStreamId[] {
+  const normalizedPath = normalizeRepoRelativePath(relativePath);
+  return getParallelWorktreeDefinitions({ includeSpine: options?.includeSpine ?? true })
+    .filter(definition => definition.protectedFiles.some(candidate => normalizeRepoRelativePath(candidate) === normalizedPath))
+    .map(definition => definition.id);
+}
+
+export function evaluateParallelWorktreeProtection(options: {
+  branchName: string;
+  changedFiles: string[];
+  baseBranch?: string;
+  branchPrefix?: string;
+  includeSpine?: boolean;
+}): ParallelWorktreeProtectionEvaluation {
+  const baseBranch = options.baseBranch?.trim() || DEFAULT_BASE_BRANCH;
+  const branchPrefix = options.branchPrefix?.trim() || DEFAULT_BRANCH_PREFIX;
+  const branchName = options.branchName.trim();
+  const branchStreamId = resolveParallelWorktreeStreamFromBranch(branchName, {
+    includeSpine: options.includeSpine ?? true,
+    branchPrefix
+  });
+  const changedFiles = Array.from(new Set(options.changedFiles.map(normalizeRepoRelativePath)));
+  const protectedFiles = changedFiles.filter(relativePath => getProtectedFileOwners(relativePath).length > 0);
+  const violations: ParallelWorktreeProtectionViolation[] = [];
+
+  if (branchName !== baseBranch) {
+    for (const relativePath of protectedFiles) {
+      const ownerStreamIds = getProtectedFileOwners(relativePath);
+
+      if (!branchStreamId) {
+        violations.push({
+          file: relativePath,
+          ownerStreamIds,
+          reason: "protected-requires-owned-stream"
+        });
+        continue;
+      }
+
+      if (ownerStreamIds.includes("spine") && branchStreamId !== "spine") {
+        violations.push({
+          file: relativePath,
+          ownerStreamIds,
+          reason: "shared-spine-only"
+        });
+        continue;
+      }
+
+      if (!ownerStreamIds.includes(branchStreamId)) {
+        violations.push({
+          file: relativePath,
+          ownerStreamIds,
+          reason: "owned-by-other-stream"
+        });
+      }
+    }
+  }
+
+  return {
+    ok: violations.length === 0,
+    branchName,
+    branchStreamId,
+    baseBranch,
+    changedFiles,
+    protectedFiles,
+    violations
+  };
 }
 
 export function buildParallelWorktreePlan(options: ParallelWorktreePlanOptions): ParallelWorktreePlan {
@@ -262,6 +394,26 @@ export function parseParallelWorktreeArgs(argv: string[], options: { cwd: string
   }
 
   return parsed;
+}
+
+export function parseParallelWorktreeCleanupArgs(
+  argv: string[],
+  options: { cwd: string }
+): ParsedParallelWorktreeCleanupArgs {
+  const filteredArgv = argv.filter(argument => argument !== "--keep-branches");
+  const parsed = parseParallelWorktreeArgs(filteredArgv, options);
+  const cleanup: ParsedParallelWorktreeCleanupArgs = {
+    ...parsed,
+    keepBranches: false
+  };
+
+  for (const argument of argv) {
+    if (argument === "--keep-branches") {
+      cleanup.keepBranches = true;
+    }
+  }
+
+  return cleanup;
 }
 
 export function renderParallelWorktreePlan(plan: ParallelWorktreePlan): string {

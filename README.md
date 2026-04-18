@@ -164,8 +164,12 @@ Agentic supports a checked-in parallel worktree model for roadmap slices that ne
 - `npm run worktree:setup -- --print-only`: preview the standard stream layout
 - `npm run worktree:setup`: create sibling worktrees for the standard streams
 - `npm run worktree:status`: inspect branch, head, and dirty-state across planned worktrees
+- `npm run worktree:cleanup -- --print-only`: preview which completed stream worktrees and merged branches are safe to remove
+- `npm run worktree:cleanup`: remove clean worktrees and delete fully merged stream branches
 
-See [docs/runbooks/parallel-worktrees.md](/Users/leonardwongly/Developer/Agentic/docs/runbooks/parallel-worktrees.md) for ownership rules, merge order, and validation requirements.
+CI now enforces the ownership model as part of `npm run test:architecture:fitness`: shared protected files are spine-only, and stream-protected files must be changed from their owning stream branch or from the integrated base branch.
+
+See [docs/runbooks/parallel-worktrees.md](/Users/leonardwongly/Developer/Agentic/docs/runbooks/parallel-worktrees.md) for ownership rules, merge order, validation requirements, and cleanup flow.
 
 ## Production Bootstrap
 

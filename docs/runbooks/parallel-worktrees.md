@@ -45,6 +45,7 @@ The model is working when:
 - each stream has one owner and a bounded write surface
 - setup is reproducible from a single command
 - status can be inspected from the repo root without manually entering each worktree
+- cleanup is reproducible from a single command with safety checks
 - merge order is explicit
 - full validation still happens on the integrated branch before commit
 
@@ -78,6 +79,13 @@ Single-owner files that should not be edited freely across streams:
 - `apps/web/components/dashboard.tsx`
 - `apps/web/app/globals.css`
 - `.github/workflows/ci.yml`
+
+CI enforcement rule:
+
+- shared protected files are spine-only on stream branches
+- stream-protected files are only allowed from their owning stream branch
+- the integrated base branch is allowed to carry protected-file changes after merge
+- if a protected file is edited from an unowned branch, `npm run test:architecture:fitness` fails
 
 Expected stream ownership:
 
@@ -150,6 +158,18 @@ Emit machine-readable status for automation or dashboards:
 npm run worktree:status -- --json
 ```
 
+Preview safe cleanup after the integrated branch is committed:
+
+```bash
+npm run worktree:cleanup -- --print-only
+```
+
+Remove clean worktrees and delete fully merged stream branches:
+
+```bash
+npm run worktree:cleanup
+```
+
 ## Execution Workflow
 
 1. Confirm the roadmap slice and stream ownership before branching.
@@ -162,6 +182,7 @@ npm run worktree:status -- --json
 
 ```bash
 npm run test:security:regression
+npm run test:architecture:fitness
 npm run test:performance:fitness
 npm test
 npm run build
@@ -175,28 +196,28 @@ npm run build
 After the integrated branch is committed:
 
 1. Confirm the main repo is clean except for intentional local-only files.
-2. Remove no-longer-needed worktrees:
+2. Preview cleanup:
 
 ```bash
-git worktree remove ../Agentic-spine
-git worktree remove ../Agentic-secops
-git worktree remove ../Agentic-connectors
-git worktree remove ../Agentic-governance
-git worktree remove ../Agentic-intelligence
+npm run worktree:cleanup -- --print-only
 ```
 
-3. Delete the temporary stream branches once they are fully merged:
+3. Run cleanup once the plan looks correct:
 
 ```bash
-git branch -d feat/parallel-spine
-git branch -d feat/parallel-secops
-git branch -d feat/parallel-connectors
-git branch -d feat/parallel-governance
-git branch -d feat/parallel-intelligence
+npm run worktree:cleanup
+```
+
+4. Keep stream branches intentionally when needed:
+
+```bash
+npm run worktree:cleanup -- --keep-branches
 ```
 
 ## Notes
 
 - The setup CLI intentionally fails if a target worktree path or branch already exists.
 - The status CLI reports missing worktrees explicitly so stale local assumptions do not hide broken parallel setup.
+- The cleanup CLI fails closed on dirty worktrees and unmerged branches instead of performing partial cleanup.
+- The architecture fitness check is the CI guardrail for protected-file ownership, so shared hot-spot files cannot drift across stream branches unnoticed.
 - The model is meant to reduce conflicts, not to replace normal review discipline. Security, correctness, and full integrated validation remain mandatory.

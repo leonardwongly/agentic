@@ -2,7 +2,10 @@ import path from "node:path";
 
 import {
   buildParallelWorktreePlan,
+  evaluateParallelWorktreeProtection,
   parseParallelWorktreeArgs,
+  parseParallelWorktreeCleanupArgs,
+  resolveParallelWorktreeStreamFromBranch,
   renderParallelWorktreePlan
 } from "../scripts/lib/parallel-worktrees";
 
@@ -89,5 +92,98 @@ describe("parallel worktree planning", () => {
     expect(summary).toContain("CONNECTORS :: Connector readiness and certification");
     expect(summary).toContain("issues: LEO-72");
     expect(summary).toContain("dependsOn: spine");
+  });
+
+  it("resolves stream ownership from the standard branch names", () => {
+    expect(resolveParallelWorktreeStreamFromBranch("feat/parallel-spine")).toBe("spine");
+    expect(resolveParallelWorktreeStreamFromBranch("feat/parallel-governance")).toBe("governance");
+    expect(resolveParallelWorktreeStreamFromBranch("feature/random")).toBeUndefined();
+  });
+
+  it("allows a stream branch to edit only its own protected files", () => {
+    const evaluation = evaluateParallelWorktreeProtection({
+      branchName: "feat/parallel-secops",
+      changedFiles: [
+        "apps/web/lib/abuse-rate-limit.ts",
+        "apps/web/app/api/goals/route.ts"
+      ]
+    });
+
+    expect(evaluation.ok).toBe(true);
+    expect(evaluation.violations).toEqual([]);
+  });
+
+  it("rejects non-spine branches that edit shared protected files", () => {
+    const evaluation = evaluateParallelWorktreeProtection({
+      branchName: "feat/parallel-connectors",
+      changedFiles: ["packages/contracts/src/index.ts"]
+    });
+
+    expect(evaluation.ok).toBe(false);
+    expect(evaluation.violations).toEqual([
+      {
+        file: "packages/contracts/src/index.ts",
+        ownerStreamIds: ["spine"],
+        reason: "shared-spine-only"
+      }
+    ]);
+  });
+
+  it("rejects stream branches that edit another stream's protected files", () => {
+    const evaluation = evaluateParallelWorktreeProtection({
+      branchName: "feat/parallel-governance",
+      changedFiles: ["apps/web/lib/google-provider-adapters.ts"]
+    });
+
+    expect(evaluation.ok).toBe(false);
+    expect(evaluation.violations).toEqual([
+      {
+        file: "apps/web/lib/google-provider-adapters.ts",
+        ownerStreamIds: ["connectors"],
+        reason: "owned-by-other-stream"
+      }
+    ]);
+  });
+
+  it("allows the integrated base branch to carry protected-file edits", () => {
+    const evaluation = evaluateParallelWorktreeProtection({
+      branchName: "main",
+      changedFiles: ["packages/contracts/src/index.ts"]
+    });
+
+    expect(evaluation.ok).toBe(true);
+    expect(evaluation.protectedFiles).toEqual(["packages/contracts/src/index.ts"]);
+  });
+
+  it("rejects protected-file edits from non-stream branches", () => {
+    const evaluation = evaluateParallelWorktreeProtection({
+      branchName: "feature/misc-hardening",
+      changedFiles: ["packages/policy/src/index.ts"]
+    });
+
+    expect(evaluation.ok).toBe(false);
+    expect(evaluation.violations).toEqual([
+      {
+        file: "packages/policy/src/index.ts",
+        ownerStreamIds: ["governance"],
+        reason: "protected-requires-owned-stream"
+      }
+    ]);
+  });
+
+  it("parses cleanup arguments including branch retention", () => {
+    const parsed = parseParallelWorktreeCleanupArgs(["--root", "../parallel", "--keep-branches", "--json"], {
+      cwd: repoRoot
+    });
+
+    expect(parsed).toEqual({
+      worktreeRoot: "/Users/leonardwongly/Developer/parallel",
+      baseBranch: undefined,
+      branchPrefix: undefined,
+      includeSpine: true,
+      printOnly: false,
+      json: true,
+      keepBranches: true
+    });
   });
 });
