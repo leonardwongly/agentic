@@ -15,7 +15,10 @@ import {
 } from "../apps/web/lib/auth-session-store";
 import { POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/route";
 import { POST as publicShareViewRoute } from "../apps/web/app/api/share/view/route";
-import { expectOperationalNoStoreHeaders } from "./route-test-helpers";
+import {
+  buildInvalidJsonRequest,
+  expectOperationalNoStoreHeaders
+} from "./route-test-helpers";
 
 async function createGoalForUser(
   repository: AgenticRepository,
@@ -189,6 +192,19 @@ describe("public share view route", () => {
     expect(payload).toEqual({
       accepted: true,
       tracked: false
+    });
+    expectOperationalNoStoreHeaders(response);
+  });
+
+  it("rejects malformed JSON with a sanitized validation error", async () => {
+    const response = await publicShareViewRoute(
+      buildInvalidJsonRequest("http://localhost/api/share/view")
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(payload).toEqual({
+      error: "Request body must be valid JSON."
     });
     expectOperationalNoStoreHeaders(response);
   });

@@ -17,6 +17,7 @@
     "security:audit-runtime": "tsx scripts/runtime-vulnerability-gate.ts",
     "security:sbom": "tsx scripts/generate-sbom.ts",
     "test": "vitest run",
+    "test:security:regression": "tsx scripts/security-regression-suite.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "deploy:staging:provider": "tsx scripts/staging-provider-deploy.ts",

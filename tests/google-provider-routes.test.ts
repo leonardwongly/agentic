@@ -275,6 +275,31 @@ describe("google provider routes", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("http://localhost/?integration=google&status=error&reason=oauth_failed");
+    expectNoStoreHeaders(response);
+    expect(exchangeGoogleAuthorizationCodeMock).not.toHaveBeenCalled();
+    expect(fetchGoogleAccountProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the callback state was signed for another user", async () => {
+    const repository = await buildRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const state = buildOAuthStateToken({
+      userId: "user-secondary",
+      workspaceId: personalWorkspaceId
+    });
+    const response = await googleCallbackRoute(
+      buildAuthorizedGetRequest(
+        `http://localhost/api/integrations/google/callback?state=${encodeURIComponent(state)}&code=oauth-code-123`
+      )
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("http://localhost/?integration=google&status=error&reason=oauth_failed");
+    expectNoStoreHeaders(response);
+    expect(exchangeGoogleAuthorizationCodeMock).not.toHaveBeenCalled();
+    expect(fetchGoogleAccountProfileMock).not.toHaveBeenCalled();
   });
 
   it("fails closed when Google omits the refresh token and no stored credential exists", async () => {
@@ -306,6 +331,7 @@ describe("google provider routes", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("http://localhost/?integration=google&status=error&reason=oauth_failed");
+    expectNoStoreHeaders(response);
     expect(
       await repository.getProviderCredential(`google:${personalWorkspaceId}:acct-123`, SYSTEM_USER_ID)
     ).toBeNull();

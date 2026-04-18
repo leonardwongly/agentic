@@ -67,6 +67,9 @@ jobs:
           npm run db:migrate
           npm run db:status -- --require-ready
 
+      - name: Run security regression suite
+        run: npm run test:security:regression
+
       - name: Run unit and integration tests
         run: npm test
 
