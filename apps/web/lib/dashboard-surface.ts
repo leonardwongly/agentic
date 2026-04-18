@@ -3,6 +3,7 @@ const advancedDashboardSections = [
   "governance",
   "autopilot",
   "operator-products",
+  "operations",
   "memory",
   "integrations",
   "notes",

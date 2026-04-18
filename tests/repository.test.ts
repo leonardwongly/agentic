@@ -33,6 +33,11 @@ describe("repository", () => {
     accountId?: string;
     accountEmail?: string;
     status?: "connected" | "reconnect_required" | "refresh_failed" | "revoked";
+    lastValidatedAt?: string | null;
+    lastRefreshFailureAt?: string | null;
+    reconnectRequiredAt?: string | null;
+    revokedAt?: string | null;
+    expiresAt?: string | null;
   }) {
     const workspaceSegment = params.workspaceId ?? "global";
 
@@ -49,6 +54,11 @@ describe("repository", () => {
         "https://www.googleapis.com/auth/gmail.modify",
         "https://www.googleapis.com/auth/calendar"
       ],
+      lastValidatedAt: params.lastValidatedAt ?? nowIso(),
+      lastRefreshFailureAt: params.lastRefreshFailureAt ?? null,
+      reconnectRequiredAt: params.reconnectRequiredAt ?? null,
+      revokedAt: params.revokedAt ?? null,
+      expiresAt: params.expiresAt ?? null,
       metadata: {
         providerAccountId: params.accountId ?? "acct-123"
       },
@@ -2269,15 +2279,50 @@ describe("repository", () => {
 
     await repository.saveMemory(reviewDueMemory);
     await repository.saveMemory(lowConfidenceMemory);
+    const asyncIssueJob = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId: SYSTEM_USER_ID,
+        request: "Recover a degraded queue path.",
+        goalId: blockedBundle.goal.id,
+        availableAt: "2026-04-17T08:00:00.000Z",
+        maxAttempts: 2
+      })
+    );
+    const claimedAsyncIssueJob = await repository.claimNextJob({
+      userId: SYSTEM_USER_ID,
+      runnerId: "worker-dashboard",
+      leaseMs: 30_000,
+      now: "2026-04-17T08:00:00.000Z"
+    });
+
+    expect(claimedAsyncIssueJob?.id).toBe(asyncIssueJob.id);
+
+    await repository.deadLetterJob({
+      jobId: asyncIssueJob.id,
+      runnerId: "worker-dashboard",
+      deadLetteredAt: timestamp,
+      error: "worker failed to complete async recovery"
+    });
+
+    await repository.saveProviderCredential(
+      buildProviderCredential({
+        userId: SYSTEM_USER_ID,
+        status: "refresh_failed",
+        lastValidatedAt: "2026-04-08T09:00:00.000Z",
+        lastRefreshFailureAt: timestamp
+      })
+    );
 
     const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
     const expiredApprovals = dashboard.diagnostics.items.find((item) => item.kind === "expired_approvals");
     const staleMemories = dashboard.diagnostics.items.find((item) => item.kind === "stale_memories");
     const stuckWorkflows = dashboard.diagnostics.items.find((item) => item.kind === "stuck_workflows");
     const orphanWatchers = dashboard.diagnostics.items.find((item) => item.kind === "orphan_watchers");
+    const asyncExecutionIssues = dashboard.diagnostics.items.find((item) => item.kind === "async_execution_issues");
+    const connectorDegradation = dashboard.diagnostics.items.find((item) => item.kind === "connector_degradation");
 
     expect(dashboard.diagnostics.status).toBe("critical");
-    expect(dashboard.diagnostics.totalCount).toBe(6);
+    expect(dashboard.diagnostics.totalCount).toBe(8);
     expect(expiredApprovals).toMatchObject({
       count: 1,
       severity: "critical"
@@ -2351,6 +2396,66 @@ describe("repository", () => {
         actionLabel: "Pause"
       }
     ]);
+    expect(asyncExecutionIssues).toMatchObject({
+      count: 1,
+      severity: "critical"
+    });
+    expect(asyncExecutionIssues?.reasons).toEqual(
+      expect.arrayContaining(["1 dead-letter job need operator recovery"])
+    );
+    expect(asyncExecutionIssues?.targets).toEqual([
+      {
+        section: "operations",
+        itemId: `operations-job-${asyncIssueJob.id}`,
+        label: `Goal queue · ${blockedBundle.goal.title}`
+      }
+    ]);
+    expect(connectorDegradation).toMatchObject({
+      count: 1,
+      severity: "warning"
+    });
+    expect(connectorDegradation?.reasons).toEqual(expect.arrayContaining(["1 connector hit token refresh failure"]));
+    expect(connectorDegradation?.targets).toEqual([
+      {
+        section: "operations",
+        itemId: "operations-connector-google:global:acct-123",
+        label: "google · owner@example.com"
+      }
+    ]);
+    expect(dashboard.operations).toBeDefined();
+    expect(dashboard.operations?.generatedAt).toBe(dashboard.diagnostics.generatedAt);
+    expect(dashboard.operations?.asyncExecution).toMatchObject({
+      status: "critical",
+      issueCount: 1,
+      deadLetterJobs: 1,
+      retryingJobs: 0
+    });
+    expect(dashboard.operations?.asyncExecution.items[0]).toMatchObject({
+      id: `operations-job-${asyncIssueJob.id}`,
+      summary: "Dead-lettered after 1/2 attempts.",
+      severity: "critical",
+      target: {
+        section: "goals",
+        itemId: blockedBundle.goal.id,
+        label: blockedBundle.goal.title
+      }
+    });
+    expect(dashboard.operations?.connectorHealth).toMatchObject({
+      status: "attention",
+      totalCount: 1,
+      issueCount: 1,
+      refreshFailedCount: 1,
+      validationStaleCount: 0
+    });
+    expect(dashboard.operations?.connectorHealth.items[0]).toMatchObject({
+      id: "operations-connector-google:global:acct-123",
+      summary: "Token refresh failed, so the connector may stop working until it is revalidated.",
+      severity: "attention",
+      target: {
+        section: "integrations",
+        label: "Open google integrations"
+      }
+    });
     expect(dashboard.controlPlane.generatedAt).toBe(dashboard.diagnostics.generatedAt);
     expect(dashboard.controlPlane.sections.map((section) => section.key)).toEqual([
       "workspace",
@@ -2376,15 +2481,15 @@ describe("repository", () => {
     });
     expect(dashboard.controlPlane.sections.find((section) => section.key === "execution")).toMatchObject({
       status: "critical",
-      targetSection: "approvals",
-      targetItemId: "approval-expired",
-      stats: expect.arrayContaining(["2 active goals", "2 running goals", "1 pending approval"])
+      targetSection: "operations",
+      targetItemId: `operations-job-${asyncIssueJob.id}`,
+      stats: expect.arrayContaining(["2 active goals", "1 queue issue", "1 dead letter / 0 retrying jobs"])
     });
     expect(dashboard.controlPlane.sections.find((section) => section.key === "trust")).toMatchObject({
       status: "critical",
-      targetSection: "approvals",
-      targetItemId: "approval-expired",
-      stats: expect.arrayContaining(["6 reliability signals", "2 stale memories", "Max auto R1"])
+      targetSection: "operations",
+      targetItemId: "operations-connector-google:global:acct-123",
+      stats: expect.arrayContaining(["8 reliability signals", "2 stale memories", "Max auto R1"])
     });
     expect(dashboard.operatingSections.generatedAt).toBe(dashboard.diagnostics.generatedAt);
     expect(dashboard.operatingSections.sections.map((section) => section.key)).toEqual([
@@ -2407,15 +2512,15 @@ describe("repository", () => {
     });
     expect(dashboard.operatingSections.sections.find((section) => section.key === "execution")).toMatchObject({
       status: "critical",
-      targetSection: "approvals",
-      targetItemId: "approval-expired",
-      metrics: expect.arrayContaining(["2 active goals", "2 running goals", "1 recent artifact"])
+      targetSection: "operations",
+      targetItemId: `operations-job-${asyncIssueJob.id}`,
+      metrics: expect.arrayContaining(["2 active goals", "1 queue issue", "1 recent artifact"])
     });
     expect(dashboard.operatingSections.sections.find((section) => section.key === "trust")).toMatchObject({
       status: "critical",
-      targetSection: "approvals",
-      targetItemId: "approval-expired",
-      metrics: expect.arrayContaining(["6 reliability signals", "2 stale memories", "1 pending approval"])
+      targetSection: "operations",
+      targetItemId: "operations-connector-google:global:acct-123",
+      metrics: expect.arrayContaining(["8 reliability signals", "2 stale memories", "1 pending approval"])
     });
     expect(dashboard.operatingSections.sections.find((section) => section.key === "build")).toMatchObject({
       status: "healthy",

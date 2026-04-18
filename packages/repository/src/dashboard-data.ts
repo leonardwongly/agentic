@@ -12,9 +12,11 @@ import type {
   GoalBundle,
   GoalShareRecord,
   IntegrationAccount,
+  JobRecord,
   MemoryRecord,
   NowQueue,
   PrivacyOperation,
+  ProviderCredential,
   Watcher,
   Workspace,
   WorkspaceGovernance,
@@ -22,6 +24,7 @@ import type {
   WorkspaceSelection
 } from "@agentic/contracts";
 import type { DashboardControlPlane, DashboardData, DashboardDiagnostics } from "./index";
+import type { DashboardOperationsTower } from "./dashboard-operations";
 
 type AssembleDashboardDataParams = {
   userId: string;
@@ -41,6 +44,8 @@ type AssembleDashboardDataParams = {
   autopilotEvents: AutopilotEvent[];
   memories: MemoryRecord[];
   integrations: IntegrationAccount[];
+  jobs?: JobRecord[];
+  providerCredentials?: ProviderCredential[];
   watchers: Watcher[];
   now?: number;
   filterBundlesForWorkspace: (goals: GoalBundle[], activeWorkspace: Workspace | null, userId: string) => GoalBundle[];
@@ -55,6 +60,7 @@ type AssembleDashboardDataParams = {
     approvals: ApprovalRequest[];
     memories: MemoryRecord[];
     watchers: Watcher[];
+    operations?: DashboardOperationsTower;
     now?: number;
   }) => DashboardDiagnostics;
   buildControlPlane: (params: {
@@ -71,6 +77,7 @@ type AssembleDashboardDataParams = {
     watchers: Watcher[];
     integrations: IntegrationAccount[];
     diagnostics: DashboardDiagnostics;
+    operations?: DashboardOperationsTower;
   }) => DashboardControlPlane;
   buildNowQueue: (params: {
     commitments: Commitment[];
@@ -94,7 +101,15 @@ type AssembleDashboardDataParams = {
     latestArtifacts: Artifact[];
     actionLogs: ActionLog[];
     diagnostics: DashboardDiagnostics;
+    operations?: DashboardOperationsTower;
   }) => DashboardOperatingSections;
+  buildOperations?: (params: {
+    activeWorkspace: Workspace | null;
+    goals: GoalBundle[];
+    jobs: JobRecord[];
+    providerCredentials: ProviderCredential[];
+    generatedAt: string;
+  }) => DashboardOperationsTower;
   buildBriefingHistory: (goals: GoalBundle[]) => BriefingHistoryItem[];
   sortArtifacts: (artifacts: Artifact[]) => Artifact[];
   sortActionLogs: (logs: ActionLog[]) => ActionLog[];
@@ -242,11 +257,21 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
     userId: params.userId
   });
   const dashboardNow = params.now ?? Date.now();
+  const operations = params.buildOperations
+    ? params.buildOperations({
+        activeWorkspace: params.activeWorkspace,
+        goals: scopedGoals,
+        jobs: params.jobs ?? [],
+        providerCredentials: params.providerCredentials ?? [],
+        generatedAt: new Date(dashboardNow).toISOString()
+      })
+    : undefined;
   const diagnostics = params.buildDiagnostics({
     goals: scopedGoals,
     approvals: scopedApprovals,
     memories: params.memories,
     watchers: scopedWatchers,
+    operations,
     now: dashboardNow
   });
   const recentAutopilotEvents = params.autopilotEvents.slice(0, 8);
@@ -273,7 +298,8 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
     integrations: params.integrations,
     latestArtifacts,
     actionLogs,
-    diagnostics
+    diagnostics,
+    operations
   });
 
   const dashboard = {
@@ -297,7 +323,8 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
       memories: params.memories,
       watchers: scopedWatchers,
       integrations: params.integrations,
-      diagnostics
+      diagnostics,
+      operations
     }),
     operatingSections,
     goals: scopedGoals,
@@ -313,7 +340,8 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
     integrations: params.integrations,
     latestArtifacts,
     actionLogs,
-    diagnostics
+    diagnostics,
+    operations
   };
 
   const durationMs = Date.now() - startedAt;

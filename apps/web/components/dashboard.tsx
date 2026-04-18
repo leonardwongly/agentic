@@ -23,6 +23,7 @@ import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/i
 import { getMemoryFreshness } from "@agentic/memory";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
+import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
 import { CoreLoopViewTracker } from "./core-loop-view-tracker";
 import { isAdvancedDashboardSection } from "../lib/dashboard-surface";
 import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-loop-telemetry";
@@ -575,7 +576,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
   const reliabilitySummary = useMemo(() => {
     if (data.diagnostics.totalCount === 0) {
-      return "No expired approvals, stale memories, blocked workflows, or orphan watchers detected.";
+      return "No reliability regressions are open across approvals, memory freshness, async execution, or connector health.";
     }
 
     return `${data.diagnostics.totalCount} reliability signal${data.diagnostics.totalCount === 1 ? "" : "s"} need attention.`;
@@ -2155,7 +2156,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           {data.diagnostics.items.length === 0 ? (
             <p className="empty-state">
               The dashboard is clear. New reliability issues will appear here as soon as approvals expire, memories go stale,
-              workflows block, or watchers outlive their goals.
+              queues degrade, connectors lose health, workflows block, or watchers outlive their goals.
             </p>
           ) : (
             <div className="diagnostic-grid">
@@ -2353,6 +2354,16 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               revokeGoalShare={revokeGoalShare}
             />
           </div>
+
+          {data.operations ? (
+            <DashboardOperationsTowerCard
+              operations={data.operations}
+              expanded={showAdvancedOperations}
+              highlightedItemId={highlightedItemId}
+              getItemAnchorId={getDashboardItemAnchorId}
+              navigateToSection={navigateToSection}
+            />
+          ) : null}
 
           <article
             className={`card operator-product-card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}

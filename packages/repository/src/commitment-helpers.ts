@@ -18,6 +18,7 @@ import {
 } from "@agentic/contracts";
 import { getMemoryFreshness } from "@agentic/memory";
 import type { DashboardDiagnostic, DashboardDiagnostics } from "./index";
+import type { DashboardOperationsTower } from "./dashboard-operations";
 
 const STALLED_WORKFLOW_MS = 30 * 60 * 1000;
 const APPROVAL_WAIT_SLA_MS = 6 * 60 * 60 * 1000;
@@ -541,6 +542,7 @@ export function buildDashboardDiagnostics(params: {
   approvals: ApprovalRequest[];
   memories: MemoryRecord[];
   watchers: Watcher[];
+  operations?: DashboardOperationsTower;
   now?: number;
 }): DashboardDiagnostics {
   const now = params.now ?? Date.now();
@@ -704,6 +706,62 @@ export function buildDashboardDiagnostics(params: {
         label: watcher.targetEntity,
         action: "pause_watcher" as const,
         actionLabel: "Pause"
+      }))
+    });
+  }
+
+  if ((params.operations?.asyncExecution.issueCount ?? 0) > 0) {
+    items.push({
+      kind: "async_execution_issues",
+      title: "Async execution issues",
+      count: params.operations!.asyncExecution.issueCount,
+      severity: params.operations!.asyncExecution.status === "critical" ? "critical" : "warning",
+      reasons: [
+        params.operations!.asyncExecution.deadLetterJobs > 0
+          ? `${pluralize(params.operations!.asyncExecution.deadLetterJobs, "dead-letter job")} need operator recovery`
+          : null,
+        params.operations!.asyncExecution.expiredLeaseCount > 0
+          ? `${pluralize(params.operations!.asyncExecution.expiredLeaseCount, "expired lease")} are still marked running`
+          : null,
+        params.operations!.asyncExecution.stalePendingCount > 0
+          ? `${pluralize(params.operations!.asyncExecution.stalePendingCount, "stale pending job")} breached the queue age threshold`
+          : null,
+        params.operations!.asyncExecution.retryingJobs > 0
+          ? `${pluralize(params.operations!.asyncExecution.retryingJobs, "retrying job")} still need worker follow-through`
+          : null
+      ].filter((reason): reason is string => reason !== null),
+      targets: params.operations!.asyncExecution.items.slice(0, 3).map((item) => ({
+        section: "operations",
+        itemId: item.id,
+        label: item.label
+      }))
+    });
+  }
+
+  if ((params.operations?.connectorHealth.issueCount ?? 0) > 0) {
+    items.push({
+      kind: "connector_degradation",
+      title: "Connector degradation",
+      count: params.operations!.connectorHealth.issueCount,
+      severity: params.operations!.connectorHealth.status === "critical" ? "critical" : "warning",
+      reasons: [
+        params.operations!.connectorHealth.reconnectRequiredCount > 0
+          ? `${pluralize(params.operations!.connectorHealth.reconnectRequiredCount, "connector")} require re-authentication`
+          : null,
+        params.operations!.connectorHealth.revokedCount > 0
+          ? `${pluralize(params.operations!.connectorHealth.revokedCount, "connector")} were revoked`
+          : null,
+        params.operations!.connectorHealth.refreshFailedCount > 0
+          ? `${pluralize(params.operations!.connectorHealth.refreshFailedCount, "connector")} hit token refresh failure`
+          : null,
+        params.operations!.connectorHealth.validationStaleCount > 0
+          ? `${pluralize(params.operations!.connectorHealth.validationStaleCount, "connector")} need validation refresh`
+          : null
+      ].filter((reason): reason is string => reason !== null),
+      targets: params.operations!.connectorHealth.items.slice(0, 3).map((item) => ({
+        section: "operations",
+        itemId: item.id,
+        label: item.label
       }))
     });
   }

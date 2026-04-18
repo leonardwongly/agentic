@@ -19,6 +19,7 @@ import type {
   WorkspaceMember
 } from "@agentic/contracts";
 import type { DashboardDiagnostics } from "./index";
+import type { DashboardOperationsTower } from "./dashboard-operations";
 
 type BuildDashboardOperatingSectionsParams = {
   activeWorkspace: Workspace | null;
@@ -37,6 +38,7 @@ type BuildDashboardOperatingSectionsParams = {
   latestArtifacts: Artifact[];
   actionLogs: ActionLog[];
   diagnostics: DashboardDiagnostics;
+  operations?: DashboardOperationsTower;
 };
 
 function pluralize(count: number, noun: string): string {
@@ -67,6 +69,20 @@ function toAttentionStatus(status: DashboardDiagnostics["status"]): DashboardOpe
   return "healthy";
 }
 
+function maxSectionStatus(
+  left: DashboardOperatingSection["status"],
+  right: DashboardOperatingSection["status"]
+): DashboardOperatingSection["status"] {
+  const weight: Record<DashboardOperatingSection["status"], number> = {
+    critical: 3,
+    attention: 2,
+    healthy: 1,
+    idle: 0
+  };
+
+  return weight[left] >= weight[right] ? left : right;
+}
+
 export function buildDashboardOperatingSections(params: BuildDashboardOperatingSectionsParams): DashboardOperatingSections {
   const freshnessNow = Date.parse(params.diagnostics.generatedAt);
   const openCommitments = params.commitments.filter(
@@ -78,7 +94,6 @@ export function buildDashboardOperatingSections(params: BuildDashboardOperatingS
   const blockedCommitments = openCommitments.filter((commitment) => commitment.status === "blocked");
   const pendingApprovals = params.approvals.filter((approval) => approval.decision === "pending");
   const activeGoals = params.goals.filter((bundle) => bundle.goal.status !== "completed");
-  const runningGoals = activeGoals.filter((bundle) => bundle.goal.status === "running");
   const blockedTasks = activeGoals.flatMap((bundle) =>
     bundle.tasks.filter((task) => task.state === "blocked" || task.state === "failed")
   );
@@ -96,6 +111,10 @@ export function buildDashboardOperatingSections(params: BuildDashboardOperatingS
   const topNowItem = params.nowQueue.items[0] ?? null;
   const firstDiagnosticTarget = params.diagnostics.items[0]?.targets[0] ?? null;
   const recentArtifactSignals = params.latestArtifacts.length > 0 ? 1 : 0;
+  const asyncExecution = params.operations?.asyncExecution;
+  const connectorHealth = params.operations?.connectorHealth;
+  const firstAsyncIssue = asyncExecution?.items[0] ?? null;
+  const firstConnectorIssue = connectorHealth?.items[0] ?? null;
 
   const sections: DashboardOperatingSection[] = [
     {
@@ -158,20 +177,31 @@ export function buildDashboardOperatingSections(params: BuildDashboardOperatingS
       key: "execution",
       title: "Execution",
       description:
-        blockedTasks.length > 0
+        firstAsyncIssue
+          ? "Async execution needs operator recovery before queued work can be trusted again."
+          : blockedTasks.length > 0
           ? `${pluralize(blockedTasks.length, "task")} are blocked or failed inside active goal execution.`
           : activeGoals.length > 0
             ? "Goals are in motion and producing artifacts and action logs that can be audited."
             : "No active goals are currently executing.",
-      status: blockedTasks.length > 0 ? "critical" : activeGoals.length > 0 ? "attention" : "idle",
-      targetSection: pendingApprovals[0] ? "approvals" : "goals",
-      targetItemId: pendingApprovals[0]?.id ?? activeGoals[0]?.goal.id,
+      status:
+        asyncExecution?.status === "critical" || blockedTasks.length > 0
+          ? "critical"
+          : asyncExecution?.status === "attention" || activeGoals.length > 0
+            ? "attention"
+            : "idle",
+      targetSection: firstAsyncIssue ? "operations" : pendingApprovals[0] ? "approvals" : "goals",
+      targetItemId: firstAsyncIssue?.id ?? pendingApprovals[0]?.id ?? activeGoals[0]?.goal.id,
       metrics: [
         `${pluralize(activeGoals.length, "active goal")}`,
-        `${pluralize(runningGoals.length, "running goal")}`,
+        `${pluralize(asyncExecution?.issueCount ?? 0, "queue issue")}`,
         `${pluralize(recentArtifactSignals, "recent artifact")}`
       ],
       highlights: compactHighlights(
+        firstAsyncIssue ? firstAsyncIssue.summary : null,
+        asyncExecution && asyncExecution.stalePendingCount > 0
+          ? `${pluralize(asyncExecution.stalePendingCount, "stale pending job")} breached the queue age threshold`
+          : null,
         blockedTasks[0] ? `Blocked task: ${blockedTasks[0].title}` : null,
         params.latestArtifacts[0] ? `Latest artifact: ${params.latestArtifacts[0].title}` : null,
         params.actionLogs[0] ? `Latest action: ${params.actionLogs[0].kind}` : null
@@ -181,12 +211,24 @@ export function buildDashboardOperatingSections(params: BuildDashboardOperatingS
       key: "trust",
       title: "Trust",
       description:
-        params.diagnostics.totalCount > 0
+        firstConnectorIssue
+          ? "Connector health degraded and should be recovered before widening automation."
+          : params.diagnostics.totalCount > 0
           ? `${pluralize(params.diagnostics.totalCount, "reliability signal")} need review before widening autonomy.`
           : "Trust signals are clean: no active reliability findings are currently open.",
-      status: toAttentionStatus(params.diagnostics.status),
-      targetSection: firstDiagnosticTarget?.section ?? (pendingApprovals[0] ? "approvals" : "memory"),
-      targetItemId: firstDiagnosticTarget?.itemId ?? pendingApprovals[0]?.id,
+      status: maxSectionStatus(
+        toAttentionStatus(params.diagnostics.status),
+        connectorHealth?.status === "critical"
+          ? "critical"
+          : connectorHealth?.status === "attention"
+            ? "attention"
+            : "healthy"
+      ),
+      targetSection:
+        firstConnectorIssue
+          ? "operations"
+          : firstDiagnosticTarget?.section ?? (pendingApprovals[0] ? "approvals" : "memory"),
+      targetItemId: firstConnectorIssue?.id ?? firstDiagnosticTarget?.itemId ?? pendingApprovals[0]?.id,
       metrics: [
         `${pluralize(params.diagnostics.totalCount, "reliability signal")}`,
         `${pluralize(staleMemories.length, "stale memory")}`,
@@ -195,7 +237,10 @@ export function buildDashboardOperatingSections(params: BuildDashboardOperatingS
           : `${pluralize(pendingApprovals.length, "pending approval")}`
       ],
       highlights: compactHighlights(
-        firstDiagnosticTarget ? `Investigate: ${firstDiagnosticTarget.label}` : null,
+        firstConnectorIssue ? firstConnectorIssue.summary : firstDiagnosticTarget ? `Investigate: ${firstDiagnosticTarget.label}` : null,
+        connectorHealth && connectorHealth.refreshFailedCount > 0
+          ? `${pluralize(connectorHealth.refreshFailedCount, "refresh failure")} need credential repair`
+          : null,
         params.workspaceGovernance ? `Max auto ${params.workspaceGovernance.maxAutoRunRiskClass}` : null,
         missingEvidenceApprovals[0] ? `Missing evidence: ${missingEvidenceApprovals[0].title}` : null,
         pendingApprovals[0] ? `Pending approval: ${pendingApprovals[0].title}` : null

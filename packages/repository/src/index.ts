@@ -135,6 +135,10 @@ import {
   CommitmentInboxQueryError
 } from "./commitment-helpers";
 import { assembleDashboardData } from "./dashboard-data";
+import {
+  buildDashboardOperationsTower,
+  type DashboardOperationsTower
+} from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 
 const UserRecordSchema = z.object({
@@ -215,17 +219,25 @@ export type DashboardData = {
   latestArtifacts: Artifact[];
   actionLogs: ActionLog[];
   diagnostics: DashboardDiagnostics;
+  operations?: DashboardOperationsTower;
 };
 
 export type DashboardDiagnosticKind =
   | "expired_approvals"
   | "stale_memories"
   | "stuck_workflows"
-  | "orphan_watchers";
+  | "orphan_watchers"
+  | "async_execution_issues"
+  | "connector_degradation";
 
 export type DashboardDiagnosticSeverity = "warning" | "critical";
 
-export type DashboardDiagnosticSection = "goals" | "approvals" | "memory" | "watchers";
+export type DashboardDiagnosticSection =
+  | "goals"
+  | "approvals"
+  | "memory"
+  | "watchers"
+  | "operations";
 
 export type DashboardControlPlaneKey = "workspace" | "commitments" | "automation" | "execution" | "trust";
 
@@ -997,6 +1009,7 @@ function buildDashboardControlPlane(params: {
   watchers: Watcher[];
   integrations: IntegrationAccount[];
   diagnostics: DashboardDiagnostics;
+  operations?: DashboardOperationsTower;
 }): DashboardControlPlane {
   const freshnessNow = Date.parse(params.diagnostics.generatedAt);
   const openCommitments = params.commitments.filter(
@@ -1010,7 +1023,6 @@ function buildDashboardControlPlane(params: {
   const pendingEvents = params.autopilotEvents.filter((event) => event.status === "pending");
   const activeWatchers = params.watchers.filter((watcher) => watcher.status === "active");
   const openGoals = params.goals.filter((bundle) => bundle.goal.status !== "completed");
-  const runningGoals = openGoals.filter((bundle) => bundle.goal.status === "running");
   const pendingApprovals = params.approvals.filter((approval) => approval.decision === "pending");
   const respondedApprovals = params.approvals.filter((approval) => approval.decision !== "pending");
   const staleMemories = params.memories.filter((record) => getMemoryFreshness(record, freshnessNow) !== "fresh");
@@ -1018,9 +1030,16 @@ function buildDashboardControlPlane(params: {
   const tracedApprovalIds = new Set(params.evidenceRecords.map((record) => record.approvalId));
   const tracedApprovals = respondedApprovals.filter((approval) => tracedApprovalIds.has(approval.id));
   const missingEvidenceApprovals = respondedApprovals.filter((approval) => !tracedApprovalIds.has(approval.id));
+  const asyncExecution = params.operations?.asyncExecution;
+  const connectorHealth = params.operations?.connectorHealth;
+  const firstAsyncIssue = asyncExecution?.items[0] ?? null;
+  const firstConnectorIssue = connectorHealth?.items[0] ?? null;
   const executionDiagnosticTarget =
     params.diagnostics.items.find(
-      (item) => item.kind === "stuck_workflows" || item.kind === "expired_approvals"
+      (item) =>
+        item.kind === "stuck_workflows" ||
+        item.kind === "expired_approvals" ||
+        item.kind === "async_execution_issues"
     )?.targets[0] ?? null;
   const trustDiagnosticTarget = params.diagnostics.items[0]?.targets[0] ?? null;
 
@@ -1088,22 +1107,39 @@ function buildDashboardControlPlane(params: {
       title: "Execution",
       description: "Workflow execution health across active goals, task progress, and approval bottlenecks.",
       status:
-        executionDiagnosticTarget
+        asyncExecution?.status === "critical" || executionDiagnosticTarget
           ? "critical"
-          : pendingApprovals.length > 0 || openGoals.length > 0
+          : asyncExecution?.status === "attention" || pendingApprovals.length > 0 || openGoals.length > 0
             ? "attention"
             : "healthy",
-      targetSection: executionDiagnosticTarget?.section ?? "goals",
-      targetItemId: executionDiagnosticTarget?.itemId,
+      targetSection: firstAsyncIssue ? "operations" : (executionDiagnosticTarget?.section ?? "goals"),
+      targetItemId: firstAsyncIssue?.id ?? executionDiagnosticTarget?.itemId,
       stats: [
         `${pluralize(openGoals.length, "active goal")}`,
-        `${pluralize(runningGoals.length, "running goal")}`,
-        `${pluralize(pendingApprovals.length, "pending approval")}`
+        `${pluralize(asyncExecution?.issueCount ?? 0, "queue issue")}`,
+        asyncExecution
+          ? `${pluralize(asyncExecution.deadLetterJobs, "dead letter")} / ${pluralize(asyncExecution.retryingJobs, "retrying job")}`
+          : `${pluralize(pendingApprovals.length, "pending approval")}`
       ],
       highlights:
-        executionDiagnosticTarget
+        firstAsyncIssue
+          ? [
+              firstAsyncIssue.summary,
+              asyncExecution && asyncExecution.stalePendingCount > 0
+                ? `${pluralize(asyncExecution.stalePendingCount, "stale pending job")} are breaching the queue age threshold.`
+                : null,
+              asyncExecution && asyncExecution.expiredLeaseCount > 0
+                ? `${pluralize(asyncExecution.expiredLeaseCount, "expired lease")} need worker recovery.`
+                : null
+            ].filter((highlight): highlight is string => highlight !== null)
+          : executionDiagnosticTarget
           ? params.diagnostics.items
-              .filter((item) => item.kind === "stuck_workflows" || item.kind === "expired_approvals")
+              .filter(
+                (item) =>
+                  item.kind === "stuck_workflows" ||
+                  item.kind === "expired_approvals" ||
+                  item.kind === "async_execution_issues"
+              )
               .flatMap((item) => item.reasons)
               .slice(0, 3)
           : openGoals.slice(0, 3).map((bundle) => bundle.goal.title)
@@ -1118,8 +1154,8 @@ function buildDashboardControlPlane(params: {
           : params.diagnostics.status === "warning"
             ? "attention"
             : "healthy",
-      targetSection: trustDiagnosticTarget?.section ?? "governance",
-      targetItemId: trustDiagnosticTarget?.itemId,
+      targetSection: firstConnectorIssue ? "operations" : (trustDiagnosticTarget?.section ?? "governance"),
+      targetItemId: firstConnectorIssue?.id ?? trustDiagnosticTarget?.itemId,
       stats: [
         `${pluralize(params.diagnostics.totalCount, "reliability signal")}`,
         respondedApprovals.length > 0
@@ -1128,7 +1164,17 @@ function buildDashboardControlPlane(params: {
         `Max auto ${params.workspaceGovernance?.maxAutoRunRiskClass ?? "R1"}`
       ],
       highlights:
-        params.diagnostics.totalCount > 0
+        firstConnectorIssue
+          ? [
+              firstConnectorIssue.summary,
+              connectorHealth && connectorHealth.refreshFailedCount > 0
+                ? `${pluralize(connectorHealth.refreshFailedCount, "refresh failure")} need connector review.`
+                : null,
+              connectorHealth && connectorHealth.validationStaleCount > 0
+                ? `${pluralize(connectorHealth.validationStaleCount, "stale validation")} should be rechecked.`
+                : null
+            ].filter((highlight): highlight is string => highlight !== null)
+          : params.diagnostics.totalCount > 0
           ? params.diagnostics.items.flatMap((item) => item.reasons).slice(0, 3)
           : missingEvidenceApprovals.length > 0
             ? missingEvidenceApprovals.slice(0, 3).map((approval) => `Missing evidence lineage for ${approval.title}.`)
@@ -3421,7 +3467,17 @@ class FileRepository implements AgenticRepository {
       store.evidenceRecords.filter((record) => record.userId === userId && goalIds.has(record.goalId))
     ).map((record) => EvidenceRecordSchema.parse(clone(record)));
     const watchers = sortByCreatedDesc(goals.flatMap((bundle) => bundle.watchers));
-    const [commitments, briefingPreferences, autopilotSettings, autopilotEventsPage, memoryPage, integrationsPage, goalShares] =
+    const [
+      commitments,
+      briefingPreferences,
+      autopilotSettings,
+      autopilotEventsPage,
+      memoryPage,
+      integrationsPage,
+      goalShares,
+      jobs,
+      providerCredentials
+    ] =
       await Promise.all([
         this.listCommitments(userId),
         this.getBriefingPreferences(userId),
@@ -3429,7 +3485,12 @@ class FileRepository implements AgenticRepository {
         this.listAutopilotEventsPage({ userId, limit: DASHBOARD_AUTOPILOT_EVENT_LIMIT }),
         this.listMemoryPage({ userId, limit: DASHBOARD_MEMORY_LIMIT }),
         this.listIntegrationsPage({ userId, limit: DASHBOARD_INTEGRATION_LIMIT }),
-        this.listGoalShares({ userId })
+        this.listGoalShares({ userId }),
+        this.listJobs({
+          userId,
+          statuses: ["queued", "running", "retrying", "dead_letter"]
+        }),
+        this.listProviderCredentials(userId)
       ]);
     const workspaceMembers = activeWorkspace ? listWorkspaceMembersForWorkspaceFromStore(store, activeWorkspace.id) : [];
     const workspaceGovernance = activeWorkspace
@@ -3459,9 +3520,12 @@ class FileRepository implements AgenticRepository {
       memories: memoryPage.items,
       watchers,
       integrations: integrationsPage.items,
+      jobs,
+      providerCredentials,
       filterBundlesForWorkspace,
       mergeCommitments,
       buildDiagnostics: buildDashboardDiagnostics,
+      buildOperations: buildDashboardOperationsTower,
       buildControlPlane: buildDashboardControlPlane,
       buildNowQueue,
       buildOperatingSections: buildDashboardOperatingSections,
@@ -7888,14 +7952,21 @@ class PostgresRepository implements AgenticRepository {
       autopilotSettings,
       autopilotEventsPage,
       memoryPage,
-      integrationsPage
+      integrationsPage,
+      jobs,
+      providerCredentials
     ] = await Promise.all([
       this.listCommitments(userId),
       this.getBriefingPreferences(userId),
       this.getAutopilotSettings(userId),
       this.listAutopilotEventsPage({ userId, limit: DASHBOARD_AUTOPILOT_EVENT_LIMIT }),
       this.listMemoryPage({ userId, limit: DASHBOARD_MEMORY_LIMIT }),
-      this.listIntegrationsPage({ userId, limit: DASHBOARD_INTEGRATION_LIMIT })
+      this.listIntegrationsPage({ userId, limit: DASHBOARD_INTEGRATION_LIMIT }),
+      this.listJobs({
+        userId,
+        statuses: ["queued", "running", "retrying", "dead_letter"]
+      }),
+      this.listProviderCredentials(userId)
     ]);
     const client = await this.pool.connect();
     let activeWorkspace: Workspace | null = null;
@@ -7964,9 +8035,12 @@ class PostgresRepository implements AgenticRepository {
       memories: memoryPage.items,
       watchers,
       integrations: integrationsPage.items,
+      jobs,
+      providerCredentials,
       filterBundlesForWorkspace,
       mergeCommitments,
       buildDiagnostics: buildDashboardDiagnostics,
+      buildOperations: buildDashboardOperationsTower,
       buildControlPlane: buildDashboardControlPlane,
       buildNowQueue,
       buildOperatingSections: buildDashboardOperatingSections,
