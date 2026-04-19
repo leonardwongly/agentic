@@ -437,6 +437,79 @@ describe("worker runtime", () => {
     expect(persistedBundle?.goal.explanation).toContain("urgent");
   });
 
+  it("derives stable default idempotency keys for briefing, docs, privacy, and autopilot jobs", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const privacyWorkspaceId = "workspace-idempotency-runtime-test";
+
+    await repository.saveWorkspace({
+      id: privacyWorkspaceId,
+      ownerUserId: SYSTEM_USER_ID,
+      name: "Idempotency Workspace",
+      slug: "idempotency-workspace",
+      description: "Workspace used to validate derived durable job keys.",
+      retentionDays: 365,
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    }, createSystemActorContext(SYSTEM_USER_ID));
+
+    const briefingJob = await enqueueBriefingCreateJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      goalId: "goal-briefing-derived-key",
+      workflowId: "workflow-briefing-derived-key",
+      briefingType: "midday",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+    });
+    const docsJob = await enqueueDocsRenderJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+    });
+    const operation = await createPrivacyOperation({
+      repository,
+      workspaceId: privacyWorkspaceId,
+      kind: "workspace_export"
+    });
+    const privacyJob = await enqueuePrivacyOperationJob({
+      repository,
+      operation: {
+        id: operation.id,
+        workspaceId: operation.workspaceId,
+        userId: operation.userId,
+        kind: operation.kind,
+        actorContext: operation.actorContext
+      }
+    });
+    const autopilotFixture = await createWatcherAutopilotFixture();
+    const autopilotJob = await enqueueAutopilotProcessJob({
+      repository: autopilotFixture.repository,
+      autopilotEvent: autopilotFixture.event
+    });
+
+    expect(briefingJob.idempotencyKey).toBe("briefing-create:midday:goal-briefing-derived-key");
+    expect(docsJob.idempotencyKey).toBe(`docs-render:${SYSTEM_USER_ID}`);
+    expect(privacyJob.idempotencyKey).toBe(`privacy-operation:${operation.id}`);
+    expect(autopilotJob.idempotencyKey).toBe(`autopilot-process:${autopilotFixture.event.id}`);
+
+    await Promise.all([
+      runWorkerRuntime({
+        repository,
+        selfImprovementRepository,
+        runnerId: "worker-runtime-derived-keys-test",
+        maxJobs: 3,
+        pollIntervalMs: 50
+      }),
+      runWorkerRuntime({
+        repository: autopilotFixture.repository,
+        selfImprovementRepository: autopilotFixture.selfImprovementRepository,
+        runnerId: "worker-runtime-derived-autopilot-test",
+        maxJobs: 1,
+        pollIntervalMs: 50
+      })
+    ]);
+  });
+
   it("keeps briefing persistence, memory capture, and self-improvement episodes idempotent across retries", async () => {
     const { repository, selfImprovementRepository } = await createTestRuntime();
     const job = createJobRecord({

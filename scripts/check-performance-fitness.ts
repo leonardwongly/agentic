@@ -25,6 +25,8 @@ function main() {
   const docsRenderRoutePath = "apps/web/app/api/docs/render/route.ts";
   const publicShareViewRoutePath = "apps/web/app/api/share/view/route.ts";
   const dashboardPath = "apps/web/components/dashboard.tsx";
+  const validationMatrixPath = "docs/security/validation-matrix.md";
+  const deploymentRunbookPath = "docs/runbooks/deployment.md";
   const goalsStatusRoutePath = "apps/web/app/api/goals/jobs/[id]/route.ts";
   const briefingStatusRoutePath = "apps/web/app/api/briefing/jobs/[id]/route.ts";
   const templateRunStatusRoutePath = "apps/web/app/api/templates/jobs/[id]/route.ts";
@@ -37,6 +39,8 @@ function main() {
   const docsRenderRoute = readRepoFile(docsRenderRoutePath);
   const publicShareViewRoute = readRepoFile(publicShareViewRoutePath);
   const dashboard = readRepoFile(dashboardPath);
+  const validationMatrix = readRepoFile(validationMatrixPath);
+  const deploymentRunbook = readRepoFile(deploymentRunbookPath);
 
   assertContains(
     goalsRoute,
@@ -173,6 +177,47 @@ function main() {
   if (idempotencyHeaderCount < 5) {
     throw new Error(`${dashboardPath} must send idempotency keys for goal creation, goal refinement, briefing creation, template execution, and docs rendering.`);
   }
+
+  assertContains(
+    validationMatrix,
+    "| Goal create/refine routes | `P0` |",
+    `${validationMatrixPath} must classify goal mutations as P0 validation surfaces.`
+  );
+  assertContains(
+    validationMatrix,
+    "| Runtime readiness and rollout telemetry | `P1` |",
+    `${validationMatrixPath} must classify rollout telemetry as a P1 release surface.`
+  );
+  assertContains(
+    validationMatrix,
+    "Retry churn for a transient failure",
+    `${validationMatrixPath} must document the retry-churn sanity budget.`
+  );
+  assertContains(
+    validationMatrix,
+    "Duplicate execution under competing workers",
+    `${validationMatrixPath} must document the duplicate-execution sanity budget.`
+  );
+  assertContains(
+    deploymentRunbook,
+    "## Rollout Stages By Risk Class",
+    `${deploymentRunbookPath} must define staged rollout expectations by risk class.`
+  );
+  assertContains(
+    deploymentRunbook,
+    "## Rollback Triggers",
+    `${deploymentRunbookPath} must define explicit rollback triggers.`
+  );
+  assertContains(
+    deploymentRunbook,
+    "retry churn",
+    `${deploymentRunbookPath} must explain how retry churn is evaluated during rollout.`
+  );
+  assertContains(
+    deploymentRunbook,
+    "duplicate execution",
+    `${deploymentRunbookPath} must explain how duplicate execution is evaluated during rollout.`
+  );
 
   console.log("Performance fitness checks passed.");
 }

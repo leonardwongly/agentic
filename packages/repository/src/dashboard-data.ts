@@ -23,7 +23,7 @@ import type {
   WorkspaceMember,
   WorkspaceSelection
 } from "@agentic/contracts";
-import type { DashboardControlPlane, DashboardData, DashboardDiagnostics } from "./index";
+import type { DashboardControlPlane, DashboardData, DashboardDiagnostics } from "./repository-types";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
 type AssembleDashboardDataParams = {

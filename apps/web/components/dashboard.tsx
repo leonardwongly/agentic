@@ -32,6 +32,22 @@ import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
 import { getGoalShareSuccessMessage } from "../lib/share-client";
 import { AgentsPanel } from "./agents";
 import { CommandPalette } from "./command-palette";
+import {
+  buildClientIdempotencyKey,
+  type BriefingCreateApiResponse,
+  type BriefingJobStatusApiResponse,
+  type DocsRenderApiResponse,
+  type DocsRenderJobStatusApiResponse,
+  type GoalJobStatusApiResponse,
+  type GoalQueuedApiResponse,
+  loadDashboardSnapshot as fetchDashboardSnapshot,
+  loadTemplatesSnapshot as fetchTemplatesSnapshot,
+  type NLIntentApiResponse,
+  pollJobStatusUntilSettled,
+  type TemplateRunApiResponse,
+  type TemplateRunJobStatusApiResponse,
+  readJson
+} from "./dashboard-async";
 import { DashboardOperatingSectionsCard } from "./dashboard-operating-sections";
 import { DashboardOperationsSections } from "./dashboard-operations-sections";
 import {
@@ -118,129 +134,12 @@ type RequestState = {
   message: string;
 };
 
-type NLIntentQueuedJob = {
-  id: string;
-  kind: "goal_create" | "briefing_create";
-  status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-  goalId: string;
-  briefingType?: BriefingType;
-  attemptCount: number;
-  maxAttempts: number;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type NLIntentApiResponse = {
-  message: string;
-  data?: unknown;
-  dashboard?: DashboardData;
-  job?: NLIntentQueuedJob;
-  statusUrl?: string;
-};
-
 type OperatorProductPayload = {
   products: OperatorProduct[];
   selection: OperatorProductSelection | null;
   agents: AgentDefinition[];
   templates: GoalTemplate[];
 };
-
-type GoalQueuedApiResponse = {
-  job: {
-    id: string;
-    kind: "goal_create" | "goal_refine";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    goalId: string;
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type GoalQueuedJob = GoalQueuedApiResponse["job"];
-
-type GoalJobStatusApiResponse = {
-  job: GoalQueuedJob;
-  result: {
-    goalId: string;
-    goalStatus: "planned" | "running" | "waiting" | "completed";
-    taskCount: number;
-    completedTaskCount: number;
-    pendingApprovalCount: number;
-    artifactCount: number;
-    watcherCount: number;
-    requiresReview: boolean;
-  } | null;
-  error: string | null;
-};
-
-type BriefingCreateApiResponse = {
-  job: {
-    id: string;
-    kind: "briefing_create";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    goalId: string;
-    briefingType: BriefingType;
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type BriefingJobStatusApiResponse = {
-  job: BriefingCreateApiResponse["job"];
-  result: GoalJobStatusApiResponse["result"];
-  error: string | null;
-};
-
-type TemplateRunApiResponse = {
-  job: {
-    id: string;
-    kind: "template_run";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    templateId: string;
-    goalId: string;
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type TemplateRunJobStatusApiResponse = {
-  job: TemplateRunApiResponse["job"];
-  result: GoalJobStatusApiResponse["result"];
-  error: string | null;
-};
-
-type DocsRenderApiResponse = {
-  job: {
-    id: string;
-    kind: "docs_render";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type DocsRenderJobStatusApiResponse = {
-  job: DocsRenderApiResponse["job"];
-  result: {
-    message: string;
-  } | null;
-  error: string | null;
-};
-
-const GOAL_JOB_POLL_INTERVAL_MS = 500;
-const GOAL_JOB_POLL_TIMEOUT_MS = 60_000;
 
 function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt"> {
   return {
@@ -278,27 +177,6 @@ function getDashboardItemAnchorId(itemId: string): string {
 
 function formatCommitmentUrgencyLabel(value: string): string {
   return value.replace(/_/gu, " ");
-}
-
-async function readJson<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as T & { error?: string };
-
-  if (!response.ok) {
-    const message = typeof payload === "object" && payload && "error" in payload ? String(payload.error) : "Request failed.";
-    throw new Error(message);
-  }
-
-  return payload;
-}
-
-async function waitForDelay(ms: number): Promise<void> {
-  await new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function buildClientIdempotencyKey(): string {
-  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 const commitmentInboxSections: Array<{
@@ -729,99 +607,27 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   }, [statsBar]);
 
   const loadDashboardSnapshot = useCallback(async () => {
-    return readJson<{ dashboard: DashboardData }>(
-      await fetch("/api/goals", {
-        cache: "no-store"
-      })
-    );
+    return fetchDashboardSnapshot();
   }, []);
 
   const loadTemplatesSnapshot = useCallback(async () => {
-    return readJson<{ templates: GoalTemplate[] }>(
-      await fetch("/api/templates", {
-        cache: "no-store"
-      })
-    );
+    return fetchTemplatesSnapshot();
   }, []);
 
-  const pollGoalJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<GoalJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
+  const pollGoalJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<GoalJobStatusApiResponse>(statusUrl);
   }, []);
 
-  const pollBriefingJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<BriefingJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
+  const pollBriefingJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<BriefingJobStatusApiResponse>(statusUrl);
   }, []);
 
-  const pollTemplateRunJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<TemplateRunJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
+  const pollTemplateRunJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<TemplateRunJobStatusApiResponse>(statusUrl);
   }, []);
 
-  const pollDocsRenderJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<DocsRenderJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
+  const pollDocsRenderJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<DocsRenderJobStatusApiResponse>(statusUrl);
   }, []);
 
   const submitGoalRequest = useCallback(async (nextRequest: string, agentId?: string) => {

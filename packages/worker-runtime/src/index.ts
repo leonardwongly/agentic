@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { runDocsBuild } from "@agentic/docs-runtime";
 import {
   createSystemActorContext,
@@ -32,7 +31,6 @@ import {
   type JobRetryPolicy
 } from "@agentic/execution";
 import {
-  createActionLog,
   logError,
   logInfo,
   logWarn,
@@ -53,6 +51,23 @@ import {
   SelfImprovementConflictError,
   type SelfImprovementRepository
 } from "@agentic/self-improvement-memory";
+import {
+  buildAutopilotGoalId,
+  buildAutopilotProcessJobIdempotencyKey,
+  buildAutopilotProcessPayload,
+  buildAutopilotWorkflowId,
+  buildBriefingCreateJobIdempotencyKey,
+  buildBriefingCreatePayload,
+  buildDocsRenderJobIdempotencyKey,
+  buildDocsRenderPayload,
+  buildGoalCreatePayload,
+  buildGoalRefinePayload,
+  buildPrivacyOperationJobIdempotencyKey,
+  buildPrivacyOperationPayload,
+  buildPublicShareViewPayload,
+  buildTemplateRunPayload
+} from "./job-payloads";
+import { createPublicShareViewedLog } from "./public-share-log";
 
 export const workerJobKindValues = ["goal_create", "goal_refine", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
 
@@ -86,182 +101,6 @@ export type WorkerRuntimeOptions = {
 
 class AutopilotExecutionError extends Error {
   readonly safeForUsers = true;
-}
-
-const SHARE_VIEW_DEDUP_WINDOW_MS = 1000 * 60 * 15;
-
-function createPublicShareViewedLog(
-  bundle: GoalBundle,
-  shareId: string,
-  tokenFingerprint: string,
-  now = Date.now()
-) {
-  const dedupeThreshold = now - SHARE_VIEW_DEDUP_WINDOW_MS;
-  const alreadyTracked = bundle.actionLogs.some((log) => {
-    if (log.kind !== "share.page_viewed") {
-      return false;
-    }
-
-    const createdAt = Date.parse(log.createdAt);
-    const loggedFingerprint = typeof log.details.tokenFingerprint === "string" ? log.details.tokenFingerprint : null;
-
-    return loggedFingerprint === tokenFingerprint && Number.isFinite(createdAt) && createdAt >= dedupeThreshold;
-  });
-
-  if (alreadyTracked) {
-    return null;
-  }
-
-  return createActionLog({
-    goalId: bundle.goal.id,
-    taskId: null,
-    workflowId: bundle.workflow.id,
-    actor: "public-share",
-    kind: "share.page_viewed",
-    message: `Opened the public share page for "${bundle.goal.title}".`,
-    details: {
-      shareId,
-      tokenFingerprint
-    }
-  });
-}
-
-function buildGoalCreatePayload(params: {
-  request: string;
-  workspaceId: string | null;
-  agentId: string | null;
-}): GoalCreateJobPayload {
-  return {
-    type: "goal_create",
-    goalId: crypto.randomUUID(),
-    workflowId: crypto.randomUUID(),
-    request: params.request,
-    workspaceId: params.workspaceId,
-    agentId: params.agentId,
-    metadata: {}
-  };
-}
-
-function buildGoalRefinePayload(params: {
-  goalId: string;
-  workflowId: string;
-  refinement: string;
-  workspaceId: string | null;
-}): GoalRefineJobPayload {
-  return {
-    type: "goal_refine",
-    goalId: params.goalId,
-    workflowId: params.workflowId,
-    refinement: params.refinement,
-    workspaceId: params.workspaceId,
-    metadata: {}
-  };
-}
-
-function buildAutopilotProcessPayload(params: {
-  autopilotEvent: AutopilotEvent;
-}): AutopilotProcessJobPayload {
-  return {
-    type: "autopilot_process",
-    autopilotEventId: params.autopilotEvent.id,
-    kind: params.autopilotEvent.kind,
-    sourceId: params.autopilotEvent.sourceId,
-    mode: params.autopilotEvent.mode,
-    metadata: {}
-  };
-}
-
-function buildBriefingCreatePayload(params: {
-  goalId: string;
-  workflowId: string;
-  briefingType: BriefingType;
-  workspaceId: string | null;
-}): BriefingCreateJobPayload {
-  return {
-    type: "briefing_create",
-    goalId: params.goalId,
-    workflowId: params.workflowId,
-    briefingType: params.briefingType,
-    workspaceId: params.workspaceId,
-    metadata: {}
-  };
-}
-
-function buildTemplateRunPayload(params: {
-  templateId: string;
-  goalId: string;
-  workflowId: string;
-  workspaceId: string | null;
-}): TemplateRunJobPayload {
-  return {
-    type: "template_run",
-    templateId: params.templateId,
-    goalId: params.goalId,
-    workflowId: params.workflowId,
-    workspaceId: params.workspaceId,
-    metadata: {}
-  };
-}
-
-function buildDocsRenderPayload(): DocsRenderJobPayload {
-  return {
-    type: "docs_render",
-    metadata: {}
-  };
-}
-
-function buildAutopilotGoalId(eventId: string): string {
-  return `autopilot-goal-${eventId}`;
-}
-
-function buildAutopilotWorkflowId(eventId: string): string {
-  return `autopilot-workflow-${eventId}`;
-}
-
-function buildAutopilotProcessJobIdempotencyKey(eventId: string): string {
-  return `autopilot-process:${eventId}`;
-}
-
-function buildPrivacyOperationPayload(params: {
-  operationId: string;
-  workspaceId: string;
-  kind: PrivacyOperationJobPayload["kind"];
-}): PrivacyOperationJobPayload {
-  return {
-    type: "privacy_operation",
-    operationId: params.operationId,
-    workspaceId: params.workspaceId,
-    kind: params.kind,
-    metadata: {}
-  };
-}
-
-function buildPublicShareViewPayload(params: {
-  shareId: string;
-  goalId: string;
-  tokenFingerprint: string;
-  viewedAt: string;
-}): PublicShareViewJobPayload {
-  return {
-    type: "public_share_view",
-    shareId: params.shareId,
-    goalId: params.goalId,
-    tokenFingerprint: params.tokenFingerprint,
-    viewedAt: params.viewedAt,
-    metadata: {}
-  };
-}
-
-function buildPrivacyOperationJobIdempotencyKey(operationId: string): string {
-  return `privacy-operation:${operationId}`;
-}
-
-function buildBriefingCreateJobIdempotencyKey(goalId: string, briefingType: BriefingType): string {
-  return `briefing-create:${briefingType}:${goalId}`;
-}
-
-function buildDocsRenderJobIdempotencyKey(userId: string): string {
-  return `docs-render:${userId}`;
 }
 
 async function resolveGoalCreateGovernance(

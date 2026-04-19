@@ -71,8 +71,13 @@ function resolveStatusUrl(baseUrl: string, statusUrl: string): string {
 }
 
 async function readJson<T>(response: Response): Promise<T> {
-  const payload = await response.json();
-  return payload as T;
+  try {
+    const payload = await response.json();
+    return payload as T;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown JSON parsing failure.";
+    throw new Error(`Deployment async canary received an invalid JSON response: ${message}`);
+  }
 }
 
 export async function runDeploymentAsyncCanary(options: DeploymentAsyncCanaryOptions): Promise<DeploymentAsyncCanarySummary> {
