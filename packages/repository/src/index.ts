@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 import { z } from "zod";
+import type { GovernanceConformanceReport } from "@agentic/policy";
 import {
   ActionLogSchema,
   ActionIntentSchema,
@@ -201,6 +202,7 @@ export type DashboardData = {
   workspaceSelection: WorkspaceSelection | null;
   workspaceMembers: WorkspaceMember[];
   workspaceGovernance: WorkspaceGovernance | null;
+  governanceConformance?: GovernanceConformanceReport | null;
   goalShares: GoalShareRecord[];
   privacyOperations: PrivacyOperation[];
   controlPlane: DashboardControlPlane;

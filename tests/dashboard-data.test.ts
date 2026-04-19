@@ -356,4 +356,89 @@ describe("assembleDashboardData instrumentation", () => {
       }
     });
   });
+
+  it("attaches governance conformance to the assembled dashboard payload", () => {
+    const dashboard = assembleDashboardData({
+      userId: "user-1",
+      workspaces: [],
+      activeWorkspace: null,
+      workspaceSelection: null,
+      workspaceMembers: [],
+      workspaceGovernance: {
+        workspaceId: "workspace-1",
+        approvalMode: "risk_based",
+        requireAuditExports: false,
+        maxAutoRunRiskClass: "R1",
+        externalSendRequiresApproval: true,
+        calendarWriteRequiresApproval: true,
+        retentionDays: 365,
+        updatedBy: "user-1",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      goals: [],
+      goalShares: [],
+      privacyOperations: [],
+      approvals: [],
+      evidenceRecords: [],
+      commitments: [],
+      briefingPreferences: {
+        userId: "user-1",
+        timezone: "Asia/Singapore",
+        focus: "balanced",
+        schedules: [],
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      autopilotSettings: {
+        userId: "user-1",
+        mode: "notify_only",
+        debounceMinutes: 15,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      autopilotEvents: [],
+      memories: [],
+      integrations: [],
+      watchers: [],
+      filterBundlesForWorkspace: (goals) => goals,
+      mergeCommitments: () => [],
+      buildDiagnostics: () => ({
+        status: "healthy",
+        totalCount: 0,
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        items: []
+      }),
+      buildControlPlane: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        sections: []
+      }),
+      buildNowQueue: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        totalCount: 0,
+        items: []
+      }),
+      buildOperatingSections: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        sections: []
+      }),
+      buildBriefingHistory: () => [],
+      sortArtifacts: (artifacts) => artifacts,
+      sortActionLogs: (logs) => logs
+    });
+
+    expect(dashboard.governanceConformance).toMatchObject({
+      status: "non_conformant",
+      checks: expect.arrayContaining([
+        expect.objectContaining({
+          id: "audit-exports",
+          status: "fail"
+        }),
+        expect.objectContaining({
+          id: "retention-window",
+          status: "pass"
+        })
+      ])
+    });
+  });
 });
