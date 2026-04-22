@@ -74,6 +74,47 @@ npm run test:smoke:observability-export
 
 The E2E suite should be treated as the pre-rollout check that exercises worker-backed goal flows from the user surface. The deployment smoke suite validates the deployed web boundary and rollout-gate telemetry after release.
 
+## Rollout Stages By Risk Class
+
+### `P0` mutation and public surfaces
+
+These surfaces change state, cross trust boundaries, or accept anonymous input.
+Examples include goal creation/refinement, briefing creation, template
+execution, docs rendering, autopilot events, privacy operations, and public
+share traffic.
+
+Required release evidence:
+
+- `npm run test:security:regression`
+- `npm run test:performance:fitness`
+- `npm run test:smoke:deployment-async`
+- live `/api/ready` confirmation after deploy
+- live telemetry rollout gate pass
+
+Do not shift production traffic for a `P0` release until the async canary has
+completed against the deployed worker path.
+
+### `P1` readiness and rollout-control surfaces
+
+These surfaces determine whether operators can trust the deployment state. They
+include `/api/ready`, rollout telemetry, queue health summaries, and the
+deployment smoke/canary harnesses.
+
+Required release evidence:
+
+- `npm run test:smoke:deployment`
+- `npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"`
+- explicit operator review of retained telemetry and queue health
+
+Warnings on `P1` surfaces require documented owner sign-off before proceeding.
+Critical failures are release blockers.
+
+### `P2` advisory and low-blast-radius surfaces
+
+These surfaces are descriptive, read-mostly, or operationally convenient but do
+not directly mutate customer state. They can ship with warnings only when the
+risk is recorded in the release notes together with an owner and follow-up date.
+
 ## Rollout Procedure
 
 1. Build the container image.
@@ -120,6 +161,15 @@ npm run test:smoke:deployment-async
 npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
 
+7. Review queue-behavior sanity signals before traffic is considered healthy.
+
+Minimum rollout expectations:
+
+- enqueue latency remains within the checked-in sanity budget
+- a small staged backlog drains promptly
+- retry churn stays bounded to the expected transient-retry budget
+- duplicate execution remains absent when competing workers poll the same queue
+
 ## Smoke Validation Expectations
 
 Successful smoke validation confirms:
@@ -130,9 +180,32 @@ Successful smoke validation confirms:
 - a deployed goal request can be enqueued and completed through the live worker path
 - telemetry export sanitizes secret-bearing payloads before retention or backend delivery
 - rollout-gate metrics stay inside the thresholds defined in `config/observability/alerts.json`
+- retry churn does not exceed the bounded sanity expectations for transient failures
+- duplicate execution evidence remains absent across worker telemetry and retained logs
 
 Treat any readiness failure as a failed rollout. Do not continue shifting traffic while `/api/ready` returns `503`.
 Treat any rollout-gate failure as a failed rollout, even when the deployment smoke request itself succeeds.
+
+## Post-Release Verification
+
+After production traffic is shifted, re-run:
+
+```bash
+curl -fsS https://agentic.example.com/api/health
+curl -fsS https://agentic.example.com/api/ready
+npm run test:smoke:deployment
+npm run test:smoke:deployment-async
+npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
+```
+
+Capture:
+
+- release artifact or image tag
+- deployment timestamp
+- health/readiness results
+- async canary result
+- rollout-gate summary
+- any residual risk or operator follow-up
 
 ## Observability Rollout Artifacts
 
@@ -157,11 +230,18 @@ If `AGENTIC_TELEMETRY_EXPORT_URL` is configured, retained batches are still writ
 
 ## Rollback
 
+## Rollback Triggers
+
 Use rollback when:
 
 - `/api/ready` returns `503` after rollout
 - smoke validation fails
 - request or worker error rates spike beyond accepted thresholds
+- retry churn rises above the bounded release sanity budget
+- duplicate execution appears in worker telemetry, action logs, or queue state
+- dead letters or stale queued work increase during the post-release verification window
+
+## Rollback
 
 Rollback steps:
 

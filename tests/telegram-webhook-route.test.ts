@@ -1,4 +1,5 @@
 import {
+  DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   SYSTEM_USER_ID,
   briefingTypeValues,
   createHumanActorContext,
@@ -17,6 +18,7 @@ function buildAutopilotSettings() {
     userId: SYSTEM_USER_ID,
     mode: "notify_only" as const,
     debounceMinutes: 15,
+    reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
     createdAt: "2024-01-01T00:00:00.000Z",
     updatedAt: "2024-01-01T00:00:00.000Z"
   };

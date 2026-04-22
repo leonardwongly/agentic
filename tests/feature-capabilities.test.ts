@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS } from "@agentic/contracts";
 import {
   FEATURE_CAPABILITIES,
   resolveFeatureCapabilities,
+  deriveFeatureCapabilityReadiness,
   summarizeFeatureCapabilities
 } from "../apps/web/lib/feature-capabilities";
 
@@ -111,5 +113,64 @@ describe("feature capability registry", () => {
     expect(watcherCritical?.runtimeReason).toContain("Queue recovery is still critical");
     expect(autopilotCritical?.readiness).toBe("preview");
     expect(autopilotCritical?.runtimeReason).toContain("Queue recovery is still critical");
+  });
+
+  it("graduates watcher and autopilot readiness when runtime reliability signals stay inside the control envelope", () => {
+    const readiness = deriveFeatureCapabilityReadiness({
+      autopilotSettings: {
+        reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
+      },
+      autopilotEvents: [
+        {
+          createdAt: new Date().toISOString(),
+          status: "executed"
+        }
+      ],
+      watchers: [
+        {
+          status: "active"
+        }
+      ],
+      diagnostics: {
+        items: []
+      }
+    });
+    const summary = summarizeFeatureCapabilities(readiness);
+
+    expect(readiness.watchers).toBe("operational");
+    expect(readiness["autopilot-control"]).toBe("operational");
+    expect(summary.advanced.operationalOrBetter).toBeGreaterThan(0);
+  });
+
+  it("keeps watcher and autopilot readiness in preview when reliability diagnostics or failures breach the thresholds", () => {
+    const readiness = deriveFeatureCapabilityReadiness({
+      autopilotSettings: {
+        reliabilityControls: {
+          ...DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+          maxConsecutiveFailures: 1
+        }
+      },
+      autopilotEvents: [
+        {
+          createdAt: new Date().toISOString(),
+          status: "failed"
+        }
+      ],
+      watchers: [
+        {
+          status: "active"
+        }
+      ],
+      diagnostics: {
+        items: [
+          {
+            kind: "async_execution_issues"
+          }
+        ]
+      }
+    });
+
+    expect(readiness.watchers).toBe("preview");
+    expect(readiness["autopilot-control"]).toBe("preview");
   });
 });

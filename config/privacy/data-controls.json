@@ -1,0 +1,193 @@
+{
+  "version": 1,
+  "reviewedAt": "2026-04-19T00:00:00.000Z",
+  "owners": [
+    "platform-security",
+    "product-engineering"
+  ],
+  "classifications": [
+    {
+      "id": "workspace_operational",
+      "label": "Workspace operational data",
+      "summary": "Internal workspace records that stay scoped to active members and inherit governance retention defaults."
+    },
+    {
+      "id": "shared_personal",
+      "label": "Shared personal data",
+      "summary": "Records that can expose recipient identity or viewing behavior outside the primary workspace boundary."
+    },
+    {
+      "id": "regulated_export",
+      "label": "Export and audit evidence",
+      "summary": "Generated audit and export packages that require owner-bounded access and redacted transport."
+    }
+  ],
+  "datasets": [
+    {
+      "id": "workspace-collaboration-records",
+      "title": "Workspace collaboration records",
+      "classificationId": "workspace_operational",
+      "productSurfaces": [
+        "Workspace governance APIs",
+        "Goal, approval, and commitment views",
+        "Operator dashboard collaboration history"
+      ],
+      "recordExamples": [
+        "Workspace members",
+        "Goals, approvals, commitments, and action logs",
+        "Artifacts linked to workspace execution"
+      ],
+      "codePaths": [
+        "packages/repository/src/index.ts",
+        "apps/web/app/api/governance/route.ts"
+      ],
+      "minimizationRules": [
+        "Reads stay limited to the active workspace rather than a global operator queue.",
+        "Workspace membership is required before collaboration records are returned.",
+        "Retention defaults come from workspace governance instead of per-surface ad hoc values."
+      ],
+      "maskingRules": [
+        "Operator summaries avoid raw provider payload echoes.",
+        "API failures return sanitized messages instead of storage internals."
+      ],
+      "tokenizationStrategy": "not_applicable",
+      "retention": {
+        "mode": "workspace_governance",
+        "defaultDays": 365,
+        "deletionFlow": "Retention enforcement expires aged collaboration records according to workspace policy."
+      },
+      "accessRules": [
+        "Only workspace members can read collaboration state.",
+        "Only workspace owners can change governance settings that widen retention or autonomy."
+      ],
+      "lifecycleOperations": [
+        "retention_enforcement",
+        "workspace_export",
+        "workspace_delete"
+      ]
+    },
+    {
+      "id": "goal-share-records",
+      "title": "Goal share records",
+      "classificationId": "shared_personal",
+      "productSurfaces": [
+        "Public goal share links",
+        "Share revoke controls",
+        "Viewer activity summaries"
+      ],
+      "recordExamples": [
+        "Share ids and expiry windows",
+        "Last-viewed timestamps",
+        "Revocation history"
+      ],
+      "codePaths": [
+        "packages/repository/src/index.ts",
+        "apps/web/app/api/goals/[id]/share/route.ts"
+      ],
+      "minimizationRules": [
+        "Share records store bounded metadata instead of duplicating full goal content.",
+        "Revocation flows keep the share record but stop further access immediately."
+      ],
+      "maskingRules": [
+        "Dashboard summaries show share status and timing without exposing hidden delivery internals."
+      ],
+      "tokenizationStrategy": "opaque_identifier",
+      "retention": {
+        "mode": "workspace_governance",
+        "defaultDays": 365,
+        "deletionFlow": "Retention enforcement revokes expired shares before removing aged share history."
+      },
+      "accessRules": [
+        "Workspace members manage shares through the goal boundary.",
+        "Privacy operations can revoke or remove share records during retention and deletion workflows."
+      ],
+      "lifecycleOperations": [
+        "retention_enforcement",
+        "workspace_delete"
+      ]
+    },
+    {
+      "id": "audit-and-export-packages",
+      "title": "Audit and export packages",
+      "classificationId": "regulated_export",
+      "productSurfaces": [
+        "Workspace audit export",
+        "Privacy export workflow",
+        "Compliance evidence artifacts"
+      ],
+      "recordExamples": [
+        "Audit export bundles",
+        "Workspace privacy exports",
+        "Compliance evidence manifests"
+      ],
+      "codePaths": [
+        "apps/web/app/api/governance/audit/route.ts",
+        "apps/web/app/api/governance/privacy/route.ts",
+        "packages/worker-runtime/src/index.ts"
+      ],
+      "minimizationRules": [
+        "Exports are generated on demand instead of being continuously materialized.",
+        "Only the active workspace scope is packaged for export."
+      ],
+      "maskingRules": [
+        "Tamper-evident export metadata is preserved without leaking raw secrets.",
+        "Queue failures are sanitized before they reach operators."
+      ],
+      "tokenizationStrategy": "redacted_reference",
+      "retention": {
+        "mode": "workspace_governance",
+        "defaultDays": 365,
+        "deletionFlow": "Workspace export and deletion paths preserve only the owner audit trail after destructive cleanup."
+      },
+      "accessRules": [
+        "Only the workspace owner can queue export or deletion operations.",
+        "Audit exports remain explicit governance actions instead of ambient background replication."
+      ],
+      "lifecycleOperations": [
+        "workspace_export",
+        "workspace_delete"
+      ]
+    },
+    {
+      "id": "connector-operational-telemetry",
+      "title": "Connector operational telemetry",
+      "classificationId": "workspace_operational",
+      "productSurfaces": [
+        "Integration readiness dashboard",
+        "Connector health and revocation checks",
+        "Observability exports"
+      ],
+      "recordExamples": [
+        "Provider readiness summaries",
+        "Degraded credential health posture",
+        "Sanitized provider error telemetry"
+      ],
+      "codePaths": [
+        "packages/integrations/src/google-managed-readiness.ts",
+        "packages/integrations/src/provider-credential-secrets.ts",
+        "packages/observability/src/index.ts"
+      ],
+      "minimizationRules": [
+        "Readiness checks emit posture and reason codes instead of raw credential material.",
+        "Observability exports keep provider diagnostics scoped to operator-safe evidence."
+      ],
+      "maskingRules": [
+        "Secrets, tokens, and sensitive payload fragments are redacted before logs or exports are emitted."
+      ],
+      "tokenizationStrategy": "redacted_reference",
+      "retention": {
+        "mode": "fixed",
+        "defaultDays": 365,
+        "deletionFlow": "Operational telemetry follows the bounded evidence retention policy and is removed during workspace deletion."
+      },
+      "accessRules": [
+        "Connector health is surfaced through operator-safe summaries only.",
+        "Raw secret material remains encrypted and excluded from telemetry."
+      ],
+      "lifecycleOperations": [
+        "workspace_export",
+        "workspace_delete"
+      ]
+    }
+  ]
+}

@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { runDocsBuild } from "@agentic/docs-runtime";
 import {
   buildApprovalNotificationDeliveryTarget,
@@ -44,7 +43,6 @@ import {
   createLocalNote,
   createProviderCredentialSecretStore,
   googleWorkspaceRequiredScopes,
-  createActionLog,
   isSlackReady,
   isTelegramReady,
   logError,
@@ -75,6 +73,13 @@ import {
   buildPolicyLearningValidation,
   type SelfImprovementRepository
 } from "@agentic/self-improvement-memory";
+import {
+  buildAutopilotEventFabricRequest,
+  getAutopilotEventFabricEnvelope,
+  isEventFabricAutopilotKind,
+  resolveAutopilotEventFabricExecutionContext
+} from "./autopilot-event-fabric";
+import { createPublicShareViewedLog } from "./public-share-log";
 
 export const workerJobKindValues = [
   "goal_create",
@@ -121,7 +126,6 @@ class AutopilotExecutionError extends Error {
   readonly safeForUsers = true;
 }
 
-const SHARE_VIEW_DEDUP_WINDOW_MS = 1000 * 60 * 15;
 const REPLAY_VALIDATION_CAPABILITIES = new Set<Capability>(["send", "schedule"]);
 
 type PolicyReplayValidationResolver = NonNullable<Parameters<typeof processUserRequest>[0]["resolvePolicyReplayValidation"]>;
@@ -141,42 +145,6 @@ function createPolicyReplayValidationResolver(
       capabilities
     });
   };
-}
-
-function createPublicShareViewedLog(
-  bundle: GoalBundle,
-  shareId: string,
-  tokenFingerprint: string,
-  now = Date.now()
-) {
-  const dedupeThreshold = now - SHARE_VIEW_DEDUP_WINDOW_MS;
-  const alreadyTracked = bundle.actionLogs.some((log) => {
-    if (log.kind !== "share.page_viewed") {
-      return false;
-    }
-
-    const createdAt = Date.parse(log.createdAt);
-    const loggedFingerprint = typeof log.details.tokenFingerprint === "string" ? log.details.tokenFingerprint : null;
-
-    return loggedFingerprint === tokenFingerprint && Number.isFinite(createdAt) && createdAt >= dedupeThreshold;
-  });
-
-  if (alreadyTracked) {
-    return null;
-  }
-
-  return createActionLog({
-    goalId: bundle.goal.id,
-    taskId: null,
-    workflowId: bundle.workflow.id,
-    actor: "public-share",
-    kind: "share.page_viewed",
-    message: `Opened the public share page for "${bundle.goal.title}".`,
-    details: {
-      shareId,
-      tokenFingerprint
-    }
-  });
 }
 
 function buildGoalCreatePayload(params: {
@@ -425,7 +393,6 @@ function buildBriefingCreateJobIdempotencyKey(goalId: string, briefingType: Brie
 function buildDocsRenderJobIdempotencyKey(userId: string): string {
   return `docs-render:${userId}`;
 }
-
 async function resolveGoalCreateGovernance(
   repository: AgenticRepository,
   userId: string,
@@ -1177,6 +1144,58 @@ async function executeBriefingEvent(params: {
   return bundle;
 }
 
+async function executeEventFabricEvent(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  userId: string;
+  actorContext: ActorContext | null;
+  event: AutopilotEvent;
+  eventId: string;
+  jobId: string;
+}) {
+  const envelope = getAutopilotEventFabricEnvelope(params.event);
+  if (!envelope) {
+    throw new AutopilotExecutionError(`Autopilot event ${params.event.id} is missing a valid fabric envelope.`);
+  }
+  const executionContext = await resolveAutopilotEventFabricExecutionContext({
+    repository: params.repository,
+    userId: params.userId,
+    envelope
+  });
+  if ("missingReason" in executionContext) {
+    throw new AutopilotExecutionError(executionContext.missingReason);
+  }
+  const [memories, integrations] = await Promise.all([
+    params.repository.listMemory(params.userId),
+    params.repository.listIntegrations(params.userId)
+  ]);
+  const bundle = await processUserRequest({
+    userId: params.userId,
+    workspaceId: executionContext.workspaceId,
+    governance: executionContext.workspaceGovernance,
+    request: buildAutopilotEventFabricRequest({
+      event: params.event,
+      envelope,
+      goalBundle: executionContext.goalBundle,
+      approval: executionContext.approval
+    }),
+    memories,
+    integrations,
+    goalId: buildAutopilotGoalId(params.eventId),
+    workflowId: buildAutopilotWorkflowId(params.eventId),
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
+  });
+  await params.repository.saveGoalBundle(bundle);
+  await persistCapturedMemories({
+    repository: params.repository,
+    selfImprovementRepository: params.selfImprovementRepository,
+    userId: params.userId,
+    actorContext: params.actorContext,
+    jobId: params.jobId,
+    bundle
+  });
+  return bundle;
+}
 export function isGoalCreateJob(job: JobRecord | null): job is JobRecord & { payload: GoalCreateJobPayload } {
   return job?.kind === "goal_create" && job.payload.type === "goal_create";
 }
@@ -1184,7 +1203,6 @@ export function isGoalCreateJob(job: JobRecord | null): job is JobRecord & { pay
 export function isGoalRefineJob(job: JobRecord | null): job is JobRecord & { payload: GoalRefineJobPayload } {
   return job?.kind === "goal_refine" && job.payload.type === "goal_refine";
 }
-
 export function isBriefingCreateJob(
   job: JobRecord | null
 ): job is JobRecord & { payload: BriefingCreateJobPayload } {
@@ -1984,6 +2002,16 @@ export async function executeAutopilotProcessJob(params: {
         userId: job.userId,
         actorContext: job.actorContext,
         type,
+        eventId: event.id,
+        jobId: job.id
+      });
+    } else if (isEventFabricAutopilotKind(job.payload.kind)) {
+      bundle = await executeEventFabricEvent({
+        repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        userId: job.userId,
+        actorContext: job.actorContext,
+        event,
         eventId: event.id,
         jobId: job.id
       });

@@ -69,11 +69,29 @@ export const autopilotEventKindValues = [
   "template_due",
   "briefing_due",
   "communication_received",
+  "inbound_communication_received",
   "deadline_drift_detected",
-  "workflow_stalled",
   "approval_sla_breached",
+  "approval_attention_required",
   "connector_failed",
+  "execution_failure_detected",
+  "workflow_stalled",
   "dormant_workflow_review_due"
+] as const;
+export const autopilotEventSeverityValues = ["low", "medium", "high", "critical"] as const;
+export const autopilotEventPolicyValues = [
+  "notify_operator",
+  "draft_goal",
+  "queue_operator_review",
+  "queue_approval_review",
+  "escalate_immediately"
+] as const;
+export const autopilotEventOperatorRouteValues = [
+  "operations",
+  "communications",
+  "approvals",
+  "workflow",
+  "platform"
 ] as const;
 export const autopilotEventStatusValues = ["pending", "simulated", "notified", "executed", "debounced", "ignored", "failed"] as const;
 export const autopilotEventFamilyValues = [
@@ -88,7 +106,13 @@ export const autopilotEventFamilyValues = [
 ] as const;
 export const autopilotEventPriorityValues = ["low", "medium", "high", "critical"] as const;
 export const autopilotEventBudgetScopeValues = ["user", "source"] as const;
-export const autopilotEventSuppressionOutcomeValues = ["allowed", "duplicate", "debounced", "budget_exhausted"] as const;
+export const autopilotEventSuppressionOutcomeValues = [
+  "allowed",
+  "duplicate",
+  "debounced",
+  "budget_exhausted",
+  "suppressed"
+] as const;
 export const goalShareStatusValues = ["active", "revoked"] as const;
 export const privacyOperationKindValues = ["retention_enforcement", "workspace_export", "workspace_delete"] as const;
 export const privacyOperationStatusValues = ["queued", "running", "completed", "failed"] as const;
@@ -168,6 +192,9 @@ export const BriefingTypeSchema = z.enum(briefingTypeValues);
 export const BriefingFocusSchema = z.enum(briefingFocusValues);
 export const AutopilotModeSchema = z.enum(autopilotModeValues);
 export const AutopilotEventKindSchema = z.enum(autopilotEventKindValues);
+export const AutopilotEventSeveritySchema = z.enum(autopilotEventSeverityValues);
+export const AutopilotEventPolicySchema = z.enum(autopilotEventPolicyValues);
+export const AutopilotEventOperatorRouteSchema = z.enum(autopilotEventOperatorRouteValues);
 export const AutopilotEventStatusSchema = z.enum(autopilotEventStatusValues);
 export const AutopilotEventFamilySchema = z.enum(autopilotEventFamilyValues);
 export const AutopilotEventPrioritySchema = z.enum(autopilotEventPriorityValues);
@@ -415,7 +442,6 @@ function profileForGoalIntent(intent: string) {
   if (intent.startsWith("briefing:")) {
     return goalContractProfiles.briefing;
   }
-
   return goalContractProfiles.general_coordination;
 }
 
@@ -702,7 +728,6 @@ export function deriveAutopilotEventResponsibility(params: { userId: string; mod
     lastChangedBy: owner
   });
 }
-
 const GoalInputSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
@@ -1464,10 +1489,27 @@ export const BriefingHistoryItemSchema = z.object({
   artifactTitle: z.string().min(1).nullable().default(null)
 });
 
+export const DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS = {
+  budgetWindowMinutes: 60,
+  maxEventsPerWindow: 12,
+  maxPendingEvents: 3,
+  maxConsecutiveFailures: 2
+} as const;
+
+export const AutopilotReliabilityControlsSchema = z
+  .object({
+    budgetWindowMinutes: z.number().int().min(1).max(24 * 60),
+    maxEventsPerWindow: z.number().int().min(1).max(500),
+    maxPendingEvents: z.number().int().min(1).max(100),
+    maxConsecutiveFailures: z.number().int().min(1).max(20)
+  })
+  .strict();
+
 export const AutopilotSettingsSchema = z.object({
   userId: z.string().min(1),
   mode: AutopilotModeSchema,
   debounceMinutes: z.number().int().min(1).max(24 * 60),
+  reliabilityControls: AutopilotReliabilityControlsSchema.default(DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS),
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
@@ -1498,7 +1540,46 @@ export const AutopilotEventSuppressionSchema = z
     reason: z.string().trim().min(1).max(200).nullable().default(null),
     relatedEventId: z.string().trim().min(1).max(200).nullable().default(null),
     budgetKey: z.string().trim().min(1).max(120).nullable().default(null),
-    observedCount: z.number().int().min(0).max(100_000).nullable().default(null)
+    observedCount: z.number().int().min(0).max(100_000).nullable().default(null),
+    budgetWindowMinutes: z.number().int().min(1).max(24 * 60).nullable().default(null),
+    recentBudgetedEventCount: z.number().int().min(0).max(100_000).nullable().default(null),
+    maxEventsPerWindow: z.number().int().min(1).max(100_000).nullable().default(null),
+    pendingEventCount: z.number().int().min(0).max(100_000).nullable().default(null),
+    maxPendingEvents: z.number().int().min(1).max(100_000).nullable().default(null),
+    consecutiveFailureCount: z.number().int().min(0).max(100_000).nullable().default(null),
+    maxConsecutiveFailures: z.number().int().min(1).max(100_000).nullable().default(null)
+  })
+  .strict();
+
+export const AutopilotEventFabricReferenceSchema = z
+  .object({
+    goalId: z.string().min(1).nullable().default(null),
+    workflowId: z.string().min(1).nullable().default(null),
+    approvalId: z.string().min(1).nullable().default(null),
+    watcherId: z.string().min(1).nullable().default(null),
+    templateId: z.string().min(1).nullable().default(null),
+    briefingType: BriefingTypeSchema.nullable().default(null)
+  })
+  .strict();
+
+export const AutopilotEventFabricEnvelopeSchema = z
+  .object({
+    version: z.literal(1),
+    family: z.string().min(1).max(80),
+    severity: AutopilotEventSeveritySchema,
+    operatorRoute: AutopilotEventOperatorRouteSchema,
+    policy: AutopilotEventPolicySchema,
+    references: AutopilotEventFabricReferenceSchema.default({
+      goalId: null,
+      workflowId: null,
+      approvalId: null,
+      watcherId: null,
+      templateId: null,
+      briefingType: null
+    }),
+    signals: z.array(z.string().min(1).max(200)).max(10).default([]),
+    trigger: z.record(z.string(), z.unknown()).default({}),
+    summary: z.string().min(1).max(500)
   })
   .strict();
 
@@ -1506,13 +1587,15 @@ export const AutopilotEventDetailsSchema = z
   .object({
     eventEnvelope: AutopilotEventEnvelopeSchema.nullable().default(null),
     budget: AutopilotEventBudgetSchema.nullable().default(null),
-    suppression: AutopilotEventSuppressionSchema.nullable().default(null)
+    suppression: AutopilotEventSuppressionSchema.nullable().default(null),
+    fabric: AutopilotEventFabricEnvelopeSchema.nullable().default(null)
   })
   .catchall(z.unknown())
   .default({
     eventEnvelope: null,
     budget: null,
-    suppression: null
+    suppression: null,
+    fabric: null
   });
 
 const AutopilotEventInputSchema = z.object({
@@ -1537,6 +1620,89 @@ export const AutopilotEventSchema = AutopilotEventInputSchema.transform((event) 
   ...event,
   responsibility: event.responsibility ?? deriveAutopilotEventResponsibility({ userId: event.userId, mode: event.mode })
 }));
+
+export const AUTOPILOT_EVENT_TAXONOMY = {
+  watcher_triggered: {
+    family: "watcher_signal",
+    defaultSeverity: "medium",
+    operatorRoute: "workflow",
+    policy: "draft_goal"
+  },
+  template_due: {
+    family: "scheduled_template",
+    defaultSeverity: "low",
+    operatorRoute: "workflow",
+    policy: "draft_goal"
+  },
+  briefing_due: {
+    family: "scheduled_briefing",
+    defaultSeverity: "low",
+    operatorRoute: "operations",
+    policy: "notify_operator"
+  },
+  communication_received: {
+    family: "inbound_communication",
+    defaultSeverity: "high",
+    operatorRoute: "communications",
+    policy: "draft_goal"
+  },
+  inbound_communication_received: {
+    family: "inbound_communication",
+    defaultSeverity: "high",
+    operatorRoute: "communications",
+    policy: "draft_goal"
+  },
+  deadline_drift_detected: {
+    family: "deadline_drift",
+    defaultSeverity: "high",
+    operatorRoute: "operations",
+    policy: "queue_operator_review"
+  },
+  approval_sla_breached: {
+    family: "approval_attention",
+    defaultSeverity: "high",
+    operatorRoute: "approvals",
+    policy: "queue_approval_review"
+  },
+  approval_attention_required: {
+    family: "approval_attention",
+    defaultSeverity: "high",
+    operatorRoute: "approvals",
+    policy: "queue_approval_review"
+  },
+  connector_failed: {
+    family: "execution_failure",
+    defaultSeverity: "critical",
+    operatorRoute: "platform",
+    policy: "escalate_immediately"
+  },
+  execution_failure_detected: {
+    family: "execution_failure",
+    defaultSeverity: "critical",
+    operatorRoute: "platform",
+    policy: "escalate_immediately"
+  },
+  workflow_stalled: {
+    family: "workflow_stall",
+    defaultSeverity: "medium",
+    operatorRoute: "workflow",
+    policy: "queue_operator_review"
+  },
+  dormant_workflow_review_due: {
+    family: "dormant_workflow_review",
+    defaultSeverity: "medium",
+    operatorRoute: "workflow",
+    policy: "queue_operator_review"
+  }
+} as const satisfies Record<
+  (typeof autopilotEventKindValues)[number],
+  {
+    family: string;
+    defaultSeverity: (typeof autopilotEventSeverityValues)[number];
+    operatorRoute: (typeof autopilotEventOperatorRouteValues)[number];
+    policy: (typeof autopilotEventPolicyValues)[number];
+  }
+>;
 
 export const GoalCreateJobPayloadSchema = z
   .object({
@@ -2866,6 +3032,9 @@ export type BriefingType = z.infer<typeof BriefingTypeSchema>;
 export type BriefingFocus = z.infer<typeof BriefingFocusSchema>;
 export type AutopilotMode = z.infer<typeof AutopilotModeSchema>;
 export type AutopilotEventKind = z.infer<typeof AutopilotEventKindSchema>;
+export type AutopilotEventSeverity = z.infer<typeof AutopilotEventSeveritySchema>;
+export type AutopilotEventPolicy = z.infer<typeof AutopilotEventPolicySchema>;
+export type AutopilotEventOperatorRoute = z.infer<typeof AutopilotEventOperatorRouteSchema>;
 export type AutopilotEventStatus = z.infer<typeof AutopilotEventStatusSchema>;
 export type AutopilotEventFamily = z.infer<typeof AutopilotEventFamilySchema>;
 export type AutopilotEventPriority = z.infer<typeof AutopilotEventPrioritySchema>;
@@ -2968,6 +3137,8 @@ export type AutopilotEventBudget = z.infer<typeof AutopilotEventBudgetSchema>;
 export type AutopilotEventSuppression = z.infer<typeof AutopilotEventSuppressionSchema>;
 export type AutopilotEventDetails = z.infer<typeof AutopilotEventDetailsSchema>;
 export type AutopilotEvent = z.infer<typeof AutopilotEventSchema>;
+export type AutopilotEventFabricReference = z.infer<typeof AutopilotEventFabricReferenceSchema>;
+export type AutopilotEventFabricEnvelope = z.infer<typeof AutopilotEventFabricEnvelopeSchema>;
 export type GoalCreateJobPayload = z.infer<typeof GoalCreateJobPayloadSchema>;
 export type GoalRefineJobPayload = z.infer<typeof GoalRefineJobPayloadSchema>;
 export type RecommendationRefinementSource = z.infer<typeof RecommendationRefinementSourceSchema>;

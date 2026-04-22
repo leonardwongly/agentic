@@ -1,7 +1,13 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, briefingTypeValues, createHumanActorContext, createSystemActorContext } from "@agentic/contracts";
+import {
+  DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+  SYSTEM_USER_ID,
+  briefingTypeValues,
+  createHumanActorContext,
+  createSystemActorContext
+} from "@agentic/contracts";
 import { createRepository, type AgenticRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
@@ -18,6 +24,7 @@ function buildAutopilotSettings() {
     userId: SYSTEM_USER_ID,
     mode: "notify_only" as const,
     debounceMinutes: 15,
+    reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
     createdAt: "2024-01-01T00:00:00.000Z",
     updatedAt: "2024-01-01T00:00:00.000Z"
   };

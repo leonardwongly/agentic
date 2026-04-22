@@ -129,6 +129,49 @@ describe("governance privacy route", () => {
     expectNoStoreHeaders(response);
   });
 
+  it("returns the privacy control summary for the active owner workspace", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults();
+
+    const response = await governancePrivacyGetRoute(buildAuthorizedGetRequest("http://localhost/api/governance/privacy"));
+    const payload = (await response.json()) as {
+      controls: {
+        registryVersion: number;
+        totalDatasets: number;
+        classifications: Array<{
+          id: string;
+          datasetCount: number;
+        }>;
+        lifecycleOperations: string[];
+      };
+      operations: unknown[];
+      dashboard: unknown;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.controls).toEqual(
+      expect.objectContaining({
+        registryVersion: 1,
+        totalDatasets: 4,
+        lifecycleOperations: ["retention_enforcement", "workspace_export", "workspace_delete"]
+      })
+    );
+    expect(payload.controls.classifications).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "workspace_operational",
+          datasetCount: 2
+        })
+      ])
+    );
+    expect(payload.operations).toEqual([]);
+    expect(payload.dashboard).toEqual(expect.any(Object));
+    expectNoStoreHeaders(response);
+  });
+
   it("reuses an existing queued privacy operation instead of enqueueing another job", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH

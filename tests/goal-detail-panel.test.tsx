@@ -244,7 +244,6 @@ describe("GoalDetailPanel", () => {
     expect(markup).toContain("Conflicts:");
     expect(markup).toContain("seat preference");
   });
-
   it("renders the selected wedge contract for operator review", () => {
     const bundle = GoalBundleSchema.parse({
       goal: {

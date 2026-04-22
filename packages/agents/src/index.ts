@@ -21,6 +21,8 @@ export type RunAgentOptions = {
   requestContext?: string;
 };
 
+const SELECTED_WEDGE_EXECUTION_MODE: AgentExecutionMode = "governed_specialist";
+
 function buildArtifact(
   task: Task,
   title: string,
@@ -61,8 +63,6 @@ type AgentContent = {
   confidence: number;
   actionIntent?: ActionIntent | null;
 };
-
-const SELECTED_WEDGE_EXECUTION_MODE: AgentExecutionMode = "governed_specialist";
 
 function buildLabeledFieldPattern(labels: readonly string[]): RegExp {
   const escapedLabels = labels

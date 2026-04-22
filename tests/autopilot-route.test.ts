@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   GoalTemplateSchema,
   SYSTEM_USER_ID,
   WatcherSchema,
@@ -1177,6 +1178,96 @@ describe("autopilot events route", () => {
     expect(persistedEvents.map((event) => event.status).sort()).toEqual(["ignored", "pending"]);
   });
 
+  it("suppresses new queued events when the pending backlog reliability control is exhausted", async () => {
+    const { repository, bundle } = await createGoalForUser("Watch for high-priority internal escalations.");
+    const watcherOne = WatcherSchema.parse({
+      id: "watcher-autopilot-suppression-1",
+      goalId: bundle.goal.id,
+      targetEntity: "ops-inbox-a",
+      condition: "an urgent escalation message arrives",
+      frequency: "hourly",
+      triggerAction: "draft the next ops response",
+      sourceSystems: ["email"],
+      status: "active",
+      expiryAt: null,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+    const watcherTwo = WatcherSchema.parse({
+      id: "watcher-autopilot-suppression-2",
+      goalId: bundle.goal.id,
+      targetEntity: "ops-inbox-b",
+      condition: "a second urgent escalation message arrives",
+      frequency: "hourly",
+      triggerAction: "draft the next ops response",
+      sourceSystems: ["email"],
+      status: "active",
+      expiryAt: null,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+
+    await repository.saveWatcher(watcherOne);
+    await repository.saveWatcher(watcherTwo);
+    const currentSettings = await repository.getAutopilotSettings(SYSTEM_USER_ID);
+    await repository.saveAutopilotSettings({
+      ...currentSettings,
+      reliabilityControls: {
+        ...DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+        maxPendingEvents: 1
+      },
+      updatedAt: nowIso()
+    });
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const firstResponse = await autopilotEventsRoute(
+      buildRequest({
+        kind: "watcher_triggered",
+        sourceId: watcherOne.id,
+        mode: "draft_goal"
+      })
+    );
+    const secondResponse = await autopilotEventsRoute(
+      buildRequest({
+        kind: "watcher_triggered",
+        sourceId: watcherTwo.id,
+        mode: "draft_goal"
+      })
+    );
+    const secondPayload = (await secondResponse.json()) as {
+      suppressed?: boolean;
+      queued?: boolean;
+      event: {
+        status: string;
+        details: {
+          suppression?: {
+            reason?: string;
+            pendingEventCount?: number;
+            maxPendingEvents?: number;
+          };
+        };
+      };
+    };
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["autopilot_process"]
+    });
+    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(200);
+    expect(secondPayload.suppressed).toBe(true);
+    expect(secondPayload.queued).toBeUndefined();
+    expect(secondPayload.event.status).toBe("ignored");
+    expect(secondPayload.event.details.suppression).toMatchObject({
+      reason: "pending_backlog",
+      pendingEventCount: 1,
+      maxPendingEvents: 1
+    });
+    expect(jobs).toHaveLength(1);
+    expect(events.map((event) => event.status).sort()).toEqual(["ignored", "pending"]);
+  });
+
   it("stamps the human actor when a session principal executes a template-triggered event", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
@@ -1446,6 +1537,66 @@ describe("autopilot events route", () => {
     expect(events[0]?.status).toBe("executed");
     expect(events[0]?.resultGoalId).toBeTruthy();
     expect(events[0]?.summary).toBe("Approval SLA breached: Security review for outbound send");
+    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
+  });
+
+  it("normalizes workflow-stalled dry runs into the shared event fabric envelope", async () => {
+    const { repository, bundle } = await createGoalForUser("Coordinate launch readiness reviews for a cross-team workflow.");
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await autopilotEventsRoute(
+      buildRequest({
+        kind: "workflow_stalled",
+        sourceId: "workflow-stall-launch-readiness",
+        mode: "draft_goal",
+        dryRun: true,
+        details: {
+          stalledStep: "legal_review",
+          status: "blocked",
+          stalledSince: "2026-04-16T00:00:00.000Z",
+          blocker: "Waiting for legal sign-off",
+          references: {
+            goalId: bundle.goal.id,
+            workflowId: bundle.workflow.id
+          }
+        }
+      })
+    );
+    const payload = (await response.json()) as {
+      simulated: boolean;
+      event: {
+        status: string;
+        details: {
+          dryRun: boolean;
+          fabric: {
+            family: string;
+            severity: string;
+            operatorRoute: string;
+            policy: string;
+            references: {
+              goalId: string | null;
+              workflowId: string | null;
+            };
+          };
+        };
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.simulated).toBe(true);
+    expect(payload.event.status).toBe("simulated");
+    expect(payload.event.details.dryRun).toBe(true);
+    expect(payload.event.details.fabric).toMatchObject({
+      family: "workflow_stall",
+      severity: "high",
+      operatorRoute: "workflow",
+      policy: "queue_operator_review",
+      references: {
+        goalId: bundle.goal.id,
+        workflowId: bundle.workflow.id
+      }
+    });
+    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
   });
 });

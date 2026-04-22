@@ -562,6 +562,65 @@ export function GoalDetailPanel({ bundle, onClose, onRefine, onShare, onSaveAsTe
         </div>
       </div>
 
+      {goal.wedge && goal.completionContract ? (
+        <div className="detail-section">
+          <h4>Goal Contract</h4>
+          <div className="detail-list">
+            <div className="detail-list-item">
+              <div className="detail-list-header">
+                <strong>{goal.wedge.label}</strong>
+                <div className="detail-list-badges">
+                  <span className="pill">{goal.wedge.selection.replaceAll("_", " ")}</span>
+                  <span className="pill">{goal.completionContract.id}</span>
+                </div>
+              </div>
+              <p className="detail-list-summary">{goal.wedge.rationale}</p>
+              <div className="detail-list-meta">
+                <span>
+                  Summary: <strong>{goal.completionContract.summary}</strong>
+                </span>
+              </div>
+              <div className="detail-field">
+                <label>Done when</label>
+                <div className="detail-value">{goal.completionContract.doneWhen}</div>
+              </div>
+              <div className="detail-field">
+                <label>Success criteria</label>
+                <div className="detail-list">
+                  {goal.completionContract.successCriteria.map((criterion) => (
+                    <div key={criterion} className="detail-list-item">
+                      <p className="detail-list-summary">{criterion}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="detail-field">
+                <label>Evidence signals</label>
+                <div className="detail-list">
+                  {goal.completionContract.evidenceSignals.map((signal) => (
+                    <div key={signal} className="detail-list-item">
+                      <p className="detail-list-summary">{signal}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {goal.completionContract.approvalExpectations.length > 0 ? (
+                <div className="detail-field">
+                  <label>Approval expectations</label>
+                  <div className="detail-list">
+                    {goal.completionContract.approvalExpectations.map((expectation) => (
+                      <div key={expectation} className="detail-list-item">
+                        <p className="detail-list-summary">{expectation}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="detail-section">
         <h4>Responsibility</h4>
         <div className="detail-field">

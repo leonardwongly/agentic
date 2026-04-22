@@ -17,7 +17,7 @@ import {
   type Watcher
 } from "@agentic/contracts";
 import { detectMemoryConflicts, getMemoryFreshness } from "@agentic/memory";
-import type { DashboardDiagnostic, DashboardDiagnostics } from "./index";
+import type { DashboardDiagnostic, DashboardDiagnostics } from "./repository-types";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
 const STALLED_WORKFLOW_MS = 30 * 60 * 1000;

@@ -54,6 +54,15 @@ button:hover:not(:disabled) {
   box-shadow: 0 10px 20px rgba(0, 0, 0, 0.08);
 }
 
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 72%, white 28%);
+  outline-offset: 2px;
+}
+
 button:disabled {
   cursor: wait;
   opacity: 0.6;
@@ -188,6 +197,194 @@ select {
 .control-plane-card {
   grid-column: span 12;
   background: linear-gradient(135deg, rgba(22, 73, 58, 0.05), rgba(0, 78, 100, 0.05));
+}
+
+.command-center-card {
+  grid-column: span 12;
+  display: grid;
+  gap: 1.25rem;
+  background: linear-gradient(135deg, rgba(141, 43, 43, 0.04), rgba(0, 78, 100, 0.06));
+}
+
+.command-center-header {
+  align-items: flex-start;
+}
+
+.command-center-summary {
+  max-width: 68ch;
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+}
+
+.command-center-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.command-center-topline {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.command-center-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 1rem;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.76);
+  text-align: left;
+}
+
+.command-center-metric span {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.command-center-metric strong {
+  font-size: 1.15rem;
+}
+
+.command-center-metric.action {
+  background: color-mix(in srgb, white 86%, var(--accent) 14%);
+}
+
+.command-center-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.command-center-priorities,
+.command-center-role-card {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.command-center-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.command-center-section-heading p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+}
+
+.command-center-priority-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.command-center-priority {
+  display: grid;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 1rem;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.8);
+  text-align: left;
+}
+
+.command-center-priority.priority-critical {
+  border-color: rgba(141, 43, 43, 0.24);
+}
+
+.command-center-priority.priority-attention {
+  border-color: rgba(196, 138, 27, 0.24);
+}
+
+.command-center-priority-header,
+.command-center-focus-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.command-center-priority p,
+.command-center-focus-header p,
+.command-center-role-intro p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.command-center-priority-pill.critical {
+  background: rgba(141, 43, 43, 0.12);
+  color: var(--danger);
+}
+
+.command-center-priority-pill.attention {
+  background: rgba(196, 138, 27, 0.14);
+  color: #8c5a04;
+}
+
+.command-center-priority-action {
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.command-center-empty {
+  margin: 0;
+}
+
+.command-center-role-view {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.command-center-role-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.command-center-role-card {
+  padding: 1rem;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.command-center-role-intro {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.command-center-role-intro h3 {
+  margin: 0;
+}
+
+.command-center-role-stats,
+.command-center-role-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.command-center-focus-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.command-center-focus-card {
+  display: grid;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 1rem;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, white 90%, var(--accent) 10%);
+  text-align: left;
 }
 
 .now-queue-card {
@@ -598,6 +795,11 @@ select {
   .hero-panel {
     grid-template-columns: 1fr;
   }
+
+  .command-center-topline,
+  .command-center-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
@@ -610,6 +812,24 @@ select {
   .card {
     padding: 1.1rem;
     border-radius: 20px;
+  }
+
+  .command-center-header-meta,
+  .command-center-section-heading {
+    justify-content: flex-start;
+  }
+
+  .command-center-priority-header,
+  .command-center-focus-header,
+  .command-center-role-tabs,
+  .command-center-role-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .command-center-role-tabs button,
+  .command-center-role-actions button {
+    width: 100%;
   }
 
   .list-item {

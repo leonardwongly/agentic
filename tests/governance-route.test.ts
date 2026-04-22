@@ -72,6 +72,9 @@ describe("governance route", () => {
       }>;
       dashboard: {
         activeWorkspace: { id: string };
+        governanceConformance: {
+          status: string;
+        } | null;
       };
     };
 
@@ -86,6 +89,9 @@ describe("governance route", () => {
       r3AutonomyEligible: false
     });
     expect(payload.conformance).toMatchObject({
+      status: "conformant"
+    });
+    expect(payload.dashboard.governanceConformance).toMatchObject({
       status: "conformant"
     });
     expect(payload.simulations).toEqual(
@@ -169,6 +175,11 @@ describe("governance route", () => {
           };
         };
       }>;
+      dashboard: {
+        governanceConformance: {
+          status: string;
+        } | null;
+      };
     };
     const persisted = await repository.getWorkspaceGovernance(dashboard.activeWorkspace!.id, SYSTEM_USER_ID);
 
@@ -196,6 +207,9 @@ describe("governance route", () => {
       }
     });
     expect(payload.conformance).toMatchObject({
+      status: "conformant"
+    });
+    expect(payload.dashboard.governanceConformance).toMatchObject({
       status: "conformant"
     });
     expect(payload.simulations).toEqual(

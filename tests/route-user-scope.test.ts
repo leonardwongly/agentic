@@ -1,5 +1,6 @@
 import type { EvidenceRecord, JobKind, JobRecord, JobStatus } from "@agentic/contracts";
 import {
+  DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   AgentDefinitionSchema,
   AgentMetricsSchema,
   SYSTEM_USER_ID,
@@ -34,6 +35,7 @@ function buildAutopilotSettings() {
     userId: SYSTEM_USER_ID,
     mode: "notify_only" as const,
     debounceMinutes: 15,
+    reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
     actorContext: null,
     createdAt: "2024-01-01T00:00:00.000Z",
     updatedAt: "2024-01-01T00:00:00.000Z"

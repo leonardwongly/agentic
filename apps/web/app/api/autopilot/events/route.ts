@@ -1,13 +1,15 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import {
+  AUTOPILOT_EVENT_TAXONOMY,
   AutopilotEventBudgetSchema,
   AutopilotEventDetailsSchema,
+  AutopilotEventFabricEnvelopeSchema,
+  AutopilotModeSchema,
   type AutopilotEventFamily,
   AutopilotEventKindSchema,
   AutopilotEventPrioritySchema,
   AutopilotEventSchema,
-  AutopilotModeSchema,
   BriefingTypeSchema,
   nowIso,
   type AutopilotEvent,
@@ -21,16 +23,20 @@ import {
 } from "@agentic/contracts";
 import { enqueueAutopilotProcessJob } from "@agentic/worker-runtime";
 import {
-  ApiRouteError,
   authenticatedRateLimitError,
   authenticatedJson,
   handleApiError,
   parseJsonBody,
+  ApiRouteError,
   withApiTelemetry
 } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
+import {
+  buildDryRunAutopilotEvent,
+  normalizeAutopilotEventRequest
+} from "../../../../lib/autopilot-event-fabric";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { getSeededRepository } from "../../../../lib/server";
 import {
@@ -55,7 +61,20 @@ const TriggerAutopilotEventSchema = z
   })
   .strict();
 
-type GenericAutopilotEventKind = Exclude<AutopilotEventKind, "watcher_triggered" | "template_due" | "briefing_due">;
+type CompatibilityAutopilotEventKind = Extract<
+  AutopilotEventKind,
+  | "watcher_triggered"
+  | "template_due"
+  | "briefing_due"
+  | "communication_received"
+  | "deadline_drift_detected"
+  | "approval_sla_breached"
+  | "workflow_stalled"
+  | "connector_failed"
+  | "dormant_workflow_review_due"
+>;
+
+type GenericAutopilotEventKind = Exclude<CompatibilityAutopilotEventKind, "watcher_triggered" | "template_due" | "briefing_due">;
 
 type AutopilotOperatorRoute = {
   section: "goals" | "approvals" | "watchers" | "operations";
@@ -70,53 +89,150 @@ type ResolvedAutopilotSource = {
   operatorRoute?: AutopilotOperatorRoute | null;
 };
 
-const autopilotFamilyByKind: Record<AutopilotEventKind, AutopilotEventFamily> = {
+type CompatibilityFabricAutopilotEventKind = Extract<
+  CompatibilityAutopilotEventKind,
+  "deadline_drift_detected" | "workflow_stalled" | "dormant_workflow_review_due"
+>;
+
+const autopilotFamilyByKind: Record<CompatibilityAutopilotEventKind, AutopilotEventFamily> = {
   watcher_triggered: "watcher",
   template_due: "template",
   briefing_due: "briefing",
   communication_received: "communication",
   deadline_drift_detected: "deadline",
-  workflow_stalled: "workflow",
   approval_sla_breached: "approval",
+  workflow_stalled: "workflow",
   connector_failed: "connector",
   dormant_workflow_review_due: "workflow"
 };
 
-const autopilotPriorityByKind: Record<AutopilotEventKind, AutopilotEventPriority> = {
+const autopilotPriorityByKind: Record<CompatibilityAutopilotEventKind, AutopilotEventPriority> = {
   watcher_triggered: "high",
   template_due: "medium",
   briefing_due: "low",
   communication_received: "high",
   deadline_drift_detected: "high",
-  workflow_stalled: "high",
   approval_sla_breached: "critical",
+  workflow_stalled: "high",
   connector_failed: "critical",
   dormant_workflow_review_due: "medium"
 };
 
-const autopilotQueueByKind: Record<AutopilotEventKind, string> = {
+const autopilotQueueByKind: Record<CompatibilityAutopilotEventKind, string> = {
   watcher_triggered: "watcher_queue",
   template_due: "scheduled_templates",
   briefing_due: "scheduled_briefings",
   communication_received: "communications_inbox",
   deadline_drift_detected: "deadline_recovery",
-  workflow_stalled: "workflow_recovery",
   approval_sla_breached: "approval_escalations",
+  workflow_stalled: "workflow_recovery",
   connector_failed: "connector_incidents",
   dormant_workflow_review_due: "workflow_review"
 };
 
-const autopilotDefaultTagsByKind: Record<AutopilotEventKind, string[]> = {
+const autopilotDefaultTagsByKind: Record<CompatibilityAutopilotEventKind, string[]> = {
   watcher_triggered: ["watcher", "queue"],
   template_due: ["template", "schedule"],
   briefing_due: ["briefing", "schedule"],
   communication_received: ["communications", "triage"],
-  deadline_drift_detected: ["deadline", "recovery"],
-  workflow_stalled: ["workflow", "stalled"],
+  deadline_drift_detected: ["deadline", "workflow"],
   approval_sla_breached: ["approval", "escalation"],
+  workflow_stalled: ["workflow", "blocked"],
   connector_failed: ["connector", "incident"],
   dormant_workflow_review_due: ["workflow", "review"]
 };
+
+function buildCompatibilityFabricEnvelope(params: {
+  kind: CompatibilityAutopilotEventKind;
+  summary: string;
+  details?: Record<string, unknown>;
+}) {
+  const details = params.details ?? {};
+  const nestedReferences =
+    typeof details.references === "object" && details.references !== null
+      ? (details.references as Record<string, unknown>)
+      : null;
+
+  if (
+    params.kind !== "deadline_drift_detected" &&
+    params.kind !== "workflow_stalled" &&
+    params.kind !== "dormant_workflow_review_due"
+  ) {
+    return null;
+  }
+
+  const kind: CompatibilityFabricAutopilotEventKind = params.kind;
+  const taxonomy = AUTOPILOT_EVENT_TAXONOMY[kind];
+  const severity =
+    kind === "deadline_drift_detected" && normalizeEventText(details.state, 40) === "breached"
+      ? "critical"
+      : kind === "workflow_stalled" && normalizeEventText(details.status, 40) === "blocked"
+        ? "high"
+        : taxonomy.defaultSeverity;
+
+  const references = {
+    goalId: normalizeEventText(nestedReferences?.goalId, 200) ?? normalizeEventText(details.goalId, 200),
+    workflowId: normalizeEventText(nestedReferences?.workflowId, 200) ?? normalizeEventText(details.workflowId, 200),
+    approvalId: null,
+    watcherId: null,
+    templateId: null,
+    briefingType: null
+  };
+  const baseEnvelope = {
+    version: 1,
+    family: taxonomy.family,
+    severity,
+    operatorRoute: taxonomy.operatorRoute,
+    policy: taxonomy.policy,
+    references,
+    signals: [
+      taxonomy.family.replaceAll("_", "-"),
+      taxonomy.operatorRoute.replaceAll("_", "-"),
+      kind.replaceAll("_", "-")
+    ],
+    summary: params.summary
+  };
+
+  if (kind === "deadline_drift_detected") {
+    return AutopilotEventFabricEnvelopeSchema.parse({
+      ...baseEnvelope,
+      trigger: {
+        target:
+          readEventText(details, ["workflowName", "goalTitle", "title", "target"], 200) ??
+          normalizeEventText(details.sourceId, 200) ??
+          "workflow",
+        deadlineAt: normalizeEventText(details.deadlineAt, 200) ?? normalizeEventText(details.deadline, 200) ?? null,
+        state: normalizeEventText(details.state, 40) ?? "at_risk",
+        reason: readEventText(details, ["reason"], 500),
+        daysOverdue: typeof details.daysOverdue === "number" ? details.daysOverdue : null
+      }
+    });
+  }
+
+  if (kind === "workflow_stalled") {
+    return AutopilotEventFabricEnvelopeSchema.parse({
+      ...baseEnvelope,
+      trigger: {
+        stalledStep:
+          readEventText(details, ["stalledStep", "blockedStep"], 200) ??
+          normalizeEventText(details.sourceId, 200) ??
+          "unknown-step",
+        status: normalizeEventText(details.status, 40) ?? "waiting",
+        stalledSince: normalizeEventText(details.stalledSince, 200),
+        blocker: readEventText(details, ["blocker"], 500)
+      }
+    });
+  }
+
+  return AutopilotEventFabricEnvelopeSchema.parse({
+    ...baseEnvelope,
+    trigger: {
+      dormantDays: typeof details.dormantDays === "number" ? details.dormantDays : null,
+      lastActivityAt: normalizeEventText(details.lastActivityAt, 200),
+      reviewReason: readEventText(details, ["reviewReason"], 500)
+    }
+  });
+}
 
 function normalizeEventText(value: unknown, maxLength = 120): string | null {
   if (typeof value !== "string") {
@@ -205,7 +321,7 @@ function buildGenericAutopilotSummary(
 
 function buildSimulatedAutopilotEvent(params: {
   userId: string;
-  kind: AutopilotEventKind;
+  kind: CompatibilityAutopilotEventKind;
   sourceId: string;
   mode: AutopilotMode;
   summary: string;
@@ -229,8 +345,9 @@ function buildSimulatedAutopilotEvent(params: {
 }
 
 function buildAutopilotEventDetails(params: {
-  kind: AutopilotEventKind;
+  kind: CompatibilityAutopilotEventKind;
   sourceId: string;
+  summary: string;
   idempotencyKey?: string | null;
   priority?: AutopilotEventPriority;
   tags?: string[];
@@ -257,6 +374,14 @@ function buildAutopilotEventDetails(params: {
 
   return AutopilotEventDetailsSchema.parse({
     ...(params.details ?? {}),
+    fabric: buildCompatibilityFabricEnvelope({
+      kind: params.kind,
+      summary: params.summary,
+      details: {
+        ...(params.details ?? {}),
+        sourceId: params.sourceId
+      }
+    }),
     eventEnvelope: {
       family: autopilotFamilyByKind[params.kind],
       trigger: params.kind,
@@ -325,6 +450,10 @@ function summarizeEnqueueFailure(createdAt: string, processedAt: string): Record
     jobStatus: "enqueue_failed",
     processingLatencyMs: measureProcessingLatencyMs(createdAt, processedAt)
   };
+}
+
+function isCompatibilityAutopilotKind(kind: AutopilotEventKind): kind is CompatibilityAutopilotEventKind {
+  return kind in autopilotFamilyByKind;
 }
 
 async function resolveWatcherSource(repository: AgenticRepository, sourceId: string, userId: string) {
@@ -567,7 +696,7 @@ async function resolveGenericAutopilotSource(params: {
 
 async function resolveAutopilotSource(params: {
   repository: AgenticRepository;
-  kind: AutopilotEventKind;
+  kind: CompatibilityAutopilotEventKind;
   sourceId: string;
   userId: string;
   details?: Record<string, unknown>;
@@ -704,14 +833,40 @@ export async function POST(request: Request) {
       const settings = await repository.getAutopilotSettings(principal.userId);
       const body = await parseJsonBody(request, TriggerAutopilotEventSchema);
       const effectiveMode = body.mode ?? settings.mode;
-      const resolvedSource = await resolveAutopilotSource({
-        repository,
-        kind: body.kind,
-        sourceId: body.sourceId,
-        userId: principal.userId,
-        details: body.details
-      });
-      const summary = body.summary?.trim() || resolvedSource.summary;
+      const normalized = isCompatibilityAutopilotKind(body.kind)
+        ? await (async () => {
+            const resolvedSource = await resolveAutopilotSource({
+              repository,
+              kind: body.kind,
+              sourceId: body.sourceId,
+              userId: principal.userId,
+              details: body.details
+            });
+
+            return {
+              summary: body.summary?.trim() || resolvedSource.summary,
+              details: buildAutopilotEventDetails({
+                kind: body.kind,
+                sourceId: body.sourceId,
+                summary: body.summary?.trim() || resolvedSource.summary,
+                idempotencyKey: body.idempotencyKey ?? null,
+                priority: body.priority,
+                tags: body.tags,
+                correlationKey: body.correlationKey,
+                budget: body.budget ?? null,
+                details: {
+                  ...resolvedSource.details,
+                  ...(body.dryRun ? { dryRun: true } : {})
+                },
+                operatorRoute: resolvedSource.operatorRoute ?? null
+              })
+            };
+          })()
+        : await normalizeAutopilotEventRequest({
+            repository,
+            userId: principal.userId,
+            body
+          });
 
       if (effectiveMode === "auto_run" && repository.backend !== "postgres") {
         return authenticatedJson(
@@ -723,32 +878,31 @@ export async function POST(request: Request) {
         );
       }
 
-      const normalizedDetails = buildAutopilotEventDetails({
-        kind: body.kind,
-        sourceId: body.sourceId,
-        idempotencyKey: body.idempotencyKey ?? null,
-        priority: body.priority,
-        tags: body.tags,
-        correlationKey: body.correlationKey,
-        budget: body.budget ?? null,
-        details: {
-          ...resolvedSource.details,
-          ...(body.dryRun ? { dryRun: true } : {})
-        },
-        operatorRoute: resolvedSource.operatorRoute ?? null
-      });
-
       if (body.dryRun) {
-        const event = buildSimulatedAutopilotEvent({
-          userId: principal.userId,
-          kind: body.kind,
-          sourceId: body.sourceId,
-          mode: effectiveMode,
-          summary,
-          details: normalizedDetails,
-          idempotencyKey: body.idempotencyKey,
-          actorContext
-        });
+        const event = isCompatibilityAutopilotKind(body.kind)
+          ? buildSimulatedAutopilotEvent({
+              userId: principal.userId,
+              kind: body.kind,
+              sourceId: body.sourceId,
+              mode: effectiveMode,
+              summary: normalized.summary,
+              details: normalized.details as AutopilotEventDetails,
+              idempotencyKey: body.idempotencyKey,
+              actorContext
+            })
+          : buildDryRunAutopilotEvent({
+              dryRun: true,
+              event: buildPendingEvent({
+                userId: principal.userId,
+                kind: body.kind,
+                sourceId: body.sourceId,
+                mode: effectiveMode,
+                summary: normalized.summary,
+                details: normalized.details,
+                idempotencyKey: body.idempotencyKey,
+                actorContext
+              })
+            });
 
         return authenticatedJson({
           event,
@@ -763,10 +917,11 @@ export async function POST(request: Request) {
         sourceId: body.sourceId,
         idempotencyKey: body.idempotencyKey ?? null,
         mode: effectiveMode,
-        summary,
-        details: normalizedDetails,
+        summary: normalized.summary,
+        details: normalized.details,
         actorContext,
-        debounceMinutes: settings.debounceMinutes
+        debounceMinutes: settings.debounceMinutes,
+        reliabilityControls: settings.reliabilityControls
       });
 
       if (claim.outcome === "ignored") {
@@ -777,7 +932,7 @@ export async function POST(request: Request) {
         });
       }
 
-      if (claim.outcome === "duplicate" || claim.outcome === "debounced") {
+      if (claim.outcome === "duplicate" || claim.outcome === "debounced" || claim.outcome === "suppressed") {
         if (claim.outcome === "duplicate" && shouldEnsureAutopilotJob(claim.event)) {
           try {
             const { job } = await ensureAutopilotProcessJob(repository, claim.event);
@@ -823,6 +978,7 @@ export async function POST(request: Request) {
           event: claim.event,
           duplicate: claim.outcome === "duplicate",
           debounced: claim.outcome === "debounced",
+          suppressed: claim.outcome === "suppressed",
           dashboard: await repository.getDashboardData(principal.userId)
         });
       }

@@ -23,7 +23,8 @@ import type {
   WorkspaceMember,
   WorkspaceSelection
 } from "@agentic/contracts";
-import type { DashboardControlPlane, DashboardData, DashboardDiagnostics } from "./index";
+import { assessWorkspaceGovernanceConformance } from "@agentic/policy";
+import type { DashboardControlPlane, DashboardData, DashboardDiagnostics } from "./repository-types";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
 type AssembleDashboardDataParams = {
@@ -315,6 +316,7 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
     diagnostics,
     operations
   });
+  const governanceConformance = assessWorkspaceGovernanceConformance(params.workspaceGovernance);
 
   const dashboard = {
     workspaces: params.workspaces,
@@ -322,6 +324,7 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
     workspaceSelection: params.workspaceSelection,
     workspaceMembers: params.workspaceMembers,
     workspaceGovernance: params.workspaceGovernance,
+    governanceConformance,
     goalShares: scopedGoalShares,
     privacyOperations: scopedPrivacyOperations,
     controlPlane: params.buildControlPlane({

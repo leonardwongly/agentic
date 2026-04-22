@@ -29,7 +29,7 @@ import type {
   WorkspaceMember,
   WorkspaceRole
 } from "@agentic/contracts";
-import type { DashboardDiagnostics } from "./index";
+import type { DashboardDiagnostics } from "./repository-types";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
 const APPROVAL_WAIT_SLA_MS = 6 * 60 * 60 * 1000;

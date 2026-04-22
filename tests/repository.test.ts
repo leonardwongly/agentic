@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   AgentDefinitionSchema,
   AutopilotEventSchema,
+  DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   ProviderCredentialSchema,
   GoalTemplateSchema,
   IntegrationAccountSchema,
@@ -2593,13 +2594,20 @@ describe("repository", () => {
     expect(defaults).toMatchObject({
       userId: SYSTEM_USER_ID,
       mode: "notify_only",
-      debounceMinutes: 15
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
     });
 
     const updated = await repository.saveAutopilotSettings({
       ...defaults,
       mode: "auto_run",
       debounceMinutes: 45,
+      reliabilityControls: {
+        budgetWindowMinutes: 30,
+        maxEventsPerWindow: 8,
+        maxPendingEvents: 2,
+        maxConsecutiveFailures: 3
+      },
       actorContext: systemActor,
       updatedAt: nowIso()
     });
@@ -2610,16 +2618,34 @@ describe("repository", () => {
     expect(updated).toMatchObject({
       mode: "auto_run",
       debounceMinutes: 45,
+      reliabilityControls: {
+        budgetWindowMinutes: 30,
+        maxEventsPerWindow: 8,
+        maxPendingEvents: 2,
+        maxConsecutiveFailures: 3
+      },
       actorContext: systemActor
     });
     expect(reloaded).toMatchObject({
       mode: "auto_run",
       debounceMinutes: 45,
+      reliabilityControls: {
+        budgetWindowMinutes: 30,
+        maxEventsPerWindow: 8,
+        maxPendingEvents: 2,
+        maxConsecutiveFailures: 3
+      },
       actorContext: systemActor
     });
     expect(dashboard.autopilotSettings).toMatchObject({
       mode: "auto_run",
       debounceMinutes: 45,
+      reliabilityControls: {
+        budgetWindowMinutes: 30,
+        maxEventsPerWindow: 8,
+        maxPendingEvents: 2,
+        maxConsecutiveFailures: 3
+      },
       actorContext: systemActor
     });
   });
@@ -2651,7 +2677,8 @@ describe("repository", () => {
         watcherId: "watcher-vip-thread"
       },
       actorContext: systemActor,
-      debounceMinutes: 15
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
     });
 
     const duplicateClaim = await repository.claimAutopilotEvent({
@@ -2662,7 +2689,8 @@ describe("repository", () => {
       mode: "draft_goal",
       summary: "Watcher triggered for a VIP thread",
       actorContext: systemActor,
-      debounceMinutes: 15
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
     });
 
     const debouncedClaim = await repository.claimAutopilotEvent({
@@ -2672,7 +2700,8 @@ describe("repository", () => {
       mode: "draft_goal",
       summary: "Watcher triggered again for the same source",
       actorContext: systemActor,
-      debounceMinutes: 15
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
     });
 
     const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
@@ -2808,6 +2837,190 @@ describe("repository", () => {
       }
     });
     expect(events.map((event) => event.status).sort()).toEqual(["ignored", "pending"]);
+  });
+
+  it("suppresses new autopilot events when the pending backlog crosses the configured threshold", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const firstClaim = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "watcher_triggered",
+      sourceId: "watcher-backlog-1",
+      mode: "draft_goal",
+      summary: "First pending watcher signal.",
+      actorContext: systemActor,
+      debounceMinutes: 15,
+      reliabilityControls: {
+        budgetWindowMinutes: 60,
+        maxEventsPerWindow: 12,
+        maxPendingEvents: 1,
+        maxConsecutiveFailures: 2
+      }
+    });
+    const secondClaim = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "watcher_triggered",
+      sourceId: "watcher-backlog-2",
+      mode: "draft_goal",
+      summary: "Second watcher signal should be suppressed until backlog clears.",
+      actorContext: systemActor,
+      debounceMinutes: 15,
+      reliabilityControls: {
+        budgetWindowMinutes: 60,
+        maxEventsPerWindow: 12,
+        maxPendingEvents: 1,
+        maxConsecutiveFailures: 2
+      }
+    });
+
+    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+
+    expect(firstClaim.outcome).toBe("claimed");
+    expect(secondClaim.outcome).toBe("suppressed");
+    expect(secondClaim.event.status).toBe("ignored");
+    expect(secondClaim.event.details).toMatchObject({
+      suppression: {
+        reason: "pending_backlog",
+        pendingEventCount: 1,
+        maxPendingEvents: 1
+      }
+    });
+    expect(events.map((event) => event.status).sort()).toEqual(["ignored", "pending"]);
+  });
+
+  it("suppresses new autopilot events when the event budget for the active window is exhausted", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    for (const sourceId of ["watcher-budget-1", "watcher-budget-2"]) {
+      const claim = await repository.claimAutopilotEvent({
+        userId: SYSTEM_USER_ID,
+        kind: "watcher_triggered",
+        sourceId,
+        mode: "draft_goal",
+        summary: `Budgeted event for ${sourceId}.`,
+        actorContext: systemActor,
+        debounceMinutes: 15,
+        reliabilityControls: {
+          budgetWindowMinutes: 60,
+          maxEventsPerWindow: 2,
+          maxPendingEvents: 5,
+          maxConsecutiveFailures: 2
+        }
+      });
+
+      expect(claim.outcome).toBe("claimed");
+    }
+
+    const suppressedClaim = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "watcher_triggered",
+      sourceId: "watcher-budget-3",
+      mode: "draft_goal",
+      summary: "Third event should be budget-suppressed.",
+      actorContext: systemActor,
+      debounceMinutes: 15,
+      reliabilityControls: {
+        budgetWindowMinutes: 60,
+        maxEventsPerWindow: 2,
+        maxPendingEvents: 5,
+        maxConsecutiveFailures: 2
+      }
+    });
+
+    expect(suppressedClaim.outcome).toBe("suppressed");
+    expect(suppressedClaim.event.status).toBe("ignored");
+    expect(suppressedClaim.event.details).toMatchObject({
+      suppression: {
+        reason: "event_budget_exceeded",
+        recentBudgetedEventCount: 2,
+        maxEventsPerWindow: 2
+      }
+    });
+  });
+
+  it("opens a failure circuit and suppresses new autopilot events after consecutive failures", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    await repository.saveAutopilotEvent(
+      AutopilotEventSchema.parse({
+        id: "autopilot-failure-1",
+        userId: SYSTEM_USER_ID,
+        kind: "watcher_triggered",
+        sourceId: "watcher-failure-circuit-1",
+        idempotencyKey: null,
+        mode: "draft_goal",
+        summary: "First failed event",
+        status: "failed",
+        details: {},
+        actorContext: systemActor,
+        createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+        processedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+        resultGoalId: null,
+        error: "Autopilot execution failed."
+      })
+    );
+    await repository.saveAutopilotEvent(
+      AutopilotEventSchema.parse({
+        id: "autopilot-failure-2",
+        userId: SYSTEM_USER_ID,
+        kind: "watcher_triggered",
+        sourceId: "watcher-failure-circuit-2",
+        idempotencyKey: null,
+        mode: "draft_goal",
+        summary: "Second failed event",
+        status: "failed",
+        details: {},
+        actorContext: systemActor,
+        createdAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+        processedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+        resultGoalId: null,
+        error: "Autopilot execution failed."
+      })
+    );
+
+    const suppressedClaim = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "watcher_triggered",
+      sourceId: "watcher-failure-circuit-3",
+      mode: "draft_goal",
+      summary: "New events should stay suppressed while the failure circuit is open.",
+      actorContext: systemActor,
+      debounceMinutes: 15,
+      reliabilityControls: {
+        budgetWindowMinutes: 60,
+        maxEventsPerWindow: 12,
+        maxPendingEvents: 5,
+        maxConsecutiveFailures: 2
+      }
+    });
+
+    expect(suppressedClaim.outcome).toBe("suppressed");
+    expect(suppressedClaim.event.status).toBe("ignored");
+    expect(suppressedClaim.event.details).toMatchObject({
+      suppression: {
+        reason: "failure_circuit_open",
+        consecutiveFailureCount: 2,
+        maxConsecutiveFailures: 2
+      }
+    });
   });
 
   it("derives dashboard diagnostics for expired approvals, stale memories, stuck workflows, and orphan watchers", async () => {
