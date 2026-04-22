@@ -220,7 +220,6 @@ const RuntimeStoreSchema = z.object({
 });
 
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
-
 export { CommitmentInboxQueryError, CollectionPageQueryError };
 export type {
   AgenticRepository,

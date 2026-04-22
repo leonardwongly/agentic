@@ -23,8 +23,14 @@ import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/i
 import { getMemoryFreshness } from "@agentic/memory";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
+import { DashboardCommandCenter } from "./dashboard-command-center";
 import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
 import { CoreLoopViewTracker } from "./core-loop-view-tracker";
+import {
+  buildDashboardCommandCenterModel,
+  getPreferredCommandCenterRole,
+  type CommandCenterRole
+} from "../lib/command-center";
 import { isAdvancedDashboardSection } from "../lib/dashboard-surface";
 import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-loop-telemetry";
 import { deriveFeatureCapabilityReadiness, summarizeFeatureCapabilities } from "../lib/feature-capabilities";
@@ -134,6 +140,35 @@ type RequestState = {
   message: string;
 };
 
+type PrivacyControlSummary = {
+  registryVersion: number;
+  reviewedAt: string;
+  owners: string[];
+  totalDatasets: number;
+  classifications: Array<{
+    id: string;
+    label: string;
+    summary: string;
+    datasetCount: number;
+  }>;
+  lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
+  datasets: Array<{
+    id: string;
+    title: string;
+    classificationId: string;
+    classificationLabel: string;
+    retentionLabel: string;
+    tokenizationStrategy: "opaque_identifier" | "redacted_reference" | "not_applicable";
+    productSurfaceCount: number;
+    minimizationRuleCount: number;
+    maskingRuleCount: number;
+    lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
+  }>;
+};
+
+type PrivacyControlsApiResponse = {
+  controls: PrivacyControlSummary;
+};
 type OperatorProductPayload = {
   products: OperatorProduct[];
   selection: OperatorProductSelection | null;
@@ -219,6 +254,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [briefingState, setBriefingState] = useState<RequestState>({ kind: "idle", message: "" });
   const [autopilotState, setAutopilotState] = useState<RequestState>({ kind: "idle", message: "" });
   const [privacyState, setPrivacyState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [privacyInventoryState, setPrivacyInventoryState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [privacyControls, setPrivacyControls] = useState<PrivacyControlSummary | null>(null);
   const [lastShareUrl, setLastShareUrl] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [templates, setTemplates] = useState<GoalTemplate[]>([]);
@@ -233,6 +270,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [slideOutPanel, setSlideOutPanel] = useState<{ type: string; data: unknown } | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
+  const [commandCenterRole, setCommandCenterRole] = useState<CommandCenterRole>("command");
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(undefined);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const [commitmentBucket, setCommitmentBucket] = useState<CommitmentInboxBucket>(initialCommitmentInbox.bucket);
@@ -423,6 +461,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   );
 
   const operatorProductTemplateLookup = templates.length > 0 ? templates : operatorProductTemplates;
+  const commandCenterModel = useMemo(
+    () =>
+      buildDashboardCommandCenterModel({
+        data,
+        selectedOperatorProduct
+      }),
+    [data, selectedOperatorProduct]
+  );
 
   const selectedNotePreview = useMemo(
     () => notes.find((note) => note.slug === selectedNoteSlug) ?? null,
@@ -560,6 +606,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     void loadOperatorProducts();
   }, []);
 
+  useEffect(() => {
+    setCommandCenterRole(getPreferredCommandCenterRole(selectedOperatorProduct));
+  }, [selectedOperatorProduct]);
+
   const setSelectedNoteTitleDraft = (value: string) => {
     selectedNoteTitleRef.current = value;
     setSelectedNoteTitle(value);
@@ -620,6 +670,36 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const loadDashboardSnapshot = useCallback(async () => {
     return fetchDashboardSnapshot();
   }, []);
+
+  const loadPrivacyControls = useCallback(async () => {
+    try {
+      const payload = await readJson<PrivacyControlsApiResponse>(
+        await fetch("/api/governance/privacy", {
+          cache: "no-store"
+        })
+      );
+
+      startTransition(() => {
+        setPrivacyControls(payload.controls);
+        setPrivacyInventoryState({
+          kind: "success",
+          message: `Registry v${payload.controls.registryVersion} reviewed ${payload.controls.reviewedAt}.`
+        });
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to load privacy controls.";
+
+      setPrivacyControls(null);
+      setPrivacyInventoryState({
+        kind: "error",
+        message: errorMessage
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPrivacyControls();
+  }, [loadPrivacyControls]);
 
   const loadTemplatesSnapshot = useCallback(async () => {
     return fetchTemplatesSnapshot();
@@ -1911,6 +1991,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           <ThemeToggle />
         </div>
 
+        <DashboardCommandCenter
+          model={commandCenterModel}
+          role={commandCenterRole}
+          onRoleChange={setCommandCenterRole}
+          openTarget={navigateToSection}
+        />
+
         <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openTarget={deepLink.openTarget} />
 
         {/* Recent Actions */}
@@ -2167,6 +2254,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               governanceState={governanceState}
               autopilotState={autopilotState}
               privacyState={privacyState}
+              privacyInventoryState={privacyInventoryState}
+              privacyControls={privacyControls}
               workspaceName={workspaceName}
               setWorkspaceName={setWorkspaceName}
               workspaceSlug={workspaceSlug}

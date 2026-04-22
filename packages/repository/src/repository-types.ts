@@ -48,6 +48,7 @@ import type {
   WorkspaceMember,
   WorkspaceSelection
 } from "@agentic/contracts";
+import type { GovernanceConformanceReport } from "@agentic/policy";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
 export type DashboardData = {
@@ -56,6 +57,7 @@ export type DashboardData = {
   workspaceSelection: WorkspaceSelection | null;
   workspaceMembers: WorkspaceMember[];
   workspaceGovernance: WorkspaceGovernance | null;
+  governanceConformance?: GovernanceConformanceReport | null;
   goalShares: GoalShareRecord[];
   privacyOperations: PrivacyOperation[];
   controlPlane: DashboardControlPlane;
