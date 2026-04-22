@@ -2,6 +2,8 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  AutopilotEventFabricEnvelopeSchema,
+  DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   GoalBundleSchema,
   SYSTEM_USER_ID,
   WatcherSchema,
@@ -215,7 +217,8 @@ describe("worker runtime", () => {
       mode: "draft_goal",
       summary: "Watcher triggered for a VIP inbox escalation.",
       actorContext: createSystemActorContext(SYSTEM_USER_ID),
-      debounceMinutes: 15
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
     });
 
     if (claimed.outcome !== "claimed") {
@@ -227,6 +230,72 @@ describe("worker runtime", () => {
       selfImprovementRepository,
       sourceBundle,
       watcher,
+      event: claimed.event
+    };
+  }
+
+  async function createWorkflowStalledFabricFixture() {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const sourceBundle = await orchestrator.processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Coordinate a cross-team launch workflow that requires legal review before release.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+
+    await repository.saveGoalBundle(sourceBundle);
+
+    const claimed = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "workflow_stalled",
+      sourceId: "workflow-stalled-worker-runtime-1",
+      idempotencyKey: "worker-runtime-fabric-1",
+      mode: "draft_goal",
+      summary: "Workflow stalled at legal review.",
+      details: {
+        stalledStep: "legal_review",
+        status: "blocked",
+        blocker: "Waiting for legal sign-off",
+        references: {
+          goalId: sourceBundle.goal.id,
+          workflowId: sourceBundle.workflow.id
+        },
+        fabric: AutopilotEventFabricEnvelopeSchema.parse({
+          version: 1,
+          family: "workflow_stall",
+          severity: "high",
+          operatorRoute: "workflow",
+          policy: "queue_operator_review",
+          references: {
+            goalId: sourceBundle.goal.id,
+            workflowId: sourceBundle.workflow.id,
+            approvalId: null,
+            watcherId: null,
+            templateId: null,
+            briefingType: null
+          },
+          signals: ["workflow-stall", "workflow", "workflow-stalled"],
+          trigger: {
+            stalledStep: "legal_review",
+            status: "blocked",
+            blocker: "Waiting for legal sign-off"
+          },
+          summary: "Workflow stalled at legal review."
+        })
+      },
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
+    });
+
+    if (claimed.outcome !== "claimed") {
+      throw new Error(`Expected claimed autopilot event, received ${claimed.outcome}.`);
+    }
+
+    return {
+      repository,
+      selfImprovementRepository,
+      sourceBundle,
       event: claimed.event
     };
   }
@@ -1170,6 +1239,45 @@ describe("worker runtime", () => {
       status: "executed",
       resultGoalId: `autopilot-goal-${event.id}`
     });
+  });
+
+  it("executes event-fabric workflow-stalled events using the referenced workflow context", async () => {
+    const { repository, selfImprovementRepository, sourceBundle, event } = await createWorkflowStalledFabricFixture();
+    const job = await enqueueAutopilotProcessJob({
+      repository,
+      autopilotEvent: event
+    });
+
+    await executeAutopilotProcessJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goals = await repository.listGoals(SYSTEM_USER_ID);
+    const persistedEvent = (await repository.listAutopilotEvents(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === event.id
+    );
+    const resultBundle = goals.find((bundle) => bundle.goal.id === persistedEvent?.resultGoalId);
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+
+    expect(goals).toHaveLength(2);
+    expect(persistedEvent).toMatchObject({
+      id: event.id,
+      status: "executed",
+      resultGoalId: `autopilot-goal-${event.id}`
+    });
+    expect(persistedEvent?.details.fabric).toMatchObject({
+      family: "workflow_stall",
+      severity: "high",
+      operatorRoute: "workflow",
+      references: {
+        goalId: sourceBundle.goal.id,
+        workflowId: sourceBundle.workflow.id
+      }
+    });
+    expect(persistedEvent?.details.jobStatus).toBe("completed");
+    expect(resultBundle?.goal.workspaceId).toBe(dashboard.activeWorkspace?.id ?? null);
   });
 
   it("records sanitized dead-letter recovery details when autopilot execution exhausts retries", async () => {

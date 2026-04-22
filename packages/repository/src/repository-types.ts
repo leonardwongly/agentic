@@ -199,7 +199,7 @@ export type AutopilotEventClaim =
       event: AutopilotEvent;
     }
   | {
-      outcome: "duplicate" | "debounced";
+      outcome: "duplicate" | "debounced" | "suppressed";
       event: AutopilotEvent;
     };
 
@@ -288,6 +288,7 @@ export type AgenticRepository = {
     details?: Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
+    reliabilityControls: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim>;
   saveAutopilotEvent(event: AutopilotEvent): Promise<AutopilotEvent>;
   listJobs(params?: {

@@ -11,6 +11,7 @@ import {
   AgentMetricsSchema,
   ActorContextSchema,
   AutopilotEventSchema,
+  DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   AutopilotSettingsSchema,
   type ApprovalDecision,
   type ApprovalDecisionScope,
@@ -117,6 +118,12 @@ import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord, getMemoryFreshness } from "@agentic/memory";
 import { respondToApproval as applyApprovalResponse } from "@agentic/orchestrator";
 import { deriveAgentMetricsFromGoals } from "./agent-metrics";
+import {
+  buildPendingAutopilotEvent,
+  buildSuppressedAutopilotEvent,
+  countsTowardAutopilotBudget,
+  evaluateAutopilotClaimControls
+} from "./autopilot-event-claim-helpers";
 import { defaultAgents, defaultOperatorProducts } from "./built-in-catalog";
 import {
   buildCollectionPage,
@@ -981,6 +988,7 @@ function defaultAutopilotSettings(userId: string): AutopilotSettings {
     userId,
     mode: "notify_only",
     debounceMinutes: 15,
+    reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
     actorContext: null,
     createdAt: timestamp,
     updatedAt: timestamp
@@ -1450,34 +1458,6 @@ function isJobScopedToWorkspace(
     default:
       return false;
   }
-}
-
-function buildPendingAutopilotEvent(params: {
-  userId: string;
-  kind: AutopilotEventKind;
-  sourceId: string;
-  idempotencyKey?: string | null;
-  mode: AutopilotMode;
-  summary: string;
-  details?: Record<string, unknown>;
-  actorContext?: ActorContext | null;
-}): AutopilotEvent {
-  return AutopilotEventSchema.parse({
-    id: crypto.randomUUID(),
-    userId: params.userId,
-    kind: params.kind,
-    sourceId: params.sourceId,
-    idempotencyKey: params.idempotencyKey ?? null,
-    mode: params.mode,
-    summary: params.summary,
-    status: "pending",
-    details: params.details ?? {},
-    actorContext: params.actorContext ?? null,
-    createdAt: nowIso(),
-    processedAt: null,
-    resultGoalId: null,
-    error: null
-  });
 }
 
 function sortJobsForClaim(items: JobRecord[]): JobRecord[] {
@@ -2506,6 +2486,7 @@ class FileRepository implements AgenticRepository {
     details?: Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
+    reliabilityControls: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim> {
     return this.withMutationLock(async () => {
       const userId = params.userId ?? SYSTEM_USER_ID;
@@ -2525,9 +2506,19 @@ class FileRepository implements AgenticRepository {
         }
       }
 
+      const windowCutoff = Date.now() - Math.max(params.debounceMinutes, params.reliabilityControls.budgetWindowMinutes) * 60 * 1000;
+      const recentEvents = sortByCreatedDesc(
+        store.autopilotEvents.filter(
+          (event) => event.userId === userId && Date.parse(event.createdAt) >= windowCutoff
+        )
+      );
       const debounceCutoff = Date.now() - params.debounceMinutes * 60 * 1000;
-      const recent = store.autopilotEvents.find((event) => {
+      const recent = recentEvents.find((event) => {
         if (event.userId !== userId || event.kind !== params.kind || event.sourceId !== params.sourceId) {
+          return false;
+        }
+
+        if (!countsTowardAutopilotBudget(event.status) && event.status !== "debounced") {
           return false;
         }
 
@@ -2557,6 +2548,43 @@ class FileRepository implements AgenticRepository {
         return {
           outcome: "debounced",
           event: AutopilotEventSchema.parse(clone(debouncedEvent))
+        };
+      }
+
+      const controlDecision = evaluateAutopilotClaimControls({
+        recentEvents: recentEvents.filter(
+          (event) =>
+            Date.parse(event.createdAt) >= Date.now() - params.reliabilityControls.budgetWindowMinutes * 60 * 1000
+        ),
+        reliabilityControls: params.reliabilityControls
+      });
+
+      if (controlDecision.outcome === "suppress") {
+        const suppressedEvent = buildSuppressedAutopilotEvent({
+          userId,
+          kind: params.kind,
+          sourceId: params.sourceId,
+          idempotencyKey: trimmedKey,
+          mode: params.mode,
+          summary: params.summary,
+          actorContext: params.actorContext,
+          details: params.details,
+          suppression: {
+            reason: controlDecision.reason,
+            budgetWindowMinutes: params.reliabilityControls.budgetWindowMinutes,
+            recentBudgetedEventCount: controlDecision.recentBudgetedEventCount,
+            maxEventsPerWindow: params.reliabilityControls.maxEventsPerWindow,
+            pendingEventCount: controlDecision.pendingEventCount,
+            maxPendingEvents: params.reliabilityControls.maxPendingEvents,
+            consecutiveFailureCount: controlDecision.consecutiveFailureCount,
+            maxConsecutiveFailures: params.reliabilityControls.maxConsecutiveFailures
+          }
+        });
+        store.autopilotEvents = upsertById(store.autopilotEvents, suppressedEvent);
+        await this.writeStore(store);
+        return {
+          outcome: "suppressed",
+          event: AutopilotEventSchema.parse(clone(suppressedEvent))
         };
       }
 
@@ -6671,6 +6699,7 @@ class PostgresRepository implements AgenticRepository {
     details?: Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
+    reliabilityControls: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim> {
     const userId = params.userId ?? SYSTEM_USER_ID;
     const trimmedKey = params.idempotencyKey?.trim() || null;
@@ -6699,23 +6728,34 @@ class PostgresRepository implements AgenticRepository {
         }
       }
 
-      const debounceCutoff = new Date(Date.now() - params.debounceMinutes * 60 * 1000).toISOString();
-      const recentResult = await client.query(
+      const windowCutoff = new Date(
+        Date.now() - Math.max(params.debounceMinutes, params.reliabilityControls.budgetWindowMinutes) * 60 * 1000
+      ).toISOString();
+      const recentEventsResult = await client.query(
         `
           select *
           from autopilot_events
           where user_id = $1
-            and kind = $2
-            and source_id = $3
-            and created_at >= $4
+            and created_at >= $2
           order by created_at desc
-          limit 1
         `,
-        [userId, params.kind, params.sourceId, debounceCutoff]
+        [userId, windowCutoff]
       );
+      const recentEvents = recentEventsResult.rows.map((row) => this.mapAutopilotEventRow(row));
+      const debounceCutoff = new Date(Date.now() - params.debounceMinutes * 60 * 1000).toISOString();
+      const recent = recentEvents.find((event) => {
+        if (event.kind !== params.kind || event.sourceId !== params.sourceId) {
+          return false;
+        }
 
-      if (recentResult.rows.length > 0) {
-        const recent = this.mapAutopilotEventRow(recentResult.rows[0]);
+        if (!countsTowardAutopilotBudget(event.status) && event.status !== "debounced") {
+          return false;
+        }
+
+        return event.createdAt >= debounceCutoff;
+      });
+
+      if (recent) {
         const debouncedEvent = AutopilotEventSchema.parse({
           ...buildPendingAutopilotEvent({
             userId,
@@ -6738,6 +6778,43 @@ class PostgresRepository implements AgenticRepository {
         return {
           outcome: "debounced",
           event: AutopilotEventSchema.parse(clone(debouncedEvent))
+        };
+      }
+
+      const controlDecision = evaluateAutopilotClaimControls({
+        recentEvents: recentEvents.filter(
+          (event) =>
+            event.createdAt >= new Date(Date.now() - params.reliabilityControls.budgetWindowMinutes * 60 * 1000).toISOString()
+        ),
+        reliabilityControls: params.reliabilityControls
+      });
+
+      if (controlDecision.outcome === "suppress") {
+        const suppressedEvent = buildSuppressedAutopilotEvent({
+          userId,
+          kind: params.kind,
+          sourceId: params.sourceId,
+          idempotencyKey: trimmedKey,
+          mode: params.mode,
+          summary: params.summary,
+          actorContext: params.actorContext,
+          details: params.details,
+          suppression: {
+            reason: controlDecision.reason,
+            budgetWindowMinutes: params.reliabilityControls.budgetWindowMinutes,
+            recentBudgetedEventCount: controlDecision.recentBudgetedEventCount,
+            maxEventsPerWindow: params.reliabilityControls.maxEventsPerWindow,
+            pendingEventCount: controlDecision.pendingEventCount,
+            maxPendingEvents: params.reliabilityControls.maxPendingEvents,
+            consecutiveFailureCount: controlDecision.consecutiveFailureCount,
+            maxConsecutiveFailures: params.reliabilityControls.maxConsecutiveFailures
+          }
+        });
+
+        await this.saveAutopilotEventWithClient(client, suppressedEvent);
+        return {
+          outcome: "suppressed",
+          event: AutopilotEventSchema.parse(clone(suppressedEvent))
         };
       }
 

@@ -1,3 +1,5 @@
+import type { AutopilotEvent, AutopilotSettings, Watcher } from "@agentic/contracts";
+
 export type FeatureCapabilitySurface = "core" | "advanced";
 export type FeatureCapabilityReadiness = "prototype" | "preview" | "operational" | "production";
 export type FeatureCapabilityLoopStage = "decide" | "approve" | "execute" | "observe" | "improve" | "setup";
@@ -249,7 +251,8 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         routeFile: "apps/web/app/api/autopilot/events/route.ts",
         methods: ["GET", "POST"]
       }
-    ]
+    ],
+    notes: "Runtime readiness graduates from preview once backlog, failure, and event-budget thresholds stay inside the bounded reliability controls."
   }
 ] as const;
 
@@ -266,22 +269,75 @@ export type FeatureCapabilitySummary = {
   advanced: SurfaceSummary;
 };
 
-function buildSurfaceSummary(surface: FeatureCapabilitySurface): SurfaceSummary {
+type FeatureCapabilitySummaryOverrides = Partial<Record<string, FeatureCapabilityReadiness>>;
+
+type FeatureCapabilityRuntimeReadinessParams = {
+  autopilotSettings: Pick<AutopilotSettings, "reliabilityControls">;
+  autopilotEvents: Pick<AutopilotEvent, "createdAt" | "status">[];
+  watchers: Pick<Watcher, "status">[];
+  diagnostics: {
+    items: Array<{
+      kind: string;
+    }>;
+  };
+};
+
+function buildSurfaceSummary(
+  surface: FeatureCapabilitySurface,
+  readinessOverrides: FeatureCapabilitySummaryOverrides
+): SurfaceSummary {
   const features = FEATURE_CAPABILITIES.filter((feature) => feature.surface === surface);
 
   return {
     total: features.length,
-    operationalOrBetter: features.filter((feature) => READINESS_RANK[feature.readiness] >= READINESS_RANK.operational)
-      .length,
-    productionReady: features.filter((feature) => feature.readiness === "production").length
+    operationalOrBetter: features.filter((feature) => {
+      const readiness = readinessOverrides[feature.id] ?? feature.readiness;
+      return READINESS_RANK[readiness] >= READINESS_RANK.operational;
+    }).length,
+    productionReady: features.filter((feature) => (readinessOverrides[feature.id] ?? feature.readiness) === "production")
+      .length
   };
 }
 
-export function summarizeFeatureCapabilities(): FeatureCapabilitySummary {
+export function deriveFeatureCapabilityReadiness(
+  params: FeatureCapabilityRuntimeReadinessParams
+): FeatureCapabilitySummaryOverrides {
+  const cutoff = Date.now() - params.autopilotSettings.reliabilityControls.budgetWindowMinutes * 60 * 1000;
+  const recentEvents = params.autopilotEvents.filter((event) => Date.parse(event.createdAt) >= cutoff);
+  const recentBudgetedEvents = recentEvents.filter(
+    (event) => event.status === "pending" || event.status === "notified" || event.status === "executed" || event.status === "failed"
+  );
+  const pendingEvents = recentEvents.filter((event) => event.status === "pending");
+  const failureEvents = recentEvents.filter((event) => event.status === "failed");
+  const watcherDiagnostics = new Set(["orphan_watchers"]);
+  const autopilotDiagnostics = new Set(["async_execution_issues", "stuck_workflows"]);
+  const hasWatcherDiagnostics = params.diagnostics.items.some((item) => watcherDiagnostics.has(item.kind));
+  const hasAutopilotDiagnostics = params.diagnostics.items.some((item) => autopilotDiagnostics.has(item.kind));
+  const hasActiveWatchers = params.watchers.some((watcher) => watcher.status === "active");
+  const watchersOperational =
+    hasActiveWatchers &&
+    !hasWatcherDiagnostics &&
+    failureEvents.length < params.autopilotSettings.reliabilityControls.maxConsecutiveFailures;
+  const autopilotOperational =
+    !hasWatcherDiagnostics &&
+    !hasAutopilotDiagnostics &&
+    pendingEvents.length < params.autopilotSettings.reliabilityControls.maxPendingEvents &&
+    recentBudgetedEvents.length < params.autopilotSettings.reliabilityControls.maxEventsPerWindow &&
+    failureEvents.length < params.autopilotSettings.reliabilityControls.maxConsecutiveFailures;
+
+  return {
+    watchers: watchersOperational ? "operational" : "preview",
+    "autopilot-control": autopilotOperational ? "operational" : "preview"
+  };
+}
+
+export function summarizeFeatureCapabilities(
+  readinessOverrides: FeatureCapabilitySummaryOverrides = {}
+): FeatureCapabilitySummary {
   return {
     totalFeatures: FEATURE_CAPABILITIES.length,
     trackedContracts: FEATURE_CAPABILITIES.reduce((count, feature) => count + feature.contracts.length, 0),
-    core: buildSurfaceSummary("core"),
-    advanced: buildSurfaceSummary("advanced")
+    core: buildSurfaceSummary("core", readinessOverrides),
+    advanced: buildSurfaceSummary("advanced", readinessOverrides)
   };
 }

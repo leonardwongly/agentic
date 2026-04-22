@@ -1,4 +1,5 @@
 import { assembleDashboardData } from "../packages/repository/src/dashboard-data";
+import { DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS } from "@agentic/contracts";
 
 describe("assembleDashboardData instrumentation", () => {
   const originalTimingLog = process.env.AGENTIC_DASHBOARD_TIMING_LOG;
@@ -40,6 +41,7 @@ describe("assembleDashboardData instrumentation", () => {
         userId: "user-1",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -111,6 +113,7 @@ describe("assembleDashboardData instrumentation", () => {
         userId: "user-1",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -290,6 +293,7 @@ describe("assembleDashboardData instrumentation", () => {
         userId: "user-1",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },

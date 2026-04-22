@@ -25,6 +25,7 @@ function main() {
   const docsRenderRoutePath = "apps/web/app/api/docs/render/route.ts";
   const publicShareViewRoutePath = "apps/web/app/api/share/view/route.ts";
   const dashboardPath = "apps/web/components/dashboard.tsx";
+  const dashboardAsyncPath = "apps/web/components/dashboard-async.ts";
   const validationMatrixPath = "docs/security/validation-matrix.md";
   const deploymentRunbookPath = "docs/runbooks/deployment.md";
   const goalsStatusRoutePath = "apps/web/app/api/goals/jobs/[id]/route.ts";
@@ -39,6 +40,7 @@ function main() {
   const docsRenderRoute = readRepoFile(docsRenderRoutePath);
   const publicShareViewRoute = readRepoFile(publicShareViewRoutePath);
   const dashboard = readRepoFile(dashboardPath);
+  const dashboardAsync = readRepoFile(dashboardAsyncPath);
   const validationMatrix = readRepoFile(validationMatrixPath);
   const deploymentRunbook = readRepoFile(deploymentRunbookPath);
 
@@ -125,8 +127,23 @@ function main() {
 
   assertContains(
     dashboard,
-    "function buildClientIdempotencyKey(): string",
-    `${dashboardPath} must generate client idempotency keys for queued mutations.`
+    'from "./dashboard-async";',
+    `${dashboardPath} must source queued dashboard helpers from ${dashboardAsyncPath}.`
+  );
+  assertContains(
+    dashboardAsync,
+    "export function buildClientIdempotencyKey(): string",
+    `${dashboardAsyncPath} must own client idempotency key generation for queued mutations.`
+  );
+  assertContains(
+    dashboardAsync,
+    "export async function readJson<T>(response: Response): Promise<T>",
+    `${dashboardAsyncPath} must own queued response parsing helpers.`
+  );
+  assertContains(
+    dashboardAsync,
+    "export async function pollJobStatusUntilSettled",
+    `${dashboardAsyncPath} must own bounded polling for queued dashboard mutations.`
   );
   assertContains(
     dashboard,

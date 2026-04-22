@@ -27,7 +27,7 @@ import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card"
 import { CoreLoopViewTracker } from "./core-loop-view-tracker";
 import { isAdvancedDashboardSection } from "../lib/dashboard-surface";
 import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-loop-telemetry";
-import { summarizeFeatureCapabilities } from "../lib/feature-capabilities";
+import { deriveFeatureCapabilityReadiness, summarizeFeatureCapabilities } from "../lib/feature-capabilities";
 import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
 import { getGoalShareSuccessMessage } from "../lib/share-client";
 import { AgentsPanel } from "./agents";
@@ -391,7 +391,18 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     () => data.integrations.filter((integration) => integration.status === "ready").length,
     [data.integrations]
   );
-  const featureCapabilitySummary = useMemo(() => summarizeFeatureCapabilities(), []);
+  const featureCapabilitySummary = useMemo(
+    () =>
+      summarizeFeatureCapabilities(
+        deriveFeatureCapabilityReadiness({
+          autopilotSettings: data.autopilotSettings,
+          autopilotEvents: data.autopilotEvents,
+          watchers: data.watchers,
+          diagnostics: data.diagnostics
+        })
+      ),
+    [data.autopilotEvents, data.autopilotSettings, data.diagnostics, data.watchers]
+  );
   const coreLoopSummary = useMemo(() => summarizeCoreLoopTelemetry(data), [data]);
   const coreLoopHealthCopy = useMemo(() => describeCoreLoopHealth(coreLoopSummary), [coreLoopSummary]);
   const integrationSurfaces = useMemo(

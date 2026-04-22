@@ -67,8 +67,13 @@ import {
   buildPublicShareViewPayload,
   buildTemplateRunPayload
 } from "./job-payloads";
+import {
+  buildAutopilotEventFabricRequest,
+  getAutopilotEventFabricEnvelope,
+  isEventFabricAutopilotKind,
+  resolveAutopilotEventFabricExecutionContext
+} from "./autopilot-event-fabric";
 import { createPublicShareViewedLog } from "./public-share-log";
-
 export const workerJobKindValues = ["goal_create", "goal_refine", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
 
 export type GoalJobResultSummary = {
@@ -516,6 +521,58 @@ async function executeBriefingEvent(params: {
   return bundle;
 }
 
+async function executeEventFabricEvent(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  userId: string;
+  actorContext: ActorContext | null;
+  event: AutopilotEvent;
+  eventId: string;
+  jobId: string;
+}) {
+  const envelope = getAutopilotEventFabricEnvelope(params.event);
+  if (!envelope) {
+    throw new AutopilotExecutionError(`Autopilot event ${params.event.id} is missing a valid fabric envelope.`);
+  }
+  const executionContext = await resolveAutopilotEventFabricExecutionContext({
+    repository: params.repository,
+    userId: params.userId,
+    envelope
+  });
+  if ("missingReason" in executionContext) {
+    throw new AutopilotExecutionError(executionContext.missingReason);
+  }
+  const [memories, integrations] = await Promise.all([
+    params.repository.listMemory(params.userId),
+    params.repository.listIntegrations(params.userId)
+  ]);
+  const bundle = await processUserRequest({
+    userId: params.userId,
+    workspaceId: executionContext.workspaceId,
+    governance: executionContext.workspaceGovernance,
+    request: buildAutopilotEventFabricRequest({
+      event: params.event,
+      envelope,
+      goalBundle: executionContext.goalBundle,
+      approval: executionContext.approval
+    }),
+    memories,
+    integrations,
+    goalId: buildAutopilotGoalId(params.eventId),
+    workflowId: buildAutopilotWorkflowId(params.eventId),
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
+  });
+  await params.repository.saveGoalBundle(bundle);
+  await persistCapturedMemories({
+    repository: params.repository,
+    selfImprovementRepository: params.selfImprovementRepository,
+    userId: params.userId,
+    actorContext: params.actorContext,
+    jobId: params.jobId,
+    bundle
+  });
+  return bundle;
+}
 export function isGoalCreateJob(job: JobRecord | null): job is JobRecord & { payload: GoalCreateJobPayload } {
   return job?.kind === "goal_create" && job.payload.type === "goal_create";
 }
@@ -523,7 +580,6 @@ export function isGoalCreateJob(job: JobRecord | null): job is JobRecord & { pay
 export function isGoalRefineJob(job: JobRecord | null): job is JobRecord & { payload: GoalRefineJobPayload } {
   return job?.kind === "goal_refine" && job.payload.type === "goal_refine";
 }
-
 export function isBriefingCreateJob(
   job: JobRecord | null
 ): job is JobRecord & { payload: BriefingCreateJobPayload } {
@@ -1136,7 +1192,7 @@ export async function executeAutopilotProcessJob(params: {
         eventId: event.id,
         jobId: job.id
       });
-    } else {
+    } else if (job.payload.kind === "briefing_due") {
       const { type } = await resolveBriefingExecutionSource(repository, job.payload.sourceId, job.userId);
       bundle = await executeBriefingEvent({
         repository,
@@ -1147,6 +1203,18 @@ export async function executeAutopilotProcessJob(params: {
         eventId: event.id,
         jobId: job.id
       });
+    } else if (isEventFabricAutopilotKind(job.payload.kind)) {
+      bundle = await executeEventFabricEvent({
+        repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        userId: job.userId,
+        actorContext: job.actorContext,
+        event,
+        eventId: event.id,
+        jobId: job.id
+      });
+    } else {
+      throw new AutopilotExecutionError(`Unsupported autopilot event kind ${job.payload.kind}.`);
     }
 
     const processedAt = nowIso();
