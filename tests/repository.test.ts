@@ -1828,6 +1828,91 @@ describe("repository", () => {
     ).rejects.toThrow(/Goal goal-does-not-exist was not found/);
   });
 
+  it("derives shared workspace watcher responsibility from the goal owner and workspace role", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const editorUserId = "user-editor";
+    const timestamp = nowIso();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(editorUserId);
+
+    const sharedWorkspace = WorkspaceSchema.parse({
+      id: "workspace-watcher-responsibility",
+      ownerUserId: SYSTEM_USER_ID,
+      slug: "watcher-responsibility",
+      name: "Watcher Responsibility",
+      description: "Shared watcher ownership should remain explicit.",
+      isPersonal: false,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+
+    await repository.saveWorkspace(sharedWorkspace, systemActor);
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-watcher-responsibility-owner",
+        workspaceId: sharedWorkspace.id,
+        userId: SYSTEM_USER_ID,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-watcher-responsibility-editor",
+        workspaceId: sharedWorkspace.id,
+        userId: editorUserId,
+        role: "editor",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Watch the shared inbox for escalation risk.",
+      sharedWorkspace.id
+    );
+
+    await repository.saveWatcher(
+      WatcherSchema.parse({
+        id: "watcher-shared-responsibility",
+        goalId: bundle.goal.id,
+        targetEntity: "shared-priority-inbox",
+        condition: "an escalation appears",
+        frequency: "hourly",
+        triggerAction: "draft the next response",
+        sourceSystems: ["email"],
+        status: "active",
+        expiryAt: null,
+        actorContext: createHumanActorContext(editorUserId),
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+    );
+
+    const reloaded = await repository.getGoalBundleForUser(bundle.goal.id, editorUserId);
+    const watcher = reloaded?.watchers.find((candidate) => candidate.id === "watcher-shared-responsibility");
+
+    expect(watcher?.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(watcher?.responsibility.delegate).toMatchObject({
+      kind: "workspace_role",
+      workspaceRole: "editor"
+    });
+    expect(watcher?.responsibility.reviewer).toMatchObject({
+      kind: "user",
+      userId: SYSTEM_USER_ID
+    });
+  });
+
   it("returns only watchers owned by the requested user", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
