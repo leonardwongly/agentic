@@ -242,6 +242,25 @@ describe("api request validation", () => {
     expectNoStoreHeaders(response);
   });
 
+  it("rejects unknown nested fields for autopilot reliability controls", async () => {
+    const response = await autopilotSettingsRoute(
+      buildJsonRequest("http://localhost/api/autopilot/settings", {
+        reliabilityControls: {
+          budgetWindowMinutes: 30,
+          maxEventsPerWindow: 8,
+          maxPendingEvents: 2,
+          maxConsecutiveFailures: 3,
+          extra: "nope"
+        }
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("Unrecognized key");
+    expectNoStoreHeaders(response);
+  });
+
   it.each([
     ["session", () => sessionRoute(buildInvalidJsonRequest("http://localhost/api/session"))],
     ["goals", () => goalsRoute(buildInvalidJsonRequest("http://localhost/api/goals"))],
@@ -602,6 +621,26 @@ describe("api request validation", () => {
     );
 
     expect(response.status).toBe(200);
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects unknown nested fields for event-fabric autopilot requests", async () => {
+    const response = await autopilotEventsRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/autopilot/events", {
+        kind: "workflow_stalled",
+        sourceId: "workflow-stall-invalid-nested-field",
+        details: {
+          stalledStep: "review_queue",
+          status: "blocked",
+          references: {},
+          extra: "nope"
+        }
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("Unrecognized key");
     expectNoStoreHeaders(response);
   });
 });

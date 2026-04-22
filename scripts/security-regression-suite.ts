@@ -10,15 +10,17 @@ type SecurityRegressionCategory = {
 
 export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
   {
-    id: "input-validation",
-    description: "Reject malformed or ambiguous input early with sanitized failures.",
+    id: "malformed-input-and-size-limits",
+    description: "Reject malformed or oversized input before it reaches durable or privileged paths.",
     files: [
       "tests/api-validation.test.ts",
+      "tests/local-notes-route.test.ts",
+      "tests/provider-credential-secrets.test.ts",
       "tests/public-share-view-route.test.ts"
     ]
   },
   {
-    id: "auth-and-session",
+    id: "auth-session-and-provider-callbacks",
     description: "Fail closed on token misuse, state tampering, and callback abuse.",
     files: [
       "tests/auth.test.ts",
@@ -26,7 +28,7 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
     ]
   },
   {
-    id: "scope-and-governance",
+    id: "authorization-governance-and-tenant-isolation",
     description: "Preserve tenant isolation, scoped access, and governed route behavior.",
     files: [
       "tests/route-user-scope.test.ts",
@@ -35,23 +37,33 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
     ]
   },
   {
-    id: "idempotency-and-public-surfaces",
-    description: "Prevent duplicate or anonymous workflows from corrupting state.",
+    id: "idempotency-replay-and-duplicate-submission",
+    description: "Prevent duplicate submissions, replayed events, and retried mutations from corrupting state.",
     files: [
       "tests/goal-route.test.ts",
       "tests/briefing-route.test.ts",
+      "tests/docs-render-route.test.ts",
       "tests/templates-route.test.ts",
       "tests/nl-intent-route.test.ts",
-      "tests/share-route.test.ts",
-      "tests/public-share-view-route.test.ts"
+      "tests/autopilot-route.test.ts"
     ]
   },
   {
-    id: "durable-execution",
-    description: "Keep retries, dead letters, and async workers safe under failure.",
+    id: "privacy-and-anonymous-surfaces",
+    description: "Keep public and privacy-sensitive surfaces rate-limited, asynchronous, and minimally exposed.",
+    files: [
+      "tests/public-share-view-route.test.ts",
+      "tests/share-route.test.ts",
+      "tests/governance-privacy-route.test.ts"
+    ]
+  },
+  {
+    id: "durable-execution-and-recovery",
+    description: "Keep retries, dead letters, duplicate execution, and worker recovery bounded and sanitized.",
     files: [
       "tests/autopilot-route.test.ts",
       "tests/docs-render-route.test.ts",
+      "tests/repository.test.ts",
       "tests/worker-runtime.test.ts"
     ]
   }

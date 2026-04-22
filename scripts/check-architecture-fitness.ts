@@ -5,6 +5,10 @@ function readRepoFile(relativePath: string): string {
   return readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
 }
 
+function countLines(content: string): number {
+  return content.split(/\r?\n/gu).length;
+}
+
 function assertContains(content: string, needle: string, message: string) {
   if (!content.includes(needle)) {
     throw new Error(message);
@@ -14,6 +18,13 @@ function assertContains(content: string, needle: string, message: string) {
 function assertNotContains(content: string, needle: string, message: string) {
   if (content.includes(needle)) {
     throw new Error(message);
+  }
+}
+
+function assertMaxLines(content: string, maxLines: number, label: string) {
+  const lineCount = countLines(content);
+  if (lineCount > maxLines) {
+    throw new Error(`${label} exceeds its line budget (${lineCount} > ${maxLines}).`);
   }
 }
 
@@ -35,7 +46,13 @@ function main() {
   const workerEntryPath = "apps/worker/src/index.ts";
   const runtimeReadinessPath = "apps/web/lib/runtime-readiness.ts";
   const dashboardPath = "apps/web/components/dashboard.tsx";
+  const dashboardAsyncPath = "apps/web/components/dashboard-async.ts";
   const dashboardSurfacePath = "apps/web/lib/dashboard-surface.ts";
+  const repositoryTypesPath = "packages/repository/src/repository-types.ts";
+  const workerRuntimePath = "packages/worker-runtime/src/index.ts";
+  const workerJobPayloadsPath = "packages/worker-runtime/src/job-payloads.ts";
+  const publicShareLogPath = "packages/worker-runtime/src/public-share-log.ts";
+  const decompositionDocPath = "docs/architecture/phase-1-decomposition-boundaries.md";
 
   const goalsRoute = readRepoFile(goalsRoutePath);
   const goalRefineRoute = readRepoFile(goalRefineRoutePath);
@@ -54,7 +71,13 @@ function main() {
   const workerEntry = readRepoFile(workerEntryPath);
   const runtimeReadiness = readRepoFile(runtimeReadinessPath);
   const dashboard = readRepoFile(dashboardPath);
+  const dashboardAsync = readRepoFile(dashboardAsyncPath);
   const dashboardSurface = readRepoFile(dashboardSurfacePath);
+  const repositoryTypes = readRepoFile(repositoryTypesPath);
+  const workerRuntime = readRepoFile(workerRuntimePath);
+  const workerJobPayloads = readRepoFile(workerJobPayloadsPath);
+  const publicShareLog = readRepoFile(publicShareLogPath);
+  const decompositionDoc = readRepoFile(decompositionDocPath);
 
   assertContains(
     goalsRoute,
@@ -209,6 +232,79 @@ function main() {
     "DashboardOperationsTowerCard",
     `${dashboardPath} must render the operations control tower surface.`
   );
+  assertContains(
+    repository,
+    'from "./repository-types";',
+    `${repositoryPath} must keep the shared repository type facade in ${repositoryTypesPath}.`
+  );
+  assertContains(
+    repository,
+    "DashboardDiagnosticTarget",
+    `${repositoryPath} must re-export dashboard diagnostic targets for UI consumers.`
+  );
+  assertContains(
+    repositoryTypes,
+    "export type DashboardDiagnosticTarget = {",
+    `${repositoryTypesPath} must own dashboard diagnostic target types.`
+  );
+  assertContains(
+    workerRuntime,
+    'from "./job-payloads";',
+    `${workerRuntimePath} must source job payload builders from ${workerJobPayloadsPath}.`
+  );
+  assertContains(
+    workerRuntime,
+    'from "./public-share-log";',
+    `${workerRuntimePath} must source share-view action log helpers from ${publicShareLogPath}.`
+  );
+  assertContains(
+    workerJobPayloads,
+    "buildAutopilotProcessJobIdempotencyKey",
+    `${workerJobPayloadsPath} must own deterministic autopilot idempotency-key derivation.`
+  );
+  assertContains(
+    workerJobPayloads,
+    "buildBriefingCreateJobIdempotencyKey",
+    `${workerJobPayloadsPath} must own deterministic briefing idempotency-key derivation.`
+  );
+  assertContains(
+    publicShareLog,
+    "createPublicShareViewedLog",
+    `${publicShareLogPath} must own public share view action-log shaping.`
+  );
+  assertContains(
+    dashboard,
+    'from "./dashboard-async";',
+    `${dashboardPath} must consume extracted async dashboard helpers from ${dashboardAsyncPath}.`
+  );
+  assertContains(
+    dashboardAsync,
+    "pollJobStatusUntilSettled",
+    `${dashboardAsyncPath} must own bounded async polling helpers.`
+  );
+  assertContains(
+    decompositionDoc,
+    "## Repository Boundary",
+    `${decompositionDocPath} must document the repository boundary.`
+  );
+  assertContains(
+    decompositionDoc,
+    "## Worker Runtime Boundary",
+    `${decompositionDocPath} must document the worker-runtime boundary.`
+  );
+  assertContains(
+    decompositionDoc,
+    "## Dashboard Boundary",
+    `${decompositionDocPath} must document the dashboard boundary.`
+  );
+  assertContains(
+    decompositionDoc,
+    "## Line Budgets",
+    `${decompositionDocPath} must document hotspot line budgets.`
+  );
+  assertMaxLines(repository, 7900, repositoryPath);
+  assertMaxLines(workerRuntime, 1650, workerRuntimePath);
+  assertMaxLines(dashboard, 3400, dashboardPath);
   assertContains(
     dashboardSurface,
     "\"operations\"",

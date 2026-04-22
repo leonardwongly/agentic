@@ -14,6 +14,7 @@ import { POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
 
 const ENQUEUE_ROUTE_BUDGET_MS = 250;
 const DOCS_WORKER_BATCH_BUDGET_MS = 1_500;
+const SMALL_QUEUE_BACKLOG_BUDGET_MS = 2_000;
 
 const { runDocsBuildMock } = vi.hoisted(() => ({
   runDocsBuildMock: vi.fn(async () => ({
@@ -188,5 +189,142 @@ describe("performance fitness", () => {
     expect(jobs).toHaveLength(5);
     expect(jobs.every((job) => job.status === "completed")).toBe(true);
     expect(throughputDurationMs).toBeLessThan(DOCS_WORKER_BATCH_BUDGET_MS);
+  });
+
+  it("drains a small queue with bounded retry churn after a transient worker failure", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const selfImprovementRepository = createSelfImprovementRepository({
+      baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-performance-memory-"))
+    });
+
+    await Promise.all([
+      repository.seedDefaults(SYSTEM_USER_ID),
+      selfImprovementRepository.seed()
+    ]);
+
+    runDocsBuildMock
+      .mockRejectedValueOnce(new Error("transient docs worker failure"))
+      .mockResolvedValue({
+        stdout: "docs ok",
+        stderr: ""
+      });
+
+    for (let index = 0; index < 3; index += 1) {
+      await enqueueDocsRenderJob({
+        repository,
+        userId: SYSTEM_USER_ID,
+        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        idempotencyKey: `performance-docs-retry-${index}`
+      });
+    }
+
+    const throughputDurationMs = await measureDurationMs(async () => {
+      await expect(
+        runWorkerRuntime({
+          repository,
+          selfImprovementRepository,
+          runnerId: "worker-performance-retry-fitness",
+          maxJobs: 4,
+          pollIntervalMs: 10,
+          retryPolicy: {
+            baseDelayMs: 10,
+            factor: 1,
+            maxDelayMs: 10
+          }
+        })
+      ).resolves.toEqual({
+        processedCount: 4,
+        stopReason: "max_jobs"
+      });
+    });
+
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["docs_render"]
+    });
+
+    expect(runDocsBuildMock).toHaveBeenCalledTimes(4);
+    expect(jobs).toHaveLength(3);
+    expect(jobs.every((job) => job.status === "completed")).toBe(true);
+    expect(jobs.filter((job) => job.attemptCount > 1)).toHaveLength(1);
+    expect(Math.max(...jobs.map((job) => job.attemptCount))).toBeLessThanOrEqual(2);
+    expect(throughputDurationMs).toBeLessThan(SMALL_QUEUE_BACKLOG_BUDGET_MS);
+  });
+
+  it("avoids duplicate execution when competing workers poll the same queued job", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const selfImprovementRepository = createSelfImprovementRepository({
+      baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-performance-memory-"))
+    });
+
+    await Promise.all([
+      repository.seedDefaults(SYSTEM_USER_ID),
+      selfImprovementRepository.seed()
+    ]);
+
+    runDocsBuildMock.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return {
+        stdout: "docs ok",
+        stderr: ""
+      };
+    });
+
+    await enqueueDocsRenderJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "performance-duplicate-execution"
+    });
+
+    const competingWorkerAbort = new AbortController();
+    const abortTimer = setTimeout(() => {
+      competingWorkerAbort.abort();
+    }, 120);
+
+    try {
+      const [primaryWorker, competingWorker] = await Promise.all([
+        runWorkerRuntime({
+          repository,
+          selfImprovementRepository,
+          runnerId: "worker-performance-primary",
+          maxJobs: 1,
+          pollIntervalMs: 10
+        }),
+        runWorkerRuntime({
+          repository,
+          selfImprovementRepository,
+          runnerId: "worker-performance-competing",
+          signal: competingWorkerAbort.signal,
+          pollIntervalMs: 10
+        })
+      ]);
+
+      const jobs = await repository.listJobs({
+        userId: SYSTEM_USER_ID,
+        kinds: ["docs_render"]
+      });
+
+      expect(primaryWorker).toEqual({
+        processedCount: 1,
+        stopReason: "max_jobs"
+      });
+      expect(competingWorker).toEqual({
+        processedCount: 0,
+        stopReason: "aborted"
+      });
+      expect(runDocsBuildMock).toHaveBeenCalledTimes(1);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]).toMatchObject({
+        status: "completed",
+        attemptCount: 1
+      });
+    } finally {
+      clearTimeout(abortTimer);
+    }
   });
 });
