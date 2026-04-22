@@ -24,6 +24,13 @@ export const taskStateValues = [
   "completed"
 ] as const;
 export const goalStatusValues = ["planned", "running", "waiting", "completed"] as const;
+export const goalWedgeKeyValues = [
+  "communications_execution",
+  "scheduling_execution",
+  "travel_readiness",
+  "general_coordination"
+] as const;
+export const goalWedgeSelectionValues = ["selected_production", "supporting"] as const;
 export const memoryTypeValues = ["observed", "inferred", "confirmed"] as const;
 export const approvalDecisionValues = ["pending", "approved", "rejected"] as const;
 export const approvalActionTypeValues = ["send", "schedule", "create", "update", "delete", "draft", "artifact-only"] as const;
@@ -32,6 +39,7 @@ export const artifactTypeValues = ["summary", "brief", "checklist", "draft", "ex
 export const agentExecutionModeValues = [
   "deterministic_scaffold",
   "custom_prompt_scaffold",
+  "governed_specialist",
   "manual_review_required"
 ] as const;
 export const commitmentStatusValues = [
@@ -116,6 +124,8 @@ export const CapabilitySchema = z.enum(capabilityValues);
 export const RiskClassSchema = z.enum(riskClassValues);
 export const TaskStateSchema = z.enum(taskStateValues);
 export const GoalStatusSchema = z.enum(goalStatusValues);
+export const GoalWedgeKeySchema = z.enum(goalWedgeKeyValues);
+export const GoalWedgeSelectionSchema = z.enum(goalWedgeSelectionValues);
 export const MemoryTypeSchema = z.enum(memoryTypeValues);
 export const ApprovalDecisionSchema = z.enum(approvalDecisionValues);
 export const ApprovalActionTypeSchema = z.enum(approvalActionTypeValues);
@@ -201,7 +211,161 @@ export const WorkflowStateSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
-export const GoalSchema = z.object({
+export const GoalWedgeSchema = z.object({
+  key: GoalWedgeKeySchema,
+  label: z.string().min(1),
+  selection: GoalWedgeSelectionSchema,
+  rationale: z.string().min(1)
+});
+
+export const GoalCompletionContractSchema = z.object({
+  id: z.string().min(1),
+  summary: z.string().min(1),
+  successCriteria: z.array(z.string().min(1)).min(1),
+  evidenceSignals: z.array(z.string().min(1)).min(1),
+  approvalExpectations: z.array(z.string().min(1)).default([]),
+  doneWhen: z.string().min(1)
+});
+
+const goalContractProfiles = {
+  communications_execution: {
+    wedge: {
+      key: "communications_execution",
+      label: "Communications execution",
+      selection: "selected_production",
+      rationale: "Inbox triage and follow-up are one of the two explicitly selected Phase 3 production wedges."
+    },
+    completionContract: {
+      id: "communications-execution-v1",
+      summary: "Produce a prioritized inbox follow-up bundle with outbound side effects held behind approval.",
+      successCriteria: [
+        "Urgent and high-signal inbound threads are reviewed and ranked.",
+        "Actionable reply drafts or escalation notes are prepared for the surfaced threads.",
+        "Follow-up commitments are captured before any external send is executed."
+      ],
+      evidenceSignals: [
+        "Priority message review artifact exists.",
+        "Draft or escalation artifact exists for the reply step.",
+        "Any external send remains approval-gated until a human decision is recorded."
+      ],
+      approvalExpectations: [
+        "External message sends require an explicit approval record before execution."
+      ],
+      doneWhen: "The inbox triage workflow has surfaced the urgent threads, prepared the follow-up artifacts, and left external delivery behind the approval boundary."
+    }
+  },
+  scheduling_execution: {
+    wedge: {
+      key: "scheduling_execution",
+      label: "Scheduling execution",
+      selection: "selected_production",
+      rationale: "Weekly planning and calendar shaping are the second explicitly selected Phase 3 production wedge."
+    },
+    completionContract: {
+      id: "scheduling-execution-v1",
+      summary: "Turn calendar commitments into a reviewable weekly operating plan without silently mutating the calendar.",
+      successCriteria: [
+        "Current commitments and deadlines are consolidated into one planning view.",
+        "A weekly operating plan is drafted with focus blocks, risk notes, and tradeoffs.",
+        "Proposed scheduling changes remain reviewable instead of auto-committed."
+      ],
+      evidenceSignals: [
+        "Calendar and commitment artifacts are captured for the planning bundle.",
+        "A weekly planning draft artifact exists.",
+        "Calendar write actions stay behind review or approval when required."
+      ],
+      approvalExpectations: [
+        "Calendar changes that exceed the workspace auto-run policy require explicit review."
+      ],
+      doneWhen: "The system has produced a coherent weekly plan with visible risks and any write-side calendar changes remain explicitly reviewable."
+    }
+  },
+  travel_readiness: {
+    wedge: {
+      key: "travel_readiness",
+      label: "Travel readiness",
+      selection: "supporting",
+      rationale: "Travel preparation remains a supporting workflow, not one of the selected production wedges."
+    },
+    completionContract: {
+      id: "travel-readiness-v1",
+      summary: "Assemble a travel brief, checklist, and monitoring plan for upcoming itinerary work.",
+      successCriteria: [
+        "A trip brief captures itinerary assumptions and likely risks.",
+        "A readiness checklist captures the open dependencies.",
+        "Any scheduling changes remain reviewable before execution."
+      ],
+      evidenceSignals: [
+        "Travel briefing artifact exists.",
+        "Checklist artifact exists.",
+        "Watcher coverage is attached for the travel workflow."
+      ],
+      approvalExpectations: [
+        "Schedule-changing travel actions stay reviewable when they affect external commitments."
+      ],
+      doneWhen: "The trip has a usable brief, a checklist of missing dependencies, and monitoring for approaching deadlines or missing bookings."
+    }
+  },
+  general_coordination: {
+    wedge: {
+      key: "general_coordination",
+      label: "General coordination",
+      selection: "supporting",
+      rationale: "Broad coordination remains a fallback path outside the selected production wedges."
+    },
+    completionContract: {
+      id: "general-coordination-v1",
+      summary: "Turn an underspecified user request into a bounded, policy-aware workflow plan.",
+      successCriteria: [
+        "The request is decomposed into explicit tasks and constraints.",
+        "Supporting context is resolved before any side effect is attempted.",
+        "The next step is drafted safely when the request does not yet qualify for typed execution."
+      ],
+      evidenceSignals: [
+        "Interpretation task exists.",
+        "Supporting context resolution is logged.",
+        "The next-step draft is visible in the resulting artifacts or tasks."
+      ],
+      approvalExpectations: [
+        "Outward side effects are deferred until the request qualifies for the typed-action boundary."
+      ],
+      doneWhen: "The user has a safe, bounded workflow with clear next steps and no hidden side effects."
+    }
+  }
+} as const satisfies Record<
+  z.infer<typeof GoalWedgeKeySchema>,
+  {
+    wedge: z.input<typeof GoalWedgeSchema>;
+    completionContract: z.input<typeof GoalCompletionContractSchema>;
+  }
+>;
+
+function profileForGoalIntent(intent: string) {
+  if (intent === "communications-triage") {
+    return goalContractProfiles.communications_execution;
+  }
+
+  if (intent === "weekly-planning") {
+    return goalContractProfiles.scheduling_execution;
+  }
+
+  if (intent === "travel-readiness") {
+    return goalContractProfiles.travel_readiness;
+  }
+
+  return goalContractProfiles.general_coordination;
+}
+
+export function deriveGoalContract(intent: string) {
+  const profile = profileForGoalIntent(intent);
+
+  return {
+    wedge: GoalWedgeSchema.parse(profile.wedge),
+    completionContract: GoalCompletionContractSchema.parse(profile.completionContract)
+  };
+}
+
+const GoalInputSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
   workspaceId: z.string().min(1).nullable().default(null),
@@ -212,8 +376,20 @@ export const GoalSchema = z.object({
   status: GoalStatusSchema,
   confidence: z.number().min(0).max(1),
   explanation: z.string().min(1),
+  wedge: GoalWedgeSchema.optional(),
+  completionContract: GoalCompletionContractSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
+});
+
+export const GoalSchema = GoalInputSchema.transform((goal) => {
+  const derived = deriveGoalContract(goal.intent);
+
+  return {
+    ...goal,
+    wedge: goal.wedge ?? derived.wedge,
+    completionContract: goal.completionContract ?? derived.completionContract
+  };
 });
 
 export const TaskSchema = z.object({

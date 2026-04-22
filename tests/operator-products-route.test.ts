@@ -42,9 +42,11 @@ describe("operator products route", () => {
     const payload = (await response.json()) as {
       products: Array<{ id: string; slug: string }>;
       selection: { operatorProductId: string } | null;
-      agents: Array<{ id: string }>;
+      agents: Array<{ id: string; name: string; allowedCapabilities: string[]; maxRiskClass: string }>;
       templates: Array<{ id: string }>;
     };
+    const communicationsAgent = payload.agents.find((agent) => agent.name === "communications");
+    const calendarAgent = payload.agents.find((agent) => agent.name === "calendar");
 
     expect(response.status).toBe(200);
     expectNoStoreHeaders(response);
@@ -52,6 +54,14 @@ describe("operator products route", () => {
     expect(payload.selection).not.toBeNull();
     expect(payload.selection?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.agents.some((agent) => agent.id === "agent-builtin-communications")).toBe(true);
+    expect(communicationsAgent).toMatchObject({
+      allowedCapabilities: ["read", "search", "draft", "send"],
+      maxRiskClass: "R3"
+    });
+    expect(calendarAgent).toMatchObject({
+      allowedCapabilities: ["read", "search", "schedule", "update"],
+      maxRiskClass: "R3"
+    });
     expect(Array.isArray(payload.templates)).toBe(true);
   });
 
