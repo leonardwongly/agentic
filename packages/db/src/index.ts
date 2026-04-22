@@ -92,7 +92,7 @@ export const goals = pgTable("goals", {
   status: text("status").notNull(),
   confidence: real("confidence").notNull(),
   explanation: text("explanation").notNull(),
-  responsibility: jsonb("responsibility").$type<Record<string, unknown>>().notNull(),
+  goalContract: jsonb("goal_contract").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -110,7 +110,7 @@ export const tasks = pgTable("tasks", {
   dependsOn: jsonb("depends_on").$type<string[]>().notNull(),
   toolCapabilities: jsonb("tool_capabilities").$type<string[]>().notNull(),
   artifactIds: jsonb("artifact_ids").$type<string[]>().notNull(),
-  responsibility: jsonb("responsibility").$type<Record<string, unknown>>().notNull(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -155,7 +155,7 @@ export const approvalRequests = pgTable("approval_requests", {
   decisionScope: text("decision_scope"),
   decisionRationale: text("decision_rationale"),
   history: jsonb("history").$type<Array<Record<string, unknown>>>().notNull(),
-  responsibility: jsonb("responsibility").$type<Record<string, unknown>>().notNull(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   expiryAt: timestamp("expiry_at", { withTimezone: true }).notNull(),
   respondedAt: timestamp("responded_at", { withTimezone: true })
@@ -331,6 +331,7 @@ export const watchers = pgTable("watchers", {
   status: text("status").notNull(),
   expiryAt: timestamp("expiry_at", { withTimezone: true }),
   actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -381,7 +382,7 @@ export const autopilotEvents = pgTable("autopilot_events", {
   status: text("status").notNull(),
   details: jsonb("details").$type<Record<string, unknown>>().notNull(),
   actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
-  responsibility: jsonb("responsibility").$type<Record<string, unknown>>().notNull(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   processedAt: timestamp("processed_at", { withTimezone: true }),
   resultGoalId: text("result_goal_id"),

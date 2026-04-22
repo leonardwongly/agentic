@@ -34,5 +34,5 @@ Performance:
 - audit formatting is derived in-memory from already loaded bundle data
 
 Residual risk:
-- older deployed databases need migration `0005_workflow_responsibility.sql` applied before Postgres-backed writes can succeed
+- older deployed databases need migrations `0003_goal_contract.sql` and `0004_team_responsibility.sql` applied before Postgres-backed writes can succeed
 - escalation-trigger transitions beyond approval response still depend on future workflow actions adopting the shared responsibility model consistently

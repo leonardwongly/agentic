@@ -4565,7 +4565,7 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into autopilot_events (
-          id, user_id, kind, source_id, idempotency_key, mode, summary, status, details, actor_context, responsibility, created_at, processed_at, result_goal_id, error
+          id, user_id, kind, source_id, idempotency_key, mode, summary, status, details, actor_context, team_responsibility, created_at, processed_at, result_goal_id, error
         )
         values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
         on conflict (id) do update
@@ -4578,7 +4578,7 @@ class PostgresRepository implements AgenticRepository {
             status = excluded.status,
             details = excluded.details,
             actor_context = excluded.actor_context,
-            responsibility = excluded.responsibility,
+            team_responsibility = excluded.team_responsibility,
             processed_at = excluded.processed_at,
             result_goal_id = excluded.result_goal_id,
             error = excluded.error
@@ -4695,22 +4695,22 @@ class PostgresRepository implements AgenticRepository {
   private mapAutopilotEventRow(row: Record<string, unknown>): AutopilotEvent {
     return normalizeAutopilotEvent(
       AutopilotEventSchema.parse({
-      id: row.id,
-      userId: row.user_id,
-      kind: row.kind,
-      sourceId: row.source_id,
-      idempotencyKey: typeof row.idempotency_key === "string" ? row.idempotency_key : null,
-      mode: row.mode,
-      summary: row.summary,
-      status: row.status,
-      details: row.details ?? {},
-      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-      responsibility: row.responsibility ?? undefined,
-      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
-      processedAt: row.processed_at ? new Date(row.processed_at as string | number | Date).toISOString() : null,
-      resultGoalId: typeof row.result_goal_id === "string" ? row.result_goal_id : null,
-      error: typeof row.error === "string" ? row.error : null
-    })
+        id: row.id,
+        userId: row.user_id,
+        kind: row.kind,
+        sourceId: row.source_id,
+        idempotencyKey: typeof row.idempotency_key === "string" ? row.idempotency_key : null,
+        mode: row.mode,
+        summary: row.summary,
+        status: row.status,
+        details: row.details ?? {},
+        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        responsibility: row.team_responsibility ?? undefined,
+        createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+        processedAt: row.processed_at ? new Date(row.processed_at as string | number | Date).toISOString() : null,
+        resultGoalId: typeof row.result_goal_id === "string" ? row.result_goal_id : null,
+        error: typeof row.error === "string" ? row.error : null
+      })
     );
   }
 
@@ -4731,7 +4731,7 @@ class PostgresRepository implements AgenticRepository {
       explanation: row.explanation,
       wedge: goalContract?.wedge,
       completionContract: goalContract?.completionContract,
-      responsibility: row.responsibility ?? goalContract?.responsibility,
+      responsibility: goalContract?.responsibility,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4764,7 +4764,7 @@ class PostgresRepository implements AgenticRepository {
       dependsOn: row.depends_on ?? [],
       toolCapabilities: row.tool_capabilities ?? [],
       artifactIds: row.artifact_ids ?? [],
-      responsibility: row.responsibility ?? undefined,
+      responsibility: row.team_responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4817,7 +4817,7 @@ class PostgresRepository implements AgenticRepository {
       decisionScope: normalizeApprovalDecisionScope(row.decision_scope),
       decisionRationale: typeof row.decision_rationale === "string" ? row.decision_rationale : null,
       history: normalizeApprovalHistory(row.history),
-      responsibility: row.responsibility ?? undefined,
+      responsibility: row.team_responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       expiryAt: new Date(row.expiry_at as string | number | Date).toISOString(),
       respondedAt: row.responded_at ? new Date(row.responded_at as string | number | Date).toISOString() : null
@@ -4836,7 +4836,7 @@ class PostgresRepository implements AgenticRepository {
       status: row.status,
       expiryAt: row.expiry_at ? new Date(row.expiry_at as string | number | Date).toISOString() : null,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-      responsibility: row.responsibility ?? undefined,
+      responsibility: row.team_responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -5807,7 +5807,7 @@ class PostgresRepository implements AgenticRepository {
         `
           insert into tasks (
             id, goal_id, workflow_id, title, summary, assigned_agent, state, risk_class, requires_approval,
-            depends_on, tool_capabilities, artifact_ids, responsibility, created_at, updated_at
+            depends_on, tool_capabilities, artifact_ids, team_responsibility, created_at, updated_at
           )
           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15)
           on conflict (id) do update
@@ -5822,7 +5822,7 @@ class PostgresRepository implements AgenticRepository {
               depends_on = excluded.depends_on,
               tool_capabilities = excluded.tool_capabilities,
               artifact_ids = excluded.artifact_ids,
-              responsibility = excluded.responsibility,
+              team_responsibility = excluded.team_responsibility,
               updated_at = excluded.updated_at
         `,
         [
@@ -5876,7 +5876,7 @@ class PostgresRepository implements AgenticRepository {
         `
           insert into approval_requests (
             id, goal_id, task_id, title, rationale, risk_class, decision, requested_action, action_intent, preview,
-            decision_scope, decision_rationale, history, responsibility, created_at, expiry_at, responded_at
+            decision_scope, decision_rationale, history, team_responsibility, created_at, expiry_at, responded_at
           )
           values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17)
           on conflict (id) do update
@@ -5892,7 +5892,7 @@ class PostgresRepository implements AgenticRepository {
               decision_scope = excluded.decision_scope,
               decision_rationale = excluded.decision_rationale,
               history = excluded.history,
-              responsibility = excluded.responsibility,
+              team_responsibility = excluded.team_responsibility,
               expiry_at = excluded.expiry_at,
               responded_at = excluded.responded_at
         `,
@@ -5922,7 +5922,7 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, responsibility, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, team_responsibility, created_at, updated_at
           )
           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
           on conflict (id) do update
@@ -5935,7 +5935,7 @@ class PostgresRepository implements AgenticRepository {
               status = excluded.status,
               expiry_at = excluded.expiry_at,
               actor_context = excluded.actor_context,
-              responsibility = excluded.responsibility,
+              team_responsibility = excluded.team_responsibility,
               updated_at = excluded.updated_at
         `,
         [
@@ -7975,7 +7975,7 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, responsibility, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, team_responsibility, created_at, updated_at
           )
           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
           on conflict (id) do update
@@ -7988,7 +7988,7 @@ class PostgresRepository implements AgenticRepository {
               status = excluded.status,
               expiry_at = excluded.expiry_at,
               actor_context = excluded.actor_context,
-              responsibility = excluded.responsibility,
+              team_responsibility = excluded.team_responsibility,
               updated_at = excluded.updated_at
         `,
         [
