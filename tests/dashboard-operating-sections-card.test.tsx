@@ -47,6 +47,13 @@ describe("DashboardOperatingSectionsCard", () => {
                 summary: "Recovery stays with the editor until retrying jobs are stale and need operator recovery before new queue work can be trusted."
               }
             ],
+            auditCoverage: {
+              required: true,
+              status: "attention",
+              summary: "Audit exports are required for this workspace, but no completed export is recorded yet.",
+              latestStatus: null,
+              latestCompletedAt: null
+            },
             actionBoundaries: [
               "Editors can triage queue work, recover execution, and prepare approvals, but governance changes stay with the owner."
             ],
@@ -107,6 +114,8 @@ describe("DashboardOperatingSectionsCard", () => {
     expect(markup).toContain("Editor execution workflow");
     expect(markup).toContain("Execution-first queue visibility");
     expect(markup).toContain("Escalate to owner");
+    expect(markup).toContain("Audit required");
+    expect(markup).toContain("Audit exports are required for this workspace, but no completed export is recorded yet.");
     expect(markup).toContain("Shared queue: editor");
     expect(markup).toContain("Approval boundary: owner");
     expect(markup).toContain("Shared queue: 1 urgent queue item should be worked in queue order by the editor.");
@@ -140,6 +149,13 @@ describe("DashboardOperatingSectionsCard", () => {
             visibilityLabel: "Setup-only visibility",
             queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
             ownershipAssignments: [],
+            auditCoverage: {
+              required: false,
+              status: "attention",
+              summary: "Activate a workspace before evaluating whether audit export coverage is meeting the governed baseline.",
+              latestStatus: null,
+              latestCompletedAt: null
+            },
             actionBoundaries: [
               "Select or create a workspace before treating this dashboard like a multi-actor operating surface."
             ],

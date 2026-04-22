@@ -89,6 +89,7 @@ type AssembleDashboardDataParams = {
     activeWorkspace: Workspace | null;
     workspaceMembers: WorkspaceMember[];
     workspaceGovernance: WorkspaceGovernance | null;
+    privacyOperations: PrivacyOperation[];
     goals: GoalBundle[];
     approvals: ApprovalRequest[];
     evidenceRecords: EvidenceRecord[];
@@ -298,6 +299,7 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
     activeWorkspace: params.activeWorkspace,
     workspaceMembers: params.workspaceMembers,
     workspaceGovernance: params.workspaceGovernance,
+    privacyOperations: scopedPrivacyOperations,
     goals: scopedGoals,
     approvals: scopedApprovals,
     evidenceRecords: scopedEvidenceRecords,

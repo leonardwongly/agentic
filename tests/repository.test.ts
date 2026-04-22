@@ -3014,6 +3014,15 @@ describe("repository", () => {
         })
       ])
     );
+    expect(dashboard.operatingSections.teamWorkflow.auditCoverage).toMatchObject({
+      required: false,
+      status: "healthy",
+      latestStatus: null,
+      latestCompletedAt: null
+    });
+    expect(dashboard.operatingSections.teamWorkflow.auditCoverage.summary).toContain(
+      "Audit exports are optional right now"
+    );
     expect(dashboard.operatingSections.teamWorkflow.slaSummary).toContain("exceeded the shared-team response window");
     expect(dashboard.operatingSections.teamWorkflow.handoffGuidance).toEqual(
       expect.arrayContaining([
@@ -3301,6 +3310,15 @@ describe("repository", () => {
     });
     expect(Array.isArray(auditedGoal?.approvals)).toBe(true);
     expect(auditedGoal?.actionLogs.some((log) => log.kind === "goal.created")).toBe(true);
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+
+    expect(dashboard.operatingSections.teamWorkflow.auditCoverage).toMatchObject({
+      required: true,
+      status: "healthy",
+      latestStatus: "completed",
+      latestCompletedAt: audit.generatedAt
+    });
+    expect(dashboard.operatingSections.teamWorkflow.auditCoverage.summary).toContain(audit.generatedAt);
   });
 
   it("fails fast with a clear error when the file-backed store is corrupted", async () => {

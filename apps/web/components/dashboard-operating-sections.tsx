@@ -102,6 +102,14 @@ export function DashboardOperatingSectionsCard({ operatingSections, openTarget }
           {operatingSections.teamWorkflow.escalationTargetRole ? (
             <span className="control-plane-stat">Escalate to {operatingSections.teamWorkflow.escalationTargetRole}</span>
           ) : null}
+          <span className="control-plane-stat">
+            Audit {operatingSections.teamWorkflow.auditCoverage.required ? "required" : "optional"}
+          </span>
+          {operatingSections.teamWorkflow.auditCoverage.latestStatus ? (
+            <span className="control-plane-stat">
+              Audit export {operatingSections.teamWorkflow.auditCoverage.latestStatus}
+            </span>
+          ) : null}
           {operatingSections.teamWorkflow.queueMetrics.map((metric) => (
             <span key={metric} className="control-plane-stat">
               {metric}
@@ -119,6 +127,7 @@ export function DashboardOperatingSectionsCard({ operatingSections, openTarget }
         ) : null}
         <ul className="control-plane-highlights">
           <li>{operatingSections.teamWorkflow.slaSummary}</li>
+          <li>{operatingSections.teamWorkflow.auditCoverage.summary}</li>
           {operatingSections.teamWorkflow.ownershipAssignments.map((assignment) => (
             <li key={assignment.key}>
               {assignment.label}: {assignment.summary}

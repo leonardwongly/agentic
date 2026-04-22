@@ -35,6 +35,13 @@ function buildDashboardData(): DashboardData {
         visibilityLabel: "Setup-only visibility",
         queueMetrics: [],
         ownershipAssignments: [],
+        auditCoverage: {
+          required: false,
+          status: "attention",
+          summary: "Activate a workspace before evaluating whether audit export coverage is meeting the governed baseline.",
+          latestStatus: null,
+          latestCompletedAt: null
+        },
         actionBoundaries: [],
         handoffGuidance: [],
         permissions: {

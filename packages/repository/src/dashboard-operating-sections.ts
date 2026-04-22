@@ -12,12 +12,14 @@ import type {
   DashboardOperatingSections,
   DashboardRoleView,
   DashboardTeamWorkflowAssignment,
+  DashboardTeamWorkflowAuditCoverage,
   DashboardTeamWorkflow,
   EvidenceRecord,
   GoalBundle,
   IntegrationAccount,
   MemoryRecord,
   NowQueue,
+  PrivacyOperation,
   Watcher,
   Workspace,
   WorkspaceGovernance,
@@ -34,6 +36,7 @@ type BuildDashboardOperatingSectionsParams = {
   activeWorkspace: Workspace | null;
   workspaceMembers: WorkspaceMember[];
   workspaceGovernance: WorkspaceGovernance | null;
+  privacyOperations: PrivacyOperation[];
   goals: GoalBundle[];
   approvals: ApprovalRequest[];
   evidenceRecords: EvidenceRecord[];
@@ -307,6 +310,8 @@ function buildTeamWorkflow(params: {
   role: WorkspaceRole | null;
   activeWorkspace: Workspace | null;
   workspaceMembers: WorkspaceMember[];
+  workspaceGovernance: WorkspaceGovernance | null;
+  privacyOperations: PrivacyOperation[];
   approvals: ApprovalRequest[];
   nowQueue: NowQueue;
   operations?: DashboardOperationsTower;
@@ -320,6 +325,13 @@ function buildTeamWorkflow(params: {
       visibilityLabel: "Setup-only visibility",
       queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
       ownershipAssignments: [],
+      auditCoverage: {
+        required: false,
+        status: "attention",
+        summary: "Activate a workspace before evaluating whether audit export coverage is meeting the governed baseline.",
+        latestStatus: null,
+        latestCompletedAt: null
+      },
       actionBoundaries: [
         "Select or create a workspace before treating this dashboard like a multi-actor operating surface."
       ],
@@ -359,6 +371,10 @@ function buildTeamWorkflow(params: {
   );
   const firstAsyncIssue = params.operations?.asyncExecution?.items[0] ?? null;
   const firstConnectorIssue = params.operations?.connectorHealth?.items[0] ?? null;
+  const latestAuditExport = [...params.privacyOperations]
+    .filter((operation) => operation.kind === "workspace_export")
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+  const auditExportsRequired = params.workspaceGovernance?.requireAuditExports ?? false;
   const hasSharedQueue = collaboratorCount > 0 || pendingApprovals.length > 0 || params.nowQueue.totalCount > 0;
   const ownerOnlyReason = "Only the workspace owner can change membership, governance posture, or privacy lifecycle state.";
   const queueMetrics = [
@@ -414,9 +430,53 @@ function buildTeamWorkflow(params: {
           : `No active execution recovery lane is currently assigned to the ${sharedQueueOwnerRole}.`
     }
   ];
+  const auditCoverage: DashboardTeamWorkflowAuditCoverage =
+    latestAuditExport?.status === "failed"
+      ? {
+          required: auditExportsRequired,
+          status: auditExportsRequired ? "critical" : "attention",
+          summary:
+            "The latest workspace audit export failed and should be retried before widening governed execution.",
+          latestStatus: latestAuditExport.status,
+          latestCompletedAt: latestAuditExport.completedAt
+        }
+      : latestAuditExport?.status === "queued" || latestAuditExport?.status === "running"
+        ? {
+            required: auditExportsRequired,
+            status: "attention",
+            summary: "A workspace audit export is in flight through the durable worker path.",
+            latestStatus: latestAuditExport.status,
+            latestCompletedAt: latestAuditExport.completedAt
+          }
+        : latestAuditExport?.status === "completed" && latestAuditExport.completedAt
+          ? {
+              required: auditExportsRequired,
+              status: "healthy",
+              summary: `Latest workspace audit export completed at ${latestAuditExport.completedAt}.`,
+              latestStatus: latestAuditExport.status,
+              latestCompletedAt: latestAuditExport.completedAt
+            }
+          : auditExportsRequired
+            ? {
+                required: true,
+                status: "attention",
+                summary:
+                  "Audit exports are required for this workspace, but no completed export is recorded yet.",
+                latestStatus: latestAuditExport?.status ?? null,
+                latestCompletedAt: latestAuditExport?.completedAt ?? null
+              }
+            : {
+                required: false,
+                status: "healthy",
+                summary:
+                  "Audit exports are optional right now, and the export route remains available for review and compliance.",
+                latestStatus: latestAuditExport?.status ?? null,
+                latestCompletedAt: latestAuditExport?.completedAt ?? null
+              };
   const handoffGuidance = compactHighlights(
     overdueApprovals[0] ? `Oldest overdue approval: ${overdueApprovals[0].title}` : null,
     firstAsyncIssue ? `Execution recovery owner: ${firstAsyncIssue.summary}` : null,
+    auditCoverage.status !== "healthy" ? auditCoverage.summary : null,
     firstConnectorIssue ? `Connector escalation: ${firstConnectorIssue.summary}` : null,
     hasSharedQueue ? "Use the shared queue ordering before pulling in new ad hoc work." : null
   );
@@ -444,6 +504,7 @@ function buildTeamWorkflow(params: {
       visibilityLabel: "Full queue, approval, and governance visibility",
       queueMetrics,
       ownershipAssignments,
+      auditCoverage,
       actionBoundaries: [
         "Owners can manage membership, governance posture, and approval decisions.",
         "Use owner authority to unblock policy gates instead of routing around them."
@@ -480,6 +541,7 @@ function buildTeamWorkflow(params: {
       visibilityLabel: "Read-only review visibility",
       queueMetrics,
       ownershipAssignments,
+      auditCoverage,
       actionBoundaries: [
         "Viewers can inspect approvals, queue evidence, and execution posture but cannot change policy or membership.",
         "Escalate blocked execution to editors and policy gates to owners."
@@ -513,6 +575,7 @@ function buildTeamWorkflow(params: {
     visibilityLabel: "Execution-first queue visibility",
     queueMetrics,
     ownershipAssignments,
+    auditCoverage,
     actionBoundaries: [
       "Editors can triage queue work, recover execution, and prepare approvals, but governance changes stay with the owner.",
       "Use the shared queue ordering before widening automation or escalating new work."
@@ -584,6 +647,8 @@ export function buildDashboardOperatingSections(params: BuildDashboardOperatingS
     role,
     activeWorkspace: params.activeWorkspace,
     workspaceMembers: params.workspaceMembers,
+    workspaceGovernance: params.workspaceGovernance,
+    privacyOperations: params.privacyOperations,
     approvals: params.approvals,
     nowQueue: params.nowQueue,
     operations: params.operations,

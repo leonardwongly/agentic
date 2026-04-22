@@ -904,6 +904,14 @@ export const DashboardTeamWorkflowAssignmentSchema = z.object({
   summary: z.string().min(1)
 });
 
+export const DashboardTeamWorkflowAuditCoverageSchema = z.object({
+  required: z.boolean(),
+  status: DashboardOperatingSectionStatusSchema,
+  summary: z.string().min(1),
+  latestStatus: PrivacyOperationStatusSchema.nullable().default(null),
+  latestCompletedAt: z.string().datetime().nullable().default(null)
+});
+
 export const DashboardTeamWorkflowSchema = z.object({
   mode: DashboardTeamWorkflowModeSchema,
   label: z.string().min(1),
@@ -911,6 +919,7 @@ export const DashboardTeamWorkflowSchema = z.object({
   visibilityLabel: z.string().min(1),
   queueMetrics: z.array(z.string().min(1)).default([]),
   ownershipAssignments: z.array(DashboardTeamWorkflowAssignmentSchema).default([]),
+  auditCoverage: DashboardTeamWorkflowAuditCoverageSchema,
   actionBoundaries: z.array(z.string().min(1)).default([]),
   handoffGuidance: z.array(z.string().min(1)).default([]),
   permissions: z.object({
@@ -2529,6 +2538,7 @@ export type DashboardRoleView = z.infer<typeof DashboardRoleViewSchema>;
 export type DashboardNextBestAction = z.infer<typeof DashboardNextBestActionSchema>;
 export type DashboardPermission = z.infer<typeof DashboardPermissionSchema>;
 export type DashboardTeamWorkflowAssignment = z.infer<typeof DashboardTeamWorkflowAssignmentSchema>;
+export type DashboardTeamWorkflowAuditCoverage = z.infer<typeof DashboardTeamWorkflowAuditCoverageSchema>;
 export type DashboardTeamWorkflow = z.infer<typeof DashboardTeamWorkflowSchema>;
 export type DashboardOperatingSections = z.infer<typeof DashboardOperatingSectionsSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;

@@ -2564,8 +2564,7 @@ class FileRepository implements AgenticRepository {
     const privacyOperations = store.privacyOperations
       .filter((operation) => operation.workspaceId === workspaceId)
       .map((operation) => PrivacyOperationSchema.parse(clone(operation)));
-
-    return buildWorkspaceAuditExport({
+    const auditExport = buildWorkspaceAuditExport({
       workspace,
       governance,
       members,
@@ -2573,6 +2572,28 @@ class FileRepository implements AgenticRepository {
       goalShares,
       privacyOperations
     });
+
+    await this.savePrivacyOperation({
+      id: `privacy-export-${crypto.randomUUID()}`,
+      workspaceId,
+      userId,
+      kind: "workspace_export",
+      status: "completed",
+      requestedBy: userId,
+      actorContext: createSystemActorContext(userId),
+      jobId: null,
+      details: {},
+      result: {
+        fileName: auditExport.fileName
+      },
+      startedAt: auditExport.generatedAt,
+      completedAt: auditExport.generatedAt,
+      error: null,
+      createdAt: auditExport.generatedAt,
+      updatedAt: auditExport.generatedAt
+    });
+
+    return auditExport;
   }
 
   async saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle> {
@@ -6616,8 +6637,7 @@ class PostgresRepository implements AgenticRepository {
           [workspaceId]
         )
       ).rows.map((row) => this.mapPrivacyOperationRow(row));
-
-      return buildWorkspaceAuditExport({
+      const auditExport = buildWorkspaceAuditExport({
         workspace,
         governance,
         members,
@@ -6625,6 +6645,28 @@ class PostgresRepository implements AgenticRepository {
         goalShares,
         privacyOperations
       });
+
+      await this.savePrivacyOperation({
+        id: `privacy-export-${crypto.randomUUID()}`,
+        workspaceId,
+        userId,
+        kind: "workspace_export",
+        status: "completed",
+        requestedBy: userId,
+        actorContext: createSystemActorContext(userId),
+        jobId: null,
+        details: {},
+        result: {
+          fileName: auditExport.fileName
+        },
+        startedAt: auditExport.generatedAt,
+        completedAt: auditExport.generatedAt,
+        error: null,
+        createdAt: auditExport.generatedAt,
+        updatedAt: auditExport.generatedAt
+      });
+
+      return auditExport;
     } finally {
       client.release();
     }

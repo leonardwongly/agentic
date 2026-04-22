@@ -106,6 +106,13 @@ function buildDashboardData(): DashboardData {
         visibilityLabel: "Execution-first queue visibility",
         queueMetrics: ["1 collaborator", "0 pending approvals", "0 urgent queue items"],
         ownershipAssignments: [],
+        auditCoverage: {
+          required: true,
+          status: "attention",
+          summary: "Audit exports are required for this workspace, but no completed export is recorded yet.",
+          latestStatus: null,
+          latestCompletedAt: null
+        },
         actionBoundaries: [
           "Editors can triage queue work and prepare approvals, but governance and membership stay with the owner."
         ],
