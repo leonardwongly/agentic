@@ -13,6 +13,11 @@ import {
 } from "../../../../../lib/api-response";
 import { parseIdempotencyKey } from "../../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../../lib/server";
+import {
+  canOperateSharedWorkflow,
+  getSharedWorkflowDeniedReason,
+  resolveWorkspaceRoleForUser
+} from "../../../../../lib/workspace-role-permissions";
 
 const GoalIdSchema = z.string().trim().min(1).max(200);
 
@@ -51,6 +56,15 @@ export async function POST(request: Request, context: RouteContext) {
 
     if (!bundle) {
       throw new ApiRouteError(404, `Goal ${goalId} was not found.`);
+    }
+
+    const workspaceMembers = bundle.goal.workspaceId
+      ? await repository.listWorkspaceMembers(bundle.goal.workspaceId, principal.userId)
+      : [];
+    const workspaceRole = resolveWorkspaceRoleForUser(workspaceMembers, bundle.goal.workspaceId, principal.userId);
+
+    if (!canOperateSharedWorkflow({ workspaceId: bundle.goal.workspaceId, role: workspaceRole })) {
+      throw new ApiRouteError(403, getSharedWorkflowDeniedReason("refine_goal"));
     }
 
     const job = await enqueueGoalRefineJob({

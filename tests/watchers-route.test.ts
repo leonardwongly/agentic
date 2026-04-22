@@ -1,7 +1,15 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, WatcherSchema, createHumanActorContext, createSystemActorContext, nowIso } from "@agentic/contracts";
+import {
+  SYSTEM_USER_ID,
+  WatcherSchema,
+  WorkspaceMemberSchema,
+  WorkspaceSchema,
+  createHumanActorContext,
+  createSystemActorContext,
+  nowIso
+} from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { vi } from "vitest";
@@ -17,10 +25,12 @@ describe("watchers route", () => {
   async function createGoalForUser(
     repository: ReturnType<typeof createRepository>,
     userId: string,
-    request: string
+    request: string,
+    workspaceId?: string | null
   ) {
     const bundle = await processUserRequest({
       userId,
+      workspaceId,
       request,
       memories: await repository.listMemory(userId),
       integrations: await repository.listIntegrations(userId)
@@ -28,6 +38,57 @@ describe("watchers route", () => {
 
     await repository.saveGoalBundle(bundle);
     return bundle;
+  }
+
+  async function createSharedWorkspace(
+    repository: ReturnType<typeof createRepository>,
+    ownerUserId: string,
+    memberUserId: string
+  ) {
+    const timestamp = "2026-04-22T00:00:00.000Z";
+    const ownerActor = createSystemActorContext(ownerUserId);
+    const workspaceId = "workspace-shared-watchers";
+
+    await repository.saveWorkspace(
+      WorkspaceSchema.parse({
+        id: workspaceId,
+        ownerUserId,
+        slug: "shared-watchers",
+        name: "Shared Watchers Workspace",
+        description: "Shared workspace for watcher permission tests.",
+        isPersonal: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }),
+      ownerActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-shared-watchers-owner",
+        workspaceId,
+        userId: ownerUserId,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      ownerActor
+    );
+
+    return {
+      workspaceId,
+      addMember: async (role: "editor" | "viewer") =>
+        repository.saveWorkspaceMember(
+          WorkspaceMemberSchema.parse({
+            id: `workspace-shared-watchers-${memberUserId}-${role}`,
+            workspaceId,
+            userId: memberUserId,
+            role,
+            joinedAt: timestamp,
+            updatedAt: timestamp
+          }),
+          ownerActor
+        )
+    };
   }
 
   beforeEach(async () => {
@@ -201,6 +262,148 @@ describe("watchers route", () => {
     expect(response.status).toBe(200);
     expect(payload.watcher.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
     expect(savedWatcher?.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
+  });
+
+  it("allows editors to create shared workspace watchers with normalized responsibility metadata", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const editorUserId = "user-editor";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(editorUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, editorUserId);
+    await workspace.addMember("editor");
+
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Watch shared inbox escalations for the team.",
+      workspace.workspaceId
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: editorUserId,
+      sessionId: "session-editor",
+      expiresAt: "2026-12-31T00:00:00.000Z"
+    });
+
+    let response: Response;
+    let payload: {
+      watcher: {
+        id: string;
+        actorContext: unknown;
+        responsibility: {
+          owner: { userId: string | null };
+          delegate: { kind: string; workspaceRole: string | null } | null;
+        };
+      };
+    };
+    try {
+      response = await watchersRoute(
+        new Request("http://localhost/api/watchers", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            goalId: bundle.goal.id,
+            targetEntity: "shared-priority-inbox",
+            condition: "a shared escalation appears",
+            frequency: "hourly",
+            triggerAction: "draft the next response"
+          })
+        })
+      );
+      payload = (await response.json()) as typeof payload;
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+
+    const savedWatcher = (await repository.listWatchers({ userId: editorUserId })).find(
+      (watcher) => watcher.id === payload.watcher.id
+    );
+
+    expect(response.status).toBe(200);
+    expect(payload.watcher.actorContext).toEqual(createHumanActorContext(editorUserId, "session-editor"));
+    expect(payload.watcher.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(payload.watcher.responsibility.delegate).toMatchObject({
+      kind: "workspace_role",
+      workspaceRole: "editor"
+    });
+    expect(savedWatcher?.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(savedWatcher?.responsibility.delegate).toMatchObject({
+      kind: "workspace_role",
+      workspaceRole: "editor"
+    });
+  });
+
+  it("returns 403 when a viewer tries to create a shared workspace watcher", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const viewerUserId = "user-viewer";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(viewerUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    await workspace.addMember("viewer");
+
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Watch shared workspace inbox escalations.",
+      workspace.workspaceId
+    );
+    const watchersBefore = await repository.listWatchers({ userId: viewerUserId });
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: viewerUserId,
+      sessionId: "session-viewer",
+      expiresAt: "2026-12-31T00:00:00.000Z"
+    });
+
+    let response: Response;
+    let payload: { error?: string };
+    try {
+      response = await watchersRoute(
+        new Request("http://localhost/api/watchers", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            goalId: bundle.goal.id,
+            targetEntity: "shared-priority-inbox",
+            condition: "a shared escalation appears",
+            frequency: "hourly",
+            triggerAction: "draft the next response"
+          })
+        })
+      );
+      payload = (await response.json()) as { error?: string };
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+
+    expect(response.status).toBe(403);
+    expect(payload.error).toBe(
+      "Viewers can inspect shared workflow watchers, but only workspace owners and editors can create or change them."
+    );
+    const watchersAfter = await repository.listWatchers({ userId: viewerUserId });
+
+    expect(watchersAfter).toHaveLength(watchersBefore.length);
+    expect(
+      watchersAfter.some(
+        (watcher) => watcher.goalId === bundle.goal.id && watcher.targetEntity === "shared-priority-inbox"
+      )
+    ).toBe(false);
   });
 
   it("lists only watchers for the authenticated user's goals", async () => {
@@ -431,5 +634,77 @@ describe("watchers route", () => {
 
     expect(response.status).toBe(404);
     expect(payload.error).toContain(`Watcher ${secondaryWatcher.id} was not found.`);
+  });
+
+  it("returns 403 when a viewer tries to update a shared workspace watcher", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const viewerUserId = "user-viewer";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(viewerUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    await workspace.addMember("viewer");
+
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Watch shared inbox escalations for the team.",
+      workspace.workspaceId
+    );
+    const watcher = await repository.saveWatcher(
+      WatcherSchema.parse({
+        id: "watcher-shared-viewer-denied",
+        goalId: bundle.goal.id,
+        targetEntity: "shared-priority-inbox",
+        condition: "a shared escalation appears",
+        frequency: "hourly",
+        triggerAction: "draft the next response",
+        sourceSystems: ["email"],
+        status: "active",
+        expiryAt: null,
+        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: viewerUserId,
+      sessionId: "session-viewer",
+      expiresAt: "2026-12-31T00:00:00.000Z"
+    });
+
+    let response: Response;
+    let payload: { error?: string };
+    try {
+      response = await watcherUpdateRoute(
+        new Request(`http://localhost/api/watchers/${watcher.id}`, {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({ action: "pause" })
+        }),
+        {
+          params: Promise.resolve({ id: watcher.id })
+        }
+      );
+      payload = (await response.json()) as { error?: string };
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+
+    const persisted = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find((candidate) => candidate.id === watcher.id);
+
+    expect(response.status).toBe(403);
+    expect(payload.error).toBe(
+      "Viewers can inspect shared workflow watchers, but only workspace owners and editors can create or change them."
+    );
+    expect(persisted?.status).toBe("active");
   });
 });

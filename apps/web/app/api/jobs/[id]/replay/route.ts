@@ -11,6 +11,11 @@ import {
   isAutopilotProcessJob
 } from "@agentic/worker-runtime";
 import { createActionLog } from "@agentic/integrations";
+import {
+  canOperateSharedWorkflow,
+  getSharedWorkflowDeniedReason,
+  resolveWorkspaceRoleForUser
+} from "../../../../../lib/workspace-role-permissions";
 
 type RouteContext = {
   params: Promise<{
@@ -33,6 +38,17 @@ export async function POST(request: Request, context: RouteContext) {
 
     if (!job) {
       throw new ApiRouteError(404, `Job ${id} was not found.`);
+    }
+
+    const sharedWorkspaceId = "workspaceId" in job.payload ? job.payload.workspaceId ?? null : null;
+
+    if (sharedWorkspaceId) {
+      const workspaceMembers = await repository.listWorkspaceMembers(sharedWorkspaceId, principal.userId);
+      const workspaceRole = resolveWorkspaceRoleForUser(workspaceMembers, sharedWorkspaceId, principal.userId);
+
+      if (!canOperateSharedWorkflow({ workspaceId: sharedWorkspaceId, role: workspaceRole })) {
+        throw new ApiRouteError(403, getSharedWorkflowDeniedReason("replay_dead_letter_job"));
+      }
     }
 
     if (job.status !== "dead_letter") {

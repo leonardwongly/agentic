@@ -1,7 +1,13 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext, nowIso } from "@agentic/contracts";
+import {
+  SYSTEM_USER_ID,
+  WorkspaceMemberSchema,
+  WorkspaceSchema,
+  createSystemActorContext,
+  nowIso
+} from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
@@ -49,6 +55,57 @@ describe("approval job route", () => {
     await repository.saveGoalBundle(bundle);
     expect(bundle.approvals[0]).toBeDefined();
     return bundle;
+  }
+
+  async function createSharedWorkspace(
+    repository: ReturnType<typeof createRepository>,
+    ownerUserId: string,
+    memberUserId: string
+  ) {
+    const timestamp = "2026-04-22T00:00:00.000Z";
+    const ownerActor = createSystemActorContext(ownerUserId);
+    const workspaceId = "workspace-shared-job-replay";
+
+    await repository.saveWorkspace(
+      WorkspaceSchema.parse({
+        id: workspaceId,
+        ownerUserId,
+        slug: "shared-job-replay",
+        name: "Shared Job Replay Workspace",
+        description: "Shared workspace for dead-letter replay permission tests.",
+        isPersonal: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }),
+      ownerActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-shared-job-replay-owner",
+        workspaceId,
+        userId: ownerUserId,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      ownerActor
+    );
+
+    return {
+      workspaceId,
+      addMember: async (role: "editor" | "viewer") =>
+        repository.saveWorkspaceMember(
+          WorkspaceMemberSchema.parse({
+            id: `workspace-shared-job-replay-${memberUserId}-${role}`,
+            workspaceId,
+            userId: memberUserId,
+            role,
+            joinedAt: timestamp,
+            updatedAt: timestamp
+          }),
+          ownerActor
+        )
+    };
   }
 
   async function createAutopilotReplayFixture(repository: ReturnType<typeof createRepository>) {
@@ -492,6 +549,84 @@ describe("approval job route", () => {
 
       expect(replayResponse.status).toBe(404);
       expect(replayPayload.error).toContain("was not found");
+      expectNoStoreHeaders(replayResponse);
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+  });
+
+  it("returns 403 when a viewer tries to replay a dead-lettered shared workspace job", async () => {
+    const repository = await buildRepository();
+    const viewerUserId = "user-viewer";
+
+    await repository.seedDefaults(viewerUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    await workspace.addMember("viewer");
+    const bundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      workspaceId: workspace.workspaceId,
+      request: "Review my inbox and draft responses.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+    await repository.saveGoalBundle(bundle);
+    const approval = bundle.approvals[0]!;
+
+    const queuedJob = await enqueueApprovalNotificationJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: approval.id,
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      decision: "approved",
+      channel: "slack_receipt",
+      slackChannelId: "C123",
+      slackMessageTs: "1710000000.000100",
+      workspaceId: bundle.goal.workspaceId,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+    });
+    const claimedJob = await repository.claimNextJob({
+      userId: SYSTEM_USER_ID,
+      kinds: ["approval_notification"],
+      runnerId: "worker-shared-job-replay-viewer-test",
+      leaseMs: 30_000,
+      now: "2099-04-22T06:00:00.000Z"
+    });
+
+    expect(claimedJob?.id).toBe(queuedJob.id);
+
+    await repository.deadLetterJob({
+      jobId: queuedJob.id,
+      runnerId: "worker-shared-job-replay-viewer-test",
+      deadLetteredAt: "2026-04-22T06:01:00.000Z",
+      error: "shared workspace replay viewer denial test"
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: viewerUserId,
+      sessionId: "session-viewer",
+      expiresAt: "2099-04-22T07:00:00.000Z"
+    });
+
+    try {
+      const replayResponse = await replayJobRoute(
+        buildAuthorizedJsonRequest(`http://localhost/api/jobs/${queuedJob.id}/replay`, {}),
+        {
+          params: Promise.resolve({ id: queuedJob.id })
+        }
+      );
+      const replayPayload = (await replayResponse.json()) as { error?: string };
+      const persistedJob = await repository.getJob(queuedJob.id, SYSTEM_USER_ID);
+
+      expect(replayResponse.status).toBe(403);
+      expect(replayPayload.error).toBe(
+        "Viewers can inspect shared runtime issues, but only workspace owners and editors can replay dead-letter jobs."
+      );
+      expect(persistedJob?.status).toBe("dead_letter");
       expectNoStoreHeaders(replayResponse);
     } finally {
       requireApiSessionSpy.mockRestore();

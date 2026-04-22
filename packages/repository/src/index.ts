@@ -1632,6 +1632,55 @@ function goalByIdFromStore(store: RuntimeStore, goalId: string): GoalBundle["goa
   return store.goals.find((candidate) => candidate.id === goalId) ?? null;
 }
 
+function watcherByIdFromStore(store: RuntimeStore, watcherId: string): Watcher | null {
+  return store.watchers.find((candidate) => candidate.id === watcherId) ?? null;
+}
+
+function isGoalIdVisibleToUser(
+  store: RuntimeStore,
+  goalId: string,
+  workspaceIds: Set<string>,
+  userId: string
+): boolean {
+  const goal = goalByIdFromStore(store, goalId);
+  return goal ? isGoalVisibleToUser(goal, workspaceIds, userId) : false;
+}
+
+function isJobVisibleToUserInStore(
+  store: RuntimeStore,
+  job: JobRecord,
+  workspaceIds: Set<string>,
+  userId: string
+): boolean {
+  if (job.userId === userId) {
+    return true;
+  }
+
+  switch (job.payload.type) {
+    case "goal_create":
+    case "goal_refine":
+    case "briefing_create":
+    case "template_run":
+    case "approval_follow_up":
+    case "approval_notification":
+      return (
+        (job.payload.workspaceId ? workspaceIds.has(job.payload.workspaceId) : false) ||
+        isGoalIdVisibleToUser(store, job.payload.goalId, workspaceIds, userId)
+      );
+    case "public_share_view":
+      return isGoalIdVisibleToUser(store, job.payload.goalId, workspaceIds, userId);
+    case "privacy_operation":
+      return job.payload.workspaceId ? workspaceIds.has(job.payload.workspaceId) : false;
+    case "autopilot_process": {
+      const watcher = watcherByIdFromStore(store, job.payload.sourceId);
+      const goal = watcher ? goalByIdFromStore(store, watcher.goalId) : null;
+      return goal?.workspaceId ? workspaceIds.has(goal.workspaceId) : false;
+    }
+    case "docs_render":
+      return false;
+  }
+}
+
 function isGoalShareVisibleToUser(store: RuntimeStore, share: GoalShareRecord, userId: string): boolean {
   const goal = goalByIdFromStore(store, share.goalId);
 
@@ -3149,10 +3198,14 @@ class FileRepository implements AgenticRepository {
     const store = await this.readStore();
     const kinds = params?.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
     const statuses = params?.statuses?.map((status) => JobStatusSchema.parse(status)) ?? [];
+    const workspaceIds = params?.userId ? workspaceIdsForUser(store, params.userId) : null;
 
     return sortByCreatedDesc(
       store.jobs.filter((job) => {
-        if (params?.userId && job.userId !== params.userId) {
+        if (
+          params?.userId &&
+          !isJobVisibleToUserInStore(store, job, workspaceIds ?? new Set<string>(), params.userId)
+        ) {
           return false;
         }
 
@@ -3171,7 +3224,10 @@ class FileRepository implements AgenticRepository {
 
   async getJob(jobId: string, userId = SYSTEM_USER_ID): Promise<JobRecord | null> {
     const store = await this.readStore();
-    const job = store.jobs.find((candidate) => candidate.id === jobId && candidate.userId === userId);
+    const workspaceIds = workspaceIdsForUser(store, userId);
+    const job = store.jobs.find(
+      (candidate) => candidate.id === jobId && isJobVisibleToUserInStore(store, candidate, workspaceIds, userId)
+    );
     return job ? JobRecordSchema.parse(clone(job)) : null;
   }
 
@@ -7508,13 +7564,63 @@ class PostgresRepository implements AgenticRepository {
     statuses?: JobStatus[];
   }): Promise<JobRecord[]> {
     await this.ready;
+    if (params?.userId) {
+      const values: unknown[] = [params.userId];
+      const predicates = [
+        `(
+          j.user_id = $1
+          or direct_wm.user_id is not null
+          or (
+            g.id is not null
+            and (
+              (g.workspace_id is null and g.user_id = $1)
+              or goal_wm.user_id is not null
+            )
+          )
+          or watcher_wm.user_id is not null
+        )`
+      ];
+
+      if (params.kinds?.length) {
+        values.push(params.kinds.map((kind) => JobKindSchema.parse(kind)));
+        predicates.push(`j.kind = any($${values.length}::text[])`);
+      }
+
+      if (params.statuses?.length) {
+        values.push(params.statuses.map((status) => JobStatusSchema.parse(status)));
+        predicates.push(`j.status = any($${values.length}::text[])`);
+      }
+
+      const result = await this.pool.query(
+        `
+          select distinct j.*
+          from jobs j
+          left join workspace_members direct_wm
+            on direct_wm.workspace_id = j.payload ->> 'workspaceId'
+            and direct_wm.user_id = $1
+          left join goals g
+            on g.id = j.payload ->> 'goalId'
+          left join workspace_members goal_wm
+            on goal_wm.workspace_id = g.workspace_id
+            and goal_wm.user_id = $1
+          left join watchers w
+            on w.id = j.payload ->> 'sourceId'
+          left join goals watcher_goal
+            on watcher_goal.id = w.goal_id
+          left join workspace_members watcher_wm
+            on watcher_wm.workspace_id = watcher_goal.workspace_id
+            and watcher_wm.user_id = $1
+          where ${predicates.join(" and ")}
+          order by j.created_at desc
+        `,
+        values
+      );
+
+      return result.rows.map((row) => this.mapJobRow(row));
+    }
+
     const values: unknown[] = [];
     const predicates: string[] = [];
-
-    if (params?.userId) {
-      values.push(params.userId);
-      predicates.push(`user_id = $${values.length}`);
-    }
 
     if (params?.kinds?.length) {
       values.push(params.kinds.map((kind) => JobKindSchema.parse(kind)));
@@ -7542,7 +7648,42 @@ class PostgresRepository implements AgenticRepository {
 
   async getJob(jobId: string, userId = SYSTEM_USER_ID): Promise<JobRecord | null> {
     await this.ready;
-    const result = await this.pool.query("select * from jobs where id = $1 and user_id = $2 limit 1", [jobId, userId]);
+    const result = await this.pool.query(
+      `
+        select distinct j.*
+        from jobs j
+        left join workspace_members direct_wm
+          on direct_wm.workspace_id = j.payload ->> 'workspaceId'
+          and direct_wm.user_id = $1
+        left join goals g
+          on g.id = j.payload ->> 'goalId'
+        left join workspace_members goal_wm
+          on goal_wm.workspace_id = g.workspace_id
+          and goal_wm.user_id = $1
+        left join watchers w
+          on w.id = j.payload ->> 'sourceId'
+        left join goals watcher_goal
+          on watcher_goal.id = w.goal_id
+        left join workspace_members watcher_wm
+          on watcher_wm.workspace_id = watcher_goal.workspace_id
+          and watcher_wm.user_id = $1
+        where j.id = $2
+          and (
+            j.user_id = $1
+            or direct_wm.user_id is not null
+            or (
+              g.id is not null
+              and (
+                (g.workspace_id is null and g.user_id = $1)
+                or goal_wm.user_id is not null
+              )
+            )
+            or watcher_wm.user_id is not null
+          )
+        limit 1
+      `,
+      [userId, jobId]
+    );
     return result.rows[0] ? this.mapJobRow(result.rows[0]) : null;
   }
 

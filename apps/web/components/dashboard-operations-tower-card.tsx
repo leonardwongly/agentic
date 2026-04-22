@@ -11,6 +11,8 @@ type DashboardOperationsTowerCardProps = {
   highlightedItemId: string | null;
   getItemAnchorId: (itemId: string) => string;
   navigateToSection: (section: string, itemId?: string) => void;
+  canReplayDeadLetterJobs: boolean;
+  replayPermissionReason: string;
 };
 
 function describeStatus(status: NonNullable<DashboardData["operations"]>["asyncExecution"]["status"]): string {
@@ -54,7 +56,15 @@ function renderPostureAction(
 }
 
 export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCardProps) {
-  const { operations, expanded, highlightedItemId, getItemAnchorId, navigateToSection } = props;
+  const {
+    operations,
+    expanded,
+    highlightedItemId,
+    getItemAnchorId,
+    navigateToSection,
+    canReplayDeadLetterJobs,
+    replayPermissionReason
+  } = props;
   const router = useRouter();
   const [replayingJobId, setReplayingJobId] = useState<string | null>(null);
 
@@ -98,12 +108,14 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
     }
 
     if (item.remediation.kind === "replay_job") {
+      const disabled = replayingJobId === item.jobId || !canReplayDeadLetterJobs;
       return (
         <button
           type="button"
           className="secondary-button"
           onClick={() => void replayJob(item.jobId)}
-          disabled={replayingJobId === item.jobId}
+          disabled={disabled}
+          title={!canReplayDeadLetterJobs ? replayPermissionReason : undefined}
         >
           {replayingJobId === item.jobId ? "Replaying..." : item.remediation.label}
         </button>

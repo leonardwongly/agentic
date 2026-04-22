@@ -33,6 +33,10 @@ import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { getSeededRepository } from "../../../../lib/server";
+import {
+  SHARED_WORKSPACE_AUTOMATION_DENIED_REASON,
+  canManageSharedWorkspaceAutomationsForRole
+} from "../../../../lib/workspace-role-permissions";
 import type { AgenticRepository } from "@agentic/repository";
 
 const TriggerAutopilotEventSchema = z
@@ -339,6 +343,15 @@ async function resolveWatcherSource(repository: AgenticRepository, sourceId: str
 
   if (!goal) {
     throw new ApiRouteError(404, `Watcher goal ${watcher.goalId} was not found.`);
+  }
+
+  if (goal.goal.workspaceId) {
+    const workspaceMembers = await repository.listWorkspaceMembers(goal.goal.workspaceId, userId);
+    const role = workspaceMembers.find((member) => member.userId === userId)?.role;
+
+    if (!canManageSharedWorkspaceAutomationsForRole(role)) {
+      throw new ApiRouteError(403, SHARED_WORKSPACE_AUTOMATION_DENIED_REASON);
+    }
   }
 
   return { repository, watcher, goal };

@@ -5,6 +5,8 @@ import {
   GoalTemplateSchema,
   SYSTEM_USER_ID,
   WatcherSchema,
+  WorkspaceMemberSchema,
+  WorkspaceSchema,
   createHumanActorContext,
   createSystemActorContext,
   nowIso
@@ -56,22 +58,74 @@ describe("autopilot events route", () => {
     });
   }
 
-  async function createGoalForUser(request: string) {
+  async function createGoalForUser(request: string, userId = SYSTEM_USER_ID, workspaceId?: string | null) {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(userId);
 
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId,
+      workspaceId,
       request,
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(userId),
+      integrations: await repository.listIntegrations(userId)
     });
 
     await repository.saveGoalBundle(bundle);
     return { repository, bundle };
+  }
+
+  async function createSharedWorkspace(
+    repository: ReturnType<typeof createRepository>,
+    ownerUserId: string,
+    memberUserId: string
+  ) {
+    const timestamp = "2026-04-22T00:00:00.000Z";
+    const ownerActor = createSystemActorContext(ownerUserId);
+    const workspaceId = "workspace-shared-autopilot";
+
+    await repository.saveWorkspace(
+      WorkspaceSchema.parse({
+        id: workspaceId,
+        ownerUserId,
+        slug: "shared-autopilot",
+        name: "Shared Autopilot Workspace",
+        description: "Shared workspace for autopilot permission tests.",
+        isPersonal: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }),
+      ownerActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-shared-autopilot-owner",
+        workspaceId,
+        userId: ownerUserId,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      ownerActor
+    );
+
+    return {
+      workspaceId,
+      addMember: async (role: "editor" | "viewer") =>
+        repository.saveWorkspaceMember(
+          WorkspaceMemberSchema.parse({
+            id: `workspace-shared-autopilot-${memberUserId}-${role}`,
+            workspaceId,
+            userId: memberUserId,
+            role,
+            joinedAt: timestamp,
+            updatedAt: timestamp
+          }),
+          ownerActor
+        )
+    };
   }
 
   async function runAutopilotWorker(repository = createRepository({ storePath: process.env.AGENTIC_RUNTIME_STORE_PATH })) {
@@ -790,6 +844,159 @@ describe("autopilot events route", () => {
     expect(response.status).toBe(404);
     expect(payload.error).toContain(`Watcher ${primaryWatcher.id} was not found.`);
     await expect(repository.listAutopilotEvents(secondaryUserId)).resolves.toHaveLength(0);
+  });
+
+  it("returns 403 when a viewer triggers a shared workspace watcher event", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const viewerUserId = "user-viewer";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(viewerUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    await workspace.addMember("viewer");
+
+    const bundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      workspaceId: workspace.workspaceId,
+      request: "Watch the shared escalation inbox for VIP issues.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+    await repository.saveGoalBundle(bundle);
+
+    const watcher = await repository.saveWatcher(
+      WatcherSchema.parse({
+        id: "watcher-shared-viewer-denied",
+        goalId: bundle.goal.id,
+        targetEntity: "shared-vip-inbox",
+        condition: "a VIP thread becomes urgent",
+        frequency: "hourly",
+        triggerAction: "prepare the next response",
+        sourceSystems: ["email"],
+        status: "active",
+        expiryAt: null,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: viewerUserId,
+      sessionId: "session-viewer",
+      expiresAt: "2026-12-31T00:00:00.000Z"
+    });
+
+    let response: Response;
+    let payload: { error?: string };
+    try {
+      response = await autopilotEventsRoute(
+        new Request("http://localhost/api/autopilot/events", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            kind: "watcher_triggered",
+            sourceId: watcher.id,
+            mode: "draft_goal",
+            dryRun: true
+          })
+        })
+      );
+      payload = (await response.json()) as { error?: string };
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+
+    expect(response.status).toBe(403);
+    expect(payload.error).toBe("Only workspace owners and editors can manage shared workspace automations.");
+    await expect(repository.listAutopilotEvents(viewerUserId)).resolves.toHaveLength(0);
+  });
+
+  it("allows editors to trigger shared workspace watcher events", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const editorUserId = "user-editor";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(editorUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, editorUserId);
+    await workspace.addMember("editor");
+
+    const bundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      workspaceId: workspace.workspaceId,
+      request: "Watch the shared escalation inbox for VIP issues.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+    await repository.saveGoalBundle(bundle);
+
+    const watcher = await repository.saveWatcher(
+      WatcherSchema.parse({
+        id: "watcher-shared-editor-allowed",
+        goalId: bundle.goal.id,
+        targetEntity: "shared-vip-inbox",
+        condition: "a VIP thread becomes urgent",
+        frequency: "hourly",
+        triggerAction: "prepare the next response",
+        sourceSystems: ["email"],
+        status: "active",
+        expiryAt: null,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: editorUserId,
+      sessionId: "session-editor",
+      expiresAt: "2026-12-31T00:00:00.000Z"
+    });
+
+    let response: Response;
+    let payload: {
+      simulated: boolean;
+      event: {
+        actorContext: unknown;
+        responsibility: {
+          owner: { userId: string | null };
+        };
+      };
+    };
+    try {
+      response = await autopilotEventsRoute(
+        new Request("http://localhost/api/autopilot/events", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            kind: "watcher_triggered",
+            sourceId: watcher.id,
+            mode: "draft_goal",
+            dryRun: true
+          })
+        })
+      );
+      payload = (await response.json()) as typeof payload;
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+
+    expect(response.status).toBe(200);
+    expect(payload.simulated).toBe(true);
+    expect(payload.event.actorContext).toEqual(createHumanActorContext(editorUserId, "session-editor"));
+    expect(payload.event.responsibility.owner.userId).toBe(editorUserId);
   });
 
   it("rejects auto-run mode when persistence is file-backed", async () => {

@@ -1085,6 +1085,13 @@ describe("route user scoping", () => {
           savedActors.push(candidate.actorContext);
           return candidate;
         },
+        getGoalBundleForUser: async () =>
+          ({
+            goal: {
+              id: watcher.goalId,
+              workspaceId: null
+            }
+          }) as Awaited<ReturnType<AgenticRepository["getGoalBundleForUser"]>>,
         getDashboardData: async (userId) => {
           dashboardCalls.push(userId);
           return buildDashboardData();

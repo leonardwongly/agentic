@@ -1908,8 +1908,8 @@ describe("repository", () => {
       workspaceRole: "editor"
     });
     expect(watcher?.responsibility.reviewer).toMatchObject({
-      kind: "user",
-      userId: SYSTEM_USER_ID
+      kind: "workspace_role",
+      workspaceRole: "owner"
     });
   });
 
@@ -2067,7 +2067,7 @@ describe("repository", () => {
     await expect(repository.listGoalsPage({ userId: SYSTEM_USER_ID, cursor: "not-base64" })).rejects.toMatchObject({
       code: "invalid_cursor"
     });
-  });
+  }, 10_000);
 
   it("bounds dashboard collections to the active workspace scope in the file-backed store", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));

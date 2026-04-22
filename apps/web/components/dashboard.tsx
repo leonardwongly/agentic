@@ -36,7 +36,13 @@ import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-
 import { resolveFeatureCapabilities, summarizeFeatureCapabilities } from "../lib/feature-capabilities";
 import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
 import { getGoalShareSuccessMessage } from "../lib/share-client";
-import { GOAL_SHARE_MUTATION_DENIED_REASON, canManageGoalSharesForRole } from "../lib/workspace-role-permissions";
+import {
+  GOAL_SHARE_MUTATION_DENIED_REASON,
+  canManageGoalSharesForRole,
+  canOperateSharedWorkflow,
+  getSharedWorkflowDeniedReason,
+  resolveWorkspaceRoleForUser
+} from "../lib/workspace-role-permissions";
 import {
   buildGoalRecommendationQuery,
   buildRecommendationFeedbackPayload,
@@ -769,10 +775,62 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       ),
     [data.goalShares, data.goals]
   );
+  const currentDashboardUserId =
+    data.workspaceSelection?.userId ?? data.briefingPreferences.userId ?? data.autopilotSettings.userId ?? null;
   const canManageGoalShares = Boolean(data.activeWorkspace) && canManageGoalSharesForRole(data.operatingSections.roleView.role);
   const goalSharePermissionReason = data.activeWorkspace
     ? GOAL_SHARE_MUTATION_DENIED_REASON
     : "Select a workspace before managing public goal share links.";
+  const resolveSharedWorkflowMutationState = useCallback(
+    (
+      workspaceId: string | null | undefined,
+      operation: "refine_goal" | "manage_watchers" | "replay_dead_letter_job"
+    ) => {
+      const workspaceRole =
+        resolveWorkspaceRoleForUser(data.workspaceMembers, workspaceId, currentDashboardUserId) ??
+        (workspaceId === data.activeWorkspace?.id ? data.operatingSections.roleView.role : null);
+      const allowed = canOperateSharedWorkflow({ workspaceId, role: workspaceRole });
+
+      return {
+        allowed,
+        reason: allowed ? null : getSharedWorkflowDeniedReason(operation)
+      };
+    },
+    [
+      currentDashboardUserId,
+      data.activeWorkspace?.id,
+      data.operatingSections.roleView.role,
+      data.workspaceMembers
+    ]
+  );
+  const goalRefinementStateById = useMemo(
+    () =>
+      new Map(
+        data.goals.map((bundle) => [
+          bundle.goal.id,
+          resolveSharedWorkflowMutationState(bundle.goal.workspaceId, "refine_goal")
+        ])
+      ),
+    [data.goals, resolveSharedWorkflowMutationState]
+  );
+  const watcherMutationStateById = useMemo(
+    () =>
+      new Map(
+        data.watchers.map((watcher) => {
+          const goalBundle = goalBundleById.get(watcher.goalId);
+          return [watcher.id, resolveSharedWorkflowMutationState(goalBundle?.goal.workspaceId ?? null, "manage_watchers")];
+        })
+      ),
+    [data.watchers, goalBundleById, resolveSharedWorkflowMutationState]
+  );
+  const sharedJobReplayState = useMemo(
+    () =>
+      resolveSharedWorkflowMutationState(
+        data.activeWorkspace && !data.activeWorkspace.isPersonal ? data.activeWorkspace.id : null,
+        "replay_dead_letter_job"
+      ),
+    [data.activeWorkspace, resolveSharedWorkflowMutationState]
+  );
 
   const reliabilityHealth = useMemo(() => {
     const status: "healthy" | "degraded" | "failing" =
@@ -2775,6 +2833,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               highlightedItemId={highlightedItemId}
               getItemAnchorId={getDashboardItemAnchorId}
               navigateToSection={navigateToSection}
+              canReplayDeadLetterJobs={sharedJobReplayState.allowed}
+              replayPermissionReason={sharedJobReplayState.reason ?? ""}
             />
           ) : null}
 
@@ -3266,6 +3326,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               {filteredGoalBundles.slice(0, 4).map((bundle) => {
                 const refinementLogs = bundle.actionLogs.filter((log) => log.kind === "goal.refined");
                 const isActive = bundle.goal.status !== "completed";
+                const refinementPermission = goalRefinementStateById.get(bundle.goal.id) ?? {
+                  allowed: true,
+                  reason: null
+                };
                 const recommendationStateForGoal = recommendationResultsByGoal[bundle.goal.id];
                 const recommendationEligible = isActive && isGoalRecommendationEligible(bundle);
                 const recommendationPending = recommendationPendingByGoal[bundle.goal.id] ?? false;
@@ -3316,16 +3380,26 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                         }
                         placeholder="Refine this goal..."
                         maxLength={2000}
+                        disabled={isPending || !refinementPermission.allowed}
+                        title={!refinementPermission.allowed ? refinementPermission.reason ?? undefined : undefined}
                       />
                       <button
                         type="button"
                         className="secondary-button"
                         onClick={() => refineGoal(bundle.goal.id)}
-                        disabled={isPending || !(refinementInputs[bundle.goal.id] ?? "").trim()}
+                        disabled={
+                          isPending ||
+                          !refinementPermission.allowed ||
+                          !(refinementInputs[bundle.goal.id] ?? "").trim()
+                        }
+                        title={!refinementPermission.allowed ? refinementPermission.reason ?? undefined : undefined}
                       >
                         Refine
                       </button>
                     </div>
+                  ) : null}
+                  {isActive && !refinementPermission.allowed && refinementPermission.reason ? (
+                    <small className="operator-product-subtitle">{refinementPermission.reason}</small>
                   ) : null}
                   {recommendationEligible ? (
                     <div className="refinement-history">
@@ -3990,42 +4064,52 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           </div>
           <div className="list-stack">
             {data.watchers.length === 0 ? <NoWatchersEmpty /> : null}
-            {data.watchers.map((watcher) => (
-              <div
-                className={`list-item vertical ${highlightedItemId === watcher.id ? "selection-highlight" : ""}`}
-                id={getDashboardItemAnchorId(watcher.id)}
-                key={watcher.id}
-              >
-                <div>
-                  <strong>{watcher.targetEntity}</strong>
-                  <p>{watcher.condition}</p>
-                </div>
-                <div className="approval-actions">
-                  <StatusBadge status={watcher.status} />
-                  <span className="pill">{watcher.frequency}</span>
-                  {watcher.status === "active" ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => void updateWatcher(watcher.id, "pause")}
-                      disabled={isPending}
-                    >
-                      Pause
-                    </button>
+            {data.watchers.map((watcher) => {
+              const watcherMutation = watcherMutationStateById.get(watcher.id) ?? {
+                allowed: true,
+                reason: null
+              };
+
+              return (
+                <div
+                  className={`list-item vertical ${highlightedItemId === watcher.id ? "selection-highlight" : ""}`}
+                  id={getDashboardItemAnchorId(watcher.id)}
+                  key={watcher.id}
+                >
+                  <div>
+                    <strong>{watcher.targetEntity}</strong>
+                    <p>{watcher.condition}</p>
+                  </div>
+                  <div className="approval-actions" style={{ opacity: watcherMutation.allowed ? 1 : 0.65 }}>
+                    <StatusBadge status={watcher.status} />
+                    <span className="pill">{watcher.frequency}</span>
+                    {watcher.status === "active" ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void updateWatcher(watcher.id, "pause")}
+                        disabled={isPending || !watcherMutation.allowed}
+                      >
+                        Pause
+                      </button>
+                    ) : null}
+                    {watcher.status === "paused" ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void updateWatcher(watcher.id, "resume")}
+                        disabled={isPending || !watcherMutation.allowed}
+                      >
+                        Resume
+                      </button>
+                    ) : null}
+                  </div>
+                  {!watcherMutation.allowed && watcherMutation.reason ? (
+                    <p className="operator-product-subtitle">{watcherMutation.reason}</p>
                   ) : null}
-                  {watcher.status === "paused" ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => void updateWatcher(watcher.id, "resume")}
-                      disabled={isPending}
-                    >
-                      Resume
-                    </button>
-                  ) : null}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </article>
 
