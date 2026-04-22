@@ -78,6 +78,97 @@ describe("GoalDetailPanel", () => {
     expect(markup).toContain("84%");
   });
 
+  it("renders responsibility ownership and handoff semantics for goals, tasks, and approvals", () => {
+    const bundle = GoalBundleSchema.parse({
+      goal: {
+        id: "goal-resp-1",
+        userId: "user-1",
+        workspaceId: null,
+        workflowId: "workflow-resp-1",
+        title: "Coordinate operator handoff",
+        request: "Make ownership explicit across the workflow.",
+        intent: "general_coordination",
+        status: "waiting",
+        confidence: 0.87,
+        explanation: "The workflow should surface delegation, reviewer, and escalation semantics.",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      workflow: {
+        id: "workflow-resp-1",
+        goalId: "goal-resp-1",
+        workspaceId: null,
+        status: "waiting",
+        currentStep: "approval",
+        checkpoint: "review",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      tasks: [
+        {
+          id: "task-resp-1",
+          goalId: "goal-resp-1",
+          workflowId: "workflow-resp-1",
+          title: "Prepare the reviewed handoff draft",
+          summary: "Stage the operator handoff draft behind explicit review.",
+          assignedAgent: "workflow",
+          state: "waiting",
+          riskClass: "R2",
+          requiresApproval: true,
+          dependsOn: [],
+          toolCapabilities: ["draft", "create"],
+          artifactIds: [],
+          createdAt: "2024-01-01T00:00:00.000Z",
+          updatedAt: "2024-01-01T00:00:00.000Z"
+        }
+      ],
+      artifacts: [],
+      approvals: [
+        {
+          id: "approval-resp-1",
+          goalId: "goal-resp-1",
+          taskId: "task-resp-1",
+          title: "Approve the handoff note",
+          rationale: "A human reviewer should accept the handoff before execution continues.",
+          riskClass: "R2",
+          decision: "pending",
+          requestedAction: "Approve the handoff note for delivery.",
+          preview: {
+            actionType: "draft",
+            summary: "Deliver the handoff note after review.",
+            target: "Operator handoff",
+            changes: [],
+            impact: {
+              affectedPeople: ["handoff-owner"],
+              affectedSystems: ["workflow"],
+              permissions: ["draft"],
+              rollback: "manual"
+            }
+          },
+          history: [],
+          createdAt: "2024-01-01T00:00:00.000Z",
+          expiryAt: "2024-01-02T00:00:00.000Z",
+          respondedAt: null
+        }
+      ],
+      watchers: [],
+      actionLogs: []
+    });
+
+    const markup = renderToStaticMarkup(
+      <GoalDetailPanel bundle={bundle} onClose={() => {}} />
+    );
+
+    expect(markup).toContain("Responsibility");
+    expect(markup).toContain("Goal owner");
+    expect(markup).toContain("Goal reviewer");
+    expect(markup).toContain("review pending");
+    expect(markup).toContain("workflow execution lane (workflow)");
+    expect(markup).toContain("Approval reviewer");
+    expect(markup).toContain("Escalation owner");
+    expect(markup).toContain("delegation change");
+  });
+
   it("renders context review details from the latest context resolution log", () => {
     const bundle = GoalBundleSchema.parse({
       goal: {

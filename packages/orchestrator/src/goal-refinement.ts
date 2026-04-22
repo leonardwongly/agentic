@@ -1,6 +1,7 @@
 import {
   createSystemActorContext,
   GoalBundleSchema,
+  deriveTaskResponsibility,
   type RecommendationRefinementSource,
   TaskSchema,
   WorkflowStateSchema,
@@ -360,6 +361,12 @@ export async function refineGoal(params: {
       riskClass: decision.riskClass,
       requiresApproval: decision.requiresApproval,
       toolCapabilities: capabilities,
+      responsibility: deriveTaskResponsibility({
+        assignedAgent: planned.assignedAgent,
+        requiresApproval: decision.requiresApproval,
+        ownerUserId: bundle.goal.userId,
+        workspaceId: bundle.goal.workspaceId
+      }),
       state
     });
 

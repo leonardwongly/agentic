@@ -16,6 +16,9 @@ import {
   getExecutionModePresentation
 } from "../ui";
 
+type ResponsibilityAssignee = GoalBundle["goal"]["responsibility"]["owner"];
+type ResponsibilityRecord = GoalBundle["goal"]["responsibility"];
+
 type GoalDetailPanelProps = {
   bundle: GoalBundle;
   onClose: () => void;
@@ -185,6 +188,48 @@ function formatPercent(value: number): string {
 
 function formatOutcomeLabel(value: PolicyTraceSummary["decision"]["outcome"]): string {
   return value.replaceAll("_", " ");
+}
+
+function formatResponsibilityAssignee(value: ResponsibilityAssignee | null | undefined): string {
+  if (!value) {
+    return "Unassigned";
+  }
+
+  if (value.kind === "user") {
+    return value.label;
+  }
+
+  if (value.kind === "workspace_role") {
+    return `${value.label} (${value.workspaceRole?.replaceAll("_", " ") ?? "workspace role"})`;
+  }
+
+  return `${value.label} (${value.systemActor ?? "system"})`;
+}
+
+function formatResponsibilityStatus(value: ResponsibilityRecord["handoffStatus"]): string {
+  return value.replaceAll("_", " ");
+}
+
+function formatAuditRequirements(value: ResponsibilityRecord): string {
+  const requirements = [...value.audit.requiredEvents.map((entry) => entry.replaceAll("_", " "))];
+
+  if (value.audit.requireActorContext) {
+    requirements.push("actor context");
+  }
+
+  if (value.audit.requireReasonForDelegation) {
+    requirements.push("delegation reason");
+  }
+
+  if (value.audit.requireReasonForEscalation) {
+    requirements.push("escalation reason");
+  }
+
+  if (value.audit.requireReviewerIdentity) {
+    requirements.push("reviewer identity");
+  }
+
+  return requirements.join(", ");
 }
 
 function parseContextPackSummary(bundle: GoalBundle): ContextPackSummary | null {
@@ -517,6 +562,36 @@ export function GoalDetailPanel({ bundle, onClose, onRefine, onShare, onSaveAsTe
         </div>
       </div>
 
+      <div className="detail-section">
+        <h4>Responsibility</h4>
+        <div className="detail-field">
+          <label>Owner</label>
+          <div className="detail-value">{formatResponsibilityAssignee(goal.responsibility.owner)}</div>
+        </div>
+        <div className="detail-field">
+          <label>Reviewer</label>
+          <div className="detail-value">{formatResponsibilityAssignee(goal.responsibility.reviewer)}</div>
+        </div>
+        <div className="detail-field">
+          <label>Escalation owner</label>
+          <div className="detail-value">{formatResponsibilityAssignee(goal.responsibility.escalationOwner)}</div>
+        </div>
+        <div className="detail-field">
+          <label>Handoff</label>
+          <div className="detail-value">{formatResponsibilityStatus(goal.responsibility.handoffStatus)}</div>
+        </div>
+        {goal.responsibility.handoffSummary ? (
+          <div className="detail-field">
+            <label>Handoff summary</label>
+            <div className="detail-value">{goal.responsibility.handoffSummary}</div>
+          </div>
+        ) : null}
+        <div className="detail-field">
+          <label>Audit requirements</label>
+          <div className="detail-value">{formatAuditRequirements(goal.responsibility)}</div>
+        </div>
+      </div>
+
       {goal.wedge && goal.completionContract ? (
         <div className="detail-section">
           <h4>Goal Contract</h4>
@@ -766,12 +841,23 @@ export function GoalDetailPanel({ bundle, onClose, onRefine, onShare, onSaveAsTe
                     <span>Capabilities: {task.toolCapabilities.join(", ") || "none"}</span>
                   </div>
                   <div className="detail-list-meta">
+                    <span>Owner: <strong>{formatResponsibilityAssignee(task.responsibility.owner)}</strong></span>
+                    <span>Delegate: <strong>{formatResponsibilityAssignee(task.responsibility.delegate)}</strong></span>
+                    {task.responsibility.reviewer ? (
+                      <span>Reviewer: <strong>{formatResponsibilityAssignee(task.responsibility.reviewer)}</strong></span>
+                    ) : null}
+                  </div>
+                  <div className="detail-list-meta">
                     <span>Implementation tier: <strong>{getImplementationTierPresentation(executionMode).label}</strong></span>
                   </div>
                   <div className="detail-list-meta">
                     <span>Execution mode: <strong>{getExecutionModePresentation(executionMode).label}</strong></span>
                     <span>Goal confidence: <strong>{goalConfidence}</strong></span>
+                    <span>Handoff: <strong>{formatResponsibilityStatus(task.responsibility.handoffStatus)}</strong></span>
                   </div>
+                  {task.responsibility.handoffSummary ? (
+                    <p className="detail-list-summary">{task.responsibility.handoffSummary}</p>
+                  ) : null}
                 </div>
               );
             })()
@@ -828,6 +914,17 @@ export function GoalDetailPanel({ bundle, onClose, onRefine, onShare, onSaveAsTe
                   </div>
                 </div>
                 <p className="detail-list-summary">{approval.rationale}</p>
+                <div className="detail-list-meta">
+                  <span>Owner: <strong>{formatResponsibilityAssignee(approval.responsibility.owner)}</strong></span>
+                  {approval.responsibility.delegate ? (
+                    <span>Delegate: <strong>{formatResponsibilityAssignee(approval.responsibility.delegate)}</strong></span>
+                  ) : null}
+                  <span>Reviewer: <strong>{formatResponsibilityAssignee(approval.responsibility.reviewer)}</strong></span>
+                </div>
+                <div className="detail-list-meta">
+                  <span>Escalation: <strong>{formatResponsibilityAssignee(approval.responsibility.escalationOwner)}</strong></span>
+                  <span>Handoff: <strong>{formatResponsibilityStatus(approval.responsibility.handoffStatus)}</strong></span>
+                </div>
               </div>
             ))}
           </div>

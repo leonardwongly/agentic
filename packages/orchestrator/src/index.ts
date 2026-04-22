@@ -2,11 +2,15 @@ import {
   APPROVAL_EXPIRY_MS,
   ActionLogSchema,
   ActionIntentSchema,
+  createSystemResponsibilityAssignee,
+  createUserResponsibilityAssignee,
   type ActorContext,
   type ApprovalDecisionRecord,
   type ApprovalDecisionScope,
   type ApprovalPreview,
   ApprovalRequestSchema,
+  deriveApprovalResponsibility,
+  deriveTaskResponsibility,
   GoalBundleSchema,
   GoalSchema,
   TaskSchema,
@@ -528,7 +532,13 @@ export async function processUserRequest(params: {
       riskClass: decision.riskClass,
       requiresApproval: decision.requiresApproval,
       toolCapabilities: capabilities,
-      state
+      state,
+      responsibility: deriveTaskResponsibility({
+        assignedAgent: plannedTask.assignedAgent,
+        requiresApproval: decision.requiresApproval,
+        ownerUserId: params.userId,
+        workspaceId
+      })
     });
     const agentResult = await runAgent(task, catalog.title, {
       agentDefinition: params.agentDefinition,
@@ -595,6 +605,11 @@ export async function processUserRequest(params: {
         requestedAction: nextTask.summary,
         actionIntent,
         preview: buildApprovalPreview(nextTask, actionIntent),
+        responsibility: deriveApprovalResponsibility({
+          ownerUserId: params.userId,
+          workspaceId,
+          delegateAgent: nextTask.assignedAgent
+        }),
         createdAt: approvalCreatedAt,
         expiryAt: new Date(Date.now() + APPROVAL_EXPIRY_MS).toISOString(),
         respondedAt: null
@@ -699,6 +714,19 @@ export function respondToApproval(params: {
           decisionScope: normalizedScope,
           decisionRationale: normalizedRationale,
           history: [...candidate.history, nextHistoryRecord],
+          responsibility: {
+            ...candidate.responsibility,
+            handoffStatus: params.decision === "approved" ? "delegated" : "returned_to_owner",
+            handoffSummary:
+              params.decision === "approved"
+                ? "The reviewer approved execution and returned the task to the active delegate."
+                : "The reviewer rejected execution and returned control to the owner for rework or escalation.",
+            lastChangedAt: respondedAt,
+            lastChangedBy:
+              params.actor.executor.kind === "human" && params.actor.executor.userId
+                ? createUserResponsibilityAssignee(params.actor.executor.userId, params.actor.executor.label)
+                : createSystemResponsibilityAssignee(params.actor.executor.label, params.actor.executor.label)
+          },
           respondedAt
         })
       : candidate
@@ -710,6 +738,20 @@ export function respondToApproval(params: {
     }
 
     const nextTask = params.decision === "approved" ? transitionTaskState(task, "queued") : transitionTaskState(task, "blocked");
+    const lastChangedBy =
+      params.actor.executor.kind === "human" && params.actor.executor.userId
+        ? createUserResponsibilityAssignee(params.actor.executor.userId, params.actor.executor.label)
+        : createSystemResponsibilityAssignee(params.actor.executor.label, params.actor.executor.label);
+    const nextResponsibility = {
+      ...nextTask.responsibility,
+      handoffStatus: params.decision === "approved" ? "delegated" : "returned_to_owner",
+      handoffSummary:
+        params.decision === "approved"
+          ? `The reviewer released "${task.title}" back to the execution delegate.`
+          : `The reviewer blocked "${task.title}" and returned control to the owner.`,
+      lastChangedAt: respondedAt,
+      lastChangedBy
+    };
     taskTransitionLog = ActionLogSchema.parse(
       createActionLog({
         goalId: bundle.goal.id,
@@ -729,7 +771,10 @@ export function respondToApproval(params: {
         prevLog: bundle.actionLogs.at(-1) ?? null
       })
     );
-    return nextTask;
+    return TaskSchema.parse({
+      ...nextTask,
+      responsibility: nextResponsibility
+    });
   });
   const statuses = recomputeWorkflowStatuses(tasks, approvals, bundle.watchers);
   const transitionLog = taskTransitionLog;

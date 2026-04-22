@@ -186,6 +186,7 @@ export function createTask(params: {
   toolCapabilities: Capability[];
   dependsOn?: string[];
   state?: TaskState;
+  responsibility?: Task["responsibility"];
 }): Task {
   const timestamp = nowIso();
 
@@ -202,6 +203,7 @@ export function createTask(params: {
     dependsOn: params.dependsOn ?? [],
     toolCapabilities: params.toolCapabilities,
     artifactIds: [],
+    responsibility: params.responsibility,
     createdAt: timestamp,
     updatedAt: timestamp
   });

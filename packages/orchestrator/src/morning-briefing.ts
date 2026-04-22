@@ -2,6 +2,7 @@ import {
   GoalBundleSchema,
   GoalSchema,
   TaskSchema,
+  deriveTaskResponsibility,
   nowIso,
   type ActionLog,
   type ApprovalRequest,
@@ -354,6 +355,12 @@ export async function generateBriefing(params: {
       riskClass: decision.riskClass,
       requiresApproval: decision.requiresApproval,
       toolCapabilities: planned.capabilities,
+      responsibility: deriveTaskResponsibility({
+        assignedAgent: planned.assignedAgent,
+        requiresApproval: decision.requiresApproval,
+        ownerUserId: params.userId,
+        workspaceId: params.workspaceId
+      }),
       state
     });
 

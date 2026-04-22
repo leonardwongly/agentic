@@ -14,6 +14,8 @@ import {
   getExecutionModePresentation
 } from "../ui";
 
+type ResponsibilityAssignee = ApprovalRequest["responsibility"]["owner"];
+
 type ApprovalDetailPanelProps = {
   approval: ApprovalRequest;
   relatedGoal?: GoalBundle | null;
@@ -34,6 +36,48 @@ const riskAssessmentCopy: Record<ApprovalRequest["riskClass"], string> = {
   R3: "High risk. This action can create significant external effects and needs careful review.",
   R4: "Critical risk. This action needs admin-level approval because it may be irreversible or highly sensitive."
 };
+
+function formatResponsibilityAssignee(value: ResponsibilityAssignee | null | undefined): string {
+  if (!value) {
+    return "Unassigned";
+  }
+
+  if (value.kind === "user") {
+    return value.label;
+  }
+
+  if (value.kind === "workspace_role") {
+    return `${value.label} (${value.workspaceRole?.replace(/_/g, " ") ?? "workspace role"})`;
+  }
+
+  return `${value.label} (${value.systemActor ?? "system"})`;
+}
+
+function formatResponsibilityStatus(value: ApprovalRequest["responsibility"]["handoffStatus"]): string {
+  return value.replace(/_/g, " ");
+}
+
+function formatAuditRequirements(approval: ApprovalRequest): string {
+  const requirements = [...approval.responsibility.audit.requiredEvents.map((entry) => entry.replace(/_/g, " "))];
+
+  if (approval.responsibility.audit.requireActorContext) {
+    requirements.push("actor context");
+  }
+
+  if (approval.responsibility.audit.requireReasonForDelegation) {
+    requirements.push("delegation reason");
+  }
+
+  if (approval.responsibility.audit.requireReasonForEscalation) {
+    requirements.push("escalation reason");
+  }
+
+  if (approval.responsibility.audit.requireReviewerIdentity) {
+    requirements.push("reviewer identity");
+  }
+
+  return requirements.join(", ");
+}
 
 export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject, isPending }: ApprovalDetailPanelProps) {
   const relatedTask = relatedGoal?.tasks.find((t) => t.id === approval.taskId);
@@ -125,6 +169,42 @@ export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject
         </div>
       ) : null}
 
+      <div className="detail-section">
+        <h4>Responsibility</h4>
+        <div className="detail-field">
+          <label>Owner</label>
+          <div className="detail-value">{formatResponsibilityAssignee(approval.responsibility.owner)}</div>
+        </div>
+        {approval.responsibility.delegate ? (
+          <div className="detail-field">
+            <label>Delegate</label>
+            <div className="detail-value">{formatResponsibilityAssignee(approval.responsibility.delegate)}</div>
+          </div>
+        ) : null}
+        <div className="detail-field">
+          <label>Reviewer</label>
+          <div className="detail-value">{formatResponsibilityAssignee(approval.responsibility.reviewer)}</div>
+        </div>
+        <div className="detail-field">
+          <label>Escalation owner</label>
+          <div className="detail-value">{formatResponsibilityAssignee(approval.responsibility.escalationOwner)}</div>
+        </div>
+        <div className="detail-field">
+          <label>Handoff</label>
+          <div className="detail-value">{formatResponsibilityStatus(approval.responsibility.handoffStatus)}</div>
+        </div>
+        {approval.responsibility.handoffSummary ? (
+          <div className="detail-field">
+            <label>Handoff summary</label>
+            <div className="detail-value">{approval.responsibility.handoffSummary}</div>
+          </div>
+        ) : null}
+        <div className="detail-field">
+          <label>Audit requirements</label>
+          <div className="detail-value">{formatAuditRequirements(approval)}</div>
+        </div>
+      </div>
+
       {approval.preview.changes.length > 0 ? (
         <div className="detail-section">
           <h4>Planned Changes</h4>
@@ -176,11 +256,19 @@ export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject
               <span>Capabilities: {relatedTask.toolCapabilities.join(", ") || "none"}</span>
             </div>
             <div className="detail-list-meta">
+              <span>Owner: <strong>{formatResponsibilityAssignee(relatedTask.responsibility.owner)}</strong></span>
+              <span>Delegate: <strong>{formatResponsibilityAssignee(relatedTask.responsibility.delegate)}</strong></span>
+              {relatedTask.responsibility.reviewer ? (
+                <span>Reviewer: <strong>{formatResponsibilityAssignee(relatedTask.responsibility.reviewer)}</strong></span>
+              ) : null}
+            </div>
+            <div className="detail-list-meta">
               <span>Implementation tier: <strong>{getImplementationTierPresentation(relatedTaskExecutionMode).label}</strong></span>
             </div>
             <div className="detail-list-meta">
               <span>Execution mode: <strong>{getExecutionModePresentation(relatedTaskExecutionMode).label}</strong></span>
               {goalConfidence ? <span>Goal confidence: <strong>{goalConfidence}</strong></span> : null}
+              <span>Handoff: <strong>{formatResponsibilityStatus(relatedTask.responsibility.handoffStatus)}</strong></span>
             </div>
           </div>
         </div>

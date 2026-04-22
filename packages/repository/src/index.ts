@@ -70,7 +70,12 @@ import {
   WorkspaceSelectionSchema,
   clone,
   createSystemActorContext,
+  deriveApprovalResponsibility,
+  deriveAutopilotEventResponsibility,
+  deriveGoalResponsibility,
   deriveJobRecoveryState,
+  deriveTaskResponsibility,
+  deriveWatcherResponsibility,
   nowIso,
   type ActionLog,
   type AgentDefinition,
@@ -1292,19 +1297,91 @@ function bundleFromStore(store: RuntimeStore, goalId: string): GoalBundle | null
     throw new Error(`Workflow ${goal.workflowId} is missing for goal ${goalId}.`);
   }
 
+  return normalizeGoalBundleResponsibilities(
+    GoalBundleSchema.parse({
+      goal,
+      workflow,
+      tasks: store.tasks.filter((task) => task.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+      artifacts: store.artifacts.filter((artifact) => artifact.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+      approvals: store.approvals.filter((approval) => approval.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+      watchers: store.watchers.filter((watcher) => watcher.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+      actionLogs: store.actionLogs.filter((log) => log.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    })
+  );
+}
+
+function normalizeGoalBundleResponsibilities(bundle: GoalBundle): GoalBundle {
+  const validated = GoalBundleSchema.parse(bundle);
+  const tasksById = new Map(validated.tasks.map((task) => [task.id, task] as const));
+  const goalResponsibility = deriveGoalResponsibility({
+    userId: validated.goal.userId,
+    workspaceId: validated.goal.workspaceId
+  });
+
   return GoalBundleSchema.parse({
-    goal,
-    workflow,
-    tasks: store.tasks.filter((task) => task.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    artifacts: store.artifacts.filter((artifact) => artifact.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    approvals: store.approvals.filter((approval) => approval.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    watchers: store.watchers.filter((watcher) => watcher.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    actionLogs: store.actionLogs.filter((log) => log.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    ...validated,
+    goal: {
+      ...validated.goal,
+      // Goal-scoped responsibility remains derived until explicit reassignment flows exist.
+      responsibility: goalResponsibility
+    },
+    tasks: validated.tasks.map((task) => ({
+      ...task,
+      responsibility: deriveTaskResponsibility({
+        assignedAgent: task.assignedAgent,
+        requiresApproval: task.requiresApproval,
+        ownerUserId: validated.goal.userId,
+        workspaceId: validated.goal.workspaceId
+      })
+    })),
+    approvals: validated.approvals.map((approval) => ({
+      ...approval,
+      responsibility: deriveApprovalResponsibility({
+        ownerUserId: validated.goal.userId,
+        workspaceId: validated.goal.workspaceId,
+        delegateAgent: tasksById.get(approval.taskId)?.assignedAgent ?? null
+      })
+    })),
+    watchers: validated.watchers.map((watcher) => ({
+      ...watcher,
+      responsibility: deriveWatcherResponsibility({
+        ownerUserId: validated.goal.userId,
+        workspaceId: validated.goal.workspaceId,
+        createdByUserId: watcher.actorContext?.subjectUserId ?? null,
+        targetEntity: watcher.targetEntity
+      })
+    }))
+  });
+}
+
+function normalizeWatcherForGoal(goal: GoalBundle["goal"], watcher: Watcher): Watcher {
+  const validated = WatcherSchema.parse(watcher);
+
+  return WatcherSchema.parse({
+    ...validated,
+    responsibility: deriveWatcherResponsibility({
+      ownerUserId: goal.userId,
+      workspaceId: goal.workspaceId,
+      createdByUserId: validated.actorContext?.subjectUserId ?? null,
+      targetEntity: validated.targetEntity
+    })
+  });
+}
+
+function normalizeAutopilotEvent(event: AutopilotEvent): AutopilotEvent {
+  const validated = AutopilotEventSchema.parse(event);
+
+  return AutopilotEventSchema.parse({
+    ...validated,
+    responsibility: deriveAutopilotEventResponsibility({
+      userId: validated.userId,
+      mode: validated.mode
+    })
   });
 }
 
 function mergeGoalBundleIntoStore(store: RuntimeStore, bundle: GoalBundle): GoalBundle {
-  const validated = GoalBundleSchema.parse(bundle);
+  const validated = normalizeGoalBundleResponsibilities(GoalBundleSchema.parse(bundle));
   const goalId = validated.goal.id;
 
   store.goals = upsertById(store.goals, validated.goal);
@@ -1779,6 +1856,10 @@ function buildPendingAutopilotEvent(params: {
     status: "pending",
     details: AutopilotEventDetailsSchema.parse(params.details ?? {}),
     actorContext: params.actorContext ?? null,
+    responsibility: deriveAutopilotEventResponsibility({
+      userId: params.userId,
+      mode: params.mode
+    }),
     createdAt: nowIso(),
     processedAt: null,
     resultGoalId: null,
@@ -3053,7 +3134,7 @@ class FileRepository implements AgenticRepository {
   async saveAutopilotEvent(event: AutopilotEvent): Promise<AutopilotEvent> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const validated = AutopilotEventSchema.parse(event);
+      const validated = normalizeAutopilotEvent(event);
       store.autopilotEvents = upsertById(store.autopilotEvents, validated);
       await this.writeStore(store);
       return AutopilotEventSchema.parse(clone(validated));
@@ -3342,7 +3423,13 @@ class FileRepository implements AgenticRepository {
       return filters?.goalId ? watcher.goalId === filters.goalId : true;
     });
 
-    return sortByCreatedDesc(watchers).map((watcher) => WatcherSchema.parse(clone(watcher)));
+    return sortByCreatedDesc(watchers).map((watcher) => {
+      const goal = goalByIdFromStore(store, watcher.goalId);
+
+      return goal
+        ? normalizeWatcherForGoal(goal, watcher)
+        : WatcherSchema.parse(clone(watcher));
+    });
   }
 
   async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
@@ -3357,7 +3444,13 @@ class FileRepository implements AgenticRepository {
 
         return params?.goalId ? watcher.goalId === params.goalId : true;
       })
-      .map((watcher) => WatcherSchema.parse(clone(watcher)));
+      .map((watcher) => {
+        const goal = goalByIdFromStore(store, watcher.goalId);
+
+        return goal
+          ? normalizeWatcherForGoal(goal, watcher)
+          : WatcherSchema.parse(clone(watcher));
+      });
 
     return buildCollectionPage({
       items: watchers,
@@ -3375,10 +3468,16 @@ class FileRepository implements AgenticRepository {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const validated = WatcherSchema.parse(watcher);
-      assertGoalExistsInStore(store, validated.goalId);
-      store.watchers = upsertById(store.watchers, validated);
+      const goal = goalByIdFromStore(store, validated.goalId);
+
+      if (!goal) {
+        throw new Error(`Goal ${validated.goalId} was not found.`);
+      }
+
+      const normalized = normalizeWatcherForGoal(goal, validated);
+      store.watchers = upsertById(store.watchers, normalized);
       await this.writeStore(store);
-      return WatcherSchema.parse(clone(validated));
+      return WatcherSchema.parse(clone(normalized));
     });
   }
 
@@ -4462,13 +4561,13 @@ class PostgresRepository implements AgenticRepository {
   }
 
   private async saveAutopilotEventWithClient(client: PoolClient, event: AutopilotEvent): Promise<void> {
-    const validated = AutopilotEventSchema.parse(event);
+    const validated = normalizeAutopilotEvent(event);
     await client.query(
       `
         insert into autopilot_events (
-          id, user_id, kind, source_id, idempotency_key, mode, summary, status, details, actor_context, created_at, processed_at, result_goal_id, error
+          id, user_id, kind, source_id, idempotency_key, mode, summary, status, details, actor_context, responsibility, created_at, processed_at, result_goal_id, error
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
         on conflict (id) do update
         set user_id = excluded.user_id,
             kind = excluded.kind,
@@ -4479,6 +4578,7 @@ class PostgresRepository implements AgenticRepository {
             status = excluded.status,
             details = excluded.details,
             actor_context = excluded.actor_context,
+            responsibility = excluded.responsibility,
             processed_at = excluded.processed_at,
             result_goal_id = excluded.result_goal_id,
             error = excluded.error
@@ -4494,6 +4594,7 @@ class PostgresRepository implements AgenticRepository {
         validated.status,
         JSON.stringify(validated.details),
         JSON.stringify(validated.actorContext),
+        JSON.stringify(validated.responsibility),
         validated.createdAt,
         validated.processedAt,
         validated.resultGoalId,
@@ -4592,7 +4693,8 @@ class PostgresRepository implements AgenticRepository {
   }
 
   private mapAutopilotEventRow(row: Record<string, unknown>): AutopilotEvent {
-    return AutopilotEventSchema.parse({
+    return normalizeAutopilotEvent(
+      AutopilotEventSchema.parse({
       id: row.id,
       userId: row.user_id,
       kind: row.kind,
@@ -4603,11 +4705,13 @@ class PostgresRepository implements AgenticRepository {
       status: row.status,
       details: row.details ?? {},
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      responsibility: row.responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       processedAt: row.processed_at ? new Date(row.processed_at as string | number | Date).toISOString() : null,
       resultGoalId: typeof row.result_goal_id === "string" ? row.result_goal_id : null,
       error: typeof row.error === "string" ? row.error : null
-    });
+    })
+    );
   }
 
   private mapGoalRow(row: Record<string, unknown>): GoalBundle["goal"] {
@@ -4627,6 +4731,7 @@ class PostgresRepository implements AgenticRepository {
       explanation: row.explanation,
       wedge: goalContract?.wedge,
       completionContract: goalContract?.completionContract,
+      responsibility: row.responsibility ?? goalContract?.responsibility,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4659,6 +4764,7 @@ class PostgresRepository implements AgenticRepository {
       dependsOn: row.depends_on ?? [],
       toolCapabilities: row.tool_capabilities ?? [],
       artifactIds: row.artifact_ids ?? [],
+      responsibility: row.responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4711,6 +4817,7 @@ class PostgresRepository implements AgenticRepository {
       decisionScope: normalizeApprovalDecisionScope(row.decision_scope),
       decisionRationale: typeof row.decision_rationale === "string" ? row.decision_rationale : null,
       history: normalizeApprovalHistory(row.history),
+      responsibility: row.responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       expiryAt: new Date(row.expiry_at as string | number | Date).toISOString(),
       respondedAt: row.responded_at ? new Date(row.responded_at as string | number | Date).toISOString() : null
@@ -4729,6 +4836,7 @@ class PostgresRepository implements AgenticRepository {
       status: row.status,
       expiryAt: row.expiry_at ? new Date(row.expiry_at as string | number | Date).toISOString() : null,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      responsibility: row.responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -5528,15 +5636,17 @@ class PostgresRepository implements AgenticRepository {
       }
 
       return [
-        GoalBundleSchema.parse({
-          goal,
-          workflow,
-          tasks: tasksByGoalId.get(goalId) ?? [],
-          artifacts: artifactsByGoalId.get(goalId) ?? [],
-          approvals: approvalsByGoalId.get(goalId) ?? [],
-          watchers: watchersByGoalId.get(goalId) ?? [],
-          actionLogs: logsByGoalId.get(goalId) ?? []
-        })
+        normalizeGoalBundleResponsibilities(
+          GoalBundleSchema.parse({
+            goal,
+            workflow,
+            tasks: tasksByGoalId.get(goalId) ?? [],
+            artifacts: artifactsByGoalId.get(goalId) ?? [],
+            approvals: approvalsByGoalId.get(goalId) ?? [],
+            watchers: watchersByGoalId.get(goalId) ?? [],
+            actionLogs: logsByGoalId.get(goalId) ?? []
+          })
+        )
       ];
     });
   }
@@ -5620,7 +5730,7 @@ class PostgresRepository implements AgenticRepository {
   }
 
   private async upsertGoalBundle(client: PoolClient, bundle: GoalBundle): Promise<void> {
-    const validated = GoalBundleSchema.parse(bundle);
+    const validated = normalizeGoalBundleResponsibilities(GoalBundleSchema.parse(bundle));
 
     await client.query(
       `
@@ -5678,7 +5788,8 @@ class PostgresRepository implements AgenticRepository {
         validated.goal.explanation,
         JSON.stringify({
           wedge: validated.goal.wedge,
-          completionContract: validated.goal.completionContract
+          completionContract: validated.goal.completionContract,
+          responsibility: validated.goal.responsibility
         }),
         validated.goal.createdAt,
         validated.goal.updatedAt
@@ -5696,9 +5807,9 @@ class PostgresRepository implements AgenticRepository {
         `
           insert into tasks (
             id, goal_id, workflow_id, title, summary, assigned_agent, state, risk_class, requires_approval,
-            depends_on, tool_capabilities, artifact_ids, created_at, updated_at
+            depends_on, tool_capabilities, artifact_ids, responsibility, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14)
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               workflow_id = excluded.workflow_id,
@@ -5711,6 +5822,7 @@ class PostgresRepository implements AgenticRepository {
               depends_on = excluded.depends_on,
               tool_capabilities = excluded.tool_capabilities,
               artifact_ids = excluded.artifact_ids,
+              responsibility = excluded.responsibility,
               updated_at = excluded.updated_at
         `,
         [
@@ -5726,6 +5838,7 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(task.dependsOn),
           JSON.stringify(task.toolCapabilities),
           JSON.stringify(task.artifactIds),
+          JSON.stringify(task.responsibility),
           task.createdAt,
           task.updatedAt
         ]
@@ -5763,9 +5876,9 @@ class PostgresRepository implements AgenticRepository {
         `
           insert into approval_requests (
             id, goal_id, task_id, title, rationale, risk_class, decision, requested_action, action_intent, preview,
-            decision_scope, decision_rationale, history, created_at, expiry_at, responded_at
+            decision_scope, decision_rationale, history, responsibility, created_at, expiry_at, responded_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13::jsonb, $14, $15, $16)
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               task_id = excluded.task_id,
@@ -5779,6 +5892,7 @@ class PostgresRepository implements AgenticRepository {
               decision_scope = excluded.decision_scope,
               decision_rationale = excluded.decision_rationale,
               history = excluded.history,
+              responsibility = excluded.responsibility,
               expiry_at = excluded.expiry_at,
               responded_at = excluded.responded_at
         `,
@@ -5796,6 +5910,7 @@ class PostgresRepository implements AgenticRepository {
           approval.decisionScope,
           approval.decisionRationale,
           JSON.stringify(approval.history),
+          JSON.stringify(approval.responsibility),
           approval.createdAt,
           approval.expiryAt,
           approval.respondedAt
@@ -5807,9 +5922,9 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, responsibility, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11, $12)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -5820,6 +5935,7 @@ class PostgresRepository implements AgenticRepository {
               status = excluded.status,
               expiry_at = excluded.expiry_at,
               actor_context = excluded.actor_context,
+              responsibility = excluded.responsibility,
               updated_at = excluded.updated_at
         `,
         [
@@ -5833,6 +5949,7 @@ class PostgresRepository implements AgenticRepository {
           watcher.status,
           watcher.expiryAt,
           JSON.stringify(watcher.actorContext),
+          JSON.stringify(watcher.responsibility),
           watcher.createdAt,
           watcher.updatedAt
         ]
@@ -6716,7 +6833,7 @@ class PostgresRepository implements AgenticRepository {
   }
 
   async saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle> {
-    const validated = GoalBundleSchema.parse(bundle);
+    const validated = normalizeGoalBundleResponsibilities(GoalBundleSchema.parse(bundle));
     await this.withTransaction(async (client) => {
       if (validated.goal.workspaceId) {
         const workspace = await this.getWorkspaceByIdWithClient(client, validated.goal.workspaceId);
@@ -7847,18 +7964,20 @@ class PostgresRepository implements AgenticRepository {
     const validated = WatcherSchema.parse(watcher);
 
     await this.withTransaction(async (client) => {
-      const goalResult = await client.query("select 1 from goals where id = $1 limit 1", [validated.goalId]);
+      const goalBundle = await this.mapGoalBundleWithClient(client, validated.goalId);
 
-      if (Number(goalResult.rowCount ?? 0) === 0) {
+      if (!goalBundle) {
         throw new Error(`Goal ${validated.goalId} was not found.`);
       }
+
+      const normalized = normalizeWatcherForGoal(goalBundle.goal, validated);
 
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, responsibility, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11, $12)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -7869,26 +7988,34 @@ class PostgresRepository implements AgenticRepository {
               status = excluded.status,
               expiry_at = excluded.expiry_at,
               actor_context = excluded.actor_context,
+              responsibility = excluded.responsibility,
               updated_at = excluded.updated_at
         `,
         [
-          validated.id,
-          validated.goalId,
-          validated.targetEntity,
-          validated.condition,
-          validated.frequency,
-          validated.triggerAction,
-          JSON.stringify(validated.sourceSystems),
-          validated.status,
-          validated.expiryAt,
-          JSON.stringify(validated.actorContext),
-          validated.createdAt,
-          validated.updatedAt
+          normalized.id,
+          normalized.goalId,
+          normalized.targetEntity,
+          normalized.condition,
+          normalized.frequency,
+          normalized.triggerAction,
+          JSON.stringify(normalized.sourceSystems),
+          normalized.status,
+          normalized.expiryAt,
+          JSON.stringify(normalized.actorContext),
+          JSON.stringify(normalized.responsibility),
+          normalized.createdAt,
+          normalized.updatedAt
         ]
       );
+
+      return normalized;
     });
 
-    return WatcherSchema.parse(clone(validated));
+    const goalBundle = await this.mapGoalBundle(validated.goalId);
+    const goal = goalBundle?.goal;
+    const normalized = goal ? normalizeWatcherForGoal(goal, validated) : validated;
+
+    return WatcherSchema.parse(clone(normalized));
   }
 
   async listIntegrations(userId = SYSTEM_USER_ID): Promise<IntegrationAccount[]> {

@@ -129,5 +129,11 @@ describe("ApprovalDetailPanel", () => {
     expect(markup).toContain("Rollback");
     expect(markup).toContain("Manual");
     expect(markup).toContain("Risk posture");
+    expect(markup).toContain("Responsibility");
+    expect(markup).toContain("Goal owner");
+    expect(markup).toContain("communications execution lane (communications)");
+    expect(markup).toContain("Approval reviewer");
+    expect(markup).toContain("review pending");
+    expect(markup).toContain("delegation change");
   });
 });

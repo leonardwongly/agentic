@@ -14,6 +14,11 @@ import {
 } from "@agentic/contracts";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
 import { RelativeTime, StatusBadge } from "./ui";
+import {
+  GOAL_SHARE_MUTATION_DENIED_REASON,
+  canManageGoalSharesForRole,
+  resolveWorkspaceRoleForUser
+} from "../lib/workspace-role-permissions";
 
 type RequestState = {
   kind: "idle" | "success" | "error";
@@ -97,6 +102,40 @@ function summarizeGoalShareStatus(share: GoalShareRecord): string {
   return `Expires ${share.expiresAt}`;
 }
 
+function formatAutopilotLabel(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function readAutopilotMetadata(details: Record<string, unknown> | undefined) {
+  const eventEnvelope =
+    details && typeof details.eventEnvelope === "object" && details.eventEnvelope !== null
+      ? (details.eventEnvelope as Record<string, unknown>)
+      : null;
+  const policy =
+    details && typeof details.policy === "object" && details.policy !== null ? (details.policy as Record<string, unknown>) : null;
+  const operatorRoute =
+    details && typeof details.operatorRoute === "object" && details.operatorRoute !== null
+      ? (details.operatorRoute as Record<string, unknown>)
+      : null;
+
+  return {
+    family: typeof eventEnvelope?.family === "string" ? eventEnvelope.family : null,
+    priority: typeof eventEnvelope?.priority === "string" ? eventEnvelope.priority : null,
+    queue: typeof policy?.queue === "string" ? policy.queue : null,
+    operatorRoute:
+      typeof operatorRoute?.section === "string" && typeof operatorRoute?.label === "string"
+        ? {
+            section: operatorRoute.section as DashboardDiagnosticTarget["section"],
+            itemId: typeof operatorRoute.itemId === "string" ? operatorRoute.itemId : undefined,
+            label: operatorRoute.label,
+            actionLabel: typeof operatorRoute.actionLabel === "string" ? operatorRoute.actionLabel : undefined
+          }
+        : null
+  };
+}
+
 export function DashboardOperationsSections(props: DashboardOperationsSectionsProps) {
   const {
     data,
@@ -137,6 +176,15 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
   const canEditGovernance = teamPermissions.editGovernance.allowed && Boolean(data.activeWorkspace);
   const canExportAudit = teamPermissions.exportAudit.allowed && Boolean(data.activeWorkspace);
   const canManagePrivacyOperations = teamPermissions.managePrivacyOperations.allowed && Boolean(data.activeWorkspace);
+  const activeWorkspaceRole = resolveWorkspaceRoleForUser(
+    data.workspaceMembers,
+    data.activeWorkspace?.id,
+    data.workspaceSelection?.userId ?? null
+  );
+  const canManageGoalShares = Boolean(data.activeWorkspace) && canManageGoalSharesForRole(activeWorkspaceRole);
+  const goalSharePermissionReason = data.activeWorkspace
+    ? GOAL_SHARE_MUTATION_DENIED_REASON
+    : "Select a workspace before managing public goal share links.";
 
   return (
     <>
@@ -555,7 +603,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
           <h3>Recent share links</h3>
           <span>{data.goalShares.length} tracked</span>
         </div>
-        <div className="list-stack">
+        <div className="list-stack" style={{ opacity: canManageGoalShares ? 1 : 0.65 }}>
           {data.goalShares.length === 0 ? (
             <div className="list-item vertical">
               <div>
@@ -578,7 +626,8 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
                       type="button"
                       className="secondary-button"
                       onClick={() => void revokeGoalShare(share.goalId, share.id, goalTitleById.get(share.goalId) ?? share.goalId)}
-                      disabled={isPending}
+                      disabled={isPending || !canManageGoalShares}
+                      title={!canManageGoalShares ? goalSharePermissionReason : undefined}
                     >
                       Revoke
                     </button>
@@ -588,6 +637,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             ))
           )}
         </div>
+        {!canManageGoalShares ? <p className="operator-product-subtitle">{goalSharePermissionReason}</p> : null}
 
         <div className="card-header">
           <h3>Recent privacy operations</h3>
@@ -684,45 +734,64 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <div className="list-item vertical">
               <div>
                 <strong>No autopilot events yet</strong>
-                <p>Watcher triggers, template schedules, and briefing schedules will appear here once they fire.</p>
+                <p>
+                  Watcher signals, scheduled runs, inbound communications, deadlines, approvals, connector failures,
+                  and dormant workflows will appear here once they fire.
+                </p>
               </div>
             </div>
           ) : (
-            data.autopilotEvents.slice(0, 5).map((event) => (
-              <div
-                className={`list-item vertical ${highlightedItemId === event.id ? "selection-highlight" : ""}`}
-                id={getItemAnchorId(event.id)}
-                key={event.id}
-              >
-                <div>
-                  <strong>{event.summary}</strong>
-                  <p>
-                    {event.kind.replaceAll("_", " ")} via {autopilotModeLabels[event.mode].toLowerCase()}
-                  </p>
+            data.autopilotEvents.slice(0, 5).map((event) => {
+              const metadata = readAutopilotMetadata(event.details);
+
+              return (
+                <div
+                  className={`list-item vertical ${highlightedItemId === event.id ? "selection-highlight" : ""}`}
+                  id={getItemAnchorId(event.id)}
+                  key={event.id}
+                >
+                  <div>
+                    <strong>{event.summary}</strong>
+                    <p>
+                      {formatAutopilotLabel(event.kind)} via {autopilotModeLabels[event.mode].toLowerCase()}
+                      {metadata.queue ? ` · ${formatAutopilotLabel(metadata.queue)}` : ""}
+                    </p>
+                  </div>
+                  <div className="goal-item-actions">
+                    <StatusBadge status={event.status} />
+                    {metadata.family ? <span className="pill">{formatAutopilotLabel(metadata.family)}</span> : null}
+                    {metadata.priority ? <span className="pill">{formatAutopilotLabel(metadata.priority)} priority</span> : null}
+                    <span className="pill">{autopilotModeLabels[event.mode]}</span>
+                    <RelativeTime date={event.processedAt ?? event.createdAt} />
+                    {metadata.operatorRoute ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => openDiagnosticTarget(metadata.operatorRoute!)}
+                      >
+                        {metadata.operatorRoute.actionLabel ?? "Open route"}
+                      </button>
+                    ) : null}
+                    {event.resultGoalId ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() =>
+                          openDiagnosticTarget({
+                            section: "goals",
+                            itemId: event.resultGoalId ?? undefined,
+                            label: event.summary
+                          })
+                        }
+                      >
+                        Open goal
+                      </button>
+                    ) : null}
+                  </div>
+                  {event.error ? <p className="status-chip error">{event.error}</p> : null}
                 </div>
-                <div className="goal-item-actions">
-                  <StatusBadge status={event.status} />
-                  <span className="pill">{autopilotModeLabels[event.mode]}</span>
-                  <RelativeTime date={event.processedAt ?? event.createdAt} />
-                  {event.resultGoalId ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() =>
-                        openDiagnosticTarget({
-                          section: "goals",
-                          itemId: event.resultGoalId ?? undefined,
-                          label: event.summary
-                        })
-                      }
-                    >
-                      Open goal
-                    </button>
-                  ) : null}
-                </div>
-                {event.error ? <p className="status-chip error">{event.error}</p> : null}
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </article>
