@@ -218,6 +218,300 @@ describe("autopilot events route", () => {
     await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
   });
 
+  it.each([
+    {
+      kind: "communication_received" as const,
+      request: "Prepare the renewal plan for the finance inbox.",
+      sourceId: "thread-finance-renewal",
+      details: {
+        sender: "CFO",
+        subject: "Renewal approval needed"
+      },
+      enrich: (bundle: Awaited<ReturnType<typeof createGoalForUser>>["bundle"]) => ({
+        goalId: bundle.goal.id
+      }),
+      expectedSummary: "Inbound communication from CFO: Renewal approval needed",
+      expectedFamily: "communication",
+      expectedPriority: "high",
+      expectedQueue: "communications_inbox",
+      expectedActionLabel: "Open goal"
+    },
+    {
+      kind: "deadline_drift_detected" as const,
+      request: "Recover the vendor onboarding workflow before the handoff date.",
+      sourceIdFromBundle: "workflow" as const,
+      details: {
+        workflowName: "Vendor onboarding",
+        deadlineAt: "2026-04-22T09:00:00.000Z"
+      },
+      expectedSummary: "Deadline drift detected for Vendor onboarding (2026-04-22T09:00:00.000Z)",
+      expectedFamily: "deadline",
+      expectedPriority: "high",
+      expectedQueue: "deadline_recovery",
+      expectedActionLabel: "Open goal"
+    },
+    {
+      kind: "workflow_stalled" as const,
+      request: "Unblock the contract review workflow for legal.",
+      sourceIdFromBundle: "workflow" as const,
+      details: {
+        workflowName: "Contract review",
+        blockedStep: "legal-approval"
+      },
+      expectedSummary: "Workflow stalled: Contract review",
+      expectedFamily: "workflow",
+      expectedPriority: "high",
+      expectedQueue: "workflow_recovery",
+      expectedActionLabel: "Open goal"
+    },
+    {
+      kind: "dormant_workflow_review_due" as const,
+      request: "Review the dormant quarterly vendor check-in workflow.",
+      sourceIdFromBundle: "workflow" as const,
+      details: {
+        workflowName: "Quarterly vendor review",
+        dormantDays: 21
+      },
+      expectedSummary: "Dormant workflow review due: Quarterly vendor review",
+      expectedFamily: "workflow",
+      expectedPriority: "medium",
+      expectedQueue: "workflow_review",
+      expectedActionLabel: "Review workflow"
+    }
+  ])(
+    "simulates $kind events with normalized family, queue, and operator routing metadata",
+    async ({
+      kind,
+      request,
+      sourceId,
+      sourceIdFromBundle,
+      details,
+      enrich,
+      expectedSummary,
+      expectedFamily,
+      expectedPriority,
+      expectedQueue,
+      expectedActionLabel
+    }) => {
+      const { repository, bundle } = await createGoalForUser(request);
+      Reflect.set(globalThis, "__agenticRepository", undefined);
+
+      const response = await autopilotEventsRoute(
+        buildRequest({
+          kind,
+          sourceId: sourceId ?? (sourceIdFromBundle === "workflow" ? bundle.workflow.id : bundle.goal.id),
+          mode: "draft_goal",
+          dryRun: true,
+          details: {
+            ...details,
+            ...(enrich ? enrich(bundle) : {})
+          }
+        })
+      );
+      const payload = (await response.json()) as {
+        simulated: boolean;
+        event: {
+          status: string;
+          summary: string;
+          details: {
+            eventEnvelope?: {
+              family: string;
+              trigger: string;
+              priority: string;
+            };
+            policy?: {
+              queue: string;
+              severity: string;
+            };
+            operatorRoute?: {
+              section: string;
+              itemId?: string;
+              label: string;
+              actionLabel?: string;
+            };
+            goalId?: string | null;
+            workflowId?: string | null;
+            workspaceId?: string | null;
+          };
+        };
+      };
+
+      expect(response.status).toBe(200);
+      expect(payload.simulated).toBe(true);
+      expect(payload.event.status).toBe("simulated");
+      expect(payload.event.summary).toBe(expectedSummary);
+      expect(payload.event.details.eventEnvelope).toMatchObject({
+        family: expectedFamily,
+        trigger: kind,
+        priority: expectedPriority
+      });
+      expect(payload.event.details.policy).toMatchObject({
+        queue: expectedQueue,
+        severity: expectedPriority
+      });
+      expect(payload.event.details.operatorRoute).toMatchObject({
+        section: "goals",
+        itemId: bundle.goal.id,
+        label: bundle.goal.title,
+        actionLabel: expectedActionLabel
+      });
+      expect(payload.event.details.goalId).toBe(bundle.goal.id);
+      expect(payload.event.details.workflowId).toBe(bundle.workflow.id);
+      expect(payload.event.details.workspaceId).toBe(bundle.workflow.workspaceId);
+      await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+    }
+  );
+
+  it.each([
+    {
+      kind: "communication_received" as const,
+      request: "Prepare the renewal plan for the finance inbox.",
+      sourceId: "thread-finance-renewal",
+      details: {
+        sender: "CFO",
+        subject: "Renewal approval needed"
+      },
+      enrich: (bundle: Awaited<ReturnType<typeof createGoalForUser>>["bundle"]) => ({
+        goalId: bundle.goal.id
+      }),
+      expectedSummary: "Inbound communication from CFO: Renewal approval needed",
+      expectedFamily: "communication",
+      expectedPriority: "high",
+      expectedActionLabel: "Open goal"
+    },
+    {
+      kind: "deadline_drift_detected" as const,
+      request: "Recover the vendor onboarding workflow before the handoff date.",
+      sourceIdFromBundle: "workflow" as const,
+      details: {
+        workflowName: "Vendor onboarding",
+        deadlineAt: "2026-04-22T09:00:00.000Z"
+      },
+      expectedSummary: "Deadline drift detected for Vendor onboarding (2026-04-22T09:00:00.000Z)",
+      expectedFamily: "deadline",
+      expectedPriority: "high",
+      expectedActionLabel: "Open goal"
+    },
+    {
+      kind: "workflow_stalled" as const,
+      request: "Unblock the contract review workflow for legal.",
+      sourceIdFromBundle: "workflow" as const,
+      details: {
+        workflowName: "Contract review",
+        blockedStep: "legal-approval"
+      },
+      expectedSummary: "Workflow stalled: Contract review",
+      expectedFamily: "workflow",
+      expectedPriority: "high",
+      expectedActionLabel: "Open goal"
+    },
+    {
+      kind: "dormant_workflow_review_due" as const,
+      request: "Review the dormant quarterly vendor check-in workflow.",
+      sourceIdFromBundle: "workflow" as const,
+      details: {
+        workflowName: "Quarterly vendor review",
+        dormantDays: 21
+      },
+      expectedSummary: "Dormant workflow review due: Quarterly vendor review",
+      expectedFamily: "workflow",
+      expectedPriority: "medium",
+      expectedActionLabel: "Review workflow"
+    }
+  ])(
+    "executes $kind events through the worker and records the resulting goal",
+    async ({
+      kind,
+      request,
+      sourceId,
+      sourceIdFromBundle,
+      details,
+      enrich,
+      expectedSummary,
+      expectedFamily,
+      expectedPriority,
+      expectedActionLabel
+    }) => {
+      const { repository, bundle } = await createGoalForUser(request);
+      Reflect.set(globalThis, "__agenticRepository", undefined);
+
+      const response = await autopilotEventsRoute(
+        buildRequest({
+          kind,
+          sourceId: sourceId ?? (sourceIdFromBundle === "workflow" ? bundle.workflow.id : bundle.goal.id),
+          mode: "draft_goal",
+          details: {
+            ...details,
+            ...(enrich ? enrich(bundle) : {})
+          }
+        })
+      );
+      const payload = (await response.json()) as {
+        event: {
+          id: string;
+          status: string;
+          summary: string;
+          resultGoalId: string | null;
+          details: {
+            eventEnvelope?: {
+              family: string;
+              trigger: string;
+              priority: string;
+            };
+            operatorRoute?: {
+              section: string;
+              itemId?: string;
+              label: string;
+              actionLabel?: string;
+            };
+          };
+        };
+        job: {
+          id: string;
+        };
+        queued: boolean;
+      };
+      const workerResult = await runAutopilotWorker(repository);
+      const event = await getAutopilotEvent(repository, payload.event.id);
+
+      expect(response.status).toBe(202);
+      expect(payload.queued).toBe(true);
+      expect(payload.event.status).toBe("pending");
+      expect(payload.event.resultGoalId).toBeNull();
+      expect(payload.event.summary).toBe(expectedSummary);
+      expect(payload.event.details.eventEnvelope).toMatchObject({
+        family: expectedFamily,
+        trigger: kind,
+        priority: expectedPriority
+      });
+      expect(payload.event.details.operatorRoute).toMatchObject({
+        section: "goals",
+        itemId: bundle.goal.id,
+        label: bundle.goal.title,
+        actionLabel: expectedActionLabel
+      });
+      expect(workerResult).toEqual({
+        processedCount: 1,
+        stopReason: "max_jobs"
+      });
+      expect(event?.status).toBe("executed");
+      expect(event?.resultGoalId).toBeTruthy();
+      expect(event?.summary).toBe(expectedSummary);
+      expect(event?.details.eventEnvelope).toMatchObject({
+        family: expectedFamily,
+        trigger: kind,
+        priority: expectedPriority
+      });
+      expect(event?.details.operatorRoute).toMatchObject({
+        section: "goals",
+        itemId: bundle.goal.id,
+        label: bundle.goal.title,
+        actionLabel: expectedActionLabel
+      });
+      await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(2);
+    }
+  );
+
   it("rate limits autopilot event creation with a route-scoped abuse key", async () => {
     const seenKeys: string[] = [];
     const store: AuthSessionStateStore = {

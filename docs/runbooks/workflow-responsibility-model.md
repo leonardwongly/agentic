@@ -1,6 +1,6 @@
 # Workflow Responsibility Model
 
-`LEO-164` makes ownership, delegation, handoff, review, and escalation explicit on core workflow objects instead of leaving those semantics implicit in status strings.
+`LEO-163` makes ownership, delegation, handoff, review, and escalation explicit on core workflow objects instead of leaving those semantics implicit in status strings.
 
 ## Boundary
 

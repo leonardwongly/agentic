@@ -1,6 +1,6 @@
 # Workflow Responsibility Audit Checklist
 
-Use this checklist when reviewing delegation, handoff, and escalation behavior for `LEO-164`.
+Use this checklist when reviewing delegation, handoff, and escalation behavior for `LEO-163`.
 
 - Goal, task, approval, and autopilot event records all carry a validated responsibility object.
 - Each responsibility object defines owner, reviewer, escalation owner, and handoff status.
