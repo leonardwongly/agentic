@@ -474,6 +474,7 @@ describe("recommendation replay analytics", () => {
     expect(report.suggestedPatterns).toBe(1);
     expect(report.guardedPatterns).toBe(1);
     expect(report.safeSuggestionPrecision).toBe(1);
+    expect(report.safeRecallProxy).toBe(1);
     expect(report.cases).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -484,6 +485,82 @@ describe("recommendation replay analytics", () => {
         expect.objectContaining({
           key: "task_plan:workflow:create_record:R2:create,update",
           predictedMode: "approval_required"
+        })
+      ])
+    );
+  });
+
+  it("tracks a safe recall proxy for reusable patterns that stay guarded", () => {
+    const report = buildRecommendationReplayReport([
+      buildReplayEpisode("suggest-recall-1"),
+      buildReplayEpisode("suggest-recall-2"),
+      buildReplayEpisode("suggest-recall-3"),
+      buildReplayEpisode("guarded-safe-1", {
+        recommendation: {
+          key: "execution_path:calendar:schedule_event:R2:schedule",
+          kind: "execution_path",
+          agent: "calendar",
+          action: "schedule_event",
+          confidence: 0.86,
+          rationale: "Observed reviewed scheduling flow.",
+          riskClass: "R2",
+          capabilities: ["schedule"],
+          sourceGoalId: "goal-guarded-safe-1",
+          sourceTaskId: "task-guarded-safe-1",
+          fallbackMode: "normal",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-guarded-safe-1",
+          workflowId: "workflow-guarded-safe-1",
+          taskId: "task-guarded-safe-1",
+          goalStatus: "completed",
+          taskState: "completed",
+          approvalDecision: "approved",
+          executionKind: "completed",
+          outcomeScore: 1,
+          userCorrection: false,
+          notes: "Safe but still sparse."
+        }
+      }),
+      buildReplayEpisode("guarded-safe-2", {
+        recommendation: {
+          key: "execution_path:calendar:schedule_event:R2:schedule",
+          kind: "execution_path",
+          agent: "calendar",
+          action: "schedule_event",
+          confidence: 0.85,
+          rationale: "Observed reviewed scheduling flow.",
+          riskClass: "R2",
+          capabilities: ["schedule"],
+          sourceGoalId: "goal-guarded-safe-2",
+          sourceTaskId: "task-guarded-safe-2",
+          fallbackMode: "normal",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-guarded-safe-2",
+          workflowId: "workflow-guarded-safe-2",
+          taskId: "task-guarded-safe-2",
+          goalStatus: "completed",
+          taskState: "completed",
+          approvalDecision: "approved",
+          executionKind: "completed",
+          outcomeScore: 1,
+          userCorrection: false,
+          notes: "Safe but below the evidence bar."
+        }
+      })
+    ]);
+
+    expect(report.safeSuggestionPrecision).toBe(1);
+    expect(report.safeRecallProxy).toBe(0.5);
+    expect(report.cases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "execution_path:calendar:schedule_event:R2:schedule",
+          predictedMode: "draft_only",
+          observedRisk: "safe"
         })
       ])
     );
@@ -602,17 +679,20 @@ describe("recommendation replay analytics", () => {
     expect(report.previous).toMatchObject({
       episodeCount: 3,
       safeSuggestionPrecision: 1,
+      safeRecallProxy: 1,
       negativeOutcomeRate: 0,
       failureCostRate: 0
     });
     expect(report.current).toMatchObject({
       episodeCount: 3,
       safeSuggestionPrecision: 0,
+      safeRecallProxy: 0,
       negativeOutcomeRate: 1
     });
     expect(report.current.failureCostRate).toBeGreaterThan(0.5);
     expect(report.drift).toMatchObject({
-      status: "regressing"
+      status: "regressing",
+      safeRecallProxyDelta: -1
     });
   });
 

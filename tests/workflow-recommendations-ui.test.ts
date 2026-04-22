@@ -121,11 +121,15 @@ describe("workflow recommendation ui helpers", () => {
     expect(context).toEqual({
       agent: "communications",
       riskClass: "R3",
-      capabilities: ["draft", "send"]
+      capabilities: ["draft", "send"],
+      goalTitle: "Ship a reviewed response",
+      goalConfidence: 0.81
     });
     expect(query?.get("kind")).toBe("execution_path");
     expect(query?.get("agent")).toBe("communications");
     expect(query?.get("riskClass")).toBe("R3");
+    expect(query?.get("goalTitle")).toBe("Ship a reviewed response");
+    expect(query?.get("goalConfidence")).toBe("0.81");
     expect(query?.getAll("capability")).toEqual(["draft", "send"]);
     expect(query?.get("minimumEvidence")).toBe("3");
     expect(query?.get("limit")).toBe("3");

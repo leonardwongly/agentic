@@ -49,6 +49,7 @@ Supported query parameters:
 - `action`
 - `riskClass`
 - repeated `capability`
+- `goalTitle` with `goalConfidence`
 - `replayMode`
 - `minimumEvidence`
 - `lowConfidenceThreshold`
@@ -60,7 +61,7 @@ Supported query parameters:
 Example:
 
 ```text
-/api/memory/recommendations?agent=communications&capability=send&minimumEvidence=3
+/api/memory/recommendations?agent=communications&capability=send&minimumEvidence=3&goalTitle=Ship%20a%20reviewed%20response&goalConfidence=0.81
 ```
 
 ## Operator Suggestions
@@ -86,6 +87,11 @@ Goal-card behavior:
    - agent/action/capability summary
    - rationale
    - evidence count, success rate, and score
+   - replay-comparison evidence showing:
+     - promotion mode
+     - rollback mode
+     - replay readiness
+     - baseline policy decision vs learning-influenced policy decision
 5. Operators can record one of four outcomes:
    - `accepted`
    - `edited`
@@ -114,6 +120,68 @@ Route guarantees:
 - Query parameters are strictly validated and fail closed on invalid values.
 - Returned payloads omit `sourceGoalId`, `sourceTaskId`, raw episode text, and any unbounded metadata.
 - Draft-only patterns stay hidden unless the caller explicitly opts into `includeDraftOnly=true`.
+
+## Learning Promotion Rules
+
+`LEO-169` adds an explicit promotion boundary between recommendation evidence and live autonomy.
+
+Workspace governance controls live under `shadowReplayPolicy`:
+- `promotionMode=validated_autonomy`
+- `promotionMode=shadow_only`
+- `promotionMode=disabled`
+- `rollbackOutcome=allowed_with_confirmation`
+- `rollbackOutcome=downgrade_to_draft`
+
+Promotion rules:
+1. Replay-derived learning never widens live autonomy until the relevant path has replay validation attached.
+2. R3 learning promotion requires:
+   - strong approval-history trust
+   - a strong execution scorecard
+   - replay validation present
+   - replay validation passing
+   - workspace shadow replay thresholds passing when the workspace widens autonomy to R3
+3. `shadow_only` keeps collecting evidence, but the policy engine will not widen live autonomy.
+4. `disabled` is the hard kill switch. It blocks learning-backed widening immediately without deleting the underlying evidence.
+5. If promotion is blocked, the policy engine falls back according to `rollbackOutcome`:
+   - `allowed_with_confirmation` keeps the task on the approval path
+   - `downgrade_to_draft` forces draft-only execution
+
+Comparison workflow:
+1. Use `comparePolicyWithAndWithoutLearning(...)` to compare the baseline decision against the learning-influenced decision.
+2. Treat any promotion without replay validation as a defect.
+3. Treat any rollback triggered by drift, failure cost, or the kill switch as expected defensive behavior.
+4. The dashboard recommendation panel now surfaces the same comparison packet returned by `GET /api/memory/recommendations`, so operators can inspect promotion state before accepting reuse guidance.
+
+## Quality Metrics And Review Cadence
+
+`LEO-170` tracks recommendation quality in two layers.
+
+Replay analytics from `GET /api/memory/recommendations` emit:
+- `product.learning.recommendation.safe_precision`
+- `product.learning.recommendation.safe_recall_proxy`
+- `product.learning.recommendation.negative_outcome_rate`
+- `product.learning.recommendation.failure_cost_rate`
+
+Operator feedback from `POST /api/goals/[id]/recommendations/feedback` emit:
+- `product.learning.recommendation.feedback.total`
+- `product.learning.recommendation.feedback.evidence_count`
+- `product.learning.recommendation.feedback.score`
+- `product.learning.recommendation.feedback.negative_rate`
+
+Operational review cadence:
+1. Review the learning-flywheel dashboard at least once every 14 days.
+2. Review immediately if rejected or overridden recommendation feedback spikes.
+3. Investigate safe-recall-proxy decay even when precision remains high; this usually means the system is getting too conservative or the safe pattern inventory is drifting out of scope.
+4. Pause promotion by switching `promotionMode` to `shadow_only` or `disabled` when precision decays or failure cost rises materially.
+5. Only restore `validated_autonomy` after replay validation returns to threshold and the degraded slice has been inspected.
+
+Remediation playbook:
+1. Identify the affected agent, action, and risk class from the dashboard panels.
+2. Compare the policy decision with and without learning influence to confirm whether learning is widening the path incorrectly.
+3. Check whether safe recall proxy has collapsed; if so, inspect whether safe patterns are being over-guarded rather than misclassified as unsafe.
+4. Move governance to `shadow_only` or `disabled` if live widening is unsafe.
+5. Re-sample the underlying outcome traces, looking for drift, false positives, corrections, post-approval failures, and safe patterns that are no longer being surfaced.
+6. Tighten thresholds or prune the noisy recommendation slice before re-enabling validated autonomy.
 
 ## Validation
 

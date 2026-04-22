@@ -39,6 +39,8 @@ describe("governance simulate route", () => {
           maxAutoRunRiskClass: "R3",
           shadowReplayPolicy: {
             enabled: false,
+            promotionMode: "shadow_only",
+            rollbackOutcome: "allowed_with_confirmation",
             minimumMatchedEpisodes: 6
           }
         },
@@ -59,6 +61,8 @@ describe("governance simulate route", () => {
         externalSendRequiresApproval: boolean;
         shadowReplayPolicy: {
           enabled: boolean;
+          promotionMode: string;
+          rollbackOutcome: string;
           minimumMatchedEpisodes: number;
           minimumPrecision: number;
         };
@@ -95,6 +99,8 @@ describe("governance simulate route", () => {
       externalSendRequiresApproval: false,
       shadowReplayPolicy: {
         enabled: false,
+        promotionMode: "shadow_only",
+        rollbackOutcome: "allowed_with_confirmation",
         minimumMatchedEpisodes: 6,
         minimumPrecision: 0.8
       }
@@ -105,7 +111,9 @@ describe("governance simulate route", () => {
       requiresExplicitApprovalCapabilities: ["schedule"],
       shadowReplay: {
         enabled: false,
-        required: true
+        required: true,
+        promotionMode: "shadow_only",
+        rollbackOutcome: "allowed_with_confirmation"
       }
     });
     expect(payload.conformance).toMatchObject({

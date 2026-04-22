@@ -4,6 +4,7 @@ import {
   buildAutonomyBudget,
   buildPolicyDecisionTrace,
   buildGovernanceSimulationScenarios,
+  comparePolicyWithAndWithoutLearning,
   evaluateTaskPolicy,
   riskFromCapabilities,
   simulateGovernanceScenarios,
@@ -70,6 +71,8 @@ describe("policy", () => {
       calendarWriteRequiresApproval: false,
       shadowReplayPolicy: {
         enabled: true,
+        promotionMode: "validated_autonomy",
+        rollbackOutcome: "allowed_with_confirmation",
         minimumMatchedEpisodes: 3,
         minimumPrecision: 0.8,
         maximumNegativeOutcomeRate: 0.15,
@@ -162,13 +165,24 @@ describe("policy", () => {
     expect(decision.requiresApproval).toBe(true);
   });
 
-  it("allows R3 autonomy only when strong memory trust and a strong scorecard are both present", () => {
+  it("allows R3 autonomy only when strong memory trust, a strong scorecard, and replay validation are all present", () => {
     const decision = evaluateTaskPolicy({
       capabilities: ["send"],
       confidence: 0.92,
       title: "Send the customer follow-up",
       memories: buildFreshApprovalMemories(),
-      scorecard: buildScorecard()
+      scorecard: buildScorecard(),
+      learningValidation: {
+        replayValidated: true,
+        matchedPatterns: 1,
+        matchedEpisodes: 4,
+        suggestedPatterns: 1,
+        safeSuggestionPrecision: 1,
+        negativeOutcomeRate: 0,
+        failureCostRate: 0,
+        driftStatus: "stable",
+        rationale: "Recent replay evidence is stable."
+      }
     });
 
     expect(decision.outcome).toBe("allowed");
@@ -208,7 +222,18 @@ describe("policy", () => {
       title: "Send the customer follow-up",
       memories: buildFreshApprovalMemories(),
       scorecard: buildScorecard(),
-      governance: buildGovernance()
+      governance: buildGovernance(),
+      learningValidation: {
+        replayValidated: true,
+        matchedPatterns: 1,
+        matchedEpisodes: 2,
+        suggestedPatterns: 1,
+        safeSuggestionPrecision: 1,
+        negativeOutcomeRate: 0,
+        failureCostRate: 0,
+        driftStatus: "stable",
+        rationale: "Replay evidence is still accumulating."
+      }
     });
 
     expect(decision.outcome).toBe("allowed_with_confirmation");
@@ -226,12 +251,25 @@ describe("policy", () => {
       governance: buildGovernance({
         shadowReplayPolicy: {
           enabled: false,
+          promotionMode: "validated_autonomy",
+          rollbackOutcome: "allowed_with_confirmation",
           minimumMatchedEpisodes: 3,
           minimumPrecision: 0.8,
           maximumNegativeOutcomeRate: 0.15,
           maximumFailureCostRate: 0.2
         }
-      })
+      }),
+      learningValidation: {
+        replayValidated: true,
+        matchedPatterns: 1,
+        matchedEpisodes: 4,
+        suggestedPatterns: 1,
+        safeSuggestionPrecision: 1,
+        negativeOutcomeRate: 0,
+        failureCostRate: 0,
+        driftStatus: "stable",
+        rationale: "Replay evidence is stable."
+      }
     });
 
     expect(decision.outcome).toBe("allowed_with_confirmation");
@@ -263,6 +301,92 @@ describe("policy", () => {
     expect(decision.outcome).toBe("allowed");
     expect(decision.requiresApproval).toBe(false);
     expect(decision.rationale).toContain("replay precision");
+  });
+
+  it("keeps approval required when replay validation is missing even if trust and scorecard are strong", () => {
+    const decision = evaluateTaskPolicy({
+      capabilities: ["send"],
+      confidence: 0.92,
+      title: "Send the customer follow-up",
+      memories: buildFreshApprovalMemories(),
+      scorecard: buildScorecard()
+    });
+
+    expect(decision.outcome).toBe("allowed_with_confirmation");
+    expect(decision.requiresApproval).toBe(true);
+    expect(decision.rationale).toContain("replay validation evidence is still missing");
+  });
+
+  it("keeps approval required when governance holds learning promotion in shadow-only mode", () => {
+    const decision = evaluateTaskPolicy({
+      capabilities: ["send"],
+      confidence: 0.92,
+      title: "Send the customer follow-up",
+      memories: buildFreshApprovalMemories(),
+      scorecard: buildScorecard(),
+      governance: buildGovernance({
+        shadowReplayPolicy: {
+          enabled: true,
+          promotionMode: "shadow_only",
+          rollbackOutcome: "allowed_with_confirmation",
+          minimumMatchedEpisodes: 3,
+          minimumPrecision: 0.8,
+          maximumNegativeOutcomeRate: 0.15,
+          maximumFailureCostRate: 0.2
+        }
+      }),
+      learningValidation: {
+        replayValidated: true,
+        matchedPatterns: 1,
+        matchedEpisodes: 4,
+        suggestedPatterns: 1,
+        safeSuggestionPrecision: 1,
+        negativeOutcomeRate: 0,
+        failureCostRate: 0,
+        driftStatus: "stable",
+        rationale: "Recent replay evidence is stable."
+      }
+    });
+
+    expect(decision.outcome).toBe("allowed_with_confirmation");
+    expect(decision.requiresApproval).toBe(true);
+    expect(decision.rationale).toContain("shadow-only mode");
+  });
+
+  it("downgrades to draft when the learning kill switch is active and rollback is configured to draft", () => {
+    const decision = evaluateTaskPolicy({
+      capabilities: ["send"],
+      confidence: 0.92,
+      title: "Send the customer follow-up",
+      memories: buildFreshApprovalMemories(),
+      scorecard: buildScorecard(),
+      governance: buildGovernance({
+        shadowReplayPolicy: {
+          enabled: true,
+          promotionMode: "disabled",
+          rollbackOutcome: "downgrade_to_draft",
+          minimumMatchedEpisodes: 3,
+          minimumPrecision: 0.8,
+          maximumNegativeOutcomeRate: 0.15,
+          maximumFailureCostRate: 0.2
+        }
+      }),
+      learningValidation: {
+        replayValidated: true,
+        matchedPatterns: 1,
+        matchedEpisodes: 4,
+        suggestedPatterns: 1,
+        safeSuggestionPrecision: 1,
+        negativeOutcomeRate: 0,
+        failureCostRate: 0,
+        driftStatus: "stable",
+        rationale: "Recent replay evidence is stable."
+      }
+    });
+
+    expect(decision.outcome).toBe("downgrade_to_draft");
+    expect(decision.requiresApproval).toBe(false);
+    expect(decision.rationale).toContain("kill switch");
   });
 
   it("keeps approval required when memory trust is strong but the scorecard is weak", () => {
@@ -421,6 +545,8 @@ describe("policy", () => {
       buildGovernance({
         shadowReplayPolicy: {
           enabled: false,
+          promotionMode: "validated_autonomy",
+          rollbackOutcome: "allowed_with_confirmation",
           minimumMatchedEpisodes: 3,
           minimumPrecision: 0.8,
           maximumNegativeOutcomeRate: 0.15,
@@ -490,7 +616,9 @@ describe("policy", () => {
       r3AutonomyEligible: true,
       shadowReplay: {
         required: true,
-        enabled: true
+        enabled: true,
+        promotionMode: "validated_autonomy",
+        rollbackOutcome: "allowed_with_confirmation"
       },
       decisionInputs: expect.arrayContaining([
         expect.objectContaining({
@@ -508,9 +636,49 @@ describe("policy", () => {
         expect.objectContaining({
           id: "replay_validation",
           active: true
+        }),
+        expect.objectContaining({
+          id: "learning_promotion_mode",
+          active: true
+        }),
+        expect.objectContaining({
+          id: "learning_rollback_control",
+          active: true
         })
       ])
     });
+  });
+
+  it("compares the policy with and without learning influence", () => {
+    const comparison = comparePolicyWithAndWithoutLearning({
+      capabilities: ["send"],
+      confidence: 0.92,
+      title: "Send the customer follow-up",
+      memories: buildFreshApprovalMemories(),
+      scorecard: buildScorecard(),
+      learningValidation: {
+        replayValidated: true,
+        matchedPatterns: 1,
+        matchedEpisodes: 4,
+        suggestedPatterns: 1,
+        safeSuggestionPrecision: 1,
+        negativeOutcomeRate: 0,
+        failureCostRate: 0,
+        driftStatus: "stable",
+        rationale: "Recent replay evidence is stable."
+      }
+    });
+
+    expect(comparison.baseline).toMatchObject({
+      outcome: "allowed_with_confirmation",
+      requiresApproval: true
+    });
+    expect(comparison.influenced).toMatchObject({
+      outcome: "allowed",
+      requiresApproval: false
+    });
+    expect(comparison.changed).toBe(true);
+    expect(comparison.promoted).toBe(true);
   });
 
   it("simulates governance scenarios with conformance context and decision traces", () => {

@@ -103,6 +103,54 @@
           "groupBy": ["outcome"]
         }
       ]
+    },
+    {
+      "key": "learning-flywheel",
+      "title": "Learning Flywheel",
+      "panels": [
+        {
+          "key": "recommendation-safe-precision",
+          "title": "Recommendation safe precision p95",
+          "metric": "product.learning.recommendation.safe_precision",
+          "aggregation": "p95",
+          "groupBy": ["agent", "riskClass"]
+        },
+        {
+          "key": "recommendation-negative-outcome-rate",
+          "title": "Recommendation negative outcome rate p95",
+          "metric": "product.learning.recommendation.negative_outcome_rate",
+          "aggregation": "p95",
+          "groupBy": ["agent", "riskClass"]
+        },
+        {
+          "key": "recommendation-safe-recall-proxy",
+          "title": "Recommendation safe recall proxy p95",
+          "metric": "product.learning.recommendation.safe_recall_proxy",
+          "aggregation": "p95",
+          "groupBy": ["agent", "riskClass"]
+        },
+        {
+          "key": "recommendation-failure-cost-rate",
+          "title": "Recommendation failure cost rate p95",
+          "metric": "product.learning.recommendation.failure_cost_rate",
+          "aggregation": "p95",
+          "groupBy": ["agent", "riskClass"]
+        },
+        {
+          "key": "recommendation-feedback-outcomes",
+          "title": "Recommendation feedback outcomes",
+          "metric": "product.learning.recommendation.feedback.total",
+          "aggregation": "sum",
+          "groupBy": ["agent", "operatorOutcome", "replayMode"]
+        },
+        {
+          "key": "recommendation-feedback-score",
+          "title": "Recommendation feedback score p95",
+          "metric": "product.learning.recommendation.feedback.score",
+          "aggregation": "p95",
+          "groupBy": ["agent", "operatorOutcome"]
+        }
+      ]
     }
   ]
 }

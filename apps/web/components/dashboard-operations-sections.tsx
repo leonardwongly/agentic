@@ -387,6 +387,45 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             Require shadow replay evidence before widening to R3 autonomy
           </label>
           <label className="field">
+            <span>Learning promotion mode</span>
+            <select
+              value={governanceDraft.shadowReplayPolicy.promotionMode}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    promotionMode: event.target.value as WorkspaceGovernance["shadowReplayPolicy"]["promotionMode"]
+                  }
+                }))
+              }
+            >
+              <option value="validated_autonomy">validated_autonomy</option>
+              <option value="shadow_only">shadow_only</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Learning rollback outcome</span>
+            <select
+              value={governanceDraft.shadowReplayPolicy.rollbackOutcome}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    rollbackOutcome: event.target.value as WorkspaceGovernance["shadowReplayPolicy"]["rollbackOutcome"]
+                  }
+                }))
+              }
+            >
+              <option value="allowed_with_confirmation">allowed_with_confirmation</option>
+              <option value="downgrade_to_draft">downgrade_to_draft</option>
+            </select>
+          </label>
+          <label className="field">
             <span>Shadow replay minimum matched episodes</span>
             <input
               type="number"

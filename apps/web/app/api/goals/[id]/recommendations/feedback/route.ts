@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createActionLog } from "@agentic/observability";
+import { createActionLog, recordCounter, recordHistogram } from "@agentic/observability";
 import { createActorContextFromPrincipal } from "../../../../../../lib/actor-context";
 import { requireApiSession } from "../../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../../lib/api-response";
@@ -88,6 +88,16 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const decisionSummary = describeDecision(decision);
+    const metricAttributes = {
+      decision,
+      operatorOutcome: decision === "edited" ? "overridden" : decision,
+      workflowKind: recommendation.workflow.kind,
+      agent: recommendation.workflow.agent,
+      action: recommendation.workflow.action,
+      riskClass: recommendation.workflow.riskClass ?? "unknown",
+      replayMode: recommendation.reuse.replayMode,
+      operatorAction: recommendation.reuse.operatorAction
+    };
     const actionLog = createActionLog({
       goalId: bundle.goal.id,
       workflowId: bundle.workflow.id,
@@ -103,6 +113,19 @@ export async function POST(request: Request, context: RouteContext) {
       },
       prevLog: bundle.actionLogs.at(-1) ?? null
     });
+
+    recordCounter("product.learning.recommendation.feedback.total", 1, metricAttributes);
+    recordHistogram(
+      "product.learning.recommendation.feedback.evidence_count",
+      recommendation.evidence.count,
+      metricAttributes
+    );
+    recordHistogram("product.learning.recommendation.feedback.score", recommendation.evidence.score, metricAttributes);
+    recordHistogram(
+      "product.learning.recommendation.feedback.negative_rate",
+      recommendation.evidence.negativeRate,
+      metricAttributes
+    );
 
     await repository.saveGoalBundle({
       ...bundle,

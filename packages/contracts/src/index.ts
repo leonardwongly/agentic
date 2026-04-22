@@ -111,6 +111,8 @@ export const agentNameValues = [
 ] as const;
 export const operatorProductStatusValues = ["active", "draft", "archived"] as const;
 export const operatorProductReadinessValues = ["ready", "recommended", "optional", "missing"] as const;
+export const learningPromotionModeValues = ["disabled", "shadow_only", "validated_autonomy"] as const;
+export const learningRollbackOutcomeValues = ["allowed_with_confirmation", "downgrade_to_draft"] as const;
 
 export const CapabilitySchema = z.enum(capabilityValues);
 export const RiskClassSchema = z.enum(riskClassValues);
@@ -153,6 +155,8 @@ export const ProviderCredentialSecretKindSchema = z.enum(providerCredentialSecre
 export const AgentNameSchema = z.enum(agentNameValues);
 export const OperatorProductStatusSchema = z.enum(operatorProductStatusValues);
 export const OperatorProductReadinessSchema = z.enum(operatorProductReadinessValues);
+export const LearningPromotionModeSchema = z.enum(learningPromotionModeValues);
+export const LearningRollbackOutcomeSchema = z.enum(learningRollbackOutcomeValues);
 
 const TimeOfDaySchema = z
   .string()
@@ -502,6 +506,8 @@ export const AutonomyBudgetDecisionInputSchema = z.object({
     "external_send_gate",
     "calendar_write_gate",
     "shadow_replay_policy",
+    "learning_promotion_mode",
+    "learning_rollback_control",
     "memory_trust",
     "scorecard_trust",
     "replay_validation"
@@ -516,6 +522,8 @@ export const AutonomyBudgetShadowReplaySchema = z.object({
   eligibleForR3: z.boolean(),
   enabled: z.boolean(),
   required: z.boolean(),
+  promotionMode: LearningPromotionModeSchema,
+  rollbackOutcome: LearningRollbackOutcomeSchema,
   thresholdSummary: z.array(z.string().min(1)).default([]),
   summary: z.string().min(1)
 });
@@ -943,6 +951,8 @@ export const DashboardOperatingSectionsSchema = z.object({
 
 export const defaultWorkspaceShadowReplayPolicy = {
   enabled: true,
+  promotionMode: "validated_autonomy",
+  rollbackOutcome: "allowed_with_confirmation",
   minimumMatchedEpisodes: 3,
   minimumPrecision: 0.8,
   maximumNegativeOutcomeRate: 0.15,
@@ -952,6 +962,8 @@ export const defaultWorkspaceShadowReplayPolicy = {
 export const WorkspaceShadowReplayPolicySchema = z
   .object({
     enabled: z.boolean().default(defaultWorkspaceShadowReplayPolicy.enabled),
+    promotionMode: LearningPromotionModeSchema.default(defaultWorkspaceShadowReplayPolicy.promotionMode),
+    rollbackOutcome: LearningRollbackOutcomeSchema.default(defaultWorkspaceShadowReplayPolicy.rollbackOutcome),
     minimumMatchedEpisodes: z.number().int().min(1).max(50).default(defaultWorkspaceShadowReplayPolicy.minimumMatchedEpisodes),
     minimumPrecision: z.number().min(0).max(1).default(defaultWorkspaceShadowReplayPolicy.minimumPrecision),
     maximumNegativeOutcomeRate: z.number().min(0).max(1).default(defaultWorkspaceShadowReplayPolicy.maximumNegativeOutcomeRate),

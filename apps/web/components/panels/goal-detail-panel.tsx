@@ -78,6 +78,8 @@ type PolicyTraceSummary = {
       eligibleForR3: boolean;
       enabled: boolean;
       required: boolean;
+      promotionMode: "disabled" | "shadow_only" | "validated_autonomy";
+      rollbackOutcome: "allowed_with_confirmation" | "downgrade_to_draft";
       thresholdSummary: string[];
       summary: string;
     };
@@ -90,6 +92,8 @@ type PolicyTraceSummary = {
         | "external_send_gate"
         | "calendar_write_gate"
         | "shadow_replay_policy"
+        | "learning_promotion_mode"
+        | "learning_rollback_control"
         | "memory_trust"
         | "scorecard_trust"
         | "replay_validation";
@@ -163,6 +167,8 @@ function isPolicyAutonomyInputId(value: unknown): value is PolicyTraceAutonomyIn
     value === "external_send_gate" ||
     value === "calendar_write_gate" ||
     value === "shadow_replay_policy" ||
+    value === "learning_promotion_mode" ||
+    value === "learning_rollback_control" ||
     value === "memory_trust" ||
     value === "scorecard_trust" ||
     value === "replay_validation"
@@ -390,6 +396,14 @@ function parsePolicyTraceSummaries(bundle: GoalBundle): PolicyTraceSummary[] {
                 eligibleForR3: shadowReplayCandidate.eligibleForR3,
                 enabled: shadowReplayCandidate.enabled,
                 required: shadowReplayCandidate.required,
+                promotionMode:
+                  shadowReplayCandidate.promotionMode === "disabled" || shadowReplayCandidate.promotionMode === "shadow_only"
+                    ? shadowReplayCandidate.promotionMode
+                    : "validated_autonomy",
+                rollbackOutcome:
+                  shadowReplayCandidate.rollbackOutcome === "downgrade_to_draft"
+                    ? "downgrade_to_draft"
+                    : "allowed_with_confirmation",
                 thresholdSummary: Array.isArray(shadowReplayCandidate.thresholdSummary)
                   ? shadowReplayCandidate.thresholdSummary.filter((entry): entry is string => typeof entry === "string")
                   : [],

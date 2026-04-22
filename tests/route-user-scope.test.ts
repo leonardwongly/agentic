@@ -124,6 +124,8 @@ function buildDashboardData(): DashboardData {
       calendarWriteRequiresApproval: true,
       shadowReplayPolicy: {
         enabled: true,
+        promotionMode: "validated_autonomy",
+        rollbackOutcome: "allowed_with_confirmation",
         minimumMatchedEpisodes: 3,
         minimumPrecision: 0.8,
         maximumNegativeOutcomeRate: 0.15,

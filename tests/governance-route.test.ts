@@ -130,6 +130,8 @@ describe("governance route", () => {
         maxAutoRunRiskClass: "R2",
         shadowReplayPolicy: {
           enabled: false,
+          promotionMode: "shadow_only",
+          rollbackOutcome: "downgrade_to_draft",
           minimumMatchedEpisodes: 5
         },
         retentionDays: 90
@@ -142,6 +144,8 @@ describe("governance route", () => {
         retentionDays: number;
         shadowReplayPolicy: {
           enabled: boolean;
+          promotionMode: string;
+          rollbackOutcome: string;
           minimumMatchedEpisodes: number;
           minimumPrecision: number;
         };
@@ -175,6 +179,8 @@ describe("governance route", () => {
       retentionDays: 90,
       shadowReplayPolicy: {
         enabled: false,
+        promotionMode: "shadow_only",
+        rollbackOutcome: "downgrade_to_draft",
         minimumMatchedEpisodes: 5,
         minimumPrecision: 0.8
       }
@@ -184,7 +190,9 @@ describe("governance route", () => {
       r3AutonomyEligible: false,
       shadowReplay: {
         enabled: false,
-        required: false
+        required: false,
+        promotionMode: "shadow_only",
+        rollbackOutcome: "downgrade_to_draft"
       }
     });
     expect(payload.conformance).toMatchObject({
@@ -208,6 +216,8 @@ describe("governance route", () => {
       retentionDays: 90,
       shadowReplayPolicy: {
         enabled: false,
+        promotionMode: "shadow_only",
+        rollbackOutcome: "downgrade_to_draft",
         minimumMatchedEpisodes: 5,
         minimumPrecision: 0.8
       }

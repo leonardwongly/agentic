@@ -272,6 +272,7 @@ export type RecommendationReplayReport = {
   suggestedPatterns: number;
   guardedPatterns: number;
   safeSuggestionPrecision: number;
+  safeRecallProxy: number;
   cases: RecommendationReplayCase[];
   insights: RecommendationInsight[];
 };
@@ -291,6 +292,7 @@ export type RecommendationPerformanceWindow = {
   consideredEpisodes: number;
   suggestedPatterns: number;
   safeSuggestionPrecision: number;
+  safeRecallProxy: number;
   negativeOutcomeRate: number;
   failureCostRate: number;
 };
@@ -303,6 +305,7 @@ export type RecommendationPerformanceBucket = RecommendationPerformanceWindow & 
 export type RecommendationPerformanceDrift = {
   status: "improving" | "stable" | "regressing" | "insufficient_data";
   safeSuggestionPrecisionDelta: number;
+  safeRecallProxyDelta: number;
   negativeOutcomeRateDelta: number;
   failureCostRateDelta: number;
 };
@@ -505,6 +508,17 @@ function calculateNegativeOutcomeRate(
   return clamp(negativeCount / episodes.length, 0, 1);
 }
 
+function calculateSafeRecallProxy(cases: RecommendationReplayCase[]): number {
+  const safeCases = cases.filter((item) => item.observedRisk === "safe");
+
+  if (safeCases.length === 0) {
+    return 0;
+  }
+
+  const suggestedSafeCases = safeCases.filter((item) => item.predictedMode === "suggest").length;
+  return clamp(suggestedSafeCases / safeCases.length, 0, 1);
+}
+
 function summarizeRecommendationPerformanceWindow(
   episodes: Array<EpisodeRecord & { recommendation: RecommendationTrace; outcomeLink: OutcomeLink }>,
   options?: {
@@ -521,6 +535,7 @@ function summarizeRecommendationPerformanceWindow(
       consideredEpisodes: 0,
       suggestedPatterns: 0,
       safeSuggestionPrecision: 0,
+      safeRecallProxy: 0,
       negativeOutcomeRate: 0,
       failureCostRate: 0
     };
@@ -540,6 +555,7 @@ function summarizeRecommendationPerformanceWindow(
     consideredEpisodes: report.consideredEpisodes,
     suggestedPatterns: report.suggestedPatterns,
     safeSuggestionPrecision: report.safeSuggestionPrecision,
+    safeRecallProxy: report.safeRecallProxy,
     negativeOutcomeRate: calculateNegativeOutcomeRate(episodes),
     failureCostRate
   };
@@ -559,6 +575,7 @@ function classifyRecommendationPerformanceDrift(params: {
     -1,
     1
   );
+  const safeRecallProxyDelta = clamp(params.current.safeRecallProxy - params.previous.safeRecallProxy, -1, 1);
   const negativeOutcomeRateDelta = clamp(params.current.negativeOutcomeRate - params.previous.negativeOutcomeRate, -1, 1);
   const failureCostRateDelta = clamp(params.current.failureCostRate - params.previous.failureCostRate, -1, 1);
 
@@ -566,6 +583,7 @@ function classifyRecommendationPerformanceDrift(params: {
     return {
       status: "insufficient_data",
       safeSuggestionPrecisionDelta,
+      safeRecallProxyDelta,
       negativeOutcomeRateDelta,
       failureCostRateDelta
     };
@@ -573,12 +591,14 @@ function classifyRecommendationPerformanceDrift(params: {
 
   if (
     safeSuggestionPrecisionDelta <= -params.regressionThreshold ||
+    safeRecallProxyDelta <= -params.regressionThreshold ||
     negativeOutcomeRateDelta >= params.regressionThreshold ||
     failureCostRateDelta >= params.regressionThreshold
   ) {
     return {
       status: "regressing",
       safeSuggestionPrecisionDelta,
+      safeRecallProxyDelta,
       negativeOutcomeRateDelta,
       failureCostRateDelta
     };
@@ -586,12 +606,14 @@ function classifyRecommendationPerformanceDrift(params: {
 
   if (
     safeSuggestionPrecisionDelta >= params.regressionThreshold / 2 &&
+    safeRecallProxyDelta >= params.regressionThreshold / 2 &&
     negativeOutcomeRateDelta <= -params.regressionThreshold / 2 &&
     failureCostRateDelta <= -params.regressionThreshold / 2
   ) {
     return {
       status: "improving",
       safeSuggestionPrecisionDelta,
+      safeRecallProxyDelta,
       negativeOutcomeRateDelta,
       failureCostRateDelta
     };
@@ -600,6 +622,7 @@ function classifyRecommendationPerformanceDrift(params: {
   return {
     status: "stable",
     safeSuggestionPrecisionDelta,
+    safeRecallProxyDelta,
     negativeOutcomeRateDelta,
     failureCostRateDelta
   };
@@ -830,6 +853,7 @@ export function buildRecommendationReplayReport(
     suggestedCases.length === 0
       ? 0
       : suggestedCases.filter((item) => item.observedRisk === "safe").length / suggestedCases.length;
+  const safeRecallProxy = calculateSafeRecallProxy(cases);
 
   return {
     totalEpisodes: episodes.length,
@@ -838,6 +862,7 @@ export function buildRecommendationReplayReport(
     suggestedPatterns: suggestedCases.length,
     guardedPatterns: insights.filter((insight) => insight.replayMode !== "suggest").length,
     safeSuggestionPrecision,
+    safeRecallProxy,
     cases,
     insights
   };

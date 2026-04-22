@@ -3198,6 +3198,8 @@ describe("repository", () => {
         calendarWriteRequiresApproval: true,
         shadowReplayPolicy: {
           enabled: false,
+          promotionMode: "disabled",
+          rollbackOutcome: "allowed_with_confirmation",
           minimumMatchedEpisodes: 6,
           minimumPrecision: 0.9,
           maximumNegativeOutcomeRate: 0.1,
@@ -3234,6 +3236,8 @@ describe("repository", () => {
         requireAuditExports: boolean;
         shadowReplayPolicy: {
           enabled: boolean;
+          promotionMode: string;
+          rollbackOutcome: string;
           minimumMatchedEpisodes: number;
           minimumPrecision: number;
         };
@@ -3269,6 +3273,8 @@ describe("repository", () => {
       retentionDays: 90,
       shadowReplayPolicy: {
         enabled: false,
+        promotionMode: "disabled",
+        rollbackOutcome: "allowed_with_confirmation",
         minimumMatchedEpisodes: 6,
         minimumPrecision: 0.9
       }
@@ -3281,6 +3287,8 @@ describe("repository", () => {
       requireAuditExports: true,
       shadowReplayPolicy: {
         enabled: false,
+        promotionMode: "disabled",
+        rollbackOutcome: "allowed_with_confirmation",
         minimumMatchedEpisodes: 6,
         minimumPrecision: 0.9
       }

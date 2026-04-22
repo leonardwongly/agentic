@@ -7,6 +7,8 @@ export type GoalRecommendationContext = {
   agent: string;
   riskClass: string | null;
   capabilities: string[];
+  goalTitle: string;
+  goalConfidence: number;
 };
 
 export type RecommendationRefinementSource = {
@@ -64,7 +66,9 @@ export function getGoalRecommendationContext(bundle: GoalBundle): GoalRecommenda
   return {
     agent: task.assignedAgent,
     riskClass: task.riskClass ?? null,
-    capabilities
+    capabilities,
+    goalTitle: bundle.goal.title.trim(),
+    goalConfidence: bundle.goal.confidence
   };
 }
 
@@ -84,6 +88,8 @@ export function buildGoalRecommendationQuery(bundle: GoalBundle): URLSearchParam
   query.set("agent", context.agent);
   query.set("minimumEvidence", String(DEFAULT_MINIMUM_EVIDENCE));
   query.set("limit", String(DEFAULT_RECOMMENDATION_LIMIT));
+  query.set("goalTitle", context.goalTitle);
+  query.set("goalConfidence", String(context.goalConfidence));
 
   if (context.riskClass) {
     query.set("riskClass", context.riskClass);

@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -63,6 +64,7 @@ describe("recommendation feedback route", () => {
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 
   beforeEach(async () => {
+    resetTelemetrySnapshot();
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
       await mkdtemp(path.join(os.tmpdir(), "agentic-recommendation-feedback-")),
@@ -75,6 +77,7 @@ describe("recommendation feedback route", () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    resetTelemetrySnapshot();
   });
 
   it("persists recommendation feedback as a goal-scoped action log and returns the dashboard snapshot", async () => {
@@ -103,6 +106,19 @@ describe("recommendation feedback route", () => {
     };
     const reloaded = await repository.getGoalBundle(bundle.goal.id);
     const feedbackLog = reloaded?.actionLogs.find((log) => log.kind === "goal.recommendation_feedback");
+    const snapshot = getTelemetrySnapshot();
+    const feedbackCountMetric = snapshot.metrics.find(
+      (entry) =>
+        entry.name === "product.learning.recommendation.feedback.total" &&
+        entry.attributes.agent === "communications" &&
+        entry.attributes.operatorOutcome === "accepted"
+    );
+    const feedbackScoreMetric = snapshot.metrics.find(
+      (entry) =>
+        entry.name === "product.learning.recommendation.feedback.score" &&
+        entry.attributes.agent === "communications" &&
+        entry.attributes.operatorOutcome === "accepted"
+    );
 
     expect(response.status).toBe(200);
     expectNoStoreHeaders(response);
@@ -115,6 +131,23 @@ describe("recommendation feedback route", () => {
       decision: "accepted",
       source: "goal_card",
       recommendation: buildRecommendation()
+    });
+    expect(feedbackCountMetric).toMatchObject({
+      kind: "counter",
+      value: 1,
+      attributes: expect.objectContaining({
+        decision: "accepted",
+        operatorOutcome: "accepted",
+        replayMode: "approval_required"
+      })
+    });
+    expect(feedbackScoreMetric).toMatchObject({
+      kind: "histogram",
+      value: 0.8,
+      attributes: expect.objectContaining({
+        decision: "accepted",
+        operatorOutcome: "accepted"
+      })
     });
   });
 
@@ -165,5 +198,42 @@ describe("recommendation feedback route", () => {
 
     expect(response.status).toBe(400);
     expect(payload.error).toContain('Unrecognized key: "extra"');
+  });
+
+  it("labels edited feedback as overridden in telemetry so drift dashboards can track operator corrections", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a reviewed outbound reply for a customer.");
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await recommendationFeedbackRoute(
+      buildAuthorizedJsonRequest(`http://localhost/api/goals/${bundle.goal.id}/recommendations/feedback`, {
+        decision: "edited",
+        recommendation: buildRecommendation(),
+        notes: "Adjusted the recommendation before reuse."
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const snapshot = getTelemetrySnapshot();
+    const feedbackCountMetric = snapshot.metrics.find(
+      (entry) =>
+        entry.name === "product.learning.recommendation.feedback.total" &&
+        entry.attributes.decision === "edited"
+    );
+
+    expect(response.status).toBe(200);
+    expect(feedbackCountMetric).toMatchObject({
+      kind: "counter",
+      value: 1,
+      attributes: expect.objectContaining({
+        decision: "edited",
+        operatorOutcome: "overridden",
+        action: "send_message"
+      })
+    });
   });
 });

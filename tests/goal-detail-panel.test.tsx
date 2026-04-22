@@ -252,6 +252,8 @@ describe("GoalDetailPanel", () => {
                   eligibleForR3: true,
                   enabled: true,
                   required: true,
+                  promotionMode: "validated_autonomy",
+                  rollbackOutcome: "allowed_with_confirmation",
                   thresholdSummary: ["3+ matched episodes", "80%+ precision"],
                   summary: "R3 autonomy depends on replay validation meeting 3+ matched episodes, 80%+ precision."
                 },

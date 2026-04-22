@@ -12,15 +12,19 @@ import {
   type AgentDefinition,
   type AutopilotSettings,
   type ApprovalDecisionScope,
+  type AutonomyBudget,
   type BriefingPreferences,
   type BriefingType,
   type CommitmentInboxBucket,
   type CommitmentInboxPage,
   type GoalTemplate,
+  type PolicyDecision,
+  type PolicyReplayValidation,
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/integrations/client";
 import { getMemoryFreshness } from "@agentic/memory";
+import type { PolicyLearningInfluenceComparison, PolicyShadowReplayReadiness } from "@agentic/policy";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
 import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
@@ -264,9 +268,38 @@ type GoalRecommendationsApiResponse = {
   recommendations: WorkflowRecommendation[];
   summary: {
     totalEpisodes: number;
-    suggestedCount: number;
-    guardedCount: number;
+    matchedEpisodes: number;
+    consideredEpisodes: number;
+    suggestedPatterns: number;
+    guardedPatterns: number;
+    sparsePatterns: number;
+    safeSuggestionPrecision: number;
+    currentSafeRecallProxy: number;
+    currentNegativeOutcomeRate: number;
+    currentFailureCostRate: number;
+    driftStatus: "improving" | "stable" | "regressing" | "insufficient_data";
+    returnedCount: number;
   };
+  analytics: {
+    current: {
+      episodeCount: number;
+      consideredEpisodes: number;
+      suggestedPatterns: number;
+      safeSuggestionPrecision: number;
+      safeRecallProxy: number;
+      negativeOutcomeRate: number;
+      failureCostRate: number;
+    };
+    timeline: Array<{ key: string }>;
+  };
+  policyPromotion: {
+    workspaceId: string;
+    autonomyBudget: AutonomyBudget | null;
+    safeRecallProxy: number;
+    learningValidation: PolicyReplayValidation;
+    shadowReplayReadiness: PolicyShadowReplayReadiness;
+    comparison: PolicyLearningInfluenceComparison;
+  } | null;
   filters: Record<string, unknown>;
 };
 
@@ -280,6 +313,7 @@ type RecommendationLoadState = {
   status: "idle" | "loading" | "ready" | "error";
   query: string | null;
   recommendations: WorkflowRecommendation[];
+  policyPromotion: GoalRecommendationsApiResponse["policyPromotion"];
   error: string | null;
 };
 
@@ -295,6 +329,8 @@ function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): 
     calendarWriteRequiresApproval: governance?.calendarWriteRequiresApproval ?? true,
     shadowReplayPolicy: {
       enabled: governance?.shadowReplayPolicy.enabled ?? true,
+      promotionMode: governance?.shadowReplayPolicy.promotionMode ?? "validated_autonomy",
+      rollbackOutcome: governance?.shadowReplayPolicy.rollbackOutcome ?? "allowed_with_confirmation",
       minimumMatchedEpisodes: governance?.shadowReplayPolicy.minimumMatchedEpisodes ?? 3,
       minimumPrecision: governance?.shadowReplayPolicy.minimumPrecision ?? 0.8,
       maximumNegativeOutcomeRate: governance?.shadowReplayPolicy.maximumNegativeOutcomeRate ?? 0.15,
@@ -317,6 +353,65 @@ const briefingFocusLabels: Record<BriefingPreferences["focus"], string> = {
   urgent: "Urgent",
   deep: "Deep work"
 };
+
+function formatLearningPromotionMode(mode: NonNullable<AutonomyBudget>["shadowReplay"]["promotionMode"]): string {
+  switch (mode) {
+    case "validated_autonomy":
+      return "Validated autonomy";
+    case "shadow_only":
+      return "Shadow only";
+    case "disabled":
+      return "Disabled";
+  }
+}
+
+function formatLearningRollbackOutcome(
+  outcome: NonNullable<AutonomyBudget>["shadowReplay"]["rollbackOutcome"]
+): string {
+  switch (outcome) {
+    case "allowed_with_confirmation":
+      return "Approval fallback";
+    case "downgrade_to_draft":
+      return "Draft fallback";
+  }
+}
+
+function formatShadowReplayReadinessLabel(status: PolicyShadowReplayReadiness["status"]): string {
+  switch (status) {
+    case "ready":
+      return "Ready";
+    case "missing":
+      return "Missing validation";
+    case "insufficient":
+      return "Below threshold";
+    case "disabled":
+      return "Disabled";
+    case "shadow_only":
+      return "Shadow only";
+    case "not_required":
+      return "Not required";
+  }
+}
+
+function getShadowReplayReadinessTone(status: PolicyShadowReplayReadiness["status"]): "success" | "error" | "warn" | "idle" {
+  switch (status) {
+    case "ready":
+      return "success";
+    case "missing":
+    case "insufficient":
+      return "warn";
+    case "disabled":
+      return "error";
+    case "shadow_only":
+    case "not_required":
+      return "idle";
+  }
+}
+
+function formatPolicyDecisionSummary(decision: PolicyDecision): string {
+  const approvalLabel = decision.requiresApproval ? "approval required" : "no approval";
+  return `${decision.outcome.replaceAll("_", " ")} · ${decision.riskClass} · ${approvalLabel}`;
+}
 
 type ApprovalResponseOptions = {
   scope?: ApprovalDecisionScope;
@@ -803,6 +898,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               status: "ready",
               query: null,
               recommendations: [],
+              policyPromotion: null,
               error: null
             }
           };
@@ -823,6 +919,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           status: "loading",
           query: queryString,
           recommendations: prev[goalId]?.recommendations ?? [],
+          policyPromotion: prev[goalId]?.policyPromotion ?? null,
           error: null
         }
       }));
@@ -845,6 +942,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               status: "ready",
               query: queryString,
               recommendations: payload.recommendations,
+              policyPromotion: payload.policyPromotion,
               error: null
             }
           }));
@@ -859,6 +957,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               status: "error",
               query: queryString,
               recommendations: [],
+              policyPromotion: null,
               error: error instanceof Error ? error.message : "Failed to load recommendation history."
             }
           }));
@@ -3198,6 +3297,49 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                       <small className="refinement-log">
                         Outcome traces stay operator-visible before any wider reuse or auto-application.
                       </small>
+                      {recommendationStateForGoal?.status === "ready" && recommendationStateForGoal.policyPromotion ? (
+                        <div className="list-item vertical">
+                          <div className="goal-item-actions">
+                            <span className={`status-chip ${getShadowReplayReadinessTone(recommendationStateForGoal.policyPromotion.shadowReplayReadiness.status)}`}>
+                              {formatShadowReplayReadinessLabel(recommendationStateForGoal.policyPromotion.shadowReplayReadiness.status)}
+                            </span>
+                            <span className="status-chip idle">
+                              {formatLearningPromotionMode(
+                                recommendationStateForGoal.policyPromotion.autonomyBudget?.shadowReplay.promotionMode ??
+                                  "validated_autonomy"
+                              )}
+                            </span>
+                            <span className="status-chip idle">
+                              {formatLearningRollbackOutcome(
+                                recommendationStateForGoal.policyPromotion.autonomyBudget?.shadowReplay.rollbackOutcome ??
+                                  "allowed_with_confirmation"
+                              )}
+                            </span>
+                          </div>
+                          <p>{recommendationStateForGoal.policyPromotion.comparison.summary}</p>
+                          <small className="refinement-log">
+                            Replay precision {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.learningValidation.safeSuggestionPrecision)} ·
+                            Recall proxy {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.safeRecallProxy)}
+                          </small>
+                          <small className="refinement-log">
+                            Negative rate {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.learningValidation.negativeOutcomeRate)} ·
+                            Failure cost {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.learningValidation.failureCostRate)} ·
+                            Drift {recommendationStateForGoal.policyPromotion.learningValidation.driftStatus.replaceAll("_", " ")}
+                          </small>
+                          <small className="refinement-log">
+                            Without learning: {formatPolicyDecisionSummary(recommendationStateForGoal.policyPromotion.comparison.baseline)}
+                          </small>
+                          <small className="refinement-log">
+                            With learning: {formatPolicyDecisionSummary(recommendationStateForGoal.policyPromotion.comparison.influenced)}
+                          </small>
+                          <small className="refinement-log">{recommendationStateForGoal.policyPromotion.shadowReplayReadiness.summary}</small>
+                          {recommendationStateForGoal.policyPromotion.shadowReplayReadiness.thresholdSummary.length > 0 ? (
+                            <small className="refinement-log">
+                              Thresholds: {recommendationStateForGoal.policyPromotion.shadowReplayReadiness.thresholdSummary.join(" · ")}
+                            </small>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {recommendationStateForGoal?.status === "error" ? (
                         <small className="status-chip error">{recommendationStateForGoal.error ?? "Failed to load recommendation history."}</small>
                       ) : null}

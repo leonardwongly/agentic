@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { WorkspaceGovernanceSchema } from "@agentic/contracts";
 import { createSelfImprovementRepository, EpisodeRecordSchema } from "@agentic/self-improvement-memory";
 import { GET as recommendationsRoute } from "../apps/web/app/api/memory/recommendations/route";
 import { expectNoStoreHeaders, buildAuthorizedGetRequest } from "./route-test-helpers";
@@ -60,11 +61,13 @@ describe("workflow recommendations route", () => {
 
   beforeEach(() => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
+    Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
   });
 
   afterEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
+    Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
     await Promise.all(tempDirs.map((tempDir) => rm(tempDir, { recursive: true, force: true })));
     tempDirs.length = 0;
@@ -104,6 +107,7 @@ describe("workflow recommendations route", () => {
         matchedEpisodes: number;
         consideredEpisodes: number;
         safeSuggestionPrecision: number;
+        currentSafeRecallProxy: number;
         currentNegativeOutcomeRate: number;
         currentFailureCostRate: number;
         driftStatus: string;
@@ -113,6 +117,7 @@ describe("workflow recommendations route", () => {
         current: {
           episodeCount: number;
           safeSuggestionPrecision: number;
+          safeRecallProxy: number;
         };
         timeline: Array<{ key: string }>;
       };
@@ -130,13 +135,15 @@ describe("workflow recommendations route", () => {
     expect(payload.summary.matchedEpisodes).toBe(2);
     expect(payload.summary.consideredEpisodes).toBe(2);
     expect(payload.summary.safeSuggestionPrecision).toBe(1);
+    expect(payload.summary.currentSafeRecallProxy).toBe(1);
     expect(payload.summary.currentNegativeOutcomeRate).toBe(0);
     expect(payload.summary.currentFailureCostRate).toBe(0);
     expect(payload.summary.driftStatus).toBe("insufficient_data");
     expect(payload.summary.returnedCount).toBe(1);
     expect(payload.analytics.current).toMatchObject({
       episodeCount: 2,
-      safeSuggestionPrecision: 1
+      safeSuggestionPrecision: 1,
+      safeRecallProxy: 1
     });
     expect(payload.analytics.timeline.length).toBeGreaterThan(0);
     expect(payload.filters).toEqual(
@@ -248,5 +255,101 @@ describe("workflow recommendations route", () => {
         })
       })
     ]);
+  });
+
+  it("returns a replay comparison report for policy promotion when goal context is provided", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-recommendations-route-policy-"));
+    tempDirs.push(tempDir);
+    const repository = createSelfImprovementRepository({
+      baseDir: path.join(tempDir, ".agentic", "self-improvement")
+    });
+
+    await repository.seed();
+    await repository.appendEpisode(buildReplayEpisode("policy-1"));
+    await repository.appendEpisode(
+      buildReplayEpisode("policy-2", {
+        timestamp: "2026-04-21T07:00:00.000Z"
+      })
+    );
+    await repository.appendEpisode(
+      buildReplayEpisode("policy-3", {
+        timestamp: "2026-04-22T07:00:00.000Z"
+      })
+    );
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", repository);
+    Reflect.set(globalThis, "__agenticRepository", {
+      seedDefaults: async () => undefined,
+      getDashboardData: async () => ({
+        activeWorkspace: {
+          id: "workspace-1",
+          userId: "user-1",
+          name: "Primary workspace",
+          description: "",
+          createdAt: "2026-04-20T00:00:00.000Z",
+          updatedAt: "2026-04-20T00:00:00.000Z"
+        },
+        workspaceGovernance: WorkspaceGovernanceSchema.parse({
+          workspaceId: "workspace-1",
+          approvalMode: "risk_based",
+          requireAuditExports: false,
+          maxAutoRunRiskClass: "R1",
+          externalSendRequiresApproval: true,
+          calendarWriteRequiresApproval: true,
+          shadowReplayPolicy: {
+            enabled: true,
+            promotionMode: "validated_autonomy",
+            rollbackOutcome: "allowed_with_confirmation",
+            minimumMatchedEpisodes: 3,
+            minimumPrecision: 0.8,
+            maximumNegativeOutcomeRate: 0.15,
+            maximumFailureCostRate: 0.2
+          },
+          retentionDays: 365,
+          updatedBy: "user-1",
+          createdAt: "2026-04-20T00:00:00.000Z",
+          updatedAt: "2026-04-20T00:00:00.000Z"
+        })
+      }),
+      getWorkspaceGovernance: async () => null
+    });
+
+    const response = await recommendationsRoute(
+      buildAuthorizedGetRequest(
+        "http://localhost/api/memory/recommendations?agent=communications&capability=send&minimumEvidence=3&goalTitle=Ship%20a%20reviewed%20response&goalConfidence=0.91"
+      )
+    );
+    const payload = (await response.json()) as {
+      policyPromotion: {
+        workspaceId: string;
+        safeRecallProxy: number;
+        learningValidation: {
+          replayValidated: boolean;
+          matchedEpisodes: number;
+        };
+        shadowReplayReadiness: {
+          status: string;
+          thresholdSummary: string[];
+        };
+        comparison: {
+          changed: boolean;
+          summary: string;
+        };
+      } | null;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.policyPromotion).toMatchObject({
+      workspaceId: "workspace-1",
+      safeRecallProxy: 1,
+      learningValidation: {
+        replayValidated: true,
+        matchedEpisodes: 3
+      },
+      shadowReplayReadiness: {
+        status: "ready"
+      }
+    });
+    expect(payload.policyPromotion?.shadowReplayReadiness.thresholdSummary.length).toBeGreaterThan(0);
+    expect(payload.policyPromotion?.comparison.summary).toMatch(/learning/i);
   });
 });
