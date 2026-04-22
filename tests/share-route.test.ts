@@ -177,6 +177,51 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       },
       operatingSections: {
         generatedAt: timestamp,
+        roleView: {
+          role: "owner",
+          label: "Owner view",
+          summary: "Owners should clear blockers first.",
+          focusAreas: ["Keep the queue moving."],
+          prioritizedSectionKeys: ["now", "execution", "trust"]
+        },
+        teamWorkflow: {
+          mode: "owner_control",
+          label: "Owner-controlled team workflow",
+          summary: "Owners are the policy authority and should keep delegation and approvals bounded.",
+          visibilityLabel: "Full queue, approval, and governance visibility",
+          queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
+          actionBoundaries: ["Owners can manage membership, governance posture, and approval decisions."],
+          handoffGuidance: ["Route execution triage to editors and keep final policy decisions with the owner boundary."],
+          permissions: {
+            manageMembers: {
+              allowed: true,
+              reason: "Owners can change workspace membership."
+            },
+            editGovernance: {
+              allowed: true,
+              reason: "Owners can change workspace governance posture."
+            },
+            exportAudit: {
+              allowed: true,
+              reason: "Workspace members can export audit evidence."
+            },
+            managePrivacyOperations: {
+              allowed: true,
+              reason: "Owners can run privacy lifecycle operations."
+            }
+          },
+          escalationTargetRole: null,
+          slaStatus: "healthy",
+          slaSummary: "Shared approvals and queue ownership are currently inside the expected response window."
+        },
+        nextBestAction: {
+          kind: "review_now",
+          label: "Inspect the live queue",
+          summary: "The operator shell is clear enough to inspect the live queue.",
+          status: "healthy",
+          targetSection: "now",
+          role: "owner"
+        },
         sections: [
           {
             key: "now",

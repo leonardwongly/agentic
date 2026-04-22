@@ -1,9 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { BriefingTypeSchema, RiskClassSchema, type ActorContext } from "@agentic/contracts";
-import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
-import { createLocalNote } from "@agentic/integrations";
-import { enqueueBriefingCreateJob, enqueueGoalCreateJob } from "@agentic/worker-runtime";
+import { enqueueApprovalFollowUpJob, enqueueBriefingCreateJob, enqueueGoalCreateJob } from "@agentic/worker-runtime";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
@@ -14,9 +12,7 @@ import {
   handleApiError,
   parseJsonBody
 } from "../../../../lib/api-response";
-import { resolveGoogleWorkspaceAdapters } from "../../../../lib/google-provider-adapters";
 import { buildNlCapabilitySummary } from "../../../../lib/nl-capabilities";
-import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
 import { parseIdempotencyKey } from "../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../lib/server";
 
@@ -223,72 +219,30 @@ async function approveAllR2(userId: string, actor: ActorContext): Promise<Intent
   }
 
   let approvedCount = 0;
+  let queuedCount = 0;
   let failedCount = 0;
 
   for (const approval of pendingApprovals) {
     try {
-      let updatedBundle = await repository.respondToApproval({
+      const updatedBundle = await repository.respondToApproval({
         approvalId: approval.id,
         decision: "approved",
         actor,
         scope: "once"
       });
-
-      let executionResults: ExecutionResult[] = [];
-
-      try {
-        const googleAdapters = await resolveGoogleWorkspaceAdapters({
-          repository,
-          userId,
-          workspaceId: updatedBundle.goal.workspaceId
-        });
-        const adapters = {
-          gmail: googleAdapters?.gmail,
-          calendar: googleAdapters?.calendar,
-          notes: { createLocalNote }
-        };
-        const governance = updatedBundle.goal.workspaceId
-          ? await repository.getWorkspaceGovernance(updatedBundle.goal.workspaceId, userId)
-          : null;
-        const { results, logs } = await executeApprovedTasks({
-          bundle: updatedBundle,
-          approvedTaskIds: [approval.taskId],
-          adapters,
-          governance
-        });
-        executionResults = results;
-        updatedBundle = reconcileExecutionResults({
-          bundle: updatedBundle,
-          results,
-          logs
-        });
-      } catch (executionError) {
-        console.error("[nl-intent] Failed to execute approved R2 task:", executionError);
-      }
-
-      await repository.saveGoalBundle(updatedBundle);
-
-      if (executionResults.length > 0) {
-        await persistCapturedMemories({
-          repository,
-          captured: captureExecutionOutcomeSignals(updatedBundle, userId, executionResults, actor),
-          goalId: updatedBundle.goal.id,
-          label: "nl-intent-execution-capture",
-          actorContext: actor
-        });
-      }
-
-      if (updatedBundle.goal.status === "completed") {
-        await persistCapturedMemories({
-          repository,
-          captured: captureMemoriesFromBundle(updatedBundle, userId, actor),
-          goalId: updatedBundle.goal.id,
-          label: "nl-intent-auto-capture",
-          actorContext: actor
-        });
-      }
+      await enqueueApprovalFollowUpJob({
+        repository,
+        userId,
+        approvalId: approval.id,
+        goalId: updatedBundle.goal.id,
+        taskId: approval.taskId,
+        decision: "approved",
+        workspaceId: updatedBundle.goal.workspaceId,
+        actorContext: actor
+      });
 
       approvedCount += 1;
+      queuedCount += 1;
     } catch (error) {
       failedCount += 1;
       console.error(`[nl-intent] Failed to approve ${approval.id}:`, error);
@@ -299,8 +253,8 @@ async function approveAllR2(userId: string, actor: ActorContext): Promise<Intent
     body: {
       message:
         failedCount === 0
-          ? `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"}.`
-          : `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"} and failed ${failedCount}.`,
+          ? `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"} and queued ${queuedCount} follow-up job${queuedCount === 1 ? "" : "s"}.`
+          : `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"}, queued ${queuedCount} follow-up job${queuedCount === 1 ? "" : "s"}, and failed ${failedCount}.`,
       dashboard: await repository.getDashboardData(userId)
     }
   };

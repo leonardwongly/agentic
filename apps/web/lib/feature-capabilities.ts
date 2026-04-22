@@ -19,6 +19,26 @@ export type FeatureCapabilityDefinition = {
   notes?: string;
 };
 
+export type FeatureCapabilityResolvedDefinition = FeatureCapabilityDefinition & {
+  runtimeReason: string;
+};
+
+export type FeatureCapabilityRuntimeContext = {
+  activeWorkspaceName: string | null;
+  watcherCount: number;
+  autopilotMode: string;
+  operations:
+    | {
+        asyncExecutionStatus: "healthy" | "attention" | "critical" | "idle";
+        asyncIssueCount: number;
+        connectorHealthStatus: "healthy" | "attention" | "critical" | "idle";
+        connectorIssueCount: number;
+        autonomyPostureStatus: "healthy" | "attention" | "critical" | "idle";
+        hasOverridePaths: boolean;
+      }
+    | null;
+};
+
 const READINESS_RANK: Record<FeatureCapabilityReadiness, number> = {
   prototype: 0,
   preview: 1,
@@ -266,22 +286,137 @@ export type FeatureCapabilitySummary = {
   advanced: SurfaceSummary;
 };
 
-function buildSurfaceSummary(surface: FeatureCapabilitySurface): SurfaceSummary {
-  const features = FEATURE_CAPABILITIES.filter((feature) => feature.surface === surface);
+function humanizeReadiness(value: FeatureCapabilityReadiness): string {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
 
+function formatCount(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function resolveAutomationRuntimeCapability(
+  feature: FeatureCapabilityDefinition,
+  context: FeatureCapabilityRuntimeContext
+): FeatureCapabilityResolvedDefinition {
+  const fallbackReason =
+    feature.notes ??
+    "This surface stays in preview until the runtime control plane exposes stable queue, recovery, and policy signals.";
+
+  if (!context.activeWorkspaceName) {
+    return {
+      ...feature,
+      runtimeReason: "Select a workspace before treating this surface as operational.",
+      readiness: "preview"
+    };
+  }
+
+  if (!context.operations) {
+    return {
+      ...feature,
+      runtimeReason: "Operational telemetry is unavailable, so this surface remains fail-closed in preview.",
+      readiness: "preview"
+    };
+  }
+
+  if (context.operations.asyncExecutionStatus === "critical") {
+    return {
+      ...feature,
+      runtimeReason: "Queue recovery is still critical, so this surface remains preview until replayable execution is healthy again.",
+      readiness: "preview"
+    };
+  }
+
+  if (context.operations.connectorHealthStatus === "critical") {
+    return {
+      ...feature,
+      runtimeReason: "Connector health is still critical, so this surface remains preview until credential recovery completes.",
+      readiness: "preview"
+    };
+  }
+
+  if (feature.id === "autopilot-control" && !context.operations.hasOverridePaths) {
+    return {
+      ...feature,
+      runtimeReason: "Operator recovery paths are unavailable, so autopilot control stays preview.",
+      readiness: "preview"
+    };
+  }
+
+  const degradedSignals: string[] = [];
+  if (context.operations.asyncExecutionStatus === "attention") {
+    degradedSignals.push(formatCount(context.operations.asyncIssueCount, "queue issue"));
+  }
+  if (context.operations.connectorHealthStatus === "attention") {
+    degradedSignals.push(formatCount(context.operations.connectorIssueCount, "connector issue"));
+  }
+  if (context.operations.autonomyPostureStatus === "attention") {
+    degradedSignals.push("autonomy posture needs review");
+  }
+
+  if (feature.id === "watchers") {
+    const watcherSummary =
+      context.watcherCount > 0
+        ? `${formatCount(context.watcherCount, "active watcher")} are already feeding the durable automation path.`
+        : "No active watchers are configured yet, but the durable automation path is available.";
+
+    return {
+      ...feature,
+      readiness: "operational",
+      runtimeReason:
+        degradedSignals.length > 0
+          ? `${watcherSummary} Operational with attention: ${degradedSignals.join(", ")}.`
+          : `${watcherSummary} Watchers now run with queue recovery, connector diagnostics, and operator remediation paths.`
+    };
+  }
+
+  const modeLabel = context.autopilotMode.replaceAll("_", " ");
   return {
-    total: features.length,
-    operationalOrBetter: features.filter((feature) => READINESS_RANK[feature.readiness] >= READINESS_RANK.operational)
-      .length,
-    productionReady: features.filter((feature) => feature.readiness === "production").length
+    ...feature,
+    readiness: "operational",
+    runtimeReason:
+      degradedSignals.length > 0
+        ? `Autopilot control is operational in ${modeLabel} mode with replay and recovery tooling. Current attention signals: ${degradedSignals.join(", ")}.`
+        : `Autopilot control is operational in ${modeLabel} mode with durable execution, replay, and operator recovery tooling.`
   };
 }
 
-export function summarizeFeatureCapabilities(): FeatureCapabilitySummary {
+export function resolveFeatureCapabilities(
+  context?: FeatureCapabilityRuntimeContext
+): readonly FeatureCapabilityResolvedDefinition[] {
+  return FEATURE_CAPABILITIES.map((feature) => {
+    if (!context || (feature.id !== "watchers" && feature.id !== "autopilot-control")) {
+      return {
+        ...feature,
+        runtimeReason: feature.notes ?? `Capability remains ${humanizeReadiness(feature.readiness).toLowerCase()}.`
+      };
+    }
+
+    return resolveAutomationRuntimeCapability(feature, context);
+  });
+}
+
+function buildSurfaceSummary(
+  surface: FeatureCapabilitySurface,
+  features: readonly Pick<FeatureCapabilityDefinition, "surface" | "readiness">[]
+): SurfaceSummary {
+  const scopedFeatures = features.filter((feature) => feature.surface === surface);
+
   return {
-    totalFeatures: FEATURE_CAPABILITIES.length,
-    trackedContracts: FEATURE_CAPABILITIES.reduce((count, feature) => count + feature.contracts.length, 0),
-    core: buildSurfaceSummary("core"),
-    advanced: buildSurfaceSummary("advanced")
+    total: scopedFeatures.length,
+    operationalOrBetter: scopedFeatures.filter(
+      (feature) => READINESS_RANK[feature.readiness] >= READINESS_RANK.operational
+    ).length,
+    productionReady: scopedFeatures.filter((feature) => feature.readiness === "production").length
+  };
+}
+
+export function summarizeFeatureCapabilities(
+  features: readonly Pick<FeatureCapabilityDefinition, "surface" | "readiness" | "contracts">[] = FEATURE_CAPABILITIES
+): FeatureCapabilitySummary {
+  return {
+    totalFeatures: features.length,
+    trackedContracts: features.reduce((count, feature) => count + feature.contracts.length, 0),
+    core: buildSurfaceSummary("core", features),
+    advanced: buildSurfaceSummary("advanced", features)
   };
 }

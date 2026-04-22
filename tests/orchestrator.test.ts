@@ -1,4 +1,4 @@
-import { SYSTEM_USER_ID, createHumanActorContext } from "@agentic/contracts";
+import { SYSTEM_USER_ID, WorkspaceGovernanceSchema, createHumanActorContext, nowIso } from "@agentic/contracts";
 import { generateBriefing, generateMorningBriefing, respondToApproval, processUserRequest } from "@agentic/orchestrator";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord } from "@agentic/memory";
@@ -20,6 +20,53 @@ function buildContext() {
   };
 }
 
+function buildFreshApprovalMemories() {
+  return Array.from({ length: 5 }, () =>
+    createMemoryRecord({
+      userId: SYSTEM_USER_ID,
+      category: "preferences",
+      memoryType: "confirmed",
+      content: "User approved send actions for customer follow-up and approved similar send tasks before.",
+      confidence: 0.95,
+      source: "auto-capture"
+    })
+  );
+}
+
+function buildStrongScorecard() {
+  return {
+    agentId: "communications",
+    period: "all" as const,
+    periodStart: "2026-01-01T00:00:00.000Z",
+    periodEnd: "2026-12-31T23:59:59.999Z",
+    tasksTotal: 5,
+    tasksCompleted: 5,
+    tasksFailed: 0,
+    tasksBlocked: 0,
+    approvalsRequested: 5,
+    approvalsApproved: 5,
+    approvalsRejected: 0,
+    averageConfidence: 0.94,
+    averageExecutionTimeMs: 2_000,
+    artifactsProduced: 4,
+    artifactsByType: {
+      draft: 4
+    },
+    errorCount: 0,
+    lastErrorAt: null,
+    lastErrorMessage: null,
+    feedbackCount: 5,
+    userCorrectionCount: 0,
+    postApprovalFailureCount: 0,
+    averageRating: null,
+    successRate: 1,
+    approvalRate: 1,
+    correctionRate: 0,
+    postApprovalFailureRate: 0,
+    updatedAt: "2026-01-15T10:00:00.000Z"
+  };
+}
+
 describe("orchestrator", () => {
   it("creates approval-gated inbox triage bundles", async () => {
     const bundle = await processUserRequest({
@@ -29,6 +76,14 @@ describe("orchestrator", () => {
     const approval = bundle.approvals[0];
 
     expect(bundle.goal.intent).toBe("communications-triage");
+    expect(bundle.goal.wedge).toMatchObject({
+      key: "communications_execution",
+      selection: "selected_production"
+    });
+    expect(bundle.goal.completionContract).toMatchObject({
+      id: "communications-execution-v1"
+    });
+    expect(bundle.goal.completionContract.successCriteria).toHaveLength(3);
     expect(bundle.tasks.length).toBeGreaterThan(0);
     expect(bundle.approvals.length).toBeGreaterThan(0);
     expect(bundle.workflow.checkpoint).toBe("approval-gate");
@@ -45,6 +100,84 @@ describe("orchestrator", () => {
     expect(approval?.decisionRationale).toBeNull();
   });
 
+  it("promotes explicit communications cues into typed send approvals for inbox triage", async () => {
+    const bundle = await processUserRequest({
+      ...buildContext(),
+      request:
+        'Triage my inbox and prepare replies for important clients. To: client@example.com Subject: Follow-up Body: "Approved response body." Mode: draft Thread-ID: thread-123'
+    });
+    const communicationsTask = bundle.tasks.find((task) => task.title === "Prepare sender-aware drafts");
+    const communicationsApproval = bundle.approvals.find((candidate) => candidate.taskId === communicationsTask?.id);
+
+    expect(communicationsTask).toBeDefined();
+    expect(communicationsApproval?.actionIntent).toMatchObject({
+      type: "send_message",
+      to: "client@example.com",
+      subject: "Follow-up",
+      body: "Approved response body.",
+      mode: "draft",
+      threadId: "thread-123"
+    });
+    expect(communicationsApproval?.preview).toMatchObject({
+      actionType: "draft",
+      summary: "Draft an email to client@example.com: Follow-up",
+      target: "client@example.com"
+    });
+    expect(communicationsApproval?.preview.changes).toEqual([
+      {
+        label: "Recipient",
+        before: "Pending user review",
+        after: "client@example.com"
+      },
+      {
+        label: "Subject",
+        before: "Pending user review",
+        after: "Follow-up"
+      }
+    ]);
+  });
+
+  it("promotes workflow create scaffolds into typed note approvals when governance requires review", async () => {
+    const governance = WorkspaceGovernanceSchema.parse({
+      workspaceId: "workspace-1",
+      approvalMode: "always_review",
+      requireAuditExports: true,
+      maxAutoRunRiskClass: "R1",
+      externalSendRequiresApproval: true,
+      calendarWriteRequiresApproval: true,
+      retentionDays: 365,
+      updatedBy: SYSTEM_USER_ID,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+    const bundle = await processUserRequest({
+      ...buildContext(),
+      workspaceId: "workspace-1",
+      governance,
+      request: "Review my inbox and prepare replies for important clients."
+    });
+    const workflowTask = bundle.tasks.find((task) => task.title === "Capture follow-up commitments");
+    const workflowApproval = bundle.approvals.find((candidate) => candidate.taskId === workflowTask?.id);
+
+    expect(workflowTask).toBeDefined();
+    expect(workflowApproval?.actionIntent).toMatchObject({
+      type: "create_note",
+      title: "Capture follow-up commitments"
+    });
+    expect(workflowApproval?.preview).toMatchObject({
+      actionType: "create",
+      summary: 'Create note "Capture follow-up commitments"',
+      target: "Capture follow-up commitments"
+    });
+    expect(workflowApproval?.preview.changes).toEqual([
+      {
+        label: "Note title",
+        before: "Pending user review",
+        after: "Capture follow-up commitments"
+      }
+    ]);
+  });
+
   it("registers watchers for travel preparation", async () => {
     const bundle = await processUserRequest({
       ...buildContext(),
@@ -52,7 +185,60 @@ describe("orchestrator", () => {
     });
 
     expect(bundle.goal.intent).toBe("travel-readiness");
+    expect(bundle.goal.wedge).toMatchObject({
+      key: "travel_readiness",
+      selection: "supporting"
+    });
     expect(bundle.watchers.length).toBeGreaterThan(0);
+  });
+
+  it("assigns the weekly planning goal to the selected scheduling execution wedge", async () => {
+    const bundle = await processUserRequest({
+      ...buildContext(),
+      request: "Plan my week around focus time, deadlines, and meetings."
+    });
+
+    expect(bundle.goal.intent).toBe("weekly-planning");
+    expect(bundle.goal.wedge).toMatchObject({
+      key: "scheduling_execution",
+      selection: "selected_production"
+    });
+    expect(bundle.goal.completionContract).toMatchObject({
+      id: "scheduling-execution-v1"
+    });
+    expect(bundle.goal.completionContract.doneWhen).toContain("weekly plan");
+  });
+
+  it("promotes explicit calendar cues into typed scheduling approvals for weekly planning", async () => {
+    const bundle = await processUserRequest({
+      ...buildContext(),
+      request:
+        "Plan my week around focus time and add a handoff block. Event: Customer handoff Start: 2026-04-20T09:00:00.000Z End: 2026-04-20T09:30:00.000Z Attendees: owner@example.com, client@example.com Description: Share next steps."
+    });
+    const calendarTask = bundle.tasks.find((task) => task.title === "Gather week commitments");
+    const calendarApproval = bundle.approvals.find((candidate) => candidate.taskId === calendarTask?.id);
+
+    expect(calendarTask).toBeDefined();
+    expect(calendarApproval?.actionIntent).toMatchObject({
+      type: "schedule_event",
+      summary: "Customer handoff",
+      start: "2026-04-20T09:00:00.000Z",
+      end: "2026-04-20T09:30:00.000Z",
+      attendees: ["owner@example.com", "client@example.com"],
+      description: "Share next steps."
+    });
+    expect(calendarApproval?.preview).toMatchObject({
+      actionType: "schedule",
+      summary: "Schedule \"Customer handoff\" from 2026-04-20T09:00:00.000Z to 2026-04-20T09:30:00.000Z",
+      target: "Calendar commitment"
+    });
+    expect(calendarApproval?.preview.changes).toEqual([
+      {
+        label: "Scheduled window",
+        before: "Pending user review",
+        after: "2026-04-20T09:00:00.000Z -> 2026-04-20T09:30:00.000Z"
+      }
+    ]);
   });
 
   it("queues approved tasks for execution after approval", async () => {
@@ -181,6 +367,108 @@ describe("orchestrator", () => {
     expect(resolutionLog?.details.resolvedMemoryCount).toBe(1);
     expect(Array.isArray(resolutionLog?.details.resolvedMemoryIds)).toBe(true);
     expect((resolutionLog?.details.resolvedMemoryIds as string[] | undefined)?.length).toBe(1);
+    expect(resolutionLog?.details.contextPack).toMatchObject({
+      kind: "goal_planning",
+      selectedMemoryIds: expect.any(Array),
+      evidenceSummary: expect.objectContaining({
+        selectedCount: 1
+      })
+    });
+  });
+
+  it("keeps conflicting planning context visible in the resolution pack for operator review", async () => {
+    const bundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Help me prepare travel plans with the right seat preference.",
+      memories: [
+        createMemoryRecord({
+          userId: SYSTEM_USER_ID,
+          category: "travel",
+          memoryType: "confirmed",
+          content: "Seat preference is aisle.",
+          confidence: 0.95,
+          source: "test",
+          permissions: ["orchestrator"]
+        }),
+        createMemoryRecord({
+          userId: SYSTEM_USER_ID,
+          category: "travel",
+          memoryType: "observed",
+          content: "Seat preference is window.",
+          confidence: 0.82,
+          source: "test",
+          permissions: ["orchestrator"]
+        })
+      ],
+      integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
+    });
+    const resolutionLog = bundle.actionLogs.find((log) => log.kind === "context.resolved");
+
+    expect(bundle.goal.explanation).toContain("conflicting context signal");
+    expect(resolutionLog?.details.contextPack).toMatchObject({
+      evidenceSummary: expect.objectContaining({
+        conflictCount: 1,
+        reviewRequiredCount: 2
+      }),
+      conflicts: [
+        expect.objectContaining({
+          subject: "seat preference"
+        })
+      ]
+    });
+  });
+
+  it("keeps the send path approval-gated when replay validation has not cleared a learned R3 flow", async () => {
+    const bundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Triage my inbox and prepare replies for important clients.",
+      memories: buildFreshApprovalMemories(),
+      integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID),
+      resolveAgentMetrics: async (agentIdOrName) =>
+        agentIdOrName === "communications" ? buildStrongScorecard() : null,
+      resolvePolicyReplayValidation: async ({ capabilities }) =>
+        capabilities.includes("send")
+          ? {
+              replayValidated: false,
+              matchedPatterns: 1,
+              matchedEpisodes: 4,
+              suggestedPatterns: 1,
+              safeSuggestionPrecision: 0.74,
+              negativeOutcomeRate: 0.26,
+              failureCostRate: 0.4,
+              driftStatus: "regressing",
+              rationale: "Recent replay evidence regressed."
+            }
+          : null
+    });
+    const communicationsTask = bundle.tasks.find((task) => task.assignedAgent === "communications" && task.toolCapabilities.includes("send"));
+    const communicationsApproval = bundle.approvals.find((approval) => approval.taskId === communicationsTask?.id);
+    const policyLog = bundle.actionLogs.find((log) => log.kind === "policy.evaluated" && log.taskId === communicationsTask?.id);
+
+    expect(communicationsTask).toBeDefined();
+    expect(communicationsTask?.requiresApproval).toBe(true);
+    expect(communicationsApproval).toBeDefined();
+    expect(policyLog?.details).toMatchObject({
+      requiresApproval: true,
+      policyTrace: {
+        decision: {
+          requiresApproval: true,
+          outcome: "allowed_with_confirmation",
+          riskClass: "R3"
+        },
+        learningValidation: {
+          replayValidated: false,
+          driftStatus: "regressing"
+        },
+        checks: expect.arrayContaining([
+          expect.objectContaining({
+            id: "replay-validation-gate",
+            stage: "trust",
+            status: "warn"
+          })
+        ])
+      }
+    });
   });
 
   it("generates typed briefing bundles using saved preferences", async () => {
@@ -210,7 +498,10 @@ describe("orchestrator", () => {
     );
     expect(resolutionLog?.details).toMatchObject({
       briefingType: "midday",
-      briefingFocus: "urgent"
+      briefingFocus: "urgent",
+      contextPack: expect.objectContaining({
+        kind: "briefing"
+      })
     });
   });
 

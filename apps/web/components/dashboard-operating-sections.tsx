@@ -1,6 +1,10 @@
 "use client";
 
-import type { DashboardOperatingSection, DashboardOperatingSections } from "@agentic/contracts";
+import type {
+  DashboardOperatingSection,
+  DashboardOperatingSectionKey,
+  DashboardOperatingSections
+} from "@agentic/contracts";
 import { StatusBadge } from "./ui";
 
 type DashboardOperatingSectionsCardProps = {
@@ -34,6 +38,21 @@ function sectionStatusLabel(status: DashboardOperatingSection["status"]): string
   }
 }
 
+function humanizeSectionKey(key: DashboardOperatingSectionKey): string {
+  switch (key) {
+    case "now":
+      return "Now";
+    case "automation":
+      return "Automation";
+    case "execution":
+      return "Execution";
+    case "trust":
+      return "Trust";
+    default:
+      return "Build";
+  }
+}
+
 export function DashboardOperatingSectionsCard({ operatingSections, openTarget }: DashboardOperatingSectionsCardProps) {
   return (
     <article className="card control-plane-card">
@@ -41,6 +60,92 @@ export function DashboardOperatingSectionsCard({ operatingSections, openTarget }
         <h2>Operating loop</h2>
         <span>Server-derived section ownership</span>
       </div>
+      <div className="control-plane-section">
+        <div className="control-plane-section-header">
+          <div>
+            <strong>{operatingSections.roleView.label}</strong>
+            <p>{operatingSections.roleView.summary}</p>
+          </div>
+          <StatusBadge status="active">
+            {operatingSections.roleView.role ? `${operatingSections.roleView.role} role` : "setup mode"}
+          </StatusBadge>
+        </div>
+        {operatingSections.roleView.focusAreas.length > 0 ? (
+          <ul className="control-plane-highlights">
+            {operatingSections.roleView.focusAreas.map((focusArea) => (
+              <li key={focusArea}>{focusArea}</li>
+            ))}
+          </ul>
+        ) : null}
+        {operatingSections.roleView.prioritizedSectionKeys.length > 0 ? (
+          <div className="control-plane-stats">
+            {operatingSections.roleView.prioritizedSectionKeys.map((sectionKey) => (
+              <span key={sectionKey} className="control-plane-stat">
+                Focus {humanizeSectionKey(sectionKey)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className="control-plane-section">
+        <div className="control-plane-section-header">
+          <div>
+            <strong>{operatingSections.teamWorkflow.label}</strong>
+            <p>{operatingSections.teamWorkflow.summary}</p>
+          </div>
+          <StatusBadge status={sectionBadgeStatus(operatingSections.teamWorkflow.slaStatus)}>
+            {sectionStatusLabel(operatingSections.teamWorkflow.slaStatus)}
+          </StatusBadge>
+        </div>
+        <div className="control-plane-stats">
+          <span className="control-plane-stat">{operatingSections.teamWorkflow.visibilityLabel}</span>
+          {operatingSections.teamWorkflow.escalationTargetRole ? (
+            <span className="control-plane-stat">Escalate to {operatingSections.teamWorkflow.escalationTargetRole}</span>
+          ) : null}
+          {operatingSections.teamWorkflow.queueMetrics.map((metric) => (
+            <span key={metric} className="control-plane-stat">
+              {metric}
+            </span>
+          ))}
+        </div>
+        <ul className="control-plane-highlights">
+          <li>{operatingSections.teamWorkflow.slaSummary}</li>
+          {operatingSections.teamWorkflow.actionBoundaries.map((boundary) => (
+            <li key={boundary}>{boundary}</li>
+          ))}
+          {operatingSections.teamWorkflow.handoffGuidance.map((guidance) => (
+            <li key={guidance}>{guidance}</li>
+          ))}
+        </ul>
+      </div>
+      <button
+        type="button"
+        className="control-plane-section"
+        onClick={() =>
+          openTarget(operatingSections.nextBestAction.targetSection, operatingSections.nextBestAction.targetItemId)
+        }
+      >
+        <div className="control-plane-section-header">
+          <div>
+            <strong>Next best action: {operatingSections.nextBestAction.label}</strong>
+            <p>{operatingSections.nextBestAction.summary}</p>
+          </div>
+          <StatusBadge status={sectionBadgeStatus(operatingSections.nextBestAction.status)}>
+            {sectionStatusLabel(operatingSections.nextBestAction.status)}
+          </StatusBadge>
+        </div>
+        <div className="control-plane-stats">
+          <span className="control-plane-stat">
+            {operatingSections.nextBestAction.role ? `${operatingSections.nextBestAction.role} route` : "setup route"}
+          </span>
+          <span className="control-plane-stat">Open {operatingSections.nextBestAction.targetSection}</span>
+        </div>
+        {operatingSections.nextBestAction.reason ? (
+          <ul className="control-plane-highlights">
+            <li>{operatingSections.nextBestAction.reason}</li>
+          </ul>
+        ) : null}
+      </button>
       <div className="control-plane-grid">
         {operatingSections.sections.map((section) => (
           <button

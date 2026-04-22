@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RecommendationRefinementSourceSchema } from "@agentic/contracts";
 import { enqueueGoalRefineJob } from "@agentic/worker-runtime";
 import { checkAbuseRateLimit } from "../../../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../../../lib/auth";
@@ -17,7 +18,8 @@ const GoalIdSchema = z.string().trim().min(1).max(200);
 
 const RefinementBodySchema = z
   .object({
-    message: z.string().trim().min(1).max(2_000)
+    message: z.string().trim().min(1).max(2_000),
+    sourceRecommendation: RecommendationRefinementSourceSchema.optional()
   })
   .strict();
 
@@ -59,6 +61,7 @@ export async function POST(request: Request, context: RouteContext) {
       refinement: body.message,
       workspaceId: bundle.goal.workspaceId,
       actorContext,
+      sourceRecommendation: body.sourceRecommendation ?? null,
       idempotencyKey: parseIdempotencyKey(request)
     });
 

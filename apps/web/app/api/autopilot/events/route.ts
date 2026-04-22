@@ -1,12 +1,19 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import {
+  AutopilotEventBudgetSchema,
+  AutopilotEventDetailsSchema,
   AutopilotEventKindSchema,
+  AutopilotEventPrioritySchema,
   AutopilotEventSchema,
   AutopilotModeSchema,
   BriefingTypeSchema,
   nowIso,
   type AutopilotEvent,
+  type AutopilotEventBudget,
+  type AutopilotEventDetails,
+  type AutopilotEventKind,
+  type AutopilotEventPriority,
   type ActorContext,
   type AutopilotMode,
   type BriefingType
@@ -34,18 +41,75 @@ const TriggerAutopilotEventSchema = z
     summary: z.string().trim().min(1).max(200).optional(),
     details: z.record(z.string().min(1).max(100), z.unknown()).optional(),
     idempotencyKey: z.string().trim().min(1).max(200).optional(),
+    priority: AutopilotEventPrioritySchema.optional(),
+    tags: z.array(z.string().trim().min(1).max(32)).max(8).optional(),
+    correlationKey: z.string().trim().min(1).max(200).optional(),
+    budget: AutopilotEventBudgetSchema.optional(),
     dryRun: z.boolean().optional().default(false),
     mode: AutopilotModeSchema.optional()
   })
   .strict();
 
+const autopilotFamilyByKind: Record<AutopilotEventKind, "watcher" | "template" | "briefing"> = {
+  watcher_triggered: "watcher",
+  template_due: "template",
+  briefing_due: "briefing"
+};
+
+const autopilotPriorityByKind: Record<AutopilotEventKind, AutopilotEventPriority> = {
+  watcher_triggered: "high",
+  template_due: "medium",
+  briefing_due: "low"
+};
+
+function buildAutopilotEventDetails(params: {
+  kind: AutopilotEventKind;
+  sourceId: string;
+  idempotencyKey?: string | null;
+  priority?: AutopilotEventPriority;
+  tags?: string[];
+  correlationKey?: string | null;
+  budget?: AutopilotEventBudget | null;
+  details?: Record<string, unknown>;
+  suppression?: {
+    outcome: "allowed" | "duplicate" | "debounced" | "budget_exhausted";
+    reason?: string | null;
+    relatedEventId?: string | null;
+    budgetKey?: string | null;
+    observedCount?: number | null;
+  };
+}): AutopilotEventDetails {
+  const tags = Array.from(
+    new Set(
+      (params.tags ?? [])
+        .map((tag) => tag.trim().toLowerCase())
+        .filter((tag) => tag.length > 0)
+    )
+  );
+
+  return AutopilotEventDetailsSchema.parse({
+    ...(params.details ?? {}),
+    eventEnvelope: {
+      family: autopilotFamilyByKind[params.kind],
+      trigger: params.kind,
+      priority: params.priority ?? autopilotPriorityByKind[params.kind],
+      tags,
+      correlationKey: params.correlationKey?.trim() || params.idempotencyKey?.trim() || `${params.kind}:${params.sourceId}`
+    },
+    budget: params.budget ?? null,
+    suppression: params.suppression ?? {
+      outcome: "allowed"
+    }
+  });
+}
+
 function buildPendingEvent(params: {
   userId: string;
-  kind: z.infer<typeof AutopilotEventKindSchema>;
+  kind: AutopilotEventKind;
   sourceId: string;
   mode: AutopilotMode;
   summary: string;
-  details?: Record<string, unknown>;
+  details?: AutopilotEventDetails;
   idempotencyKey?: string | null;
   actorContext: ActorContext;
 }): AutopilotEvent {
@@ -208,6 +272,7 @@ export async function POST(request: Request) {
       const body = await parseJsonBody(request, TriggerAutopilotEventSchema);
       const effectiveMode = body.mode ?? settings.mode;
       let summary = body.summary?.trim() ?? "";
+      let sourceDetails: Record<string, unknown> = {};
 
       if (effectiveMode === "auto_run" && repository.backend !== "postgres") {
         return authenticatedJson(
@@ -222,6 +287,9 @@ export async function POST(request: Request) {
       if (body.kind === "watcher_triggered") {
         const { watcher } = await resolveWatcherSource(body.sourceId, principal.userId);
         summary ||= `Watcher triggered: ${watcher.targetEntity}`;
+        sourceDetails = {
+          watcherId: watcher.id
+        };
 
         if (body.dryRun) {
           const event = AutopilotEventSchema.parse({
@@ -231,11 +299,20 @@ export async function POST(request: Request) {
               sourceId: body.sourceId,
               mode: effectiveMode,
               summary,
-              details: {
-                ...(body.details ?? {}),
-                watcherId: watcher.id,
-                dryRun: true
-              },
+              details: buildAutopilotEventDetails({
+                kind: body.kind,
+                sourceId: body.sourceId,
+                idempotencyKey: body.idempotencyKey ?? null,
+                priority: body.priority,
+                tags: body.tags,
+                correlationKey: body.correlationKey,
+                budget: body.budget ?? null,
+                details: {
+                  ...(body.details ?? {}),
+                  watcherId: watcher.id,
+                  dryRun: true
+                }
+              }),
               idempotencyKey: body.idempotencyKey,
               actorContext
             }),
@@ -253,6 +330,9 @@ export async function POST(request: Request) {
       if (body.kind === "template_due") {
         const { template } = await resolveTemplateSource(body.sourceId, principal.userId);
         summary ||= `Template due: ${template.name}`;
+        sourceDetails = {
+          templateId: template.id
+        };
 
         if (body.dryRun) {
           const event = AutopilotEventSchema.parse({
@@ -262,11 +342,20 @@ export async function POST(request: Request) {
               sourceId: body.sourceId,
               mode: effectiveMode,
               summary,
-              details: {
-                ...(body.details ?? {}),
-                templateId: template.id,
-                dryRun: true
-              },
+              details: buildAutopilotEventDetails({
+                kind: body.kind,
+                sourceId: body.sourceId,
+                idempotencyKey: body.idempotencyKey ?? null,
+                priority: body.priority,
+                tags: body.tags,
+                correlationKey: body.correlationKey,
+                budget: body.budget ?? null,
+                details: {
+                  ...(body.details ?? {}),
+                  templateId: template.id,
+                  dryRun: true
+                }
+              }),
               idempotencyKey: body.idempotencyKey,
               actorContext
             }),
@@ -284,6 +373,9 @@ export async function POST(request: Request) {
       if (body.kind === "briefing_due") {
         const { type } = await resolveBriefingSource(body.sourceId, principal.userId);
         summary ||= `Briefing due: ${type}`;
+        sourceDetails = {
+          briefingType: type
+        };
 
         if (body.dryRun) {
           const event = AutopilotEventSchema.parse({
@@ -293,11 +385,20 @@ export async function POST(request: Request) {
               sourceId: body.sourceId,
               mode: effectiveMode,
               summary,
-              details: {
-                ...(body.details ?? {}),
-                briefingType: type,
-                dryRun: true
-              },
+              details: buildAutopilotEventDetails({
+                kind: body.kind,
+                sourceId: body.sourceId,
+                idempotencyKey: body.idempotencyKey ?? null,
+                priority: body.priority,
+                tags: body.tags,
+                correlationKey: body.correlationKey,
+                budget: body.budget ?? null,
+                details: {
+                  ...(body.details ?? {}),
+                  briefingType: type,
+                  dryRun: true
+                }
+              }),
               idempotencyKey: body.idempotencyKey,
               actorContext
             }),
@@ -312,6 +413,20 @@ export async function POST(request: Request) {
         }
       }
 
+      const normalizedDetails = buildAutopilotEventDetails({
+        kind: body.kind,
+        sourceId: body.sourceId,
+        idempotencyKey: body.idempotencyKey ?? null,
+        priority: body.priority,
+        tags: body.tags,
+        correlationKey: body.correlationKey,
+        budget: body.budget ?? null,
+        details: {
+          ...(body.details ?? {}),
+          ...sourceDetails
+        }
+      });
+
       const claim = await repository.claimAutopilotEvent({
         userId: principal.userId,
         kind: body.kind,
@@ -319,10 +434,18 @@ export async function POST(request: Request) {
         idempotencyKey: body.idempotencyKey ?? null,
         mode: effectiveMode,
         summary,
-        details: body.details,
+        details: normalizedDetails,
         actorContext,
         debounceMinutes: settings.debounceMinutes
       });
+
+      if (claim.outcome === "ignored") {
+        return authenticatedJson({
+          event: claim.event,
+          ignored: true,
+          dashboard: await repository.getDashboardData(principal.userId)
+        });
+      }
 
       if (claim.outcome === "duplicate" || claim.outcome === "debounced") {
         if (claim.outcome === "duplicate" && shouldEnsureAutopilotJob(claim.event)) {

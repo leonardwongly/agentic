@@ -1,6 +1,9 @@
 import {
+  AutonomyBudgetSchema,
   PolicyDecisionSchema,
+  PolicyDecisionTraceSchema,
   type AgentMetrics,
+  type AutonomyBudget,
   type Capability,
   type MemoryRecord,
   type PolicyDecision,
@@ -65,12 +68,32 @@ export type PolicySimulationCheck = {
   detail: string;
 };
 
+export type PolicyReplayValidation = {
+  replayValidated: boolean;
+  matchedPatterns: number;
+  matchedEpisodes: number;
+  suggestedPatterns: number;
+  safeSuggestionPrecision: number;
+  negativeOutcomeRate: number;
+  failureCostRate: number;
+  driftStatus: "improving" | "stable" | "regressing" | "insufficient_data";
+  rationale: string;
+};
+
+export type PolicyShadowReplayReadiness = {
+  status: "ready" | "missing" | "insufficient" | "disabled" | "not_required";
+  summary: string;
+  thresholdSummary: string[];
+};
+
 export type PolicySimulationResult = {
   decision: PolicyDecision;
   checks: PolicySimulationCheck[];
   trust: TrustSignal;
   scorecardTrust: ScorecardTrustSignal;
+  autonomyBudget: AutonomyBudget | null;
   conformance: GovernanceConformanceReport | null;
+  learningValidation: PolicyReplayValidation | null;
 };
 
 export type GovernanceSimulationScenario = {
@@ -191,6 +214,235 @@ function riskExceedsLimit(riskClass: RiskClass, maxAutoRunRiskClass: RiskClass):
   return riskClassOrder[riskClass] > riskClassOrder[maxAutoRunRiskClass];
 }
 
+function summarizeShadowReplayThresholds(governance: WorkspaceGovernance): string[] {
+  const policy = governance.shadowReplayPolicy;
+
+  return [
+    `${policy.minimumMatchedEpisodes}+ matched episode${policy.minimumMatchedEpisodes === 1 ? "" : "s"}`,
+    `${Math.round(policy.minimumPrecision * 100)}%+ precision`,
+    `<= ${Math.round(policy.maximumNegativeOutcomeRate * 100)}% negative outcomes`,
+    `<= ${Math.round(policy.maximumFailureCostRate * 100)}% failure cost`
+  ];
+}
+
+export function buildAutonomyBudget(governance: WorkspaceGovernance | null | undefined): AutonomyBudget | null {
+  if (!governance) {
+    return null;
+  }
+
+  const requiresExplicitApprovalCapabilities: Capability[] = [];
+
+  if (governance.externalSendRequiresApproval) {
+    requiresExplicitApprovalCapabilities.push("send");
+  }
+
+  if (governance.calendarWriteRequiresApproval) {
+    requiresExplicitApprovalCapabilities.push("schedule");
+  }
+
+  const r3AutonomyEligible = governance.approvalMode === "risk_based" && governance.maxAutoRunRiskClass === "R3";
+  const shadowReplayRequired = r3AutonomyEligible;
+  const thresholdSummary = summarizeShadowReplayThresholds(governance);
+
+  const summary =
+    governance.approvalMode === "always_review"
+      ? "Always-review governance keeps every task on the approval path, so confidence and learning signals can explain decisions but do not widen autonomy."
+      : r3AutonomyEligible
+        ? `Risk-based governance can consider R3 autonomy up to ${governance.maxAutoRunRiskClass}, but elevated paths still depend on trust, scorecard, and replay-validation inputs.`
+        : `Risk-based governance caps autonomous execution at ${governance.maxAutoRunRiskClass}, with higher-risk work staying on the approval path.`;
+
+  const shadowReplaySummary = shadowReplayRequired
+    ? governance.shadowReplayPolicy.enabled
+      ? `R3 autonomy depends on replay validation meeting ${thresholdSummary.join(", ")}.`
+      : "R3 autonomy is configured, but shadow replay is disabled, so elevated autonomy should remain held back until replay thresholds are restored."
+    : governance.shadowReplayPolicy.enabled
+      ? `Shadow replay thresholds are staged for future R3 widening: ${thresholdSummary.join(", ")}.`
+      : "Shadow replay is inactive because workspace autonomy is currently capped below R3.";
+
+  return AutonomyBudgetSchema.parse({
+    approvalMode: governance.approvalMode,
+    governanceCeilingRiskClass: governance.maxAutoRunRiskClass,
+    requiresExplicitApprovalCapabilities,
+    r3AutonomyEligible,
+    shadowReplay: {
+      eligibleForR3: r3AutonomyEligible,
+      enabled: governance.shadowReplayPolicy.enabled,
+      required: shadowReplayRequired,
+      thresholdSummary,
+      summary: shadowReplaySummary
+    },
+    decisionInputs: [
+      {
+        id: "confidence_threshold",
+        category: "input",
+        active: true,
+        summary: "Minimum confidence gates autonomous execution.",
+        detail: "Tasks below 0.55 confidence are downgraded to draft behavior before other autonomy checks are considered."
+      },
+      {
+        id: "capability_risk_class",
+        category: "input",
+        active: true,
+        summary: "Capabilities are mapped into a bounded risk class.",
+        detail: "Read/search stay low risk, create/update/draft/monitor raise the task to R2, send/schedule raise it to R3, and delete/approve remain R4."
+      },
+      {
+        id: "approval_mode",
+        category: "governance",
+        active: true,
+        summary: `Workspace approval mode is ${governance.approvalMode}.`,
+        detail:
+          governance.approvalMode === "always_review"
+            ? "Always-review mode keeps all tasks on the approval path regardless of confidence or trust signals."
+            : "Risk-based mode lets the policy engine evaluate confidence, risk, governance, and trust before deciding whether approval is still required."
+      },
+      {
+        id: "governance_ceiling",
+        category: "governance",
+        active: true,
+        summary: `Autonomous execution ceiling is ${governance.maxAutoRunRiskClass}.`,
+        detail: `Tasks above ${governance.maxAutoRunRiskClass} stay approval-gated even when confidence is high.`
+      },
+      {
+        id: "external_send_gate",
+        category: "governance",
+        active: governance.externalSendRequiresApproval,
+        summary: governance.externalSendRequiresApproval
+          ? "External sends remain approval-gated."
+          : "External sends can be considered for autonomous execution.",
+        detail: governance.externalSendRequiresApproval
+          ? "Customer-facing or outbound communication must receive approval before execution."
+          : "External send tasks still pass through the broader policy checks, but governance does not force review at the capability boundary."
+      },
+      {
+        id: "calendar_write_gate",
+        category: "governance",
+        active: governance.calendarWriteRequiresApproval,
+        summary: governance.calendarWriteRequiresApproval
+          ? "Calendar writes remain approval-gated."
+          : "Calendar writes can be considered for autonomous execution.",
+        detail: governance.calendarWriteRequiresApproval
+          ? "Scheduling changes that create external commitments stay behind approval."
+          : "Calendar writes still pass through the broader policy checks, but governance does not force review at the capability boundary."
+      },
+      {
+        id: "shadow_replay_policy",
+        category: "governance",
+        active: r3AutonomyEligible,
+        summary: shadowReplaySummary,
+        detail: r3AutonomyEligible
+          ? "When the workspace widens autonomy to R3, replay thresholds determine whether learned elevated paths can clear the final review gate."
+          : "Replay thresholds are configuration-only until the workspace widens autonomy to R3."
+      },
+      {
+        id: "memory_trust",
+        category: "trust",
+        active: r3AutonomyEligible,
+        summary: "Fresh approval history can strengthen R3 autonomy decisions.",
+        detail: "The policy engine only considers memory trust when evaluating whether a learned R3 path has enough approval history to clear review."
+      },
+      {
+        id: "scorecard_trust",
+        category: "trust",
+        active: r3AutonomyEligible,
+        summary: "Execution scorecards can strengthen R3 autonomy decisions.",
+        detail: "Strong task success, approval, and correction metrics are required alongside memory trust before elevated autonomy can clear R3 review."
+      },
+      {
+        id: "replay_validation",
+        category: "learning",
+        active: r3AutonomyEligible,
+        summary: "Replay validation protects learned R3 autonomy signals.",
+        detail: "Matched episodes, precision, negative outcomes, failure cost, and drift must all stay inside replay thresholds before learned elevated autonomy is trusted."
+      }
+    ],
+    summary
+  });
+}
+
+export function assessShadowReplayReadiness(params: {
+  governance?: WorkspaceGovernance | null;
+  learningValidation?: PolicyReplayValidation | null;
+}): PolicyShadowReplayReadiness {
+  const governance = params.governance;
+
+  if (!governance || governance.maxAutoRunRiskClass !== "R3") {
+    return {
+      status: "not_required",
+      summary: "Shadow replay is not required because workspace autonomy is not widened to R3.",
+      thresholdSummary: []
+    };
+  }
+
+  const thresholdSummary = summarizeShadowReplayThresholds(governance);
+  const policy = governance.shadowReplayPolicy;
+
+  if (!policy.enabled) {
+    return {
+      status: "disabled",
+      summary:
+        "Shadow replay is disabled while workspace governance still allows R3 autonomy. Keep elevated autonomy gated until replay thresholds are restored.",
+      thresholdSummary
+    };
+  }
+
+  const learningValidation = params.learningValidation;
+
+  if (!learningValidation) {
+    return {
+      status: "missing",
+      summary:
+        "Shadow replay evidence is still missing for this learned R3 path, so elevated autonomy must remain approval-gated.",
+      thresholdSummary
+    };
+  }
+
+  const failures: string[] = [];
+
+  if (!learningValidation.replayValidated) {
+    failures.push(learningValidation.rationale);
+  }
+
+  if (learningValidation.matchedEpisodes < policy.minimumMatchedEpisodes) {
+    failures.push(
+      `Only ${learningValidation.matchedEpisodes} matched episode${learningValidation.matchedEpisodes === 1 ? "" : "s"} were observed.`
+    );
+  }
+
+  if (learningValidation.safeSuggestionPrecision < policy.minimumPrecision) {
+    failures.push(
+      `Replay precision ${learningValidation.safeSuggestionPrecision.toFixed(2)} is below the ${policy.minimumPrecision.toFixed(2)} minimum.`
+    );
+  }
+
+  if (learningValidation.negativeOutcomeRate > policy.maximumNegativeOutcomeRate) {
+    failures.push(
+      `Negative outcome rate ${learningValidation.negativeOutcomeRate.toFixed(2)} exceeds the ${policy.maximumNegativeOutcomeRate.toFixed(2)} maximum.`
+    );
+  }
+
+  if (learningValidation.failureCostRate > policy.maximumFailureCostRate) {
+    failures.push(
+      `Failure cost rate ${learningValidation.failureCostRate.toFixed(2)} exceeds the ${policy.maximumFailureCostRate.toFixed(2)} maximum.`
+    );
+  }
+
+  if (failures.length > 0) {
+    return {
+      status: "insufficient",
+      summary: failures.join(" "),
+      thresholdSummary
+    };
+  }
+
+  return {
+    status: "ready",
+    summary:
+      "Shadow replay thresholds are satisfied, so elevated R3 autonomy can rely on replay-validated learning evidence for this path.",
+    thresholdSummary
+  };
+}
+
 function buildDecision(params: {
   riskClass: RiskClass;
   outcome: PolicyDecision["outcome"];
@@ -299,6 +551,41 @@ export function assessWorkspaceGovernanceConformance(
             status: "warn",
             summary: `Always-review mode keeps a relaxed ${governance.maxAutoRunRiskClass} ceiling.`,
             detail: "The approval mode is strict, but the stored ceiling is looser than necessary and can confuse operators."
+        }
+    );
+  }
+
+  if (governance.maxAutoRunRiskClass === "R3") {
+    checks.push(
+      governance.shadowReplayPolicy.enabled
+        ? {
+            id: "shadow-replay",
+            status: "pass",
+            summary: "Shadow replay is required before widened autonomy can clear R3 paths.",
+            detail: `Replay thresholds require ${summarizeShadowReplayThresholds(governance).join(", ")} before elevated autonomy is considered ready.`
+          }
+        : {
+            id: "shadow-replay",
+            status: "fail",
+            summary: "R3 autonomy is configured without shadow replay gating.",
+            detail:
+              "Workspace governance allows widened autonomy but has disabled the replay-shadow gate that should validate learned high-impact execution paths first."
+          }
+    );
+  } else {
+    checks.push(
+      governance.shadowReplayPolicy.enabled
+        ? {
+            id: "shadow-replay",
+            status: "pass",
+            summary: "Shadow replay thresholds are configured for future autonomy widening.",
+            detail: `If the workspace later widens autonomy to R3, replay thresholds will require ${summarizeShadowReplayThresholds(governance).join(", ")}.`
+          }
+        : {
+            id: "shadow-replay",
+            status: "pass",
+            summary: "Shadow replay is inactive because autonomy is capped below R3.",
+            detail: "The current risk ceiling does not rely on replay-shadow evidence because elevated autonomy is not enabled."
           }
     );
   }
@@ -436,13 +723,16 @@ export function simulateTaskPolicy(params: {
   memories?: MemoryRecord[];
   scorecard?: AgentMetrics | null;
   governance?: WorkspaceGovernance | null;
+  learningValidation?: PolicyReplayValidation | null;
 }): PolicySimulationResult {
   const riskClass = riskFromCapabilities(params.capabilities);
+  const autonomyBudget = buildAutonomyBudget(params.governance);
   const trust = params.memories
     ? computeTrustFromMemories(params.memories, params.title, params.capabilities)
     : { approvedCount: 0, rejectedCount: 0, trustScore: 0 };
   const scorecardTrust = computeTrustFromScorecard(params.scorecard);
   const conformance = assessWorkspaceGovernanceConformance(params.governance);
+  const learningValidation = params.learningValidation ?? null;
   const checks: PolicySimulationCheck[] = [
     {
       id: "risk-classification",
@@ -472,7 +762,9 @@ export function simulateTaskPolicy(params: {
       checks,
       trust,
       scorecardTrust,
-      conformance
+      autonomyBudget,
+      conformance,
+      learningValidation
     };
   }
 
@@ -495,7 +787,9 @@ export function simulateTaskPolicy(params: {
       checks,
       trust,
       scorecardTrust,
-      conformance
+      autonomyBudget,
+      conformance,
+      learningValidation
     };
   }
 
@@ -513,10 +807,10 @@ export function simulateTaskPolicy(params: {
       summary: "Workspace governance requires approval.",
       detail: governanceApprovalReason
     });
-    return {
-      decision: buildDecision({
-        riskClass,
-        outcome: "allowed_with_confirmation",
+  return {
+    decision: buildDecision({
+      riskClass,
+      outcome: "allowed_with_confirmation",
         rationale: `The task "${params.title}" requires approval. ${governanceApprovalReason}`,
         confidence: params.confidence,
         requiresApproval: true
@@ -524,32 +818,95 @@ export function simulateTaskPolicy(params: {
       checks,
       trust,
       scorecardTrust,
-      conformance
+      autonomyBudget,
+      conformance,
+      learningValidation
     };
   }
 
   if (riskClass === "R3") {
     // Scorecards only strengthen autonomy when memory trust is already strong.
     if (trust.trustScore >= 0.7 && trust.approvedCount >= 3 && scorecardTrust.strong) {
+      const shadowReplayReadiness = assessShadowReplayReadiness({
+        governance: params.governance,
+        learningValidation
+      });
+
+      if (params.governance?.maxAutoRunRiskClass === "R3" && shadowReplayReadiness.status !== "ready") {
+        checks.push({
+          id: "shadow-replay-gate",
+          stage: "trust",
+          status: "warn",
+          summary: "Shadow replay has not yet cleared the learned R3 path.",
+          detail: shadowReplayReadiness.summary
+        });
+        return {
+          decision: buildDecision({
+            riskClass,
+            outcome: "allowed_with_confirmation",
+            rationale: `The task "${params.title}" still requires approval because the workspace shadow replay gate has not cleared the learned R3 path. ${shadowReplayReadiness.summary}`,
+            confidence: params.confidence,
+            requiresApproval: true
+          }),
+          checks,
+          trust,
+          scorecardTrust,
+          autonomyBudget,
+          conformance,
+          learningValidation
+        };
+      }
+
+      if (learningValidation && !learningValidation.replayValidated) {
+        checks.push({
+          id: "replay-validation-gate",
+          stage: "trust",
+          status: "warn",
+          summary: "Outcome-trace learning is not yet replay-validated for autonomy.",
+          detail: learningValidation.rationale
+        });
+        return {
+          decision: buildDecision({
+            riskClass,
+            outcome: "allowed_with_confirmation",
+            rationale: `The task "${params.title}" still requires approval because replay validation has not cleared the learned automation signal. ${learningValidation.rationale}`,
+            confidence: params.confidence,
+            requiresApproval: true
+          }),
+          checks,
+          trust,
+          scorecardTrust,
+          autonomyBudget,
+          conformance,
+          learningValidation
+        };
+      }
+
       checks.push({
         id: "trust-elevation",
         stage: "trust",
         status: "pass",
         summary: "Strong trust and scorecard signals allow autonomous execution.",
-        detail: `Learned trust score ${trust.trustScore.toFixed(2)} with ${trust.approvedCount} prior approvals and a strong scorecard cleared the R3 review gate.`
+        detail: learningValidation
+          ? `Learned trust score ${trust.trustScore.toFixed(2)} with ${trust.approvedCount} prior approvals, a strong scorecard, and replay precision ${learningValidation.safeSuggestionPrecision.toFixed(2)} cleared the R3 review gate.`
+          : `Learned trust score ${trust.trustScore.toFixed(2)} with ${trust.approvedCount} prior approvals and a strong scorecard cleared the R3 review gate.`
       });
       return {
         decision: buildDecision({
           riskClass,
           outcome: "allowed",
-          rationale: `The task "${params.title}" would normally require approval, but learned trust (${trust.approvedCount} prior approvals, trust score ${trust.trustScore.toFixed(2)}) and a strong execution scorecard allow autonomous execution.`,
+          rationale: learningValidation
+            ? `The task "${params.title}" would normally require approval, but learned trust (${trust.approvedCount} prior approvals, trust score ${trust.trustScore.toFixed(2)}), a strong execution scorecard, and replay-validated outcome traces with replay precision ${learningValidation.safeSuggestionPrecision.toFixed(2)} allow autonomous execution.`
+            : `The task "${params.title}" would normally require approval, but learned trust (${trust.approvedCount} prior approvals, trust score ${trust.trustScore.toFixed(2)}) and a strong execution scorecard allow autonomous execution.`,
           confidence: params.confidence,
           requiresApproval: false
         }),
         checks,
         trust,
         scorecardTrust,
-        conformance
+        autonomyBudget,
+        conformance,
+        learningValidation
       };
     }
 
@@ -572,7 +929,9 @@ export function simulateTaskPolicy(params: {
         checks,
         trust,
         scorecardTrust,
-        conformance
+        autonomyBudget,
+        conformance,
+        learningValidation
       };
     }
 
@@ -596,7 +955,9 @@ export function simulateTaskPolicy(params: {
         checks,
         trust,
         scorecardTrust,
-        conformance
+        autonomyBudget,
+        conformance,
+        learningValidation
       };
     }
 
@@ -618,7 +979,9 @@ export function simulateTaskPolicy(params: {
       checks,
       trust,
       scorecardTrust,
-      conformance
+      autonomyBudget,
+      conformance,
+      learningValidation
     };
   }
 
@@ -640,8 +1003,26 @@ export function simulateTaskPolicy(params: {
     checks,
     trust,
     scorecardTrust,
-    conformance
+    autonomyBudget,
+    conformance,
+    learningValidation
   };
+}
+
+export function buildPolicyDecisionTrace(result: PolicySimulationResult) {
+  return PolicyDecisionTraceSchema.parse({
+    decision: result.decision,
+    checks: result.checks,
+    trust: result.trust,
+    scorecardTrust: {
+      strong: result.scorecardTrust.strong,
+      weak: result.scorecardTrust.weak,
+      rationale: result.scorecardTrust.rationale ?? null
+    },
+    autonomyBudget: result.autonomyBudget,
+    conformance: result.conformance,
+    learningValidation: result.learningValidation
+  });
 }
 
 export function evaluateTaskPolicy(params: {
@@ -651,6 +1032,7 @@ export function evaluateTaskPolicy(params: {
   memories?: MemoryRecord[];
   scorecard?: AgentMetrics | null;
   governance?: WorkspaceGovernance | null;
+  learningValidation?: PolicyReplayValidation | null;
 }): PolicyDecision {
   return simulateTaskPolicy(params).decision;
 }

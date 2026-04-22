@@ -2,9 +2,12 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  buildPolicyLearningValidation,
+  buildRecommendationPerformanceReport,
   buildRecommendationReplayReport,
   createSelfImprovementRepository,
   deriveRecommendationInsights,
+  deriveWorkflowRecommendations,
   EpisodeRecordSchema,
   SemanticPatternSchema,
   SelfImprovementConflictError,
@@ -484,5 +487,422 @@ describe("recommendation replay analytics", () => {
         })
       ])
     );
+  });
+
+  it("tracks recommendation drift and failure cost across replay windows", () => {
+    const report = buildRecommendationPerformanceReport([
+      buildReplayEpisode("stable-1", {
+        timestamp: "2026-04-01T09:00:00.000Z"
+      }),
+      buildReplayEpisode("stable-2", {
+        timestamp: "2026-04-02T09:00:00.000Z"
+      }),
+      buildReplayEpisode("stable-3", {
+        timestamp: "2026-04-03T09:00:00.000Z"
+      }),
+      buildReplayEpisode("regress-1", {
+        timestamp: "2026-04-10T09:00:00.000Z",
+        outcome: "failure",
+        recommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          kind: "execution_path",
+          agent: "communications",
+          action: "send_message",
+          confidence: 0.58,
+          rationale: "Observed governed outbound send flow.",
+          riskClass: "R3",
+          capabilities: ["send"],
+          sourceGoalId: "goal-regress-1",
+          sourceTaskId: "task-regress-1",
+          fallbackMode: "review_required",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-regress-1",
+          workflowId: "workflow-regress-1",
+          taskId: "task-regress-1",
+          goalStatus: "blocked",
+          taskState: "failed",
+          approvalDecision: "rejected",
+          executionKind: "failed",
+          outcomeScore: -1,
+          userCorrection: true,
+          notes: "Recent outbound flow needed manual correction."
+        }
+      }),
+      buildReplayEpisode("regress-2", {
+        timestamp: "2026-04-11T09:00:00.000Z",
+        outcome: "partial",
+        recommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          kind: "execution_path",
+          agent: "communications",
+          action: "send_message",
+          confidence: 0.61,
+          rationale: "Observed governed outbound send flow.",
+          riskClass: "R3",
+          capabilities: ["send"],
+          sourceGoalId: "goal-regress-2",
+          sourceTaskId: "task-regress-2",
+          fallbackMode: "review_required",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-regress-2",
+          workflowId: "workflow-regress-2",
+          taskId: "task-regress-2",
+          goalStatus: "running",
+          taskState: "completed",
+          approvalDecision: null,
+          executionKind: "completed",
+          outcomeScore: 0.2,
+          userCorrection: true,
+          notes: "Operator intervened before final delivery."
+        }
+      }),
+      buildReplayEpisode("regress-3", {
+        timestamp: "2026-04-12T09:00:00.000Z",
+        outcome: "failure",
+        recommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          kind: "execution_path",
+          agent: "communications",
+          action: "send_message",
+          confidence: 0.55,
+          rationale: "Observed governed outbound send flow.",
+          riskClass: "R3",
+          capabilities: ["send"],
+          sourceGoalId: "goal-regress-3",
+          sourceTaskId: "task-regress-3",
+          fallbackMode: "review_required",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-regress-3",
+          workflowId: "workflow-regress-3",
+          taskId: "task-regress-3",
+          goalStatus: "blocked",
+          taskState: "failed",
+          approvalDecision: "rejected",
+          executionKind: "failed",
+          outcomeScore: -1,
+          userCorrection: false,
+          notes: "Recent replay evidence regressed."
+        }
+      })
+    ], {
+      bucketDays: 7,
+      bucketCount: 2,
+      minimumEvidence: 1,
+      lowConfidenceThreshold: 0.7,
+      automationThreshold: 0.8
+    });
+
+    expect(report.timeline).toHaveLength(2);
+    expect(report.previous).toMatchObject({
+      episodeCount: 3,
+      safeSuggestionPrecision: 1,
+      negativeOutcomeRate: 0,
+      failureCostRate: 0
+    });
+    expect(report.current).toMatchObject({
+      episodeCount: 3,
+      safeSuggestionPrecision: 0,
+      negativeOutcomeRate: 1
+    });
+    expect(report.current.failureCostRate).toBeGreaterThan(0.5);
+    expect(report.drift).toMatchObject({
+      status: "regressing"
+    });
+  });
+
+  it("replay-validates only stable recommendation evidence before autonomy promotion", () => {
+    const episodes = [
+      buildReplayEpisode("valid-1", {
+        timestamp: "2026-04-08T09:00:00.000Z"
+      }),
+      buildReplayEpisode("valid-2", {
+        timestamp: "2026-04-10T09:00:00.000Z"
+      }),
+      buildReplayEpisode("valid-3", {
+        timestamp: "2026-04-12T09:00:00.000Z"
+      })
+    ];
+
+    const validation = buildPolicyLearningValidation(episodes, {
+      kind: "execution_path",
+      agent: "communications",
+      riskClass: "R3",
+      capabilities: ["send"],
+      minimumEvidence: 3
+    });
+
+    expect(validation).toMatchObject({
+      replayValidated: true,
+      matchedEpisodes: 3,
+      matchedPatterns: 1,
+      suggestedPatterns: 1,
+      driftStatus: "insufficient_data"
+    });
+    expect(validation.rationale).toContain("Replay validation passed");
+  });
+
+  it("fails replay validation when negative outcomes regress recent evidence", () => {
+    const validation = buildPolicyLearningValidation([
+      buildReplayEpisode("baseline-1", {
+        timestamp: "2026-04-01T09:00:00.000Z"
+      }),
+      buildReplayEpisode("baseline-2", {
+        timestamp: "2026-04-02T09:00:00.000Z"
+      }),
+      buildReplayEpisode("baseline-3", {
+        timestamp: "2026-04-03T09:00:00.000Z"
+      }),
+      buildReplayEpisode("failure-1", {
+        timestamp: "2026-04-10T09:00:00.000Z",
+        outcome: "failure",
+        recommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          kind: "execution_path",
+          agent: "communications",
+          action: "send_message",
+          confidence: 0.6,
+          rationale: "Observed governed outbound send flow.",
+          riskClass: "R3",
+          capabilities: ["send"],
+          sourceGoalId: "goal-failure-1",
+          sourceTaskId: "task-failure-1",
+          fallbackMode: "review_required",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-failure-1",
+          workflowId: "workflow-failure-1",
+          taskId: "task-failure-1",
+          goalStatus: "blocked",
+          taskState: "failed",
+          approvalDecision: "rejected",
+          executionKind: "failed",
+          outcomeScore: -1,
+          userCorrection: true,
+          notes: "Recent send path regressed."
+        }
+      }),
+      buildReplayEpisode("failure-2", {
+        timestamp: "2026-04-11T09:00:00.000Z",
+        outcome: "failure",
+        recommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          kind: "execution_path",
+          agent: "communications",
+          action: "send_message",
+          confidence: 0.59,
+          rationale: "Observed governed outbound send flow.",
+          riskClass: "R3",
+          capabilities: ["send"],
+          sourceGoalId: "goal-failure-2",
+          sourceTaskId: "task-failure-2",
+          fallbackMode: "review_required",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-failure-2",
+          workflowId: "workflow-failure-2",
+          taskId: "task-failure-2",
+          goalStatus: "blocked",
+          taskState: "failed",
+          approvalDecision: "rejected",
+          executionKind: "failed",
+          outcomeScore: -1,
+          userCorrection: false,
+          notes: "Recent send path regressed again."
+        }
+      }),
+      buildReplayEpisode("failure-3", {
+        timestamp: "2026-04-12T09:00:00.000Z",
+        outcome: "partial",
+        recommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          kind: "execution_path",
+          agent: "communications",
+          action: "send_message",
+          confidence: 0.62,
+          rationale: "Observed governed outbound send flow.",
+          riskClass: "R3",
+          capabilities: ["send"],
+          sourceGoalId: "goal-failure-3",
+          sourceTaskId: "task-failure-3",
+          fallbackMode: "review_required",
+          evidenceHint: "sparse"
+        },
+        outcomeLink: {
+          goalId: "goal-failure-3",
+          workflowId: "workflow-failure-3",
+          taskId: "task-failure-3",
+          goalStatus: "running",
+          taskState: "completed",
+          approvalDecision: null,
+          executionKind: "completed",
+          outcomeScore: 0.2,
+          userCorrection: true,
+          notes: "Recent send path needed correction."
+        }
+      })
+    ], {
+      kind: "execution_path",
+      agent: "communications",
+      riskClass: "R3",
+      capabilities: ["send"],
+      minimumEvidence: 3
+    });
+
+    expect(validation.replayValidated).toBe(false);
+    expect(validation.driftStatus).toBe("regressing");
+    expect(validation.negativeOutcomeRate).toBeGreaterThan(0.5);
+    expect(validation.failureCostRate).toBeGreaterThan(0.3);
+    expect(validation.rationale).toContain("Replay evidence is regressing");
+  });
+});
+
+describe("workflow recommendations", () => {
+  function buildWorkflowEpisode(
+    id: string,
+    overrides: Partial<ReturnType<typeof EpisodeRecordSchema.parse>> = {}
+  ) {
+    return buildEpisode({
+      id,
+      recommendation: {
+        key: "execution_path:communications:send_message:R3:send",
+        kind: "execution_path",
+        agent: "communications",
+        action: "send_message",
+        confidence: 0.91,
+        rationale: "Observed governed outbound send flow.",
+        riskClass: "R3",
+        capabilities: ["send"],
+        sourceGoalId: `goal-${id}`,
+        sourceTaskId: `task-${id}`,
+        fallbackMode: "normal",
+        evidenceHint: "established"
+      },
+      outcomeLink: {
+        goalId: `goal-${id}`,
+        workflowId: `workflow-${id}`,
+        taskId: `task-${id}`,
+        goalStatus: "completed",
+        taskState: "completed",
+        approvalDecision: "approved",
+        executionKind: "completed",
+        outcomeScore: 1,
+        userCorrection: false,
+        notes: "Validated outbound send."
+      },
+      ...overrides
+    });
+  }
+
+  it("derives ranked reusable workflow recommendations with capability and agent filters", () => {
+    const recommendations = deriveWorkflowRecommendations(
+      [
+        buildWorkflowEpisode("wf-1"),
+        buildWorkflowEpisode("wf-2", {
+          timestamp: "2026-04-20T09:05:00.000Z"
+        }),
+        buildWorkflowEpisode("wf-3", {
+          recommendation: {
+            key: "execution_path:calendar:schedule_event:R2:schedule",
+            kind: "execution_path",
+            agent: "calendar",
+            action: "schedule_event",
+            confidence: 0.86,
+            rationale: "Observed calendar scheduling flow.",
+            riskClass: "R2",
+            capabilities: ["schedule"],
+            sourceGoalId: "goal-wf-3",
+            sourceTaskId: "task-wf-3",
+            fallbackMode: "normal",
+            evidenceHint: "established"
+          }
+        })
+      ],
+      {
+        agent: "communications",
+        capabilities: ["send"],
+        minimumEvidence: 2
+      }
+    );
+
+    expect(recommendations).toEqual([
+      expect.objectContaining({
+        workflow: expect.objectContaining({
+          agent: "communications",
+          action: "send_message",
+          capabilities: ["send"]
+        }),
+        reuse: expect.objectContaining({
+          replayMode: "suggest",
+          operatorAction: "suggest_reuse"
+        }),
+        evidence: expect.objectContaining({
+          count: 2,
+          approvalCount: 2
+        })
+      })
+    ]);
+  });
+
+  it("excludes draft-only recommendations by default but includes them when requested", () => {
+    const draftOnlyEpisode = buildWorkflowEpisode("wf-draft-1", {
+      recommendation: {
+        key: "task_plan:workflow:create_record:R2:create",
+        kind: "task_plan",
+        agent: "workflow",
+        action: "create_record",
+        confidence: 0.32,
+        rationale: "Observed early drafting flow.",
+        riskClass: "R2",
+        capabilities: ["create"],
+        sourceGoalId: "goal-wf-draft-1",
+        sourceTaskId: "task-wf-draft-1",
+        fallbackMode: "review_required",
+        evidenceHint: "sparse"
+      },
+      outcomeLink: {
+        goalId: "goal-wf-draft-1",
+        workflowId: "workflow-wf-draft-1",
+        taskId: "task-wf-draft-1",
+        goalStatus: "active",
+        taskState: "in_progress",
+        approvalDecision: null,
+        executionKind: "not_run",
+        outcomeScore: 0,
+        userCorrection: false,
+        notes: "Draft-only evidence."
+      },
+      outcome: "partial"
+    });
+
+    expect(deriveWorkflowRecommendations([draftOnlyEpisode], { minimumScore: 0 })).toEqual([]);
+    expect(
+      deriveWorkflowRecommendations([draftOnlyEpisode], {
+        includeDraftOnly: true,
+        minimumScore: 0
+      })
+    ).toEqual([
+      expect.objectContaining({
+        reuse: expect.objectContaining({
+          replayMode: "draft_only",
+          operatorAction: "keep_draft_only"
+        })
+      })
+    ]);
+  });
+
+  it("rejects invalid workflow recommendation filters", () => {
+    expect(() =>
+      deriveWorkflowRecommendations([], {
+        capabilities: Array.from({ length: 11 }, (_, index) => `capability-${index}`)
+      })
+    ).toThrow(SelfImprovementValidationError);
   });
 });

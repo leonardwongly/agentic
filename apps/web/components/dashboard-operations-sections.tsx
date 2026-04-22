@@ -132,6 +132,11 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
     revokeGoalShare
   } = props;
   const goalTitleById = new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.title]));
+  const teamPermissions = data.operatingSections.teamWorkflow.permissions;
+  const canManageMembers = teamPermissions.manageMembers.allowed && Boolean(data.activeWorkspace);
+  const canEditGovernance = teamPermissions.editGovernance.allowed && Boolean(data.activeWorkspace);
+  const canExportAudit = teamPermissions.exportAudit.allowed && Boolean(data.activeWorkspace);
+  const canManagePrivacyOperations = teamPermissions.managePrivacyOperations.allowed && Boolean(data.activeWorkspace);
 
   return (
     <>
@@ -217,18 +222,23 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             </div>
           ))}
         </div>
-        <div className="list-stack compact">
+        <div className="list-stack compact" style={{ opacity: canManageMembers ? 1 : 0.65 }}>
           <label className="field">
             <span>Member user ID</span>
             <input
               value={workspaceMemberUserId}
               onChange={(event) => setWorkspaceMemberUserId(event.target.value)}
               placeholder="alex@example.com"
+              disabled={isPending || !canManageMembers}
             />
           </label>
           <label className="field">
             <span>Role</span>
-            <select value={workspaceMemberRole} onChange={(event) => setWorkspaceMemberRole(event.target.value as (typeof workspaceRoleValues)[number])}>
+            <select
+              value={workspaceMemberRole}
+              onChange={(event) => setWorkspaceMemberRole(event.target.value as (typeof workspaceRoleValues)[number])}
+              disabled={isPending || !canManageMembers}
+            >
               {workspaceRoleValues.map((role) => (
                 <option key={role} value={role}>
                   {role}
@@ -236,9 +246,10 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ))}
             </select>
           </label>
-          <button type="button" className="secondary-button" onClick={() => void addWorkspaceMember()} disabled={isPending || !data.activeWorkspace}>
+          <button type="button" className="secondary-button" onClick={() => void addWorkspaceMember()} disabled={isPending || !canManageMembers}>
             Add member
           </button>
+          {!canManageMembers ? <p className="operator-product-subtitle">{teamPermissions.manageMembers.reason}</p> : null}
         </div>
       </article>
 
@@ -250,7 +261,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               Approval policy and audit defaults stay at the workspace boundary so collaboration does not widen autonomy silently.
             </p>
           </div>
-          <button type="button" className="secondary-button" onClick={() => void exportWorkspaceAudit()} disabled={isPending || !data.activeWorkspace}>
+          <button type="button" className="secondary-button" onClick={() => void exportWorkspaceAudit()} disabled={isPending || !canExportAudit}>
             Export audit
           </button>
         </div>
@@ -260,11 +271,13 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ? `Editing governance for ${data.activeWorkspace.name}.`
               : "Select a workspace before editing governance.")}
         </p>
-        <div className="list-stack compact">
+        <p className="operator-product-subtitle">{teamPermissions.exportAudit.reason}</p>
+        <div className="list-stack compact" style={{ opacity: canEditGovernance ? 1 : 0.65 }}>
           <label className="field">
             <span>Approval mode</span>
             <select
               value={governanceDraft.approvalMode}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -283,6 +296,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <span>Max auto-run risk class</span>
             <select
               value={governanceDraft.maxAutoRunRiskClass}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -304,6 +318,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               min={7}
               max={3650}
               value={governanceDraft.retentionDays}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -316,6 +331,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <input
               type="checkbox"
               checked={governanceDraft.requireAuditExports}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -329,6 +345,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <input
               type="checkbox"
               checked={governanceDraft.externalSendRequiresApproval}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -342,6 +359,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <input
               type="checkbox"
               checked={governanceDraft.calendarWriteRequiresApproval}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -351,9 +369,106 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             />
             Calendar writes always require approval
           </label>
-          <button type="button" className="primary-button" onClick={() => void saveWorkspaceGovernance()} disabled={isPending || !data.activeWorkspace}>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={governanceDraft.shadowReplayPolicy.enabled}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    enabled: event.target.checked
+                  }
+                }))
+              }
+            />
+            Require shadow replay evidence before widening to R3 autonomy
+          </label>
+          <label className="field">
+            <span>Shadow replay minimum matched episodes</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={governanceDraft.shadowReplayPolicy.minimumMatchedEpisodes}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    minimumMatchedEpisodes: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Shadow replay minimum precision</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={governanceDraft.shadowReplayPolicy.minimumPrecision}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    minimumPrecision: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Shadow replay maximum negative outcome rate</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={governanceDraft.shadowReplayPolicy.maximumNegativeOutcomeRate}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    maximumNegativeOutcomeRate: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Shadow replay maximum failure cost rate</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={governanceDraft.shadowReplayPolicy.maximumFailureCostRate}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    maximumFailureCostRate: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <button type="button" className="primary-button" onClick={() => void saveWorkspaceGovernance()} disabled={isPending || !canEditGovernance}>
             Save governance
           </button>
+          {!canEditGovernance ? <p className="operator-product-subtitle">{teamPermissions.editGovernance.reason}</p> : null}
         </div>
       </article>
 
@@ -373,7 +488,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ? `Privacy controls are scoped to ${data.activeWorkspace.name}.`
               : "Select a workspace before running privacy operations.")}
         </p>
-        <div className="list-stack compact">
+        <div className="list-stack compact" style={{ opacity: canManagePrivacyOperations ? 1 : 0.65 }}>
           {privacyOperationKindValues.map((kind) => (
             <div className="list-item vertical" key={kind}>
               <div>
@@ -385,13 +500,16 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
                   type="button"
                   className={kind === "workspace_delete" ? "danger-button" : "secondary-button"}
                   onClick={() => void runPrivacyOperation(kind)}
-                  disabled={isPending || !data.activeWorkspace}
+                  disabled={isPending || !canManagePrivacyOperations}
                 >
                   {privacyOperationLabels[kind]}
                 </button>
               </div>
             </div>
           ))}
+          {!canManagePrivacyOperations ? (
+            <p className="operator-product-subtitle">{teamPermissions.managePrivacyOperations.reason}</p>
+          ) : null}
         </div>
 
         <div className="card-header">

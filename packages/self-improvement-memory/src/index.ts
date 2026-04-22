@@ -276,6 +276,126 @@ export type RecommendationReplayReport = {
   insights: RecommendationInsight[];
 };
 
+export type RecommendationEvidenceFilters = {
+  kind?: RecommendationTrace["kind"];
+  agent?: string;
+  action?: string;
+  riskClass?: string;
+  capabilities?: string[];
+};
+
+export type RecommendationPerformanceWindow = {
+  startedAt: string | null;
+  endedAt: string | null;
+  episodeCount: number;
+  consideredEpisodes: number;
+  suggestedPatterns: number;
+  safeSuggestionPrecision: number;
+  negativeOutcomeRate: number;
+  failureCostRate: number;
+};
+
+export type RecommendationPerformanceBucket = RecommendationPerformanceWindow & {
+  key: string;
+  label: string;
+};
+
+export type RecommendationPerformanceDrift = {
+  status: "improving" | "stable" | "regressing" | "insufficient_data";
+  safeSuggestionPrecisionDelta: number;
+  negativeOutcomeRateDelta: number;
+  failureCostRateDelta: number;
+};
+
+export type RecommendationPerformanceReport = {
+  current: RecommendationPerformanceWindow;
+  previous: RecommendationPerformanceWindow;
+  timeline: RecommendationPerformanceBucket[];
+  drift: RecommendationPerformanceDrift;
+};
+
+export type PolicyLearningValidation = {
+  replayValidated: boolean;
+  matchedPatterns: number;
+  matchedEpisodes: number;
+  suggestedPatterns: number;
+  safeSuggestionPrecision: number;
+  negativeOutcomeRate: number;
+  failureCostRate: number;
+  driftStatus: RecommendationPerformanceDrift["status"];
+  rationale: string;
+};
+
+export type WorkflowRecommendationOperatorAction =
+  | "suggest_reuse"
+  | "require_approval"
+  | "require_review"
+  | "keep_draft_only";
+
+export type WorkflowRecommendation = {
+  key: string;
+  source: "outcome_trace";
+  workflow: {
+    kind: RecommendationTrace["kind"];
+    agent: string;
+    action: string;
+    riskClass: string | null;
+    capabilities: string[];
+  };
+  reuse: {
+    replayMode: RecommendationReplayMode;
+    operatorAction: WorkflowRecommendationOperatorAction;
+    rationale: string;
+  };
+  evidence: {
+    count: number;
+    approvalCount: number;
+    successCount: number;
+    partialCount: number;
+    failureCount: number;
+    rejectionCount: number;
+    userCorrectionCount: number;
+    averageConfidence: number;
+    approvalRate: number;
+    successRate: number;
+    negativeRate: number;
+    score: number;
+    lastSeenAt: string;
+  };
+};
+
+export type WorkflowRecommendationFilters = {
+  kind?: RecommendationTrace["kind"];
+  agent?: string;
+  action?: string;
+  riskClass?: string;
+  capabilities?: string[];
+  replayMode?: RecommendationReplayMode;
+  minimumEvidence?: number;
+  lowConfidenceThreshold?: number;
+  automationThreshold?: number;
+  minimumScore?: number;
+  limit?: number;
+  includeDraftOnly?: boolean;
+};
+
+const WorkflowRecommendationFiltersSchema: z.ZodType<WorkflowRecommendationFilters> = z
+  .object({
+    kind: RecommendationTraceSchema.shape.kind.optional(),
+    agent: boundedString(80).optional(),
+    action: boundedString(120).optional(),
+    riskClass: z.string().trim().min(1).max(16).optional(),
+    capabilities: z.array(boundedString(40)).max(10).optional(),
+    replayMode: z.enum(["draft_only", "review_required", "approval_required", "suggest"]).optional(),
+    minimumEvidence: z.number().int().min(1).max(100).optional(),
+    lowConfidenceThreshold: z.number().min(0).max(1).optional(),
+    automationThreshold: z.number().min(0).max(1).optional(),
+    minimumScore: z.number().min(0).max(1).optional(),
+    limit: z.number().int().min(1).max(50).optional(),
+    includeDraftOnly: z.boolean().optional()
+  })
+  .strict();
+
 function validateInput<T>(schema: z.ZodType<T>, value: unknown, message: string): T {
   const result = schema.safeParse(value);
 
@@ -293,6 +413,209 @@ function normalizeOptionalTrimmedString(value: string | undefined): string | und
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeRecommendationCapabilities(capabilities?: string[]): string[] {
+  if (!capabilities || capabilities.length === 0) {
+    return [];
+  }
+
+  return [...new Set(capabilities)].sort((left, right) => left.localeCompare(right));
+}
+
+function matchesRecommendationEvidenceFilters(
+  episode: EpisodeRecord,
+  filters?: RecommendationEvidenceFilters
+): episode is EpisodeRecord & {
+  recommendation: RecommendationTrace;
+  outcomeLink: OutcomeLink;
+} {
+  if (!episode.recommendation || !episode.outcomeLink) {
+    return false;
+  }
+
+  if (!filters) {
+    return true;
+  }
+
+  if (filters.kind && episode.recommendation.kind !== filters.kind) {
+    return false;
+  }
+
+  if (filters.agent && episode.recommendation.agent !== filters.agent) {
+    return false;
+  }
+
+  if (filters.action && episode.recommendation.action !== filters.action) {
+    return false;
+  }
+
+  if (filters.riskClass && episode.recommendation.riskClass !== filters.riskClass) {
+    return false;
+  }
+
+  const requiredCapabilities = normalizeRecommendationCapabilities(filters.capabilities);
+
+  if (requiredCapabilities.length > 0) {
+    const availableCapabilities = normalizeRecommendationCapabilities(episode.recommendation.capabilities);
+
+    if (!requiredCapabilities.every((capability) => availableCapabilities.includes(capability))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function calculateEpisodeFailureCost(episode: EpisodeRecord & { outcomeLink: OutcomeLink }): number {
+  let cost = 0;
+
+  if (episode.outcome === "failure" || episode.outcomeLink.executionKind === "failed") {
+    cost += 1;
+  } else if (episode.outcome === "partial") {
+    cost += 0.35;
+  }
+
+  if (episode.outcomeLink.approvalDecision === "rejected") {
+    cost += 0.35;
+  }
+
+  if (episode.outcomeLink.userCorrection) {
+    cost += 0.25;
+  }
+
+  return clamp(cost, 0, 1);
+}
+
+function calculateNegativeOutcomeRate(
+  episodes: Array<EpisodeRecord & { outcomeLink: OutcomeLink }>
+): number {
+  if (episodes.length === 0) {
+    return 0;
+  }
+
+  const negativeCount = episodes.filter(
+    (episode) =>
+      episode.outcome === "failure" ||
+      episode.outcomeLink.executionKind === "failed" ||
+      episode.outcomeLink.approvalDecision === "rejected" ||
+      episode.outcomeLink.userCorrection
+  ).length;
+
+  return clamp(negativeCount / episodes.length, 0, 1);
+}
+
+function summarizeRecommendationPerformanceWindow(
+  episodes: Array<EpisodeRecord & { recommendation: RecommendationTrace; outcomeLink: OutcomeLink }>,
+  options?: {
+    minimumEvidence?: number;
+    lowConfidenceThreshold?: number;
+    automationThreshold?: number;
+  }
+): RecommendationPerformanceWindow {
+  if (episodes.length === 0) {
+    return {
+      startedAt: null,
+      endedAt: null,
+      episodeCount: 0,
+      consideredEpisodes: 0,
+      suggestedPatterns: 0,
+      safeSuggestionPrecision: 0,
+      negativeOutcomeRate: 0,
+      failureCostRate: 0
+    };
+  }
+
+  const report = buildRecommendationReplayReport(episodes, options);
+  const failureCostRate = clamp(
+    episodes.reduce((total, episode) => total + calculateEpisodeFailureCost(episode), 0) / episodes.length,
+    0,
+    1
+  );
+
+  return {
+    startedAt: episodes[0]?.timestamp ?? null,
+    endedAt: episodes.at(-1)?.timestamp ?? null,
+    episodeCount: episodes.length,
+    consideredEpisodes: report.consideredEpisodes,
+    suggestedPatterns: report.suggestedPatterns,
+    safeSuggestionPrecision: report.safeSuggestionPrecision,
+    negativeOutcomeRate: calculateNegativeOutcomeRate(episodes),
+    failureCostRate
+  };
+}
+
+function buildWindowTimestamp(timestampMs: number): string {
+  return new Date(timestampMs).toISOString();
+}
+
+function classifyRecommendationPerformanceDrift(params: {
+  current: RecommendationPerformanceWindow;
+  previous: RecommendationPerformanceWindow;
+  regressionThreshold: number;
+}): RecommendationPerformanceDrift {
+  const safeSuggestionPrecisionDelta = clamp(
+    params.current.safeSuggestionPrecision - params.previous.safeSuggestionPrecision,
+    -1,
+    1
+  );
+  const negativeOutcomeRateDelta = clamp(params.current.negativeOutcomeRate - params.previous.negativeOutcomeRate, -1, 1);
+  const failureCostRateDelta = clamp(params.current.failureCostRate - params.previous.failureCostRate, -1, 1);
+
+  if (params.current.consideredEpisodes === 0 || params.previous.consideredEpisodes === 0) {
+    return {
+      status: "insufficient_data",
+      safeSuggestionPrecisionDelta,
+      negativeOutcomeRateDelta,
+      failureCostRateDelta
+    };
+  }
+
+  if (
+    safeSuggestionPrecisionDelta <= -params.regressionThreshold ||
+    negativeOutcomeRateDelta >= params.regressionThreshold ||
+    failureCostRateDelta >= params.regressionThreshold
+  ) {
+    return {
+      status: "regressing",
+      safeSuggestionPrecisionDelta,
+      negativeOutcomeRateDelta,
+      failureCostRateDelta
+    };
+  }
+
+  if (
+    safeSuggestionPrecisionDelta >= params.regressionThreshold / 2 &&
+    negativeOutcomeRateDelta <= -params.regressionThreshold / 2 &&
+    failureCostRateDelta <= -params.regressionThreshold / 2
+  ) {
+    return {
+      status: "improving",
+      safeSuggestionPrecisionDelta,
+      negativeOutcomeRateDelta,
+      failureCostRateDelta
+    };
+  }
+
+  return {
+    status: "stable",
+    safeSuggestionPrecisionDelta,
+    negativeOutcomeRateDelta,
+    failureCostRateDelta
+  };
+}
+
+function mapReplayModeToOperatorAction(replayMode: RecommendationReplayMode): WorkflowRecommendationOperatorAction {
+  switch (replayMode) {
+    case "suggest":
+      return "suggest_reuse";
+    case "approval_required":
+      return "require_approval";
+    case "review_required":
+      return "require_review";
+    case "draft_only":
+      return "keep_draft_only";
+  }
 }
 
 function buildRecommendationRationale(params: {
@@ -518,6 +841,288 @@ export function buildRecommendationReplayReport(
     cases,
     insights
   };
+}
+
+export function filterRecommendationEvidenceEpisodes(
+  episodes: EpisodeRecord[],
+  filters?: RecommendationEvidenceFilters
+): Array<EpisodeRecord & { recommendation: RecommendationTrace; outcomeLink: OutcomeLink }> {
+  return episodes
+    .filter((episode): episode is EpisodeRecord & { recommendation: RecommendationTrace; outcomeLink: OutcomeLink } =>
+      matchesRecommendationEvidenceFilters(episode, filters)
+    )
+    .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+}
+
+export function buildRecommendationPerformanceReport(
+  episodes: EpisodeRecord[],
+  params?: RecommendationEvidenceFilters & {
+    bucketDays?: number;
+    bucketCount?: number;
+    minimumEvidence?: number;
+    lowConfidenceThreshold?: number;
+    automationThreshold?: number;
+    regressionThreshold?: number;
+  }
+): RecommendationPerformanceReport {
+  const bucketDays = Math.max(1, Math.trunc(params?.bucketDays ?? 7));
+  const bucketCount = Math.max(2, Math.trunc(params?.bucketCount ?? 4));
+  const regressionThreshold = clamp(params?.regressionThreshold ?? 0.12, 0.01, 1);
+  const filteredEpisodes = filterRecommendationEvidenceEpisodes(episodes, params);
+  const anchorTimestampMs =
+    filteredEpisodes.length > 0 ? Date.parse(filteredEpisodes.at(-1)?.timestamp ?? "") : Date.now();
+  const bucketWindowMs = bucketDays * 24 * 60 * 60 * 1000;
+  const timeline: RecommendationPerformanceBucket[] = [];
+
+  for (let offset = bucketCount - 1; offset >= 0; offset -= 1) {
+    const bucketEndMs = anchorTimestampMs - offset * bucketWindowMs;
+    const bucketStartMs = bucketEndMs - bucketWindowMs;
+    const windowEpisodes = filteredEpisodes.filter((episode) => {
+      const timestampMs = Date.parse(episode.timestamp);
+      return Number.isFinite(timestampMs) && timestampMs > bucketStartMs && timestampMs <= bucketEndMs;
+    });
+    const summary = summarizeRecommendationPerformanceWindow(windowEpisodes, params);
+
+    timeline.push({
+      ...summary,
+      key: buildWindowTimestamp(bucketEndMs),
+      label: `${buildWindowTimestamp(bucketStartMs).slice(0, 10)}..${buildWindowTimestamp(bucketEndMs).slice(5, 10)}`
+    });
+  }
+
+  const current = timeline.at(-1) ?? summarizeRecommendationPerformanceWindow([], params);
+  const previous = timeline.at(-2) ?? summarizeRecommendationPerformanceWindow([], params);
+
+  return {
+    current,
+    previous,
+    timeline,
+    drift: classifyRecommendationPerformanceDrift({
+      current,
+      previous,
+      regressionThreshold
+    })
+  };
+}
+
+export function buildPolicyLearningValidation(
+  episodes: EpisodeRecord[],
+  filters: RecommendationEvidenceFilters,
+  options?: {
+    bucketDays?: number;
+    bucketCount?: number;
+    minimumEvidence?: number;
+    lowConfidenceThreshold?: number;
+    automationThreshold?: number;
+    regressionThreshold?: number;
+    minimumSafeSuggestionPrecision?: number;
+    maximumNegativeOutcomeRate?: number;
+    maximumFailureCostRate?: number;
+  }
+): PolicyLearningValidation {
+  const minimumEvidence = Math.max(1, Math.trunc(options?.minimumEvidence ?? 3));
+  const minimumSafeSuggestionPrecision = clamp(options?.minimumSafeSuggestionPrecision ?? 0.85, 0, 1);
+  const maximumNegativeOutcomeRate = clamp(options?.maximumNegativeOutcomeRate ?? 0.25, 0, 1);
+  const maximumFailureCostRate = clamp(options?.maximumFailureCostRate ?? 0.35, 0, 1);
+  const filteredEpisodes = filterRecommendationEvidenceEpisodes(episodes, filters);
+  const matchedPatterns = new Set(filteredEpisodes.map((episode) => episode.recommendation.key)).size;
+  const performance = buildRecommendationPerformanceReport(filteredEpisodes, options);
+  const currentWindow = performance.current;
+
+  if (currentWindow.consideredEpisodes < minimumEvidence) {
+    return {
+      replayValidated: false,
+      matchedPatterns,
+      matchedEpisodes: filteredEpisodes.length,
+      suggestedPatterns: currentWindow.suggestedPatterns,
+      safeSuggestionPrecision: currentWindow.safeSuggestionPrecision,
+      negativeOutcomeRate: currentWindow.negativeOutcomeRate,
+      failureCostRate: currentWindow.failureCostRate,
+      driftStatus: performance.drift.status,
+      rationale: `Replay validation is still sparse (${currentWindow.consideredEpisodes}/${minimumEvidence} matched episodes).`
+    };
+  }
+
+  if (performance.drift.status === "regressing") {
+    return {
+      replayValidated: false,
+      matchedPatterns,
+      matchedEpisodes: filteredEpisodes.length,
+      suggestedPatterns: currentWindow.suggestedPatterns,
+      safeSuggestionPrecision: currentWindow.safeSuggestionPrecision,
+      negativeOutcomeRate: currentWindow.negativeOutcomeRate,
+      failureCostRate: currentWindow.failureCostRate,
+      driftStatus: performance.drift.status,
+      rationale: "Replay evidence is regressing, so the learning signal stays out of the autonomy policy."
+    };
+  }
+
+  if (currentWindow.suggestedPatterns === 0) {
+    return {
+      replayValidated: false,
+      matchedPatterns,
+      matchedEpisodes: filteredEpisodes.length,
+      suggestedPatterns: currentWindow.suggestedPatterns,
+      safeSuggestionPrecision: currentWindow.safeSuggestionPrecision,
+      negativeOutcomeRate: currentWindow.negativeOutcomeRate,
+      failureCostRate: currentWindow.failureCostRate,
+      driftStatus: performance.drift.status,
+      rationale: "Matched outcome traces have not yet cleared the suggestable replay threshold."
+    };
+  }
+
+  if (currentWindow.safeSuggestionPrecision < minimumSafeSuggestionPrecision) {
+    return {
+      replayValidated: false,
+      matchedPatterns,
+      matchedEpisodes: filteredEpisodes.length,
+      suggestedPatterns: currentWindow.suggestedPatterns,
+      safeSuggestionPrecision: currentWindow.safeSuggestionPrecision,
+      negativeOutcomeRate: currentWindow.negativeOutcomeRate,
+      failureCostRate: currentWindow.failureCostRate,
+      driftStatus: performance.drift.status,
+      rationale: `Replay precision ${currentWindow.safeSuggestionPrecision.toFixed(2)} is below the ${minimumSafeSuggestionPrecision.toFixed(2)} promotion threshold.`
+    };
+  }
+
+  if (currentWindow.negativeOutcomeRate > maximumNegativeOutcomeRate) {
+    return {
+      replayValidated: false,
+      matchedPatterns,
+      matchedEpisodes: filteredEpisodes.length,
+      suggestedPatterns: currentWindow.suggestedPatterns,
+      safeSuggestionPrecision: currentWindow.safeSuggestionPrecision,
+      negativeOutcomeRate: currentWindow.negativeOutcomeRate,
+      failureCostRate: currentWindow.failureCostRate,
+      driftStatus: performance.drift.status,
+      rationale: `Negative outcome rate ${currentWindow.negativeOutcomeRate.toFixed(2)} exceeds the ${maximumNegativeOutcomeRate.toFixed(2)} safety limit.`
+    };
+  }
+
+  if (currentWindow.failureCostRate > maximumFailureCostRate) {
+    return {
+      replayValidated: false,
+      matchedPatterns,
+      matchedEpisodes: filteredEpisodes.length,
+      suggestedPatterns: currentWindow.suggestedPatterns,
+      safeSuggestionPrecision: currentWindow.safeSuggestionPrecision,
+      negativeOutcomeRate: currentWindow.negativeOutcomeRate,
+      failureCostRate: currentWindow.failureCostRate,
+      driftStatus: performance.drift.status,
+      rationale: `Failure cost rate ${currentWindow.failureCostRate.toFixed(2)} exceeds the ${maximumFailureCostRate.toFixed(2)} safety limit.`
+    };
+  }
+
+  return {
+    replayValidated: true,
+    matchedPatterns,
+    matchedEpisodes: filteredEpisodes.length,
+    suggestedPatterns: currentWindow.suggestedPatterns,
+    safeSuggestionPrecision: currentWindow.safeSuggestionPrecision,
+    negativeOutcomeRate: currentWindow.negativeOutcomeRate,
+    failureCostRate: currentWindow.failureCostRate,
+    driftStatus: performance.drift.status,
+    rationale: `Replay validation passed with precision ${currentWindow.safeSuggestionPrecision.toFixed(2)}, negative rate ${currentWindow.negativeOutcomeRate.toFixed(2)}, and failure cost ${currentWindow.failureCostRate.toFixed(2)}.`
+  };
+}
+
+export function deriveWorkflowRecommendations(
+  episodes: EpisodeRecord[],
+  filters?: WorkflowRecommendationFilters
+): WorkflowRecommendation[] {
+  const normalizedFilters = validateInput(
+    WorkflowRecommendationFiltersSchema,
+    filters ?? {},
+    "Workflow recommendation filters are invalid."
+  );
+  const requiredCapabilities = normalizeRecommendationCapabilities(normalizedFilters.capabilities);
+  const minimumScore = normalizedFilters.minimumScore ?? 0.45;
+  const includeDraftOnly = normalizedFilters.includeDraftOnly ?? false;
+  const limit = normalizedFilters.limit ?? 10;
+  const insights = deriveRecommendationInsights(episodes, {
+    minimumEvidence: normalizedFilters.minimumEvidence,
+    lowConfidenceThreshold: normalizedFilters.lowConfidenceThreshold,
+    automationThreshold: normalizedFilters.automationThreshold
+  });
+
+  return insights
+    .filter((insight) => {
+      if (!includeDraftOnly && insight.replayMode === "draft_only") {
+        return false;
+      }
+
+      if (normalizedFilters.kind && insight.kind !== normalizedFilters.kind) {
+        return false;
+      }
+
+      if (normalizedFilters.agent && insight.agent !== normalizedFilters.agent) {
+        return false;
+      }
+
+      if (normalizedFilters.action && insight.action !== normalizedFilters.action) {
+        return false;
+      }
+
+      if (normalizedFilters.riskClass && insight.riskClass !== normalizedFilters.riskClass) {
+        return false;
+      }
+
+      if (normalizedFilters.replayMode && insight.replayMode !== normalizedFilters.replayMode) {
+        return false;
+      }
+
+      if (requiredCapabilities.length > 0 && !requiredCapabilities.every((capability) => insight.capabilities.includes(capability))) {
+        return false;
+      }
+
+      if (insight.score < minimumScore) {
+        return false;
+      }
+
+      return true;
+    })
+    .slice(0, limit)
+    .map((insight) => {
+      const successRate = clamp((insight.successCount + insight.partialCount * 0.5) / insight.evidenceCount, 0, 1);
+      const approvalRate = clamp(insight.approvalCount / insight.evidenceCount, 0, 1);
+      const negativeRate = clamp(
+        (insight.failureCount + insight.rejectionCount + insight.userCorrectionCount) / insight.evidenceCount,
+        0,
+        1
+      );
+
+      return {
+        key: insight.key,
+        source: "outcome_trace",
+        workflow: {
+          kind: insight.kind,
+          agent: insight.agent,
+          action: insight.action,
+          riskClass: insight.riskClass,
+          capabilities: [...insight.capabilities]
+        },
+        reuse: {
+          replayMode: insight.replayMode,
+          operatorAction: mapReplayModeToOperatorAction(insight.replayMode),
+          rationale: insight.rationale
+        },
+        evidence: {
+          count: insight.evidenceCount,
+          approvalCount: insight.approvalCount,
+          successCount: insight.successCount,
+          partialCount: insight.partialCount,
+          failureCount: insight.failureCount,
+          rejectionCount: insight.rejectionCount,
+          userCorrectionCount: insight.userCorrectionCount,
+          averageConfidence: insight.averageConfidence,
+          approvalRate,
+          successRate,
+          negativeRate,
+          score: insight.score,
+          lastSeenAt: insight.lastSeenAt
+        }
+      } satisfies WorkflowRecommendation;
+    });
 }
 
 export type ListEpisodesFilters = {

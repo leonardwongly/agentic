@@ -211,6 +211,7 @@ export const workspaceGovernance = pgTable("workspace_governance", {
   maxAutoRunRiskClass: text("max_auto_run_risk_class").notNull(),
   externalSendRequiresApproval: boolean("external_send_requires_approval").notNull(),
   calendarWriteRequiresApproval: boolean("calendar_write_requires_approval").notNull(),
+  shadowReplayPolicy: jsonb("shadow_replay_policy").$type<Record<string, unknown> | null>(),
   retentionDays: integer("retention_days").notNull(),
   updatedBy: text("updated_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),

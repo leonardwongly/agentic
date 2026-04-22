@@ -25,18 +25,19 @@ type BadgeProps = {
   variant?: BadgeVariant;
   size?: BadgeSize;
   className?: string;
+  title?: string;
   dot?: boolean;
   count?: number;
   pulse?: boolean;
 };
 
-export function Badge({ children, variant = "default", size = "md", className = "", dot, count, pulse }: BadgeProps) {
+export function Badge({ children, variant = "default", size = "md", className = "", title, dot, count, pulse }: BadgeProps) {
   const classes = ["badge", variantStyles[variant], sizeStyles[size], pulse ? "badge-pulse" : "", className]
     .filter(Boolean)
     .join(" ");
 
   return (
-    <span className={classes}>
+    <span className={classes} title={title}>
       {dot && <span className="badge-dot" />}
       {typeof count === "number" && count > 0 && <span className="badge-count">{count > 99 ? "99+" : count}</span>}
       {children}

@@ -9,7 +9,10 @@ import {
   ActionIntentSchema,
   AgentDefinitionSchema,
   AgentMetricsSchema,
+  appendJobExecutionJournalEntry,
   ActorContextSchema,
+  AutopilotEventBudgetSchema,
+  AutopilotEventDetailsSchema,
   AutopilotEventSchema,
   AutopilotSettingsSchema,
   type ApprovalDecision,
@@ -20,6 +23,8 @@ import {
   ApprovalRequestSchema,
   ArtifactSchema,
   type AutopilotEvent,
+  type AutopilotEventBudget,
+  type AutopilotEventDetails,
   type AutopilotEventKind,
   type AutopilotMode,
   type AutopilotSettings,
@@ -40,6 +45,7 @@ import {
   JobKindSchema,
   JobRecordSchema,
   JobStatusSchema,
+  type JobExecutionJournal,
   IntegrationAccountPageSchema,
   MemoryRecordSchema,
   OperatorProductSchema,
@@ -52,6 +58,7 @@ import {
   ProviderCredentialSecretRecordSchema,
   RiskClassSchema,
   SYSTEM_USER_ID,
+  defaultWorkspaceShadowReplayPolicy,
   TaskSchema,
   WatcherSchema,
   WatcherPageSchema,
@@ -63,6 +70,7 @@ import {
   WorkspaceSelectionSchema,
   clone,
   createSystemActorContext,
+  deriveJobRecoveryState,
   nowIso,
   type ActionLog,
   type AgentDefinition,
@@ -225,6 +233,7 @@ export type DashboardData = {
 export type DashboardDiagnosticKind =
   | "expired_approvals"
   | "stale_memories"
+  | "context_conflicts"
   | "stuck_workflows"
   | "orphan_watchers"
   | "async_execution_issues"
@@ -344,7 +353,7 @@ export type AutopilotEventClaim =
       event: AutopilotEvent;
     }
   | {
-      outcome: "duplicate" | "debounced";
+      outcome: "duplicate" | "debounced" | "ignored";
       event: AutopilotEvent;
     };
 
@@ -432,7 +441,7 @@ export type AgenticRepository = {
     idempotencyKey?: string | null;
     mode: AutopilotMode;
     summary: string;
-    details?: Record<string, unknown>;
+    details?: AutopilotEventDetails | Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
   }): Promise<AutopilotEventClaim>;
@@ -1376,6 +1385,7 @@ function defaultWorkspaceGovernance(workspaceId: string, updatedBy: string): Wor
     maxAutoRunRiskClass: "R1",
     externalSendRequiresApproval: true,
     calendarWriteRequiresApproval: true,
+    shadowReplayPolicy: defaultWorkspaceShadowReplayPolicy,
     retentionDays: 365,
     updatedBy,
     createdAt: timestamp,
@@ -1732,7 +1742,7 @@ function buildPendingAutopilotEvent(params: {
   idempotencyKey?: string | null;
   mode: AutopilotMode;
   summary: string;
-  details?: Record<string, unknown>;
+  details?: AutopilotEventDetails | Record<string, unknown>;
   actorContext?: ActorContext | null;
 }): AutopilotEvent {
   return AutopilotEventSchema.parse({
@@ -1744,13 +1754,62 @@ function buildPendingAutopilotEvent(params: {
     mode: params.mode,
     summary: params.summary,
     status: "pending",
-    details: params.details ?? {},
+    details: AutopilotEventDetailsSchema.parse(params.details ?? {}),
     actorContext: params.actorContext ?? null,
     createdAt: nowIso(),
     processedAt: null,
     resultGoalId: null,
     error: null
   });
+}
+
+function normalizeAutopilotEventDetails(details?: AutopilotEventDetails | Record<string, unknown>): AutopilotEventDetails {
+  return AutopilotEventDetailsSchema.parse(details ?? {});
+}
+
+function withAutopilotSuppression(
+  details: AutopilotEventDetails | Record<string, unknown> | undefined,
+  suppression: {
+    outcome: "allowed" | "duplicate" | "debounced" | "budget_exhausted";
+    reason?: string | null;
+    relatedEventId?: string | null;
+    budgetKey?: string | null;
+    observedCount?: number | null;
+  }
+): AutopilotEventDetails {
+  const normalized = normalizeAutopilotEventDetails(details);
+  return AutopilotEventDetailsSchema.parse({
+    ...normalized,
+    suppression
+  });
+}
+
+function autopilotEventCountsAgainstBudget(event: AutopilotEvent): boolean {
+  return event.status !== "debounced" && event.status !== "ignored";
+}
+
+function autopilotEventMatchesBudget(params: {
+  event: AutopilotEvent;
+  userId: string;
+  sourceId: string;
+  budget: AutopilotEventBudget;
+  cutoffMs: number;
+}): boolean {
+  if (params.event.userId !== params.userId || !autopilotEventCountsAgainstBudget(params.event)) {
+    return false;
+  }
+
+  const createdMs = Date.parse(params.event.createdAt);
+  if (!Number.isFinite(createdMs) || createdMs < params.cutoffMs) {
+    return false;
+  }
+
+  if (params.budget.scope === "source" && params.event.sourceId !== params.sourceId) {
+    return false;
+  }
+
+  const details = normalizeAutopilotEventDetails(params.event.details);
+  return details.budget?.key === params.budget.key;
 }
 
 function sortJobsForClaim(items: JobRecord[]): JobRecord[] {
@@ -1776,6 +1835,33 @@ function isJobClaimable(job: JobRecord, now: number): boolean {
   return false;
 }
 
+function buildJobLifecycleJournal(params: {
+  job: JobRecord;
+  status: JobStatus;
+  at: string;
+  summary: string;
+  error?: string | null;
+  metadata?: Record<string, unknown>;
+  retryCount?: number;
+}): JobExecutionJournal {
+  return appendJobExecutionJournalEntry({
+    journal: params.job.journal,
+    at: params.at,
+    status: params.status,
+    attemptCount: params.job.attemptCount,
+    summary: params.summary,
+    error: params.error ?? null,
+    metadata: params.metadata ?? {},
+    retryCount: params.retryCount,
+    recovery: deriveJobRecoveryState({
+      jobId: params.job.id,
+      status: params.status,
+      payload: params.job.payload,
+      replayedFromJobId: params.job.journal.replayedFromJobId
+    })
+  });
+}
+
 function claimJobRecord(job: JobRecord, runnerId: string, leaseMs: number, claimedAt: string): JobRecord {
   return JobRecordSchema.parse({
     ...job,
@@ -1787,6 +1873,19 @@ function claimJobRecord(job: JobRecord, runnerId: string, leaseMs: number, claim
     leaseExpiresAt: new Date(Date.parse(claimedAt) + leaseMs).toISOString(),
     completedAt: null,
     deadLetteredAt: null,
+    journal: buildJobLifecycleJournal({
+      job: {
+        ...job,
+        attemptCount: job.attemptCount + 1
+      },
+      status: "running",
+      at: claimedAt,
+      summary: `Attempt ${job.attemptCount + 1} claimed by ${runnerId}.`,
+      metadata: {
+        runnerId,
+        leaseMs
+      }
+    }),
     updatedAt: claimedAt
   });
 }
@@ -2776,7 +2875,7 @@ class FileRepository implements AgenticRepository {
     idempotencyKey?: string | null;
     mode: AutopilotMode;
     summary: string;
-    details?: Record<string, unknown>;
+    details?: AutopilotEventDetails | Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
   }): Promise<AutopilotEventClaim> {
@@ -2784,6 +2883,7 @@ class FileRepository implements AgenticRepository {
       const userId = params.userId ?? SYSTEM_USER_ID;
       const store = await this.readStore();
       const trimmedKey = params.idempotencyKey?.trim() || null;
+      const normalizedDetails = normalizeAutopilotEventDetails(params.details);
 
       if (trimmedKey) {
         const existing = store.autopilotEvents.find(
@@ -2794,6 +2894,48 @@ class FileRepository implements AgenticRepository {
           return {
             outcome: "duplicate",
             event: AutopilotEventSchema.parse(clone(existing))
+          };
+        }
+      }
+
+      const budget = normalizedDetails.budget ? AutopilotEventBudgetSchema.parse(normalizedDetails.budget) : null;
+      if (budget) {
+        const budgetCutoff = Date.now() - budget.windowMinutes * 60 * 1000;
+        const observedCount = store.autopilotEvents.filter((event) =>
+          autopilotEventMatchesBudget({
+            event,
+            userId,
+            sourceId: params.sourceId,
+            budget,
+            cutoffMs: budgetCutoff
+          })
+        ).length;
+
+        if (observedCount >= budget.maxEvents) {
+          const ignoredEvent = AutopilotEventSchema.parse({
+            ...buildPendingAutopilotEvent({
+              userId,
+              kind: params.kind,
+              sourceId: params.sourceId,
+              idempotencyKey: trimmedKey,
+              mode: params.mode,
+              summary: params.summary,
+              actorContext: params.actorContext,
+              details: withAutopilotSuppression(normalizedDetails, {
+                outcome: "budget_exhausted",
+                reason: `Budget ${budget.key} exhausted in the active window.`,
+                budgetKey: budget.key,
+                observedCount
+              })
+            }),
+            status: "ignored",
+            processedAt: nowIso()
+          });
+          store.autopilotEvents = upsertById(store.autopilotEvents, ignoredEvent);
+          await this.writeStore(store);
+          return {
+            outcome: "ignored",
+            event: AutopilotEventSchema.parse(clone(ignoredEvent))
           };
         }
       }
@@ -2817,10 +2959,17 @@ class FileRepository implements AgenticRepository {
             mode: params.mode,
             summary: params.summary,
             actorContext: params.actorContext,
-            details: {
-              ...(params.details ?? {}),
-              debouncedByEventId: recent.id
-            }
+            details: withAutopilotSuppression(
+              {
+                ...normalizedDetails,
+                debouncedByEventId: recent.id
+              },
+              {
+                outcome: "debounced",
+                reason: "Suppressed by debounce window.",
+                relatedEventId: recent.id
+              }
+            )
           }),
           status: "debounced",
           processedAt: nowIso()
@@ -2841,7 +2990,9 @@ class FileRepository implements AgenticRepository {
         mode: params.mode,
         summary: params.summary,
         actorContext: params.actorContext,
-        details: params.details
+        details: withAutopilotSuppression(normalizedDetails, {
+          outcome: "allowed"
+        })
       });
 
       store.autopilotEvents = upsertById(store.autopilotEvents, claimed);
@@ -2978,6 +3129,12 @@ class FileRepository implements AgenticRepository {
         status: "completed",
         leaseExpiresAt: null,
         completedAt,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "completed",
+          at: completedAt,
+          summary: `Job completed successfully on attempt ${existing.attemptCount}.`
+        }),
         updatedAt: completedAt
       });
       store.jobs = upsertById(store.jobs, completed);
@@ -3002,6 +3159,7 @@ class FileRepository implements AgenticRepository {
 
       assertRunningJobOwner(existing, params.runnerId);
       const updatedAt = nowIso();
+      const trimmedError = params.error.trim().slice(0, 1000);
       const retried = JobRecordSchema.parse({
         ...existing,
         status: "retrying",
@@ -3009,7 +3167,18 @@ class FileRepository implements AgenticRepository {
         claimedAt: null,
         leaseExpiresAt: null,
         availableAt: params.availableAt,
-        lastError: params.error.trim().slice(0, 1000),
+        lastError: trimmedError,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "retrying",
+          at: updatedAt,
+          summary: `Attempt ${existing.attemptCount} failed and retry ${existing.attemptCount + 1} was scheduled.`,
+          error: trimmedError,
+          metadata: {
+            nextAvailableAt: params.availableAt
+          },
+          retryCount: existing.attemptCount
+        }),
         updatedAt
       });
       store.jobs = upsertById(store.jobs, retried);
@@ -3034,12 +3203,21 @@ class FileRepository implements AgenticRepository {
 
       assertRunningJobOwner(existing, params.runnerId);
       const deadLetteredAt = params.deadLetteredAt ?? nowIso();
+      const trimmedError = params.error.trim().slice(0, 1000);
       const deadLettered = JobRecordSchema.parse({
         ...existing,
         status: "dead_letter",
         leaseExpiresAt: null,
         deadLetteredAt,
-        lastError: params.error.trim().slice(0, 1000),
+        lastError: trimmedError,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "dead_letter",
+          at: deadLetteredAt,
+          summary: `Job dead-lettered after ${existing.attemptCount}/${existing.maxAttempts} attempts.`,
+          error: trimmedError,
+          retryCount: existing.attemptCount
+        }),
         updatedAt: deadLetteredAt
       });
       store.jobs = upsertById(store.jobs, deadLettered);
@@ -4285,12 +4463,12 @@ class PostgresRepository implements AgenticRepository {
         insert into jobs (
           id, user_id, kind, status, idempotency_key, payload, actor_context, max_attempts, attempt_count,
           claimed_by, last_attempt_at, claimed_at, lease_expires_at, available_at, completed_at, dead_lettered_at,
-          last_error, created_at, updated_at
+          last_error, execution_journal, created_at, updated_at
         )
         values (
           $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9,
           $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19
+          $17, $18::jsonb, $19, $20
         )
         on conflict (id) do update
         set user_id = excluded.user_id,
@@ -4309,6 +4487,7 @@ class PostgresRepository implements AgenticRepository {
             completed_at = excluded.completed_at,
             dead_lettered_at = excluded.dead_lettered_at,
             last_error = excluded.last_error,
+            execution_journal = excluded.execution_journal,
             updated_at = excluded.updated_at
       `,
       [
@@ -4329,6 +4508,7 @@ class PostgresRepository implements AgenticRepository {
         validated.completedAt,
         validated.deadLetteredAt,
         validated.lastError,
+        JSON.stringify(validated.journal),
         validated.createdAt,
         validated.updatedAt
       ]
@@ -4385,6 +4565,9 @@ class PostgresRepository implements AgenticRepository {
   }
 
   private mapGoalRow(row: Record<string, unknown>): GoalBundle["goal"] {
+    const goalContract =
+      row.goal_contract && typeof row.goal_contract === "object" ? (row.goal_contract as Record<string, unknown>) : null;
+
     return GoalSchema.parse({
       id: row.id,
       userId: row.user_id,
@@ -4396,6 +4579,8 @@ class PostgresRepository implements AgenticRepository {
       status: row.status,
       confidence: Number(row.confidence),
       explanation: row.explanation,
+      wedge: goalContract?.wedge,
+      completionContract: goalContract?.completionContract,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4536,6 +4721,7 @@ class PostgresRepository implements AgenticRepository {
       completedAt: row.completed_at ? new Date(row.completed_at as string | number | Date).toISOString() : null,
       deadLetteredAt: row.dead_lettered_at ? new Date(row.dead_lettered_at as string | number | Date).toISOString() : null,
       lastError: typeof row.last_error === "string" ? row.last_error : null,
+      journal: row.execution_journal ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4611,6 +4797,10 @@ class PostgresRepository implements AgenticRepository {
       maxAutoRunRiskClass: row.max_auto_run_risk_class,
       externalSendRequiresApproval: Boolean(row.external_send_requires_approval),
       calendarWriteRequiresApproval: Boolean(row.calendar_write_requires_approval),
+      shadowReplayPolicy:
+        row.shadow_replay_policy && typeof row.shadow_replay_policy === "object"
+          ? row.shadow_replay_policy
+          : defaultWorkspaceShadowReplayPolicy,
       retentionDays: Number(row.retention_days),
       updatedBy: row.updated_by,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
@@ -4703,15 +4893,16 @@ class PostgresRepository implements AgenticRepository {
       `
         insert into workspace_governance (
           workspace_id, approval_mode, require_audit_exports, max_auto_run_risk_class, external_send_requires_approval,
-          calendar_write_requires_approval, retention_days, updated_by, created_at, updated_at
+          calendar_write_requires_approval, shadow_replay_policy, retention_days, updated_by, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         on conflict (workspace_id) do update
         set approval_mode = excluded.approval_mode,
             require_audit_exports = excluded.require_audit_exports,
             max_auto_run_risk_class = excluded.max_auto_run_risk_class,
             external_send_requires_approval = excluded.external_send_requires_approval,
             calendar_write_requires_approval = excluded.calendar_write_requires_approval,
+            shadow_replay_policy = excluded.shadow_replay_policy,
             retention_days = excluded.retention_days,
             updated_by = excluded.updated_by,
             updated_at = excluded.updated_at
@@ -4723,6 +4914,7 @@ class PostgresRepository implements AgenticRepository {
         validated.maxAutoRunRiskClass,
         validated.externalSendRequiresApproval,
         validated.calendarWriteRequiresApproval,
+        JSON.stringify(validated.shadowReplayPolicy),
         validated.retentionDays,
         validated.updatedBy,
         validated.createdAt,
@@ -5392,8 +5584,10 @@ class PostgresRepository implements AgenticRepository {
 
     await client.query(
       `
-        insert into goals (id, user_id, workspace_id, workflow_id, title, request, intent, status, confidence, explanation, created_at, updated_at)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        insert into goals (
+          id, user_id, workspace_id, workflow_id, title, request, intent, status, confidence, explanation, goal_contract, created_at, updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
         on conflict (id) do update
         set user_id = excluded.user_id,
             workspace_id = excluded.workspace_id,
@@ -5404,6 +5598,7 @@ class PostgresRepository implements AgenticRepository {
             status = excluded.status,
             confidence = excluded.confidence,
             explanation = excluded.explanation,
+            goal_contract = excluded.goal_contract,
             updated_at = excluded.updated_at
       `,
       [
@@ -5417,6 +5612,10 @@ class PostgresRepository implements AgenticRepository {
         validated.goal.status,
         validated.goal.confidence,
         validated.goal.explanation,
+        JSON.stringify({
+          wedge: validated.goal.wedge,
+          completionContract: validated.goal.completionContract
+        }),
         validated.goal.createdAt,
         validated.goal.updatedAt
       ]
@@ -6941,12 +7140,13 @@ class PostgresRepository implements AgenticRepository {
     idempotencyKey?: string | null;
     mode: AutopilotMode;
     summary: string;
-    details?: Record<string, unknown>;
+    details?: AutopilotEventDetails | Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
   }): Promise<AutopilotEventClaim> {
     const userId = params.userId ?? SYSTEM_USER_ID;
     const trimmedKey = params.idempotencyKey?.trim() || null;
+    const normalizedDetails = normalizeAutopilotEventDetails(params.details);
 
     return this.withTransaction(async (client) => {
       await client.query("select pg_advisory_xact_lock(hashtext($1))", [
@@ -6968,6 +7168,52 @@ class PostgresRepository implements AgenticRepository {
           return {
             outcome: "duplicate",
             event: this.mapAutopilotEventRow(existingResult.rows[0])
+          };
+        }
+      }
+
+      const budget = normalizedDetails.budget ? AutopilotEventBudgetSchema.parse(normalizedDetails.budget) : null;
+      if (budget) {
+        const budgetCutoff = new Date(Date.now() - budget.windowMinutes * 60 * 1000).toISOString();
+        const budgetResult = await client.query(
+          `
+            select count(*)::int as event_count
+            from autopilot_events
+            where user_id = $1
+              and created_at >= $2
+              and status not in ('debounced', 'ignored')
+              and details -> 'budget' ->> 'key' = $3
+              and ($4::text <> 'source' or source_id = $5)
+          `,
+          [userId, budgetCutoff, budget.key, budget.scope, params.sourceId]
+        );
+        const observedCount = Number(budgetResult.rows[0]?.event_count ?? 0);
+
+        if (observedCount >= budget.maxEvents) {
+          const ignoredEvent = AutopilotEventSchema.parse({
+            ...buildPendingAutopilotEvent({
+              userId,
+              kind: params.kind,
+              sourceId: params.sourceId,
+              idempotencyKey: trimmedKey,
+              mode: params.mode,
+              summary: params.summary,
+              actorContext: params.actorContext,
+              details: withAutopilotSuppression(normalizedDetails, {
+                outcome: "budget_exhausted",
+                reason: `Budget ${budget.key} exhausted in the active window.`,
+                budgetKey: budget.key,
+                observedCount
+              })
+            }),
+            status: "ignored",
+            processedAt: nowIso()
+          });
+
+          await this.saveAutopilotEventWithClient(client, ignoredEvent);
+          return {
+            outcome: "ignored",
+            event: AutopilotEventSchema.parse(clone(ignoredEvent))
           };
         }
       }
@@ -6998,10 +7244,17 @@ class PostgresRepository implements AgenticRepository {
             mode: params.mode,
             summary: params.summary,
             actorContext: params.actorContext,
-            details: {
-              ...(params.details ?? {}),
-              debouncedByEventId: recent.id
-            }
+            details: withAutopilotSuppression(
+              {
+                ...normalizedDetails,
+                debouncedByEventId: recent.id
+              },
+              {
+                outcome: "debounced",
+                reason: "Suppressed by debounce window.",
+                relatedEventId: recent.id
+              }
+            )
           }),
           status: "debounced",
           processedAt: nowIso()
@@ -7022,7 +7275,9 @@ class PostgresRepository implements AgenticRepository {
         mode: params.mode,
         summary: params.summary,
         actorContext: params.actorContext,
-        details: params.details
+        details: withAutopilotSuppression(normalizedDetails, {
+          outcome: "allowed"
+        })
       });
 
       await this.saveAutopilotEventWithClient(client, claimed);
@@ -7188,6 +7443,12 @@ class PostgresRepository implements AgenticRepository {
         status: "completed",
         leaseExpiresAt: null,
         completedAt,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "completed",
+          at: completedAt,
+          summary: `Job completed successfully on attempt ${existing.attemptCount}.`
+        }),
         updatedAt: completedAt
       });
       await this.saveJobWithClient(client, completed);
@@ -7210,6 +7471,8 @@ class PostgresRepository implements AgenticRepository {
 
       const existing = this.mapJobRow(result.rows[0]);
       assertRunningJobOwner(existing, params.runnerId);
+      const updatedAt = nowIso();
+      const trimmedError = params.error.trim().slice(0, 1000);
       const retried = JobRecordSchema.parse({
         ...existing,
         status: "retrying",
@@ -7217,8 +7480,19 @@ class PostgresRepository implements AgenticRepository {
         claimedAt: null,
         leaseExpiresAt: null,
         availableAt: params.availableAt,
-        lastError: params.error.trim().slice(0, 1000),
-        updatedAt: nowIso()
+        lastError: trimmedError,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "retrying",
+          at: updatedAt,
+          summary: `Attempt ${existing.attemptCount} failed and retry ${existing.attemptCount + 1} was scheduled.`,
+          error: trimmedError,
+          metadata: {
+            nextAvailableAt: params.availableAt
+          },
+          retryCount: existing.attemptCount
+        }),
+        updatedAt
       });
       await this.saveJobWithClient(client, retried);
       return JobRecordSchema.parse(clone(retried));
@@ -7241,12 +7515,21 @@ class PostgresRepository implements AgenticRepository {
       const existing = this.mapJobRow(result.rows[0]);
       assertRunningJobOwner(existing, params.runnerId);
       const deadLetteredAt = params.deadLetteredAt ?? nowIso();
+      const trimmedError = params.error.trim().slice(0, 1000);
       const deadLettered = JobRecordSchema.parse({
         ...existing,
         status: "dead_letter",
         leaseExpiresAt: null,
         deadLetteredAt,
-        lastError: params.error.trim().slice(0, 1000),
+        lastError: trimmedError,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "dead_letter",
+          at: deadLetteredAt,
+          summary: `Job dead-lettered after ${existing.attemptCount}/${existing.maxAttempts} attempts.`,
+          error: trimmedError,
+          retryCount: existing.attemptCount
+        }),
         updatedAt: deadLetteredAt
       });
       await this.saveJobWithClient(client, deadLettered);

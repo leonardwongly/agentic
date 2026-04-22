@@ -1,4 +1,4 @@
-import type { EvidenceRecord } from "@agentic/contracts";
+import type { EvidenceRecord, JobKind, JobRecord, JobStatus } from "@agentic/contracts";
 import {
   AgentDefinitionSchema,
   AgentMetricsSchema,
@@ -14,6 +14,7 @@ import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { ApprovalMutationError, type AgenticRepository, type DashboardData } from "@agentic/repository";
 import { createMemoryRecord } from "@agentic/memory";
 import type { SelfImprovementRepository } from "@agentic/self-improvement-memory";
+import { vi } from "vitest";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { GET as integrationsRouteGet, POST as integrationsRoutePost } from "../apps/web/app/api/integrations/route";
 import { POST as approvalResponseRoute } from "../apps/web/app/api/approvals/[id]/respond/route";
@@ -121,6 +122,13 @@ function buildDashboardData(): DashboardData {
       maxAutoRunRiskClass: "R1",
       externalSendRequiresApproval: true,
       calendarWriteRequiresApproval: true,
+      shadowReplayPolicy: {
+        enabled: true,
+        minimumMatchedEpisodes: 3,
+        minimumPrecision: 0.8,
+        maximumNegativeOutcomeRate: 0.15,
+        maximumFailureCostRate: 0.2
+      },
       retentionDays: 365,
       updatedBy: SYSTEM_USER_ID,
       createdAt: timestamp,
@@ -142,6 +150,51 @@ function buildDashboardData(): DashboardData {
     },
     operatingSections: {
       generatedAt: timestamp,
+      roleView: {
+        role: "owner",
+        label: "Owner view",
+        summary: "Owners should clear blockers first.",
+        focusAreas: ["Keep the queue moving."],
+        prioritizedSectionKeys: ["now", "execution", "trust"]
+      },
+      teamWorkflow: {
+        mode: "owner_control",
+        label: "Owner-controlled team workflow",
+        summary: "Owners are the policy authority and should keep delegation and approvals bounded.",
+        visibilityLabel: "Full queue, approval, and governance visibility",
+        queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
+        actionBoundaries: ["Owners can manage membership, governance posture, and approval decisions."],
+        handoffGuidance: ["Route execution triage to editors and keep final policy decisions with the owner boundary."],
+        permissions: {
+          manageMembers: {
+            allowed: true,
+            reason: "Owners can change workspace membership."
+          },
+          editGovernance: {
+            allowed: true,
+            reason: "Owners can change workspace governance posture."
+          },
+          exportAudit: {
+            allowed: true,
+            reason: "Workspace members can export audit evidence."
+          },
+          managePrivacyOperations: {
+            allowed: true,
+            reason: "Owners can run privacy lifecycle operations."
+          }
+        },
+        escalationTargetRole: null,
+        slaStatus: "healthy",
+        slaSummary: "Shared approvals and queue ownership are currently inside the expected response window."
+      },
+      nextBestAction: {
+        kind: "review_now",
+        label: "Inspect the live queue",
+        summary: "The operator shell is clear enough to inspect the live queue.",
+        status: "healthy",
+        targetSection: "now",
+        role: "owner"
+      },
       sections: [
         {
           key: "now",
@@ -232,7 +285,196 @@ function buildAgentDefinition() {
   });
 }
 
+function createFakeJobStore() {
+  const jobs = new Map<string, JobRecord>();
+
+  const filterJobs = (params?: {
+    userId?: string;
+    kinds?: JobKind[];
+    statuses?: JobStatus[];
+  }) =>
+    Array.from(jobs.values()).filter((job) => {
+      if (params?.userId && job.userId !== params.userId) {
+        return false;
+      }
+
+      if (params?.kinds?.length && !params.kinds.includes(job.kind)) {
+        return false;
+      }
+
+      if (params?.statuses?.length && !params.statuses.includes(job.status)) {
+        return false;
+      }
+
+      return true;
+    });
+
+  const getOwnedJob = (jobId: string, userId?: string) => {
+    const job = jobs.get(jobId) ?? null;
+
+    if (!job) {
+      return null;
+    }
+
+    if (userId && job.userId !== userId) {
+      return null;
+    }
+
+    return job;
+  };
+
+  return {
+    async listJobs(params?: {
+      userId?: string;
+      kinds?: JobKind[];
+      statuses?: JobStatus[];
+    }) {
+      return filterJobs(params);
+    },
+    async getJob(jobId: string, userId = SYSTEM_USER_ID) {
+      return getOwnedJob(jobId, userId);
+    },
+    async enqueueJob(job: JobRecord) {
+      if (job.idempotencyKey) {
+        const existing = filterJobs({ userId: job.userId }).find(
+          (candidate) => candidate.idempotencyKey === job.idempotencyKey
+        );
+
+        if (existing) {
+          return existing;
+        }
+      }
+
+      jobs.set(job.id, job);
+      return job;
+    },
+    async claimNextJob(params: {
+      userId?: string;
+      kinds?: JobKind[];
+      runnerId: string;
+      leaseMs: number;
+      now?: string;
+    }) {
+      const now = params.now ?? nowIso();
+      const candidate = filterJobs({
+        userId: params.userId ?? SYSTEM_USER_ID,
+        kinds: params.kinds,
+        statuses: ["queued", "retrying"]
+      })
+        .filter((job) => job.availableAt <= now)
+        .sort((left, right) => left.availableAt.localeCompare(right.availableAt))[0];
+
+      if (!candidate) {
+        return null;
+      }
+
+      const leasedUntil = new Date(Date.parse(now) + params.leaseMs).toISOString();
+      const claimed = {
+        ...candidate,
+        status: "running" as const,
+        runnerId: params.runnerId,
+        attemptCount: candidate.attemptCount + 1,
+        startedAt: candidate.startedAt ?? now,
+        leasedUntil,
+        updatedAt: now
+      };
+
+      jobs.set(claimed.id, claimed);
+      return claimed;
+    },
+    async completeJob(params: {
+      jobId: string;
+      runnerId: string;
+      completedAt?: string;
+    }) {
+      const job = getOwnedJob(params.jobId);
+
+      if (!job) {
+        throw new Error(`Job ${params.jobId} was not found.`);
+      }
+
+      if (job.runnerId && job.runnerId !== params.runnerId) {
+        throw new Error(`Job ${params.jobId} is claimed by another worker.`);
+      }
+
+      const completedAt = params.completedAt ?? nowIso();
+      const completed = {
+        ...job,
+        status: "completed" as const,
+        runnerId: null,
+        leasedUntil: null,
+        completedAt,
+        updatedAt: completedAt
+      };
+
+      jobs.set(completed.id, completed);
+      return completed;
+    },
+    async retryJob(params: {
+      jobId: string;
+      runnerId: string;
+      availableAt: string;
+      error: string;
+    }) {
+      const job = getOwnedJob(params.jobId);
+
+      if (!job) {
+        throw new Error(`Job ${params.jobId} was not found.`);
+      }
+
+      if (job.runnerId && job.runnerId !== params.runnerId) {
+        throw new Error(`Job ${params.jobId} is claimed by another worker.`);
+      }
+
+      const retried = {
+        ...job,
+        status: "retrying" as const,
+        runnerId: null,
+        leasedUntil: null,
+        availableAt: params.availableAt,
+        lastError: params.error,
+        updatedAt: params.availableAt
+      };
+
+      jobs.set(retried.id, retried);
+      return retried;
+    },
+    async deadLetterJob(params: {
+      jobId: string;
+      runnerId: string;
+      deadLetteredAt?: string;
+      error: string;
+    }) {
+      const job = getOwnedJob(params.jobId);
+
+      if (!job) {
+        throw new Error(`Job ${params.jobId} was not found.`);
+      }
+
+      if (job.runnerId && job.runnerId !== params.runnerId) {
+        throw new Error(`Job ${params.jobId} is claimed by another worker.`);
+      }
+
+      const deadLetteredAt = params.deadLetteredAt ?? nowIso();
+      const deadLettered = {
+        ...job,
+        status: "dead_letter" as const,
+        runnerId: null,
+        leasedUntil: null,
+        deadLetteredAt,
+        lastError: params.error,
+        updatedAt: deadLetteredAt
+      };
+
+      jobs.set(deadLettered.id, deadLettered);
+      return deadLettered;
+    }
+  };
+}
+
 function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRepository {
+  const jobStore = createFakeJobStore();
+
   return {
     backend: "file",
     seedDefaults: async () => {},
@@ -299,6 +541,13 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       throw new Error("claimAutopilotEvent was not stubbed.");
     },
     saveAutopilotEvent: async (event) => event,
+    listJobs: jobStore.listJobs,
+    getJob: jobStore.getJob,
+    enqueueJob: jobStore.enqueueJob,
+    claimNextJob: jobStore.claimNextJob,
+    completeJob: jobStore.completeJob,
+    retryJob: jobStore.retryJob,
+    deadLetterJob: jobStore.deadLetterJob,
     listMemory: async () => [],
     saveMemory: async (record) => record,
     saveEvidenceRecord: async (record) => record,
@@ -571,21 +820,38 @@ describe("route user scoping", () => {
         params: Promise.resolve({ id: approval.id })
       }
     );
+    const payload = (await response.json()) as {
+      job: {
+        id: string;
+        kind: string;
+        status: string;
+        approvalId: string;
+      };
+      statusUrl: string;
+    };
+    const repository = Reflect.get(globalThis, "__agenticRepository") as AgenticRepository;
+    const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(202);
     expect(approvalCalls).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
     expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
     expect(resolvedDecisions).toEqual(["approved"]);
     expect(resolvedScopes).toEqual(["similar_24h"]);
     expect(resolvedRationales).toEqual(["This pattern is safe for similar outbound replies."]);
-    expect(savedMemories.length).toBeGreaterThan(0);
-    expect(appendedEpisodes.length).toBeGreaterThan(0);
-    expect(savedEvidence).toHaveLength(1);
-    expect(savedEvidence[0]).toMatchObject({
-      approvalId: approval.id,
-      memoryIds: expect.arrayContaining(savedMemoryIds)
+    expect(payload.job.kind).toBe("approval_follow_up");
+    expect(payload.job.status).toBe("queued");
+    expect(payload.job.approvalId).toBe(approval.id);
+    expect(payload.statusUrl).toBe(`/api/approvals/jobs/${payload.job.id}`);
+    expect(queuedJobs).toHaveLength(1);
+    expect(queuedJobs[0]).toMatchObject({
+      id: payload.job.id,
+      kind: "approval_follow_up",
+      status: "queued"
     });
-    expect(savedEvidence[0]?.actionLogIds.length ?? 0).toBeGreaterThan(0);
+    expect(savedMemories).toEqual([]);
+    expect(savedMemoryIds).toEqual([]);
+    expect(appendedEpisodes).toEqual([]);
+    expect(savedEvidence).toEqual([]);
   });
 
   it("returns 409 when another client already handled the approval", async () => {
@@ -611,6 +877,74 @@ describe("route user scoping", () => {
 
     expect(response.status).toBe(409);
     expect(payload.error).toContain("already been handled");
+  });
+
+  it("returns 404 and does not enqueue work when the approval is outside the caller scope", async () => {
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        respondToApproval: async () => {
+          throw new ApprovalMutationError("not_found", "Approval approval-hidden was not found.");
+        }
+      })
+    );
+
+    const response = await approvalResponseRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/approvals/approval-hidden/respond", {
+        decision: "approved",
+        scope: "similar_24h",
+        rationale: "This should fail closed because the approval is not visible."
+      }),
+      {
+        params: Promise.resolve({ id: "approval-hidden" })
+      }
+    );
+    const payload = (await response.json()) as { error?: string };
+    const repository = Reflect.get(globalThis, "__agenticRepository") as AgenticRepository;
+    const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+
+    expect(response.status).toBe(404);
+    expect(payload.error).toContain("was not found");
+    expect(queuedJobs).toEqual([]);
+  });
+
+  it("returns 403 when a non-owner tries to add a workspace member", async () => {
+    const saveWorkspaceMember = vi.fn(async (member) => member);
+
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        listWorkspaces: async () => [
+          {
+            id: "workspace-shared-editor",
+            ownerUserId: "workspace-owner",
+            slug: "shared-editor",
+            name: "Shared Editor Workspace",
+            description: "Editors should not be able to change membership.",
+            isPersonal: false,
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z"
+          }
+        ],
+        saveWorkspaceMember
+      })
+    );
+
+    const response = await workspacesRoutePost(
+      buildAuthorizedJsonRequest("http://localhost/api/workspaces", {
+        action: "add_member",
+        workspaceId: "workspace-shared-editor",
+        userId: "new-collaborator@example.com",
+        role: "viewer"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(403);
+    expect(payload.error).toBe("Only the workspace owner can manage members.");
+    expect(saveWorkspaceMember).not.toHaveBeenCalled();
   });
 
   it("passes the system user explicitly when updating memories", async () => {

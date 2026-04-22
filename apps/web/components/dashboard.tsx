@@ -22,14 +22,23 @@ import {
 import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/integrations/client";
 import { getMemoryFreshness } from "@agentic/memory";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
+import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
 import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
 import { CoreLoopViewTracker } from "./core-loop-view-tracker";
 import { isAdvancedDashboardSection } from "../lib/dashboard-surface";
 import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-loop-telemetry";
-import { summarizeFeatureCapabilities } from "../lib/feature-capabilities";
+import { resolveFeatureCapabilities, summarizeFeatureCapabilities } from "../lib/feature-capabilities";
 import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
 import { getGoalShareSuccessMessage } from "../lib/share-client";
+import {
+  buildGoalRecommendationQuery,
+  buildRecommendationFeedbackPayload,
+  buildRecommendationRefinementSource,
+  formatRecommendationOperatorActionLabel,
+  isGoalRecommendationEligible,
+  type RecommendationRefinementSource
+} from "../lib/workflow-recommendations";
 import { AgentsPanel } from "./agents";
 import { CommandPalette } from "./command-palette";
 import { DashboardOperatingSectionsCard } from "./dashboard-operating-sections";
@@ -37,6 +46,17 @@ import { DashboardOperationsSections } from "./dashboard-operations-sections";
 import {
   StatusBadge,
   RiskBadge,
+  ExecutionModeBadge,
+  ImplementationTierBadge,
+  approvalMatchesExecutionModeFilter,
+  bundleMatchesExecutionModeFilter,
+  executionModeFilterOptions,
+  extractArtifactExecutionMode,
+  formatConfidencePercentage,
+  getExecutionModeFilterOption,
+  getImplementationTierPresentation,
+  getExecutionModePresentation,
+  matchesExecutionModeFilter,
   CopyButton,
   CopyableText,
   RelativeTime,
@@ -104,7 +124,8 @@ import {
   HealthIndicator,
   InlineGoalProgress,
   useGoalProgress,
-  AgentOverride
+  AgentOverride,
+  type ExecutionModeFilterValue
 } from "./ui";
 
 type DashboardProps = {
@@ -239,6 +260,29 @@ type DocsRenderJobStatusApiResponse = {
   error: string | null;
 };
 
+type GoalRecommendationsApiResponse = {
+  recommendations: WorkflowRecommendation[];
+  summary: {
+    totalEpisodes: number;
+    suggestedCount: number;
+    guardedCount: number;
+  };
+  filters: Record<string, unknown>;
+};
+
+type RecommendationFeedbackApiResponse = {
+  goalId: string;
+  message: string;
+  dashboard: DashboardData;
+};
+
+type RecommendationLoadState = {
+  status: "idle" | "loading" | "ready" | "error";
+  query: string | null;
+  recommendations: WorkflowRecommendation[];
+  error: string | null;
+};
+
 const GOAL_JOB_POLL_INTERVAL_MS = 500;
 const GOAL_JOB_POLL_TIMEOUT_MS = 60_000;
 
@@ -249,6 +293,13 @@ function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): 
     maxAutoRunRiskClass: governance?.maxAutoRunRiskClass ?? "R1",
     externalSendRequiresApproval: governance?.externalSendRequiresApproval ?? true,
     calendarWriteRequiresApproval: governance?.calendarWriteRequiresApproval ?? true,
+    shadowReplayPolicy: {
+      enabled: governance?.shadowReplayPolicy.enabled ?? true,
+      minimumMatchedEpisodes: governance?.shadowReplayPolicy.minimumMatchedEpisodes ?? 3,
+      minimumPrecision: governance?.shadowReplayPolicy.minimumPrecision ?? 0.8,
+      maximumNegativeOutcomeRate: governance?.shadowReplayPolicy.maximumNegativeOutcomeRate ?? 0.15,
+      maximumFailureCostRate: governance?.shadowReplayPolicy.maximumFailureCostRate ?? 0.2
+    },
     retentionDays: governance?.retentionDays ?? 365
   };
 }
@@ -351,7 +402,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [operatorProductTemplates, setOperatorProductTemplates] = useState<GoalTemplate[]>([]);
   const [operatorProductState, setOperatorProductState] = useState<RequestState>({ kind: "idle", message: "" });
   const [refinementInputs, setRefinementInputs] = useState<Record<string, string>>({});
+  const [refinementSourceByGoal, setRefinementSourceByGoal] = useState<Record<string, RecommendationRefinementSource>>({});
   const [refinementState, setRefinementState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [recommendationState, setRecommendationState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [recommendationResultsByGoal, setRecommendationResultsByGoal] = useState<Record<string, RecommendationLoadState>>({});
+  const [recommendationPendingByGoal, setRecommendationPendingByGoal] = useState<Record<string, boolean>>({});
   const [slideOutPanel, setSlideOutPanel] = useState<{ type: string; data: unknown } | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
@@ -361,6 +416,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [commitmentInbox, setCommitmentInbox] = useState(initialCommitmentInbox);
   const [commitmentInboxState, setCommitmentInboxState] = useState<RequestState>({ kind: "idle", message: "" });
   const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
+  const [executionModeFilter, setExecutionModeFilter] = useState<ExecutionModeFilterValue>("all");
   const [briefingPreferencesDraft, setBriefingPreferencesDraft] = useState<BriefingPreferences>(initialData.briefingPreferences);
   const [autopilotDraft, setAutopilotDraft] = useState<AutopilotSettings>(initialData.autopilotSettings);
   const [workspaceName, setWorkspaceName] = useState("");
@@ -374,6 +430,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const selectedNoteTitleRef = useRef("");
   const selectedNoteContentRef = useRef("");
   const commitmentInboxRequestIdRef = useRef(0);
+  const recommendationQueriesRef = useRef<Record<string, string | null>>({});
 
   // 10x Dashboard Hooks - Phase 1
   const statsBar = useStatsBar(data);
@@ -387,9 +444,40 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   // 10x Dashboard Hooks - Phase 2
   const undo = useUndo();
   const [approvalGroupBy, setApprovalGroupBy] = useState<GroupBy>("none");
-  const approvalGroups = useApprovalGroups(data.approvals.filter((a) => a.decision === "pending"), approvalGroupBy);
   const memoryBulkSelection = useBulkMemorySelection();
   const timelineFilters = useFilteredTimeline(data.actionLogs);
+  const pendingApprovals = useMemo(
+    () => data.approvals.filter((approval) => approval.decision === "pending"),
+    [data.approvals]
+  );
+  const goalBundleById = useMemo(
+    () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle])),
+    [data.goals]
+  );
+  const goalConfidenceById = useMemo(
+    () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.confidence])),
+    [data.goals]
+  );
+  const filteredGoalBundles = useMemo(
+    () => data.goals.filter((bundle) => bundleMatchesExecutionModeFilter(bundle, executionModeFilter)),
+    [data.goals, executionModeFilter]
+  );
+  const filteredPendingApprovals = useMemo(
+    () =>
+      pendingApprovals.filter((approval) =>
+        approvalMatchesExecutionModeFilter(approval, goalBundleById.get(approval.goalId), executionModeFilter)
+      ),
+    [executionModeFilter, goalBundleById, pendingApprovals]
+  );
+  const filteredLatestArtifacts = useMemo(
+    () =>
+      data.latestArtifacts.filter((artifact) =>
+        matchesExecutionModeFilter(extractArtifactExecutionMode(artifact), executionModeFilter)
+      ),
+    [data.latestArtifacts, executionModeFilter]
+  );
+  const approvalGroups = useApprovalGroups(filteredPendingApprovals, approvalGroupBy);
+  const selectedExecutionModeFilter = getExecutionModeFilterOption(executionModeFilter);
   
   // NL Executor for dashboard commands
   const executeNlIntent = useCallback(
@@ -490,15 +578,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   });
   
   // Batch selection for approvals
-  const approvalBatch = useBatchSelection(
-    data.approvals.filter((a) => a.decision === "pending"),
-    "approval"
-  );
-
-  const pendingApprovals = useMemo(
-    () => data.approvals.filter((approval) => approval.decision === "pending"),
-    [data.approvals]
-  );
+  const approvalBatch = useBatchSelection(filteredPendingApprovals, "approval");
   const nlCapabilitySummary = useMemo(
     () =>
       buildNlCapabilitySummary({
@@ -513,7 +593,37 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     () => data.integrations.filter((integration) => integration.status === "ready").length,
     [data.integrations]
   );
-  const featureCapabilitySummary = useMemo(() => summarizeFeatureCapabilities(), []);
+  const resolvedFeatureCapabilities = useMemo(
+    () =>
+      resolveFeatureCapabilities({
+        activeWorkspaceName: data.activeWorkspace?.name ?? null,
+        watcherCount: data.watchers.filter((watcher) => watcher.status === "active").length,
+        autopilotMode: data.autopilotSettings.mode,
+        operations: data.operations
+          ? {
+              asyncExecutionStatus: data.operations.asyncExecution.status,
+              asyncIssueCount: data.operations.asyncExecution.issueCount,
+              connectorHealthStatus: data.operations.connectorHealth.status,
+              connectorIssueCount: data.operations.connectorHealth.issueCount,
+              autonomyPostureStatus: data.operations.autonomyPosture.status,
+              hasOverridePaths: data.operations.autonomyPosture.overridePaths.length > 0
+            }
+          : null
+      }),
+    [data.activeWorkspace?.name, data.autopilotSettings.mode, data.operations, data.watchers]
+  );
+  const featureCapabilitySummary = useMemo(
+    () => summarizeFeatureCapabilities(resolvedFeatureCapabilities),
+    [resolvedFeatureCapabilities]
+  );
+  const watcherCapability = useMemo(
+    () => resolvedFeatureCapabilities.find((feature) => feature.id === "watchers") ?? null,
+    [resolvedFeatureCapabilities]
+  );
+  const autopilotCapability = useMemo(
+    () => resolvedFeatureCapabilities.find((feature) => feature.id === "autopilot-control") ?? null,
+    [resolvedFeatureCapabilities]
+  );
   const coreLoopSummary = useMemo(() => summarizeCoreLoopTelemetry(data), [data]);
   const coreLoopHealthCopy = useMemo(() => describeCoreLoopHealth(coreLoopSummary), [coreLoopSummary]);
   const integrationSurfaces = useMemo(
@@ -671,6 +781,96 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     void loadOperatorProducts();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    for (const bundle of filteredGoalBundles.slice(0, 4)) {
+      const query = buildGoalRecommendationQuery(bundle);
+      const goalId = bundle.goal.id;
+
+      if (!query) {
+        recommendationQueriesRef.current[goalId] = null;
+        setRecommendationResultsByGoal((prev) => {
+          const existing = prev[goalId];
+
+          if (existing?.status === "ready" && existing.query === null && existing.recommendations.length === 0 && existing.error === null) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            [goalId]: {
+              status: "ready",
+              query: null,
+              recommendations: [],
+              error: null
+            }
+          };
+        });
+        continue;
+      }
+
+      const queryString = query.toString();
+
+      if (recommendationQueriesRef.current[goalId] === queryString) {
+        continue;
+      }
+
+      recommendationQueriesRef.current[goalId] = queryString;
+      setRecommendationResultsByGoal((prev) => ({
+        ...prev,
+        [goalId]: {
+          status: "loading",
+          query: queryString,
+          recommendations: prev[goalId]?.recommendations ?? [],
+          error: null
+        }
+      }));
+
+      void (async () => {
+        try {
+          const payload = await readJson<GoalRecommendationsApiResponse>(
+            await fetch(`/api/memory/recommendations?${queryString}`, {
+              cache: "no-store"
+            })
+          );
+
+          if (cancelled) {
+            return;
+          }
+
+          setRecommendationResultsByGoal((prev) => ({
+            ...prev,
+            [goalId]: {
+              status: "ready",
+              query: queryString,
+              recommendations: payload.recommendations,
+              error: null
+            }
+          }));
+        } catch (error) {
+          if (cancelled) {
+            return;
+          }
+
+          setRecommendationResultsByGoal((prev) => ({
+            ...prev,
+            [goalId]: {
+              status: "error",
+              query: queryString,
+              recommendations: [],
+              error: error instanceof Error ? error.message : "Failed to load recommendation history."
+            }
+          }));
+        }
+      })();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredGoalBundles]);
+
   const setSelectedNoteTitleDraft = (value: string) => {
     selectedNoteTitleRef.current = value;
     setSelectedNoteTitle(value);
@@ -823,6 +1023,53 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
     return null;
   }, []);
+
+  const submitRecommendationFeedback = useCallback(
+    async (goalId: string, recommendation: WorkflowRecommendation, decision: "accepted" | "edited" | "rejected" | "ignored", goalTitle: string) => {
+      setRecommendationPendingByGoal((prev) => ({ ...prev, [goalId]: true }));
+
+      try {
+        const payload = await readJson<RecommendationFeedbackApiResponse>(
+          await fetch(`/api/goals/${goalId}/recommendations/feedback`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json"
+            },
+            body: JSON.stringify(buildRecommendationFeedbackPayload(recommendation, decision))
+          })
+        );
+
+        startTransition(() => {
+          setData(payload.dashboard);
+          statsBar.updateSync();
+        });
+
+        if (decision === "edited") {
+          const sourceRecommendation = buildRecommendationRefinementSource(recommendation, goalTitle);
+
+          setRefinementInputs((prev) => ({
+            ...prev,
+            [goalId]: sourceRecommendation.suggestedMessage
+          }));
+          setRefinementSourceByGoal((prev) => ({
+            ...prev,
+            [goalId]: sourceRecommendation
+          }));
+        }
+
+        const successMessage = payload.message;
+        setRecommendationState({ kind: "success", message: successMessage });
+        toast.success(successMessage);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Failed to record recommendation feedback.";
+        setRecommendationState({ kind: "error", message: errorMessage });
+        toast.error("Recommendation feedback failed", errorMessage);
+      } finally {
+        setRecommendationPendingByGoal((prev) => ({ ...prev, [goalId]: false }));
+      }
+    },
+    [statsBar]
+  );
 
   const submitGoalRequest = useCallback(async (nextRequest: string, agentId?: string) => {
     setIsPending(true);
@@ -1528,6 +1775,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
   const refineGoal = async (goalId: string) => {
     const message = (refinementInputs[goalId] ?? "").trim();
+    const sourceRecommendation = refinementSourceByGoal[goalId];
 
     if (!message) {
       setRefinementState({ kind: "error", message: "Enter a refinement message before submitting." });
@@ -1545,7 +1793,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             "content-type": "application/json",
             "x-idempotency-key": buildClientIdempotencyKey()
           },
-          body: JSON.stringify({ message })
+          body: JSON.stringify({
+            message,
+            ...(sourceRecommendation ? { sourceRecommendation } : {})
+          })
         })
       );
       const settled = await pollGoalJobUntilSettled(queued.statusUrl);
@@ -1565,6 +1816,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       startTransition(() => {
         setData(snapshot.dashboard);
         setRefinementInputs((prev) => ({ ...prev, [goalId]: "" }));
+        setRefinementSourceByGoal((prev) => {
+          const { [goalId]: _removed, ...rest } = prev;
+          return rest;
+        });
         setRefinementState({ kind: "success", message: "Goal refined successfully." });
         toast.success("Goal refined successfully.");
         statsBar.updateSync();
@@ -2178,7 +2433,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           {data.diagnostics.items.length === 0 ? (
             <p className="empty-state">
               The dashboard is clear. New reliability issues will appear here as soon as approvals expire, memories go stale,
-              queues degrade, connectors lose health, workflows block, or watchers outlive their goals.
+              context signals conflict, queues degrade, connectors lose health, workflows block, or watchers outlive their goals.
             </p>
           ) : (
             <div className="diagnostic-grid">
@@ -2332,6 +2587,16 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             totalIntegrations={data.integrations.length}
             watcherCount={data.watchers.length}
             autopilotMode={data.autopilotSettings.mode}
+            watchersReadiness={watcherCapability?.readiness ?? "preview"}
+            watchersReason={
+              watcherCapability?.runtimeReason ??
+              "Operational telemetry is unavailable, so watcher readiness stays fail-closed."
+            }
+            autopilotReadiness={autopilotCapability?.readiness ?? "preview"}
+            autopilotReason={
+              autopilotCapability?.runtimeReason ??
+              "Operational telemetry is unavailable, so autopilot readiness stays fail-closed."
+            }
             coreOperationalCount={featureCapabilitySummary.core.operationalOrBetter}
             coreTotalCount={featureCapabilitySummary.core.total}
             advancedOperationalCount={featureCapabilitySummary.advanced.operationalOrBetter}
@@ -2784,10 +3049,34 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             </div>
           </article>
 
+        <article className="card">
+          <div className="card-header">
+            <h2>Execution visibility</h2>
+            <span>Filters goals, approvals, and artifacts together</span>
+          </div>
+          <div className="approval-actions">
+            <label className="field">
+              <span>Execution mode</span>
+              <select
+                aria-label="Execution mode filter"
+                value={executionModeFilter}
+                onChange={(event) => setExecutionModeFilter(event.target.value as ExecutionModeFilterValue)}
+              >
+                {executionModeFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="detail-list-summary">{selectedExecutionModeFilter.description}</p>
+          </div>
+        </article>
+
         <article className="card request-card" id="section-goals">
           <div className="card-header">
             <h2>Request work</h2>
-            <span>{data.goals.length} goals</span>
+            <span>{filteredGoalBundles.length} / {data.goals.length} goals</span>
           </div>
             {/* Smart suggestion */}
             <ContextualSuggestion
@@ -2834,11 +3123,23 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             {refinementState.message ? (
               <p className={`status-chip ${refinementState.kind}`}>{refinementState.message}</p>
             ) : null}
+            {recommendationState.message ? (
+              <p className={`status-chip ${recommendationState.kind}`}>{recommendationState.message}</p>
+            ) : null}
             <div className="list-stack">
-              {data.goals.length === 0 && <NoGoalsEmpty onCreate={focusRequestComposer} />}
-              {data.goals.slice(0, 4).map((bundle) => {
+              {filteredGoalBundles.length === 0 ? (
+                data.goals.length === 0 ? (
+                  <NoGoalsEmpty onCreate={focusRequestComposer} />
+                ) : (
+                  <p className="status-chip idle">No goals match the current execution-mode filter.</p>
+                )
+              ) : null}
+              {filteredGoalBundles.slice(0, 4).map((bundle) => {
                 const refinementLogs = bundle.actionLogs.filter((log) => log.kind === "goal.refined");
                 const isActive = bundle.goal.status !== "completed";
+                const recommendationStateForGoal = recommendationResultsByGoal[bundle.goal.id];
+                const recommendationEligible = isActive && isGoalRecommendationEligible(bundle);
+                const recommendationPending = recommendationPendingByGoal[bundle.goal.id] ?? false;
                 return (
                   <div
                     className={`list-item vertical ${highlightedItemId === bundle.goal.id ? "selection-highlight" : ""}`}
@@ -2891,6 +3192,80 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                       </button>
                     </div>
                   ) : null}
+                  {recommendationEligible ? (
+                    <div className="refinement-history">
+                      <strong>Recommendation-backed suggestions</strong>
+                      <small className="refinement-log">
+                        Outcome traces stay operator-visible before any wider reuse or auto-application.
+                      </small>
+                      {recommendationStateForGoal?.status === "error" ? (
+                        <small className="status-chip error">{recommendationStateForGoal.error ?? "Failed to load recommendation history."}</small>
+                      ) : null}
+                      {recommendationStateForGoal?.status === "ready" && recommendationStateForGoal.recommendations.length === 0 ? (
+                        <small className="refinement-log">No recommendation-backed suggestions yet.</small>
+                      ) : null}
+                      {recommendationStateForGoal?.status === "ready" && recommendationStateForGoal.recommendations.length > 0 ? (
+                        <div className="list-stack">
+                          {recommendationStateForGoal.recommendations.map((recommendation) => (
+                            <div key={recommendation.key} className="list-item vertical">
+                              <div className="goal-item-actions">
+                                <span className="status-chip idle">
+                                  {formatRecommendationOperatorActionLabel(recommendation.reuse.operatorAction)}
+                                </span>
+                                <small className="share-metric">
+                                  {recommendation.workflow.agent} · {recommendation.workflow.action}
+                                </small>
+                                <RelativeTime date={recommendation.evidence.lastSeenAt} />
+                              </div>
+                              <p>{recommendation.reuse.rationale}</p>
+                              <small className="refinement-log">
+                                Capabilities: {recommendation.workflow.capabilities.join(", ")} · Evidence {recommendation.evidence.count} · Success{" "}
+                                {formatConfidencePercentage(recommendation.evidence.successRate)} · Score{" "}
+                                {formatConfidencePercentage(recommendation.evidence.score)}
+                              </small>
+                              <div className="goal-item-actions">
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "accepted", bundle.goal.title)}
+                                  disabled={isPending || recommendationPending}
+                                >
+                                  Accept
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "edited", bundle.goal.title)}
+                                  disabled={isPending || recommendationPending}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "ignored", bundle.goal.title)}
+                                  disabled={isPending || recommendationPending}
+                                >
+                                  Ignore
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "rejected", bundle.goal.title)}
+                                  disabled={isPending || recommendationPending}
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {!recommendationStateForGoal || recommendationStateForGoal.status === "idle" || recommendationStateForGoal.status === "loading" ? (
+                        <small className="refinement-log">Loading suggestion history…</small>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -2905,7 +3280,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                 value={approvalGroupBy}
                 onChange={setApprovalGroupBy}
               />
-              <span>{pendingApprovals.length} pending</span>
+              <span>{filteredPendingApprovals.length} / {pendingApprovals.length} pending</span>
               <FocusModeButton
                 sectionId="approvals"
                 sectionTitle="Approvals"
@@ -2953,7 +3328,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                 >
                   {group.approvals.map((approval, idx) => {
                     // Get global index for keyboard navigation
-                    const globalIndex = pendingApprovals.findIndex(a => a.id === approval.id);
+                    const globalIndex = filteredPendingApprovals.findIndex(a => a.id === approval.id);
                     return (
                       <KeyboardApprovalItem
                         key={approval.id}
@@ -3020,8 +3395,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             </div>
           ) : (
           <div className="list-stack">
-            {pendingApprovals.length === 0 ? <NoApprovalsEmpty /> : null}
-            {pendingApprovals.map((approval, index) => (
+            {filteredPendingApprovals.length === 0 ? (
+              pendingApprovals.length === 0 ? (
+                <NoApprovalsEmpty />
+              ) : (
+                <p className="status-chip idle">No pending approvals match the current execution-mode filter.</p>
+              )
+            ) : null}
+            {filteredPendingApprovals.map((approval, index) => (
               <KeyboardApprovalItem
                 key={approval.id}
                 index={index}
@@ -3090,24 +3471,48 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             <FeatureHelp feature="artifacts">
               <h2>Artifacts</h2>
             </FeatureHelp>
-            <span>{data.latestArtifacts.length} recent</span>
+            <span>{filteredLatestArtifacts.length} / {data.latestArtifacts.length} recent</span>
           </div>
           <div className="artifact-stack">
-            {data.latestArtifacts.length === 0 && <NoArtifactsEmpty />}
-            {data.latestArtifacts.map((artifact) => (
-              <div className="artifact-card" key={artifact.id}>
-                <div className="card-header">
-                  <ArtifactPreview artifact={artifact}>
-                    <strong>{artifact.title}</strong>
-                  </ArtifactPreview>
-                  <StatusBadge status={artifact.artifactType} />
+            {filteredLatestArtifacts.length === 0 ? (
+              data.latestArtifacts.length === 0 ? (
+                <NoArtifactsEmpty />
+              ) : (
+                <p className="status-chip idle">No artifacts match the current execution-mode filter.</p>
+              )
+            ) : null}
+            {filteredLatestArtifacts.map((artifact) => {
+              const executionMode = extractArtifactExecutionMode(artifact);
+              const goalConfidence = goalConfidenceById.get(artifact.goalId);
+
+              return (
+                <div className="artifact-card" key={artifact.id}>
+                  <div className="card-header">
+                    <ArtifactPreview artifact={artifact}>
+                      <strong>{artifact.title}</strong>
+                    </ArtifactPreview>
+                    <div className="detail-list-badges">
+                      <StatusBadge status={artifact.artifactType} />
+                      <ImplementationTierBadge mode={executionMode} />
+                      <ExecutionModeBadge mode={executionMode} />
+                    </div>
+                  </div>
+                  <div className="detail-list-meta">
+                    <span>Implementation tier: <strong>{getImplementationTierPresentation(executionMode).label}</strong></span>
+                  </div>
+                  <div className="detail-list-meta">
+                    <span>Execution mode: <strong>{getExecutionModePresentation(executionMode).label}</strong></span>
+                    <span>
+                      Goal confidence: <strong>{typeof goalConfidence === "number" ? formatConfidencePercentage(goalConfidence) : "Unavailable"}</strong>
+                    </span>
+                  </div>
+                  <pre>{artifact.content}</pre>
+                  <div className="artifact-actions">
+                    <CopyButton value={artifact.content} label="Copy content" />
+                  </div>
                 </div>
-                <pre>{artifact.content}</pre>
-                <div className="artifact-actions">
-                  <CopyButton value={artifact.content} label="Copy content" />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </article>
 

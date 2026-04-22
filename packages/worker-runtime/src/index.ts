@@ -1,8 +1,12 @@
 import crypto from "node:crypto";
 import { runDocsBuild } from "@agentic/docs-runtime";
 import {
+  buildApprovalNotificationDeliveryTarget,
   createSystemActorContext,
+  type ApprovalNotificationJobPayload,
+  type ApprovalFollowUpJobPayload,
   type BriefingCreateJobPayload,
+  type Capability,
   type DocsRenderJobPayload,
   GoalTemplateSchema,
   nowIso,
@@ -16,6 +20,8 @@ import {
   type GoalTemplate,
   type JobKind,
   type JobRecord,
+  RecommendationRefinementSourceSchema,
+  type RecommendationRefinementSource,
   type PrivacyOperationJobPayload,
   type PublicShareViewJobPayload,
   type TemplateRunJobPayload,
@@ -32,29 +38,56 @@ import {
   type JobRetryPolicy
 } from "@agentic/execution";
 import {
+  assessManagedGoogleCredential,
+  createCalendarAdapter,
+  createGmailAdapter,
+  createLocalNote,
+  createProviderCredentialSecretStore,
+  googleWorkspaceRequiredScopes,
   createActionLog,
+  isSlackReady,
+  isTelegramReady,
   logError,
   logInfo,
   logWarn,
   recordCounter,
+  sendNotification,
+  updateMessage,
+  updateTelegramMessage,
   withSpan,
   withTelemetryContext
-} from "@agentic/observability";
+} from "@agentic/integrations";
 import {
+  captureExecutionOutcomeSignals,
+  type CapturedMemories,
   captureMemoriesFromBundle,
   computeNextRun,
+  executeApprovedTasks,
   generateBriefing,
   interpolateTemplate,
+  reconcileExecutionResults,
   refineGoal,
   processUserRequest
 } from "@agentic/orchestrator";
 import type { AgenticRepository } from "@agentic/repository";
 import {
   SelfImprovementConflictError,
+  buildPolicyLearningValidation,
   type SelfImprovementRepository
 } from "@agentic/self-improvement-memory";
 
-export const workerJobKindValues = ["goal_create", "goal_refine", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
+export const workerJobKindValues = [
+  "goal_create",
+  "goal_refine",
+  "briefing_create",
+  "template_run",
+  "docs_render",
+  "autopilot_process",
+  "approval_follow_up",
+  "approval_notification",
+  "privacy_operation",
+  "public_share_view"
+] as const;
 
 export type GoalJobResultSummary = {
   goalId: string;
@@ -89,6 +122,26 @@ class AutopilotExecutionError extends Error {
 }
 
 const SHARE_VIEW_DEDUP_WINDOW_MS = 1000 * 60 * 15;
+const REPLAY_VALIDATION_CAPABILITIES = new Set<Capability>(["send", "schedule"]);
+
+type PolicyReplayValidationResolver = NonNullable<Parameters<typeof processUserRequest>[0]["resolvePolicyReplayValidation"]>;
+
+function createPolicyReplayValidationResolver(
+  episodes: Awaited<ReturnType<SelfImprovementRepository["listEpisodes"]>>
+): PolicyReplayValidationResolver {
+  return async ({ agent, capabilities, riskClass }) => {
+    if (!capabilities.some((capability) => REPLAY_VALIDATION_CAPABILITIES.has(capability))) {
+      return null;
+    }
+
+    return buildPolicyLearningValidation(episodes, {
+      kind: "execution_path",
+      agent,
+      riskClass,
+      capabilities
+    });
+  };
+}
 
 function createPublicShareViewedLog(
   bundle: GoalBundle,
@@ -147,6 +200,7 @@ function buildGoalRefinePayload(params: {
   workflowId: string;
   refinement: string;
   workspaceId: string | null;
+  sourceRecommendation?: RecommendationRefinementSource | null;
 }): GoalRefineJobPayload {
   return {
     type: "goal_refine",
@@ -154,12 +208,17 @@ function buildGoalRefinePayload(params: {
     workflowId: params.workflowId,
     refinement: params.refinement,
     workspaceId: params.workspaceId,
-    metadata: {}
+    metadata: params.sourceRecommendation
+      ? {
+          sourceRecommendation: RecommendationRefinementSourceSchema.parse(params.sourceRecommendation)
+        }
+      : {}
   };
 }
 
 function buildAutopilotProcessPayload(params: {
   autopilotEvent: AutopilotEvent;
+  replayedFromJobId?: string | null;
 }): AutopilotProcessJobPayload {
   return {
     type: "autopilot_process",
@@ -167,8 +226,90 @@ function buildAutopilotProcessPayload(params: {
     kind: params.autopilotEvent.kind,
     sourceId: params.autopilotEvent.sourceId,
     mode: params.autopilotEvent.mode,
-    metadata: {}
+    metadata: params.replayedFromJobId
+      ? {
+          replayedFromJobId: params.replayedFromJobId
+        }
+      : {}
   };
+}
+
+function buildApprovalFollowUpPayload(params: {
+  approvalId: string;
+  goalId: string;
+  taskId: string;
+  decision: ApprovalFollowUpJobPayload["decision"];
+  workspaceId: string | null;
+  replayedFromJobId?: string | null;
+}): ApprovalFollowUpJobPayload {
+  return {
+    type: "approval_follow_up",
+    approvalId: params.approvalId,
+    goalId: params.goalId,
+    taskId: params.taskId,
+    decision: params.decision,
+    workspaceId: params.workspaceId,
+    metadata: {
+      replayedFromJobId: params.replayedFromJobId ?? null
+    }
+  };
+}
+
+function buildApprovalNotificationPayload(params: {
+  approvalId: string;
+  goalId: string;
+  taskId: string;
+  decision: ApprovalNotificationJobPayload["decision"];
+  workspaceId: string | null;
+  replayedFromJobId?: string | null;
+} & (
+  | {
+      channel: "slack";
+    }
+  | {
+      channel: "slack_receipt";
+      slackChannelId: string;
+      slackMessageTs: string;
+    }
+  | {
+      channel: "telegram_receipt";
+      telegramChatId: string;
+      telegramMessageId: number;
+    }
+)): ApprovalNotificationJobPayload {
+  const basePayload = {
+    type: "approval_notification" as const,
+    approvalId: params.approvalId,
+    goalId: params.goalId,
+    taskId: params.taskId,
+    decision: params.decision,
+    workspaceId: params.workspaceId,
+    metadata: {
+      replayedFromJobId: params.replayedFromJobId ?? null
+    }
+  };
+
+  switch (params.channel) {
+    case "slack":
+      return {
+        ...basePayload,
+        channel: "slack"
+      };
+    case "slack_receipt":
+      return {
+        ...basePayload,
+        channel: "slack_receipt",
+        slackChannelId: params.slackChannelId,
+        slackMessageTs: params.slackMessageTs
+      };
+    case "telegram_receipt":
+      return {
+        ...basePayload,
+        channel: "telegram_receipt",
+        telegramChatId: params.telegramChatId,
+        telegramMessageId: params.telegramMessageId
+      };
+  }
 }
 
 function buildBriefingCreatePayload(params: {
@@ -218,8 +359,29 @@ function buildAutopilotWorkflowId(eventId: string): string {
   return `autopilot-workflow-${eventId}`;
 }
 
-function buildAutopilotProcessJobIdempotencyKey(eventId: string): string {
-  return `autopilot-process:${eventId}`;
+function buildAutopilotProcessJobIdempotencyKey(params: {
+  eventId: string;
+  replayedFromJobId?: string | null;
+}): string {
+  const baseKey = `autopilot-process:${params.eventId}`;
+  return params.replayedFromJobId ? `${baseKey}:replay:${params.replayedFromJobId}` : baseKey;
+}
+
+function buildApprovalFollowUpJobIdempotencyKey(params: {
+  approvalId: string;
+  decision: ApprovalFollowUpJobPayload["decision"];
+  replayedFromJobId?: string | null;
+}): string {
+  const baseKey = `approval-follow-up:${params.approvalId}:${params.decision}`;
+  return params.replayedFromJobId ? `${baseKey}:replay:${params.replayedFromJobId}` : baseKey;
+}
+
+function buildApprovalNotificationJobIdempotencyKey(params: {
+  payload: ApprovalNotificationJobPayload;
+  replayedFromJobId?: string | null;
+}): string {
+  const baseKey = `approval-notification:${params.payload.decision}:${buildApprovalNotificationDeliveryTarget(params.payload)}`;
+  return params.replayedFromJobId ? `${baseKey}:replay:${params.replayedFromJobId}` : baseKey;
 }
 
 function buildPrivacyOperationPayload(params: {
@@ -335,6 +497,184 @@ async function persistCapturedMemories(params: {
     });
     throw error;
   }
+}
+
+async function persistCapturedSignals(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  captured: CapturedMemories;
+  userId: string;
+  jobId: string;
+  label: string;
+}) {
+  if (params.captured.memories.length === 0 && params.captured.episodes.length === 0) {
+    return [];
+  }
+
+  try {
+    await Promise.all(params.captured.memories.map((memory) => params.repository.saveMemory(memory)));
+
+    for (const episode of params.captured.episodes) {
+      try {
+        await params.selfImprovementRepository.appendEpisode(episode);
+      } catch (error) {
+        if (error instanceof SelfImprovementConflictError) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    return params.captured.memories.map((memory) => memory.id);
+  } catch (error) {
+    logError("approval_follow_up.memory_capture_failed", error, {
+      jobId: params.jobId,
+      userId: params.userId,
+      label: params.label
+    });
+    return [];
+  }
+}
+
+function listGoogleCredentialCandidatesForWorkspace(
+  credentials: Awaited<ReturnType<AgenticRepository["listProviderCredentials"]>>,
+  workspaceId: string | null | undefined
+) {
+  const connected = credentials
+    .filter((credential) => credential.provider === "google" && credential.status === "connected")
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+
+  if (workspaceId) {
+    const exact = connected.filter((credential) => credential.workspaceId === workspaceId);
+
+    if (exact.length > 0) {
+      return exact;
+    }
+  }
+
+  return connected.filter((credential) => credential.workspaceId === null);
+}
+
+async function resolveGoogleWorkspaceAdapters(params: {
+  repository: AgenticRepository;
+  userId: string;
+  workspaceId?: string | null;
+}) {
+  const candidates = listGoogleCredentialCandidatesForWorkspace(
+    await params.repository.listProviderCredentials(params.userId),
+    params.workspaceId ?? null
+  );
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const candidateFailures: string[] = [];
+
+  for (const credential of candidates) {
+    const secretRecord = await params.repository.getProviderCredentialSecret(
+      credential.id,
+      "oauth_refresh_token",
+      params.userId
+    );
+    const assessment = assessManagedGoogleCredential({
+      account: {
+        id: "google-workspace",
+        name: "Google workspace adapters",
+        metadata: {
+          provider: "google",
+          managed: true,
+          providerCredentialId: credential.id
+        }
+      },
+      credential,
+      hasRefreshTokenSecret: Boolean(secretRecord)
+    });
+
+    const missingWorkspaceScopes = googleWorkspaceRequiredScopes.filter((scope) => !credential.scopes.includes(scope));
+    const blockedByWorkspaceScopes = missingWorkspaceScopes.length > 0;
+    const workspaceIssues = blockedByWorkspaceScopes
+      ? [`missing required Google scopes: ${missingWorkspaceScopes.join(", ")}`]
+      : [];
+
+    if (!assessment?.ready || blockedByWorkspaceScopes) {
+      candidateFailures.push(
+        `${credential.id}: ${[...(assessment?.issues.map((issue) => issue.message) ?? []), ...workspaceIssues].join("; ")}`
+      );
+      continue;
+    }
+
+    try {
+      const refreshToken = createProviderCredentialSecretStore().decrypt(secretRecord!.secret);
+
+      return {
+        credential,
+        gmail: createGmailAdapter({ refreshToken }),
+        calendar: createCalendarAdapter({ refreshToken })
+      };
+    } catch (error) {
+      candidateFailures.push(
+        `${credential.id}: ${error instanceof Error ? error.message : "failed to decrypt refresh token"}`
+      );
+    }
+  }
+
+  throw new Error(
+    `No approval-safe Google credential is available for workspace adapters. ${candidateFailures.join(" | ")}`
+  );
+}
+
+function mergeIds(...groups: Array<string[] | undefined>): string[] {
+  return Array.from(new Set(groups.flatMap((group) => group ?? [])));
+}
+
+async function finalizeApprovalEvidenceRecord(params: {
+  repository: AgenticRepository;
+  bundle: GoalBundle;
+  userId: string;
+  approvalId: string;
+  memoryIds: string[];
+}) {
+  const { repository, bundle, userId, approvalId, memoryIds } = params;
+  const approval = bundle.approvals.find((candidate) => candidate.id === approvalId);
+
+  if (!approval || approval.decision === "pending") {
+    return;
+  }
+
+  const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
+  const evidenceRecord =
+    (await repository.listEvidenceRecords({ userId, approvalId }))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .at(0) ?? null;
+
+  if (!evidenceRecord) {
+    return;
+  }
+
+  const relatedActionLogIds = bundle.actionLogs
+    .filter(
+      (log) => log.taskId === approval.taskId || (typeof log.details.approvalId === "string" && log.details.approvalId === approvalId)
+    )
+    .map((log) => log.id);
+  const relatedArtifactIds = bundle.artifacts
+    .filter((artifact) => artifact.taskId === approval.taskId)
+    .map((artifact) => artifact.id);
+
+  await repository.saveEvidenceRecord({
+    ...evidenceRecord,
+    resultingTaskState: task?.state ?? evidenceRecord.resultingTaskState,
+    resultingGoalStatus: bundle.goal.status,
+    actionLogIds: mergeIds(evidenceRecord.actionLogIds, relatedActionLogIds),
+    artifactIds: mergeIds(
+      evidenceRecord.artifactIds,
+      relatedArtifactIds,
+      approval.actionIntent?.type === "manual_review" ? approval.actionIntent.artifactIds : undefined
+    ),
+    memoryIds: mergeIds(evidenceRecord.memoryIds, memoryIds),
+    updatedAt: new Date().toISOString()
+  });
 }
 
 async function resolveDashboardWorkspaceContext(repository: AgenticRepository, userId: string) {
@@ -517,13 +857,15 @@ async function executeWatcherEvent(params: {
   eventId: string;
   jobId: string;
 }) {
-  const [memories, integrations] = await Promise.all([
+  const [memories, integrations, episodes] = await Promise.all([
     params.repository.listMemory(params.userId),
-    params.repository.listIntegrations(params.userId)
+    params.repository.listIntegrations(params.userId),
+    params.selfImprovementRepository.listEpisodes()
   ]);
   const governance = params.goal.goal.workspaceId
     ? await params.repository.getWorkspaceGovernance(params.goal.goal.workspaceId, params.userId)
     : null;
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
   const bundle = await processUserRequest({
     userId: params.userId,
     workspaceId: params.goal.goal.workspaceId,
@@ -533,7 +875,8 @@ async function executeWatcherEvent(params: {
     integrations,
     goalId: buildAutopilotGoalId(params.eventId),
     workflowId: buildAutopilotWorkflowId(params.eventId),
-    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId),
+    resolvePolicyReplayValidation
   });
 
   await params.repository.saveGoalBundle(bundle);
@@ -560,10 +903,12 @@ async function runTemplateExecution(params: {
   workspaceGovernance: WorkspaceGovernance | null;
   jobId: string;
 }) {
-  const [memories, integrations] = await Promise.all([
+  const [memories, integrations, episodes] = await Promise.all([
     params.repository.listMemory(params.userId),
-    params.repository.listIntegrations(params.userId)
+    params.repository.listIntegrations(params.userId),
+    params.selfImprovementRepository.listEpisodes()
   ]);
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
   const bundle = await processUserRequest({
     userId: params.userId,
     workspaceId: params.workspaceId,
@@ -573,7 +918,8 @@ async function runTemplateExecution(params: {
     integrations,
     goalId: params.goalId,
     workflowId: params.workflowId,
-    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId),
+    resolvePolicyReplayValidation
   });
 
   await params.repository.saveGoalBundle(bundle);
@@ -639,17 +985,19 @@ async function executeBriefingEvent(params: {
   eventId: string;
   jobId: string;
 }) {
-  const [preferences, memories, integrations, approvals, watchers] = await Promise.all([
+  const [preferences, memories, integrations, approvals, watchers, episodes] = await Promise.all([
     params.repository.getBriefingPreferences(params.userId),
     params.repository.listMemory(params.userId),
     params.repository.listIntegrations(params.userId),
     params.repository.listApprovals(params.userId),
-    params.repository.listWatchers({ userId: params.userId })
+    params.repository.listWatchers({ userId: params.userId }),
+    params.selfImprovementRepository.listEpisodes()
   ]);
   const { workspaceId, workspaceGovernance } = await resolveDashboardWorkspaceContext(
     params.repository,
     params.userId
   );
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
   const bundle = await generateBriefing({
     type: params.type,
     userId: params.userId,
@@ -662,7 +1010,8 @@ async function executeBriefingEvent(params: {
     activeWatchers: watchers.filter((watcher) => watcher.status === "active"),
     goalId: buildAutopilotGoalId(params.eventId),
     workflowId: buildAutopilotWorkflowId(params.eventId),
-    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId),
+    resolvePolicyReplayValidation
   });
 
   await params.repository.saveGoalBundle(bundle);
@@ -703,6 +1052,18 @@ export function isAutopilotProcessJob(
   job: JobRecord | null
 ): job is JobRecord & { payload: AutopilotProcessJobPayload } {
   return job?.kind === "autopilot_process" && job.payload.type === "autopilot_process";
+}
+
+export function isApprovalFollowUpJob(
+  job: JobRecord | null
+): job is JobRecord & { payload: ApprovalFollowUpJobPayload } {
+  return job?.kind === "approval_follow_up" && job.payload.type === "approval_follow_up";
+}
+
+export function isApprovalNotificationJob(
+  job: JobRecord | null
+): job is JobRecord & { payload: ApprovalNotificationJobPayload } {
+  return job?.kind === "approval_notification" && job.payload.type === "approval_notification";
 }
 
 export function isPrivacyOperationJob(
@@ -771,13 +1132,15 @@ export async function enqueueGoalRefineJob(params: {
   refinement: string;
   workspaceId: string | null;
   actorContext: ActorContext | null;
+  sourceRecommendation?: RecommendationRefinementSource | null;
   idempotencyKey?: string | null;
 }): Promise<JobRecord & { payload: GoalRefineJobPayload }> {
   const payload = buildGoalRefinePayload({
     goalId: params.goalId,
     workflowId: params.workflowId,
     refinement: params.refinement,
-    workspaceId: params.workspaceId
+    workspaceId: params.workspaceId,
+    sourceRecommendation: params.sourceRecommendation ?? null
   });
 
   return withSpan(
@@ -954,9 +1317,11 @@ export async function enqueueDocsRenderJob(params: {
 export async function enqueueAutopilotProcessJob(params: {
   repository: AgenticRepository;
   autopilotEvent: AutopilotEvent;
+  replayedFromJobId?: string | null;
 }): Promise<JobRecord & { payload: AutopilotProcessJobPayload }> {
   const payload = buildAutopilotProcessPayload({
-    autopilotEvent: params.autopilotEvent
+    autopilotEvent: params.autopilotEvent,
+    replayedFromJobId: params.replayedFromJobId
   });
 
   return withSpan(
@@ -971,7 +1336,10 @@ export async function enqueueAutopilotProcessJob(params: {
         kind: "autopilot_process",
         payload,
         actorContext: params.autopilotEvent.actorContext,
-        idempotencyKey: buildAutopilotProcessJobIdempotencyKey(params.autopilotEvent.id),
+        idempotencyKey: buildAutopilotProcessJobIdempotencyKey({
+          eventId: params.autopilotEvent.id,
+          replayedFromJobId: params.replayedFromJobId
+        }),
         maxAttempts: 3
       })) as JobRecord & { payload: AutopilotProcessJobPayload };
 
@@ -979,6 +1347,153 @@ export async function enqueueAutopilotProcessJob(params: {
         jobId: job.id,
         jobKind: job.kind,
         userId: job.userId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
+}
+
+export async function enqueueApprovalFollowUpJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  approvalId: string;
+  goalId: string;
+  taskId: string;
+  decision: ApprovalFollowUpJobPayload["decision"];
+  workspaceId: string | null;
+  actorContext: ActorContext | null;
+  idempotencyKey?: string | null;
+  replayedFromJobId?: string | null;
+}): Promise<JobRecord & { payload: ApprovalFollowUpJobPayload }> {
+  const payload = buildApprovalFollowUpPayload({
+    approvalId: params.approvalId,
+    goalId: params.goalId,
+    taskId: params.taskId,
+    decision: params.decision,
+    workspaceId: params.workspaceId,
+    replayedFromJobId: params.replayedFromJobId
+  });
+
+  return withSpan(
+    "worker.job.enqueue.approval_follow_up",
+    {
+      jobKind: "approval_follow_up",
+      userId: params.userId,
+      goalId: params.goalId,
+      approvalId: params.approvalId
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "approval_follow_up",
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey:
+          params.idempotencyKey ??
+          buildApprovalFollowUpJobIdempotencyKey({
+            approvalId: params.approvalId,
+            decision: params.decision,
+            replayedFromJobId: params.replayedFromJobId
+          }),
+        maxAttempts: 1
+      })) as JobRecord & { payload: ApprovalFollowUpJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId,
+        goalId: params.goalId,
+        approvalId: params.approvalId
+      });
+      recordCounter("worker.job.enqueued.total", 1, {
+        jobKind: job.kind
+      });
+      return job;
+    }
+  );
+}
+
+export async function enqueueApprovalNotificationJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  approvalId: string;
+  goalId: string;
+  taskId: string;
+  decision: ApprovalNotificationJobPayload["decision"];
+  workspaceId: string | null;
+  actorContext: ActorContext | null;
+  idempotencyKey?: string | null;
+  replayedFromJobId?: string | null;
+} & (
+  | {
+      channel: "slack";
+    }
+  | {
+      channel: "slack_receipt";
+      slackChannelId: string;
+      slackMessageTs: string;
+    }
+  | {
+      channel: "telegram_receipt";
+      telegramChatId: string;
+      telegramMessageId: number;
+    }
+)): Promise<JobRecord & { payload: ApprovalNotificationJobPayload }> {
+  const payload = buildApprovalNotificationPayload({
+    approvalId: params.approvalId,
+    goalId: params.goalId,
+    taskId: params.taskId,
+    decision: params.decision,
+    workspaceId: params.workspaceId,
+    replayedFromJobId: params.replayedFromJobId,
+    ...(params.channel === "slack"
+      ? { channel: "slack" as const }
+      : params.channel === "slack_receipt"
+        ? {
+            channel: "slack_receipt" as const,
+            slackChannelId: params.slackChannelId,
+            slackMessageTs: params.slackMessageTs
+          }
+        : {
+            channel: "telegram_receipt" as const,
+            telegramChatId: params.telegramChatId,
+            telegramMessageId: params.telegramMessageId
+          })
+  });
+
+  return withSpan(
+    "worker.job.enqueue.approval_notification",
+    {
+      jobKind: "approval_notification",
+      userId: params.userId,
+      goalId: params.goalId,
+      approvalId: params.approvalId,
+      channel: params.channel
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "approval_notification",
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey:
+          params.idempotencyKey ??
+          buildApprovalNotificationJobIdempotencyKey({
+            payload,
+            replayedFromJobId: params.replayedFromJobId
+          })
+      })) as JobRecord & { payload: ApprovalNotificationJobPayload };
+
+      logInfo("worker.job.enqueued", {
+        jobId: job.id,
+        jobKind: job.kind,
+        userId: job.userId,
+        goalId: params.goalId,
+        approvalId: params.approvalId,
+        channel: params.channel
       });
       recordCounter("worker.job.enqueued.total", 1, {
         jobKind: job.kind
@@ -1097,11 +1612,13 @@ export async function executeGoalCreateJob(params: {
   }
 
   const governance = await resolveGoalCreateGovernance(repository, job.userId, job.payload.workspaceId);
-  const [memories, integrations, agentDefinition] = await Promise.all([
+  const [memories, integrations, agentDefinition, episodes] = await Promise.all([
     repository.listMemory(job.userId),
     repository.listIntegrations(job.userId),
-    resolveGoalCreateAgentDefinition(repository, job.userId, job.payload.agentId)
+    resolveGoalCreateAgentDefinition(repository, job.userId, job.payload.agentId),
+    params.selfImprovementRepository.listEpisodes()
   ]);
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
   const bundle = await processUserRequest({
     userId: job.userId,
     request: job.payload.request,
@@ -1112,7 +1629,8 @@ export async function executeGoalCreateJob(params: {
     agentDefinition,
     goalId: job.payload.goalId,
     workflowId: job.payload.workflowId,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId)
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId),
+    resolvePolicyReplayValidation
   });
 
   await repository.saveGoalBundle(bundle);
@@ -1143,19 +1661,26 @@ export async function executeGoalRefineJob(params: {
     throw new Error(`Goal ${job.payload.goalId} was not found.`);
   }
 
-  const [memories, governance] = await Promise.all([
+  const [memories, episodes, governance] = await Promise.all([
     repository.listMemory(job.userId),
+    params.selfImprovementRepository.listEpisodes(),
     job.payload.workspaceId
       ? repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
       : Promise.resolve(null)
   ]);
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
   const updatedBundle = await refineGoal({
     bundle,
     refinement: job.payload.refinement,
     memories,
     actorContext: job.actorContext,
+    sourceRecommendation:
+      job.payload.metadata && typeof job.payload.metadata === "object" && "sourceRecommendation" in job.payload.metadata
+        ? RecommendationRefinementSourceSchema.parse(job.payload.metadata.sourceRecommendation)
+        : null,
     governance,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId)
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId),
+    resolvePolicyReplayValidation
   });
 
   await repository.saveGoalBundle(updatedBundle);
@@ -1175,13 +1700,15 @@ export async function executeBriefingCreateJob(params: {
   const governance = job.payload.workspaceId
     ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
     : null;
-  const [preferences, memories, integrations, approvals, watchers] = await Promise.all([
+  const [preferences, memories, integrations, approvals, watchers, episodes] = await Promise.all([
     repository.getBriefingPreferences(job.userId),
     repository.listMemory(job.userId),
     repository.listIntegrations(job.userId),
     repository.listApprovals(job.userId),
-    repository.listWatchers({ userId: job.userId })
+    repository.listWatchers({ userId: job.userId }),
+    params.selfImprovementRepository.listEpisodes()
   ]);
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
   const bundle = await generateBriefing({
     type: job.payload.briefingType,
     userId: job.userId,
@@ -1194,7 +1721,8 @@ export async function executeBriefingCreateJob(params: {
     activeWatchers: watchers.filter((watcher) => watcher.status === "active"),
     goalId: job.payload.goalId,
     workflowId: job.payload.workflowId,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId)
+    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId),
+    resolvePolicyReplayValidation
   });
 
   await repository.saveGoalBundle(bundle);
@@ -1344,6 +1872,241 @@ export async function executeAutopilotProcessJob(params: {
       error: sanitizeAutopilotError(error)
     });
     throw error;
+  }
+}
+
+export async function executeApprovalFollowUpJob(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  job: JobRecord;
+}) {
+  const { job, repository } = params;
+
+  if (!isApprovalFollowUpJob(job)) {
+    throw new Error(`Expected an approval_follow_up payload for job ${job.id}.`);
+  }
+
+  const bundle = await repository.getGoalBundleForUser(job.payload.goalId, job.userId);
+
+  if (!bundle) {
+    throw new Error(`Goal ${job.payload.goalId} was not found.`);
+  }
+
+  const approval = bundle.approvals.find((candidate) => candidate.id === job.payload.approvalId);
+
+  if (!approval) {
+    throw new Error(`Approval ${job.payload.approvalId} was not found.`);
+  }
+
+  if (approval.taskId !== job.payload.taskId) {
+    throw new Error(`Approval ${approval.id} no longer matches queued task ${job.payload.taskId}.`);
+  }
+
+  if (approval.decision !== job.payload.decision) {
+    throw new Error(
+      `Approval ${approval.id} decision changed from ${job.payload.decision} to ${approval.decision}.`
+    );
+  }
+
+  const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
+
+  if (!task) {
+    throw new Error(`Task ${approval.taskId} was not found for approval ${approval.id}.`);
+  }
+
+  let updatedBundle = bundle;
+  const shouldExecuteApprovedTask = job.payload.decision === "approved" && task.state === "queued";
+
+  if (shouldExecuteApprovedTask) {
+    const googleAdapters = await resolveGoogleWorkspaceAdapters({
+      repository,
+      userId: job.userId,
+      workspaceId: job.payload.workspaceId
+    });
+    const { results, logs } = await executeApprovedTasks({
+      bundle,
+      approvedTaskIds: [approval.taskId],
+      adapters: {
+        gmail: googleAdapters?.gmail,
+        calendar: googleAdapters?.calendar,
+        notes: { createLocalNote }
+      },
+      governance: job.payload.workspaceId
+        ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
+        : null
+    });
+    updatedBundle = reconcileExecutionResults({
+      bundle,
+      results,
+      logs
+    });
+    await repository.saveGoalBundle(updatedBundle);
+
+    const capturedMemoryIds = await persistCapturedSignals({
+      repository,
+      selfImprovementRepository: params.selfImprovementRepository,
+      captured: captureExecutionOutcomeSignals(
+        updatedBundle,
+        job.userId,
+        results,
+        job.actorContext ?? createSystemActorContext(job.userId)
+      ),
+      userId: job.userId,
+      jobId: job.id,
+      label: "approval-execution-capture"
+    });
+
+    await finalizeApprovalEvidenceRecord({
+      repository,
+      bundle: updatedBundle,
+      userId: job.userId,
+      approvalId: approval.id,
+      memoryIds: capturedMemoryIds
+    });
+  }
+
+  if (updatedBundle.goal.status === "completed") {
+    const capturedMemoryIds = await persistCapturedSignals({
+      repository,
+      selfImprovementRepository: params.selfImprovementRepository,
+      captured: captureMemoriesFromBundle(
+        updatedBundle,
+        job.userId,
+        job.actorContext ?? createSystemActorContext(job.userId)
+      ),
+      userId: job.userId,
+      jobId: job.id,
+      label: "approval-auto-capture"
+    });
+
+    if (capturedMemoryIds.length > 0) {
+      await finalizeApprovalEvidenceRecord({
+        repository,
+        bundle: updatedBundle,
+        userId: job.userId,
+        approvalId: approval.id,
+        memoryIds: capturedMemoryIds
+      });
+    }
+  } else if (!shouldExecuteApprovedTask) {
+    await finalizeApprovalEvidenceRecord({
+      repository,
+      bundle: updatedBundle,
+      userId: job.userId,
+      approvalId: approval.id,
+      memoryIds: []
+    });
+  }
+
+  if (isSlackReady()) {
+    await enqueueApprovalNotificationJob({
+      repository,
+      userId: job.userId,
+      approvalId: approval.id,
+      goalId: updatedBundle.goal.id,
+      taskId: task.id,
+      decision: job.payload.decision,
+      channel: "slack",
+      workspaceId: job.payload.workspaceId,
+      actorContext: job.actorContext,
+      replayedFromJobId: null
+    });
+  }
+}
+
+export async function executeApprovalNotificationJob(params: {
+  repository: AgenticRepository;
+  job: JobRecord;
+}) {
+  const { job, repository } = params;
+
+  if (!isApprovalNotificationJob(job)) {
+    throw new Error(`Expected an approval_notification payload for job ${job.id}.`);
+  }
+
+  const bundle = await repository.getGoalBundleForUser(job.payload.goalId, job.userId);
+
+  if (!bundle) {
+    throw new Error(`Goal ${job.payload.goalId} was not found.`);
+  }
+
+  const approval = bundle.approvals.find((candidate) => candidate.id === job.payload.approvalId);
+
+  if (!approval) {
+    throw new Error(`Approval ${job.payload.approvalId} was not found.`);
+  }
+
+  if (approval.taskId !== job.payload.taskId) {
+    throw new Error(`Approval ${approval.id} no longer matches queued task ${job.payload.taskId}.`);
+  }
+
+  if (approval.decision !== job.payload.decision) {
+    throw new Error(
+      `Approval ${approval.id} decision changed from ${job.payload.decision} to ${approval.decision}.`
+    );
+  }
+
+  const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
+
+  if (!task) {
+    throw new Error(`Task ${approval.taskId} was not found for approval ${approval.id}.`);
+  }
+
+  const statusEmoji = job.payload.decision === "approved" ? "\u2713" : "\u2717";
+  const statusLabel = job.payload.decision === "approved" ? "Approved" : "Rejected";
+  const receiptLabel = job.payload.decision === "approved" ? "Approved" : "Rejected";
+
+  switch (job.payload.channel) {
+    case "slack":
+      if (!isSlackReady()) {
+        throw new Error("Slack integration is not configured.");
+      }
+
+      await sendNotification({
+        channel: process.env.SLACK_DEFAULT_CHANNEL ?? "#approvals",
+        text: `${statusEmoji} ${statusLabel}: ${task.title}`
+      });
+      return;
+    case "slack_receipt":
+      if (!isSlackReady()) {
+        throw new Error("Slack integration is not configured.");
+      }
+
+      await updateMessage({
+        channel: job.payload.slackChannelId,
+        ts: job.payload.slackMessageTs,
+        text: `${statusEmoji} ${receiptLabel}: ${task.title}`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `${statusEmoji} *${receiptLabel}:* ${task.title}`
+            }
+          },
+          {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: `Decision recorded via Slack worker for approval ${approval.id}.`
+              }
+            ]
+          }
+        ]
+      });
+      return;
+    case "telegram_receipt":
+      if (!isTelegramReady()) {
+        throw new Error("Telegram integration is not configured.");
+      }
+
+      await updateTelegramMessage({
+        chatId: job.payload.telegramChatId,
+        messageId: job.payload.telegramMessageId,
+        text: `${job.payload.decision === "approved" ? "\u2705" : "\u274c"} ${receiptLabel}: ${task.title}`
+      });
+      return;
   }
 }
 
@@ -1624,6 +2387,17 @@ export function createWorkerJobHandlers(params: {
         selfImprovementRepository: params.selfImprovementRepository,
         job,
         retryPolicy: params.retryPolicy
+      })),
+    approval_follow_up: wrapHandler("approval_follow_up", (job) =>
+      executeApprovalFollowUpJob({
+        repository: params.repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        job
+      })),
+    approval_notification: wrapHandler("approval_notification", (job) =>
+      executeApprovalNotificationJob({
+        repository: params.repository,
+        job
       })),
     privacy_operation: wrapHandler("privacy_operation", (job) =>
       executePrivacyOperationJob({

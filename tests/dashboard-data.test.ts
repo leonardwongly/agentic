@@ -66,6 +66,51 @@ describe("assembleDashboardData instrumentation", () => {
       }),
       buildOperatingSections: () => ({
         generatedAt: "2024-01-01T00:00:00.000Z",
+        roleView: {
+          role: null,
+          label: "Setup view",
+          summary: "No active workspace is selected.",
+          focusAreas: [],
+          prioritizedSectionKeys: []
+        },
+        teamWorkflow: {
+          mode: "setup",
+          label: "Team workflow not active",
+          summary: "No active workspace is selected.",
+          visibilityLabel: "Setup-only visibility",
+          queueMetrics: [],
+          actionBoundaries: [],
+          handoffGuidance: [],
+          permissions: {
+            manageMembers: {
+              allowed: false,
+              reason: "Select or create a workspace before managing members."
+            },
+            editGovernance: {
+              allowed: false,
+              reason: "Select a workspace before editing governance controls."
+            },
+            exportAudit: {
+              allowed: false,
+              reason: "Select a workspace before exporting workspace audit evidence."
+            },
+            managePrivacyOperations: {
+              allowed: false,
+              reason: "Select a workspace before running privacy lifecycle operations."
+            }
+          },
+          escalationTargetRole: null,
+          slaStatus: "attention",
+          slaSummary: "A workspace must be activated before team ownership can be enforced."
+        },
+        nextBestAction: {
+          kind: "configure_workspace",
+          label: "Activate a workspace",
+          summary: "Select or create a workspace before using the operator shell.",
+          status: "attention",
+          targetSection: "workspaces",
+          role: null
+        },
         sections: []
       }),
       buildBriefingHistory: () => [],
@@ -137,6 +182,51 @@ describe("assembleDashboardData instrumentation", () => {
       }),
       buildOperatingSections: () => ({
         generatedAt: "2024-01-01T00:00:00.000Z",
+        roleView: {
+          role: null,
+          label: "Setup view",
+          summary: "No active workspace is selected.",
+          focusAreas: [],
+          prioritizedSectionKeys: []
+        },
+        teamWorkflow: {
+          mode: "setup",
+          label: "Team workflow not active",
+          summary: "No active workspace is selected.",
+          visibilityLabel: "Setup-only visibility",
+          queueMetrics: [],
+          actionBoundaries: [],
+          handoffGuidance: [],
+          permissions: {
+            manageMembers: {
+              allowed: false,
+              reason: "Select or create a workspace before managing members."
+            },
+            editGovernance: {
+              allowed: false,
+              reason: "Select a workspace before editing governance controls."
+            },
+            exportAudit: {
+              allowed: false,
+              reason: "Select a workspace before exporting workspace audit evidence."
+            },
+            managePrivacyOperations: {
+              allowed: false,
+              reason: "Select a workspace before running privacy lifecycle operations."
+            }
+          },
+          escalationTargetRole: null,
+          slaStatus: "attention",
+          slaSummary: "A workspace must be activated before team ownership can be enforced."
+        },
+        nextBestAction: {
+          kind: "configure_workspace",
+          label: "Activate a workspace",
+          summary: "Select or create a workspace before using the operator shell.",
+          status: "attention",
+          targetSection: "workspaces",
+          role: null
+        },
         sections: []
       }),
       buildBriefingHistory: () => [],

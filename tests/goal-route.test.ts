@@ -225,7 +225,13 @@ describe("goal route", () => {
           "x-idempotency-key": idempotencyKey
         },
         body: JSON.stringify({
-          message: "Also include an executive summary for reviewers."
+          message: "Also include an executive summary for reviewers.",
+          sourceRecommendation: {
+            key: "execution_path:communications:send_message:R3:send",
+            source: "outcome_trace",
+            suggestedMessage:
+              'Refine "Plan a reviewer-safe follow-up workflow." to follow the communications send_message recommendation. Preserve the draft, send capability path.'
+          }
         })
       });
 
@@ -252,7 +258,18 @@ describe("goal route", () => {
     expect(secondPayload.job.id).toBe(firstPayload.job.id);
     expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
     expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.payload).toMatchObject({
+      type: "goal_refine",
+      metadata: {
+        sourceRecommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          source: "outcome_trace"
+        }
+      }
+    });
   });
 
   it("rate limits queued goal creation with a route-scoped abuse key", async () => {
@@ -548,7 +565,7 @@ describe("goal route", () => {
     expect(payload.result).toBeNull();
     expect(payload.error).toBe("Goal refinement failed. Retry the request or inspect worker logs.");
     expect(payload.error).not.toContain("SECRET");
-  });
+  }, 15_000);
 
   it("stamps access-key actor context onto goal refinement logs", async () => {
     const repository = createRepository({

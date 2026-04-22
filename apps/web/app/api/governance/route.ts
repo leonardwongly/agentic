@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { WorkspaceGovernanceSchema } from "@agentic/contracts";
+import { WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema } from "@agentic/contracts";
 import {
   assessWorkspaceGovernanceConformance,
+  buildAutonomyBudget,
   buildGovernanceSimulationScenarios,
   simulateGovernanceScenarios
 } from "@agentic/policy";
@@ -18,6 +19,7 @@ const GovernanceUpdateSchema = z
     maxAutoRunRiskClass: WorkspaceGovernanceSchema.shape.maxAutoRunRiskClass.optional(),
     externalSendRequiresApproval: z.boolean().optional(),
     calendarWriteRequiresApproval: z.boolean().optional(),
+    shadowReplayPolicy: WorkspaceShadowReplayPolicySchema.partial().strict().optional(),
     retentionDays: WorkspaceGovernanceSchema.shape.retentionDays.optional()
   })
   .strict();
@@ -34,9 +36,16 @@ async function resolveWorkspaceContext(userId: string) {
   return { repository, dashboard, activeWorkspace };
 }
 
+function assertOwnerCanEditGovernance(activeWorkspace: { ownerUserId: string }, userId: string) {
+  if (activeWorkspace.ownerUserId !== userId) {
+    throw new ApiRouteError(403, "Only the workspace owner can update governance.");
+  }
+}
+
 function buildGovernanceResponse(governance: z.infer<typeof WorkspaceGovernanceSchema> | null, dashboard: unknown) {
   return {
     governance,
+    autonomyBudget: buildAutonomyBudget(governance),
     conformance: assessWorkspaceGovernanceConformance(governance),
     simulations: simulateGovernanceScenarios({
       governance,
@@ -64,6 +73,7 @@ export async function POST(request: Request) {
     const principal = await requireApiSession(request);
     const actor = createActorContextFromPrincipal(principal);
     const { repository, activeWorkspace } = await resolveWorkspaceContext(principal.userId);
+    assertOwnerCanEditGovernance(activeWorkspace, principal.userId);
     const body = await parseJsonBody(request, GovernanceUpdateSchema);
     const current =
       (await repository.getWorkspaceGovernance(activeWorkspace.id, principal.userId)) ??
@@ -74,6 +84,7 @@ export async function POST(request: Request) {
         maxAutoRunRiskClass: "R1",
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
+        shadowReplayPolicy: {},
         retentionDays: 365,
         updatedBy: principal.userId,
         createdAt: activeWorkspace.createdAt,
@@ -83,6 +94,10 @@ export async function POST(request: Request) {
     const updated = WorkspaceGovernanceSchema.parse({
       ...current,
       ...body,
+      shadowReplayPolicy: {
+        ...current.shadowReplayPolicy,
+        ...(body.shadowReplayPolicy ?? {})
+      },
       updatedBy: principal.userId,
       updatedAt: new Date().toISOString()
     });

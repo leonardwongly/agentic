@@ -1,7 +1,18 @@
 "use client";
 
 import type { ApprovalRequest, GoalBundle } from "@agentic/contracts";
-import { StatusBadge, RiskBadge, RelativeTime, CopyableText } from "../ui";
+import {
+  StatusBadge,
+  RiskBadge,
+  RelativeTime,
+  CopyableText,
+  ExecutionModeBadge,
+  ImplementationTierBadge,
+  findTaskExecutionMode,
+  formatConfidencePercentage,
+  getImplementationTierPresentation,
+  getExecutionModePresentation
+} from "../ui";
 
 type ApprovalDetailPanelProps = {
   approval: ApprovalRequest;
@@ -27,7 +38,9 @@ const riskAssessmentCopy: Record<ApprovalRequest["riskClass"], string> = {
 export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject, isPending }: ApprovalDetailPanelProps) {
   const relatedTask = relatedGoal?.tasks.find((t) => t.id === approval.taskId);
   const impact = approval.preview.impact;
-  const goalConfidence = relatedGoal ? `${Math.round(relatedGoal.goal.confidence * 100)}%` : null;
+  const goalConfidence = relatedGoal ? formatConfidencePercentage(relatedGoal.goal.confidence) : null;
+  const relatedTaskExecutionMode =
+    relatedGoal && relatedTask ? findTaskExecutionMode(relatedTask, relatedGoal.artifacts) : null;
 
   return (
     <div className="detail-panel">
@@ -153,12 +166,21 @@ export function ApprovalDetailPanel({ approval, relatedGoal, onApprove, onReject
               <div className="detail-list-badges">
                 <StatusBadge status={relatedTask.state} />
                 <RiskBadge riskClass={relatedTask.riskClass} />
+                <ImplementationTierBadge mode={relatedTaskExecutionMode} />
+                <ExecutionModeBadge mode={relatedTaskExecutionMode} />
               </div>
             </div>
             <p className="detail-list-summary">{relatedTask.summary}</p>
             <div className="detail-list-meta">
               <span>Agent: {relatedTask.assignedAgent}</span>
               <span>Capabilities: {relatedTask.toolCapabilities.join(", ") || "none"}</span>
+            </div>
+            <div className="detail-list-meta">
+              <span>Implementation tier: <strong>{getImplementationTierPresentation(relatedTaskExecutionMode).label}</strong></span>
+            </div>
+            <div className="detail-list-meta">
+              <span>Execution mode: <strong>{getExecutionModePresentation(relatedTaskExecutionMode).label}</strong></span>
+              {goalConfidence ? <span>Goal confidence: <strong>{goalConfidence}</strong></span> : null}
             </div>
           </div>
         </div>

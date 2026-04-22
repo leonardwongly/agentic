@@ -1,4 +1,6 @@
 import {
+  buildApprovalNotificationDeliveryTarget,
+  createJobExecutionJournal,
   JobRecordSchema,
   JobStatusSchema,
   TaskSchema,
@@ -11,9 +13,9 @@ import {
   type Capability,
   type Goal,
   type JobKind,
+  type JobPayload,
   type JobRecord,
   type JobStatus,
-  type JobPayload,
   type RiskClass,
   type Task,
   type TaskState,
@@ -117,6 +119,42 @@ const defaultRetryPolicy: JobRetryPolicy = {
   maxDelayMs: 5 * 60_000
 };
 
+function deriveJobSideEffectTarget(payload: JobPayload): string | null {
+  if (payload.type === "approval_follow_up") {
+    return `goal:${payload.goalId}:task:${payload.taskId}`;
+  }
+
+  if (payload.type === "approval_notification") {
+    return buildApprovalNotificationDeliveryTarget(payload);
+  }
+
+  if (payload.type === "autopilot_process") {
+    return `autopilot-event:${payload.autopilotEventId}`;
+  }
+
+  if ("goalId" in payload && typeof payload.goalId === "string" && payload.goalId.trim()) {
+    return `goal:${payload.goalId}`;
+  }
+
+  if (payload.type === "privacy_operation") {
+    return `privacy:${payload.operationId}`;
+  }
+
+  if (payload.type === "public_share_view") {
+    return `share:${payload.shareId}`;
+  }
+
+  return null;
+}
+
+function deriveReplayedFromJobId(payload: JobPayload): string | null {
+  const candidate =
+    payload.metadata && typeof payload.metadata.replayedFromJobId === "string"
+      ? payload.metadata.replayedFromJobId.trim()
+      : "";
+  return candidate || null;
+}
+
 export function createWorkflowState(
   goalId: string,
   currentStep = "intake",
@@ -183,6 +221,7 @@ export function createJobRecord(params: {
   availableAt?: string;
 }): JobRecord {
   const timestamp = nowIso();
+  const replayedFromJobId = deriveReplayedFromJobId(params.payload);
 
   return JobRecordSchema.parse({
     id: crypto.randomUUID(),
@@ -202,6 +241,20 @@ export function createJobRecord(params: {
     completedAt: null,
     deadLetteredAt: null,
     lastError: null,
+    journal: createJobExecutionJournal({
+      at: timestamp,
+      status: "queued",
+      attemptCount: 0,
+      maxAttempts: params.maxAttempts ?? 3,
+      idempotencyKey: params.idempotencyKey?.trim() || null,
+      sideEffectTarget: deriveJobSideEffectTarget(params.payload),
+      replayedFromJobId,
+      summary: replayedFromJobId
+        ? `Replay queued from job ${replayedFromJobId}.`
+        : "Job queued for worker execution.",
+      recovery: null,
+      retryCount: 0
+    }),
     createdAt: timestamp,
     updatedAt: timestamp
   });

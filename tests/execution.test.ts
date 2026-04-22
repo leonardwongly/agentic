@@ -1,4 +1,11 @@
-import { ApprovalRequestSchema, JobRecordSchema, WatcherSchema, nowIso } from "@agentic/contracts";
+import {
+  appendJobExecutionJournalEntry,
+  ApprovalRequestSchema,
+  deriveJobRecoveryState,
+  JobRecordSchema,
+  WatcherSchema,
+  nowIso
+} from "@agentic/contracts";
 import {
   computeJobRetryDelayMs,
   createDurableJobQueue,
@@ -106,6 +113,19 @@ describe("execution", () => {
     });
 
     expect(job.status).toBe("queued");
+    expect(job.journal).toMatchObject({
+      lifecycleState: "queued",
+      retryCount: 0,
+      sideEffectTarget: "goal:goal-1",
+      replayedFromJobId: null,
+      recovery: null
+    });
+    expect(job.journal.entries).toHaveLength(1);
+    expect(job.journal.entries[0]).toMatchObject({
+      state: "queued",
+      attempt: 0,
+      summary: "Job queued for worker execution."
+    });
     expect(isJobClaimable(job, Date.parse(job.availableAt))).toBe(true);
     expect(computeJobRetryDelayMs(1, { baseDelayMs: 500, maxDelayMs: 5_000 })).toBe(500);
     expect(computeJobRetryDelayMs(4, { baseDelayMs: 500, maxDelayMs: 2_000 })).toBe(2_000);
@@ -152,6 +172,24 @@ describe("execution", () => {
             leaseExpiresAt: null,
             availableAt: params.availableAt,
             lastError: params.error,
+            journal: appendJobExecutionJournalEntry({
+              journal: baseJob.journal,
+              at: params.availableAt,
+              status: "retrying",
+              attemptCount: 1,
+              summary: "Attempt 1 failed and retry 2 was scheduled.",
+              error: params.error,
+              metadata: {
+                nextAvailableAt: params.availableAt
+              },
+              retryCount: 1,
+              recovery: deriveJobRecoveryState({
+                jobId: params.jobId,
+                status: "retrying",
+                payload: baseJob.payload,
+                replayedFromJobId: baseJob.journal.replayedFromJobId
+              })
+            }),
             updatedAt: params.availableAt
           });
         },
@@ -167,6 +205,21 @@ describe("execution", () => {
             leaseExpiresAt: null,
             deadLetteredAt: params.deadLetteredAt,
             lastError: params.error,
+            journal: appendJobExecutionJournalEntry({
+              journal: baseJob.journal,
+              at: params.deadLetteredAt,
+              status: "dead_letter",
+              attemptCount: 2,
+              summary: "Job dead-lettered after 2/2 attempts.",
+              error: params.error,
+              retryCount: 2,
+              recovery: deriveJobRecoveryState({
+                jobId: params.jobId,
+                status: "dead_letter",
+                payload: baseJob.payload,
+                replayedFromJobId: baseJob.journal.replayedFromJobId
+              })
+            }),
             updatedAt: params.deadLetteredAt
           });
         }
@@ -208,8 +261,35 @@ describe("execution", () => {
 
     expect(retried.status).toBe("retrying");
     expect(retried.availableAt).toBe("2026-04-16T00:00:00.500Z");
+    expect(retried.journal).toMatchObject({
+      lifecycleState: "retrying",
+      retryCount: 1,
+      recovery: {
+        strategy: "retry_job"
+      }
+    });
+    expect(retried.journal.entries.at(-1)).toMatchObject({
+      state: "retrying",
+      attempt: 1,
+      error: "temporary upstream failure",
+      metadata: {
+        nextAvailableAt: "2026-04-16T00:00:00.500Z"
+      }
+    });
     expect(deadLettered.status).toBe("dead_letter");
     expect(deadLettered.deadLetteredAt).toBe("2026-04-16T00:05:00.000Z");
+    expect(deadLettered.journal).toMatchObject({
+      lifecycleState: "dead_letter",
+      retryCount: 2,
+      recovery: {
+        strategy: "manual_review"
+      }
+    });
+    expect(deadLettered.journal.entries.at(-1)).toMatchObject({
+      state: "dead_letter",
+      attempt: 2,
+      error: "permanent upstream failure"
+    });
     expect(recordedCalls.map((call) => call.type)).toEqual(["retry", "dead_letter"]);
   });
 

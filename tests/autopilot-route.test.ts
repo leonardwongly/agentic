@@ -131,6 +131,16 @@ describe("autopilot events route", () => {
       event: {
         status: string;
         actorContext: unknown;
+        details: {
+          eventEnvelope?: {
+            family: string;
+            trigger: string;
+            priority: string;
+          };
+          suppression?: {
+            outcome: string;
+          };
+        };
       };
     };
 
@@ -138,6 +148,16 @@ describe("autopilot events route", () => {
     expect(payload.simulated).toBe(true);
     expect(payload.event.status).toBe("simulated");
     expect(payload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.event.details).toMatchObject({
+      eventEnvelope: {
+        family: "watcher",
+        trigger: "watcher_triggered",
+        priority: "high"
+      },
+      suppression: {
+        outcome: "allowed"
+      }
+    });
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
     await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
   });
@@ -513,6 +533,91 @@ describe("autopilot events route", () => {
     expect(persistedEvents.some((event) => event.status === "executed")).toBe(true);
     expect(persistedEvents.some((event) => event.status === "debounced")).toBe(true);
     expect(persistedEvents.every((event) => event.actorContext?.subjectUserId === SYSTEM_USER_ID)).toBe(true);
+  });
+
+  it("suppresses watcher-triggered events when the source budget is exhausted", async () => {
+    const { repository, bundle } = await createGoalForUser("Watch for repeated VIP escalations.");
+    const watcher = WatcherSchema.parse({
+      id: "watcher-autopilot-budget",
+      goalId: bundle.goal.id,
+      targetEntity: "vip-escalations",
+      condition: "repeated urgent escalations arrive in a short window",
+      frequency: "hourly",
+      triggerAction: "draft the next operator response",
+      sourceSystems: ["email"],
+      status: "active",
+      expiryAt: null,
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+
+    await repository.saveWatcher(watcher);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const firstResponse = await autopilotEventsRoute(
+      buildRequest({
+        kind: "watcher_triggered",
+        sourceId: watcher.id,
+        mode: "draft_goal",
+        budget: {
+          key: "watcher:vip-escalations",
+          windowMinutes: 60,
+          maxEvents: 1,
+          scope: "source"
+        }
+      })
+    );
+    const secondResponse = await autopilotEventsRoute(
+      buildRequest({
+        kind: "watcher_triggered",
+        sourceId: watcher.id,
+        mode: "draft_goal",
+        budget: {
+          key: "watcher:vip-escalations",
+          windowMinutes: 60,
+          maxEvents: 1,
+          scope: "source"
+        }
+      })
+    );
+    const secondPayload = (await secondResponse.json()) as {
+      ignored?: boolean;
+      event: {
+        status: string;
+        details: {
+          budget?: {
+            key: string;
+          };
+          suppression?: {
+            outcome: string;
+            budgetKey: string | null;
+            observedCount: number | null;
+          };
+        };
+      };
+    };
+    const queuedJobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["autopilot_process"]
+    });
+    const persistedEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(200);
+    expect(secondPayload.ignored).toBe(true);
+    expect(secondPayload.event.status).toBe("ignored");
+    expect(secondPayload.event.details).toMatchObject({
+      budget: {
+        key: "watcher:vip-escalations"
+      },
+      suppression: {
+        outcome: "budget_exhausted",
+        budgetKey: "watcher:vip-escalations",
+        observedCount: 1
+      }
+    });
+    expect(queuedJobs).toHaveLength(1);
+    expect(persistedEvents.map((event) => event.status).sort()).toEqual(["ignored", "pending"]);
   });
 
   it("stamps the human actor when a session principal executes a template-triggered event", async () => {

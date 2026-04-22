@@ -85,6 +85,7 @@ type AssembleDashboardDataParams = {
     now?: number;
   }) => NowQueue;
   buildOperatingSections: (params: {
+    userId: string;
     activeWorkspace: Workspace | null;
     workspaceMembers: WorkspaceMember[];
     workspaceGovernance: WorkspaceGovernance | null;
@@ -105,7 +106,12 @@ type AssembleDashboardDataParams = {
   }) => DashboardOperatingSections;
   buildOperations?: (params: {
     activeWorkspace: Workspace | null;
+    workspaceGovernance: WorkspaceGovernance | null;
+    autopilotSettings: AutopilotSettings;
     goals: GoalBundle[];
+    approvals: ApprovalRequest[];
+    autopilotEvents: AutopilotEvent[];
+    integrations: IntegrationAccount[];
     jobs: JobRecord[];
     providerCredentials: ProviderCredential[];
     generatedAt: string;
@@ -260,7 +266,12 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
   const operations = params.buildOperations
     ? params.buildOperations({
         activeWorkspace: params.activeWorkspace,
+        workspaceGovernance: params.workspaceGovernance,
+        autopilotSettings: params.autopilotSettings,
         goals: scopedGoals,
+        approvals: scopedApprovals,
+        autopilotEvents: params.autopilotEvents,
+        integrations: params.integrations,
         jobs: params.jobs ?? [],
         providerCredentials: params.providerCredentials ?? [],
         generatedAt: new Date(dashboardNow).toISOString()
@@ -283,6 +294,7 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
   const latestArtifacts = params.sortArtifacts(scopedGoals.flatMap((bundle) => bundle.artifacts)).slice(0, 8);
   const actionLogs = params.sortActionLogs(scopedGoals.flatMap((bundle) => bundle.actionLogs)).slice(0, 20);
   const operatingSections = params.buildOperatingSections({
+    userId: params.userId,
     activeWorkspace: params.activeWorkspace,
     workspaceMembers: params.workspaceMembers,
     workspaceGovernance: params.workspaceGovernance,

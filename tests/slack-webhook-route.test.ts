@@ -1,4 +1,13 @@
-import { SYSTEM_USER_ID, briefingTypeValues, createHumanActorContext, type ActorContext } from "@agentic/contracts";
+import {
+  SYSTEM_USER_ID,
+  briefingTypeValues,
+  createHumanActorContext,
+  nowIso,
+  type ActorContext,
+  type JobKind,
+  type JobRecord,
+  type JobStatus
+} from "@agentic/contracts";
 import { ApprovalMutationError, type AgenticRepository } from "@agentic/repository";
 import { vi } from "vitest";
 import { buildSlackApprovalToken } from "../apps/web/lib/slack-approvals";
@@ -18,19 +27,24 @@ const { verifySlackSignatureMock, updateMessageMock } = vi.hoisted(() => ({
   updateMessageMock: vi.fn(async () => undefined)
 }));
 
-vi.mock("@agentic/integrations", () => ({
-  verifySlackSignature: verifySlackSignatureMock,
-  updateMessage: updateMessageMock,
-  isGmailReady: () => false,
-  isCalendarReady: () => false,
-  createDraft: vi.fn(),
-  sendDraft: vi.fn(),
-  listRecentEmails: vi.fn(),
-  createEvent: vi.fn(),
-  updateEvent: vi.fn(),
-  listUpcomingEvents: vi.fn(),
-  createLocalNote: vi.fn()
-}));
+vi.mock("@agentic/integrations", async () => {
+  const actual = await vi.importActual<typeof import("@agentic/integrations")>("@agentic/integrations");
+
+  return {
+    ...actual,
+    verifySlackSignature: verifySlackSignatureMock,
+    updateMessage: updateMessageMock,
+    isGmailReady: () => false,
+    isCalendarReady: () => false,
+    createDraft: vi.fn(),
+    sendDraft: vi.fn(),
+    listRecentEmails: vi.fn(),
+    createEvent: vi.fn(),
+    updateEvent: vi.fn(),
+    listUpcomingEvents: vi.fn(),
+    createLocalNote: vi.fn()
+  };
+});
 
 vi.mock("../apps/web/lib/server", () => ({
   getSeededRepository: async () => Reflect.get(globalThis, "__agenticRepository") as AgenticRepository,
@@ -40,6 +54,181 @@ vi.mock("../apps/web/lib/server", () => ({
 }));
 
 import { POST as slackWebhookRoute } from "../apps/web/app/api/slack/webhook/route";
+
+function createFakeJobStore() {
+  const jobs = new Map<string, JobRecord>();
+
+  const filterJobs = (params?: {
+    userId?: string;
+    kinds?: JobKind[];
+    statuses?: JobStatus[];
+  }) =>
+    Array.from(jobs.values()).filter((job) => {
+      if (params?.userId && job.userId !== params.userId) {
+        return false;
+      }
+
+      if (params?.kinds?.length && !params.kinds.includes(job.kind)) {
+        return false;
+      }
+
+      if (params?.statuses?.length && !params.statuses.includes(job.status)) {
+        return false;
+      }
+
+      return true;
+    });
+
+  const getOwnedJob = (jobId: string, userId?: string) => {
+    const job = jobs.get(jobId) ?? null;
+
+    if (!job) {
+      return null;
+    }
+
+    if (userId && job.userId !== userId) {
+      return null;
+    }
+
+    return job;
+  };
+
+  return {
+    async listJobs(params?: {
+      userId?: string;
+      kinds?: JobKind[];
+      statuses?: JobStatus[];
+    }) {
+      return filterJobs(params);
+    },
+    async getJob(jobId: string, userId = SYSTEM_USER_ID) {
+      return getOwnedJob(jobId, userId);
+    },
+    async enqueueJob(job: JobRecord) {
+      if (job.idempotencyKey) {
+        const existing = filterJobs({ userId: job.userId }).find(
+          (candidate) => candidate.idempotencyKey === job.idempotencyKey
+        );
+
+        if (existing) {
+          return existing;
+        }
+      }
+
+      jobs.set(job.id, job);
+      return job;
+    },
+    async claimNextJob(params: {
+      userId?: string;
+      kinds?: JobKind[];
+      runnerId: string;
+      leaseMs: number;
+      now?: string;
+    }) {
+      const now = params.now ?? nowIso();
+      const candidate = filterJobs({
+        userId: params.userId ?? SYSTEM_USER_ID,
+        kinds: params.kinds,
+        statuses: ["queued", "retrying"]
+      })
+        .filter((job) => job.availableAt <= now)
+        .sort((left, right) => left.availableAt.localeCompare(right.availableAt))[0];
+
+      if (!candidate) {
+        return null;
+      }
+
+      const leasedUntil = new Date(Date.parse(now) + params.leaseMs).toISOString();
+      const claimed = {
+        ...candidate,
+        status: "running" as const,
+        runnerId: params.runnerId,
+        attemptCount: candidate.attemptCount + 1,
+        startedAt: candidate.startedAt ?? now,
+        leasedUntil,
+        updatedAt: now
+      };
+
+      jobs.set(claimed.id, claimed);
+      return claimed;
+    },
+    async completeJob(params: {
+      jobId: string;
+      runnerId: string;
+      completedAt?: string;
+    }) {
+      const job = getOwnedJob(params.jobId);
+
+      if (!job) {
+        throw new Error(`Job ${params.jobId} was not found.`);
+      }
+
+      const completedAt = params.completedAt ?? nowIso();
+      const completed = {
+        ...job,
+        status: "completed" as const,
+        runnerId: null,
+        leasedUntil: null,
+        completedAt,
+        updatedAt: completedAt
+      };
+
+      jobs.set(completed.id, completed);
+      return completed;
+    },
+    async retryJob(params: {
+      jobId: string;
+      runnerId: string;
+      availableAt: string;
+      error: string;
+    }) {
+      const job = getOwnedJob(params.jobId);
+
+      if (!job) {
+        throw new Error(`Job ${params.jobId} was not found.`);
+      }
+
+      const retried = {
+        ...job,
+        status: "retrying" as const,
+        runnerId: null,
+        leasedUntil: null,
+        availableAt: params.availableAt,
+        lastError: params.error,
+        updatedAt: params.availableAt
+      };
+
+      jobs.set(retried.id, retried);
+      return retried;
+    },
+    async deadLetterJob(params: {
+      jobId: string;
+      runnerId: string;
+      deadLetteredAt?: string;
+      error: string;
+    }) {
+      const job = getOwnedJob(params.jobId);
+
+      if (!job) {
+        throw new Error(`Job ${params.jobId} was not found.`);
+      }
+
+      const deadLetteredAt = params.deadLetteredAt ?? nowIso();
+      const deadLettered = {
+        ...job,
+        status: "dead_letter" as const,
+        runnerId: null,
+        leasedUntil: null,
+        deadLetteredAt,
+        lastError: params.error,
+        updatedAt: deadLetteredAt
+      };
+
+      jobs.set(deadLettered.id, deadLettered);
+      return deadLettered;
+    }
+  };
+}
 
 function buildSlackRequest(actionId: string, actionValue: string, slackUserId = "U123") {
   const payload = {
@@ -70,6 +259,7 @@ function buildSlackRequest(actionId: string, actionValue: string, slackUserId = 
 }
 
 function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRepository {
+  const jobStore = createFakeJobStore();
   const timestamp = "2024-01-01T00:00:00.000Z";
   const workspace = {
     id: "workspace-personal-system-user",
@@ -184,6 +374,13 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     getWorkflowTemplate: async () => null,
     saveWorkflowTemplate: async (template) => template,
     deleteWorkflowTemplate: async () => {},
+    listJobs: jobStore.listJobs,
+    getJob: jobStore.getJob,
+    enqueueJob: jobStore.enqueueJob,
+    claimNextJob: jobStore.claimNextJob,
+    completeJob: jobStore.completeJob,
+    retryJob: jobStore.retryJob,
+    deadLetterJob: jobStore.deadLetterJob,
     getDashboardData: async () => ({
       workspaces: [workspace],
       activeWorkspace: workspace,
@@ -231,6 +428,51 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       },
       operatingSections: {
         generatedAt: timestamp,
+        roleView: {
+          role: "owner",
+          label: "Owner view",
+          summary: "Owners should clear blockers first.",
+          focusAreas: ["Keep the queue moving."],
+          prioritizedSectionKeys: ["now", "execution", "trust"]
+        },
+        teamWorkflow: {
+          mode: "owner_control",
+          label: "Owner-controlled team workflow",
+          summary: "Owners are the policy authority and should keep delegation and approvals bounded.",
+          visibilityLabel: "Full queue, approval, and governance visibility",
+          queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
+          actionBoundaries: ["Owners can manage membership, governance posture, and approval decisions."],
+          handoffGuidance: ["Route execution triage to editors and keep final policy decisions with the owner boundary."],
+          permissions: {
+            manageMembers: {
+              allowed: true,
+              reason: "Owners can change workspace membership."
+            },
+            editGovernance: {
+              allowed: true,
+              reason: "Owners can change workspace governance posture."
+            },
+            exportAudit: {
+              allowed: true,
+              reason: "Workspace members can export audit evidence."
+            },
+            managePrivacyOperations: {
+              allowed: true,
+              reason: "Owners can run privacy lifecycle operations."
+            }
+          },
+          escalationTargetRole: null,
+          slaStatus: "healthy",
+          slaSummary: "Shared approvals and queue ownership are currently inside the expected response window."
+        },
+        nextBestAction: {
+          kind: "review_now",
+          label: "Inspect the live queue",
+          summary: "The operator shell is clear enough to inspect the live queue.",
+          status: "healthy",
+          targetSection: "now",
+          role: "owner"
+        },
         sections: [
           {
             key: "now",
@@ -317,302 +559,99 @@ describe("slack webhook route", () => {
       scope?: string;
       rationale?: string | null;
     }> = [];
-
-    Reflect.set(
-      globalThis,
-      "__agenticRepository",
-      createFakeRepository({
-        getGoalBundleForUser: async (goalId, userId) =>
-          goalId === "goal-1" && userId === "user-slack"
-            ? {
-                goal: {
-                  id: "goal-1",
-                  userId,
-                  request: "Review my inbox",
-                  title: "Review inbox",
-                  explanation: "Review inbox and draft responses.",
-                  intent: "communications-triage",
-                  status: "running",
-                  workspaceId: "workspace-personal-system-user",
-                  workflowId: "workflow-1",
-                  confidence: 0.84,
-                  createdAt: "2024-01-01T00:00:00.000Z",
-                  updatedAt: "2024-01-01T00:00:00.000Z"
-                },
-                workflow: {
-                  id: "workflow-1",
-                  goalId: "goal-1",
-                  workspaceId: "workspace-personal-system-user",
-                  status: "running",
-                  currentStep: "Awaiting approval",
-                  checkpoint: "approval-gate",
-                  createdAt: "2024-01-01T00:00:00.000Z",
-                  updatedAt: "2024-01-01T00:00:00.000Z"
-                },
-                tasks: [
-                  {
-                    id: "task-1",
-                    goalId: "goal-1",
-                    workflowId: "workflow-1",
-                    title: "Draft reply",
-                    summary: "Prepare an external response.",
-                    assignedAgent: "communications",
-                    state: "waiting",
-                    priority: "P1",
-                    riskClass: "R3",
-                    needsApproval: true,
-                    requiresApproval: true,
-                    toolCapabilities: ["send"],
-                    dependsOn: [],
-                    artifactIds: [],
-                    createdAt: "2024-01-01T00:00:00.000Z",
-                    updatedAt: "2024-01-01T00:00:00.000Z"
-                  }
-                ],
-                approvals: [
-                  {
-                    id: "approval-safe",
-                    goalId: "goal-1",
-                    taskId: "task-1",
-                    title: "Send reply",
-                    rationale: "External email send.",
-                    riskClass: "R3",
-                    decision: "pending",
-                    requestedAction: "Send the drafted reply",
-                    preview: {
-                      actionType: "send",
-                      target: "customer@example.com",
-                      summary: "Send the drafted reply to the customer.",
-                      changes: [],
-                      impact: {
-                        affectedPeople: ["customer@example.com"],
-                        affectedSystems: ["email"],
-                        permissions: ["send"],
-                        rollback: "manual"
-                      }
-                    },
-                    decisionScope: null,
-                    decisionRationale: null,
-                    history: [],
-                    createdAt: "2024-01-01T00:00:00.000Z",
-                    expiryAt: "2099-01-01T00:00:00.000Z",
-                    respondedAt: null
-                  }
-                ],
-                artifacts: [],
-                memories: [],
-                watchers: [],
-                actionLogs: []
-              }
-            : null,
-        respondToApproval: async (input) => {
-          approvalCalls.push({
-            approvalId: input.approvalId,
-            decision: input.decision,
-            actor: input.actor,
-            scope: input.scope,
-            rationale: input.rationale
-          });
-          return {
-            goal: {
-              id: "goal-1",
-              userId: input.actor.subjectUserId,
-              request: "Review my inbox",
-              title: "Review inbox",
-              explanation: "Review inbox and draft responses.",
-              intent: "communications-triage",
-              status: "running",
-              createdAt: "2024-01-01T00:00:00.000Z",
-              updatedAt: "2024-01-01T00:00:00.000Z"
-            },
-            workflow: {
-              id: "workflow-1",
-              goalId: "goal-1",
-              status: "running",
-              checkpoint: "approval-gate",
-              summary: "Waiting on approval.",
-              createdAt: "2024-01-01T00:00:00.000Z",
-              updatedAt: "2024-01-01T00:00:00.000Z"
-            },
-            tasks: [
-              {
-                id: "task-1",
-                goalId: "goal-1",
-                title: "Draft reply",
-                summary: "Prepare an external response.",
-                state: "completed",
-                priority: "P1",
-                needsApproval: true,
+    const repository = createFakeRepository({
+      getGoalBundleForUser: async (goalId, userId) =>
+        goalId === "goal-1" && userId === "user-slack"
+          ? {
+              goal: {
+                id: "goal-1",
+                userId,
+                request: "Review my inbox",
+                title: "Review inbox",
+                explanation: "Review inbox and draft responses.",
+                intent: "communications-triage",
+                status: "running",
+                workspaceId: "workspace-personal-system-user",
+                workflowId: "workflow-1",
+                confidence: 0.84,
                 createdAt: "2024-01-01T00:00:00.000Z",
                 updatedAt: "2024-01-01T00:00:00.000Z"
-              }
-            ],
-            approvals: [
-              {
-                id: input.approvalId,
+              },
+              workflow: {
+                id: "workflow-1",
                 goalId: "goal-1",
-                taskId: "task-1",
-                title: "Send reply",
-                rationale: "External email send.",
-                riskClass: "R3",
-                decision: input.decision,
-                requestedAction: "Send the drafted reply",
-                preview: {
-                  actionType: "send",
-                  target: "customer@example.com",
-                  summary: "Send the drafted reply to the customer.",
-                  changes: [],
-                  impact: {
-                    affectedPeople: ["customer@example.com"],
-                    affectedSystems: ["email"],
-                    permissions: ["send"],
-                    rollback: "manual"
-                  }
-                },
-                decisionScope: input.scope ?? null,
-                decisionRationale: input.rationale ?? null,
-                history: [
-                  {
-                    decision: input.decision,
-                    scope: input.scope ?? "once",
-                    rationale: input.rationale ?? null,
-                    actor: input.actor.executor.userId ?? input.actor.executor.label,
-                    actorContext: input.actor,
-                    createdAt: "2024-01-01T00:00:00.000Z"
-                  }
-                ],
+                workspaceId: "workspace-personal-system-user",
+                status: "running",
+                currentStep: "Awaiting approval",
+                checkpoint: "approval-gate",
                 createdAt: "2024-01-01T00:00:00.000Z",
-                expiryAt: null,
-                respondedAt: "2024-01-01T00:00:00.000Z"
-              }
-            ],
-            artifacts: [],
-            memories: [],
-            watchers: [],
-            actionLogs: []
-          };
-        },
-        saveGoalBundle: async (bundle) => bundle
-      })
-    );
-
-    const response = await slackWebhookRoute(
-      buildSlackRequest(
-        "approval_approve",
-        buildSlackApprovalToken({
-          approvalId: "approval-safe",
-          goalId: "goal-1",
-          workspaceId: "workspace-personal-system-user",
-          expiresAt: "2099-01-01T00:00:00.000Z"
-        })
-      )
-    );
-    const payload = (await response.json()) as { ok?: boolean };
-
-    expect(response.status).toBe(200);
-    expect(payload.ok).toBe(true);
-    expect(approvalCalls).toEqual([
-      {
-        approvalId: "approval-safe",
-        decision: "approved",
-        actor: createHumanActorContext("user-slack"),
-        scope: "once",
-        rationale: null
-      }
-    ]);
-  });
-
-  it("stamps mapped Slack actor context onto auto-captured memories", async () => {
-    const savedMemories: Array<{ actorContext?: ActorContext | null; category: string; content: string }> = [];
-
-    Reflect.set(
-      globalThis,
-      "__agenticRepository",
-      createFakeRepository({
-        getGoalBundleForUser: async (goalId, userId) =>
-          goalId === "goal-1" && userId === "user-slack"
-            ? {
-                goal: {
-                  id: "goal-1",
-                  userId,
-                  request: "Review my inbox",
-                  title: "Review inbox",
-                  explanation: "Review inbox and draft responses.",
-                  intent: "communications-triage",
-                  status: "running",
-                  workspaceId: "workspace-personal-system-user",
-                  workflowId: "workflow-1",
-                  confidence: 0.84,
-                  createdAt: "2024-01-01T00:00:00.000Z",
-                  updatedAt: "2024-01-01T00:00:00.000Z"
-                },
-                workflow: {
-                  id: "workflow-1",
+                updatedAt: "2024-01-01T00:00:00.000Z"
+              },
+              tasks: [
+                {
+                  id: "task-1",
                   goalId: "goal-1",
-                  workspaceId: "workspace-personal-system-user",
-                  status: "running",
-                  currentStep: "Awaiting approval",
-                  checkpoint: "approval-gate",
+                  workflowId: "workflow-1",
+                  title: "Draft reply",
+                  summary: "Prepare an external response.",
+                  assignedAgent: "communications",
+                  state: "waiting",
+                  priority: "P1",
+                  riskClass: "R3",
+                  needsApproval: true,
+                  requiresApproval: true,
+                  toolCapabilities: ["send"],
+                  dependsOn: [],
+                  artifactIds: [],
                   createdAt: "2024-01-01T00:00:00.000Z",
                   updatedAt: "2024-01-01T00:00:00.000Z"
-                },
-                tasks: [
-                  {
-                    id: "task-1",
-                    goalId: "goal-1",
-                    workflowId: "workflow-1",
-                    title: "Draft reply",
-                    summary: "Prepare an external response.",
-                    assignedAgent: "communications",
-                    state: "waiting",
-                    priority: "P1",
-                    riskClass: "R3",
-                    needsApproval: true,
-                    requiresApproval: true,
-                    toolCapabilities: ["draft", "send"],
-                    dependsOn: [],
-                    artifactIds: [],
-                    createdAt: "2024-01-01T00:00:00.000Z",
-                    updatedAt: "2024-01-01T00:00:00.000Z"
-                  }
-                ],
-                approvals: [
-                  {
-                    id: "approval-safe",
-                    goalId: "goal-1",
-                    taskId: "task-1",
-                    title: "Send reply",
-                    rationale: "External email send.",
-                    riskClass: "R3",
-                    decision: "pending",
-                    requestedAction: "Send the drafted reply",
-                    preview: {
-                      actionType: "send",
-                      target: "customer@example.com",
-                      summary: "Send the drafted reply to the customer.",
-                      changes: [],
-                      impact: {
-                        affectedPeople: ["customer@example.com"],
-                        affectedSystems: ["email"],
-                        permissions: ["send"],
-                        rollback: "manual"
-                      }
-                    },
-                    decisionScope: null,
-                    decisionRationale: null,
-                    history: [],
-                    createdAt: "2024-01-01T00:00:00.000Z",
-                    expiryAt: "2099-01-01T00:00:00.000Z",
-                    respondedAt: null
-                  }
-                ],
-                artifacts: [],
-                memories: [],
-                watchers: [],
-                actionLogs: []
-              }
-            : null,
-        respondToApproval: async (input) => ({
+                }
+              ],
+              approvals: [
+                {
+                  id: "approval-safe",
+                  goalId: "goal-1",
+                  taskId: "task-1",
+                  title: "Send reply",
+                  rationale: "External email send.",
+                  riskClass: "R3",
+                  decision: "pending",
+                  requestedAction: "Send the drafted reply",
+                  preview: {
+                    actionType: "send",
+                    target: "customer@example.com",
+                    summary: "Send the drafted reply to the customer.",
+                    changes: [],
+                    impact: {
+                      affectedPeople: ["customer@example.com"],
+                      affectedSystems: ["email"],
+                      permissions: ["send"],
+                      rollback: "manual"
+                    }
+                  },
+                  decisionScope: null,
+                  decisionRationale: null,
+                  history: [],
+                  createdAt: "2024-01-01T00:00:00.000Z",
+                  expiryAt: "2099-01-01T00:00:00.000Z",
+                  respondedAt: null
+                }
+              ],
+              artifacts: [],
+              memories: [],
+              watchers: [],
+              actionLogs: []
+            }
+          : null,
+      respondToApproval: async (input) => {
+        approvalCalls.push({
+          approvalId: input.approvalId,
+          decision: input.decision,
+          actor: input.actor,
+          scope: input.scope,
+          rationale: input.rationale
+        });
+        return {
           goal: {
             id: "goal-1",
             userId: input.actor.subjectUserId,
@@ -620,20 +659,16 @@ describe("slack webhook route", () => {
             title: "Review inbox",
             explanation: "Review inbox and draft responses.",
             intent: "communications-triage",
-            status: "completed",
-            workspaceId: "workspace-personal-system-user",
-            workflowId: "workflow-1",
-            confidence: 0.84,
+            status: "running",
             createdAt: "2024-01-01T00:00:00.000Z",
             updatedAt: "2024-01-01T00:00:00.000Z"
           },
           workflow: {
             id: "workflow-1",
             goalId: "goal-1",
-            workspaceId: "workspace-personal-system-user",
-            status: "completed",
-            checkpoint: "done",
-            summary: "Completed after rejection.",
+            status: "running",
+            checkpoint: "approval-gate",
+            summary: "Waiting on approval.",
             createdAt: "2024-01-01T00:00:00.000Z",
             updatedAt: "2024-01-01T00:00:00.000Z"
           },
@@ -641,18 +676,11 @@ describe("slack webhook route", () => {
             {
               id: "task-1",
               goalId: "goal-1",
-              workflowId: "workflow-1",
               title: "Draft reply",
               summary: "Prepare an external response.",
-              assignedAgent: "communications",
               state: "completed",
               priority: "P1",
-              riskClass: "R3",
               needsApproval: true,
-              requiresApproval: true,
-              toolCapabilities: ["draft", "send"],
-              dependsOn: [],
-              artifactIds: [],
               createdAt: "2024-01-01T00:00:00.000Z",
               updatedAt: "2024-01-01T00:00:00.000Z"
             }
@@ -700,14 +728,252 @@ describe("slack webhook route", () => {
           memories: [],
           watchers: [],
           actionLogs: []
-        }),
-        saveGoalBundle: async (bundle) => bundle,
-        saveMemory: async (record) => {
-          savedMemories.push(record);
-          return record;
-        }
-      })
+        };
+      },
+      saveGoalBundle: async (bundle) => bundle
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await slackWebhookRoute(
+      buildSlackRequest(
+        "approval_approve",
+        buildSlackApprovalToken({
+          approvalId: "approval-safe",
+          goalId: "goal-1",
+          workspaceId: "workspace-personal-system-user",
+          expiresAt: "2099-01-01T00:00:00.000Z"
+        })
+      )
     );
+    const payload = (await response.json()) as { ok?: boolean };
+
+    expect(response.status).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(approvalCalls).toEqual([
+      {
+        approvalId: "approval-safe",
+        decision: "approved",
+        actor: createHumanActorContext("user-slack"),
+        scope: "once",
+        rationale: null
+      }
+    ]);
+    await expect(repository.listJobs({ userId: "user-slack" })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "approval_follow_up",
+          status: "queued",
+          payload: expect.objectContaining({
+            type: "approval_follow_up",
+            approvalId: "approval-safe",
+            goalId: "goal-1",
+            taskId: "task-1",
+            decision: "approved"
+          })
+        }),
+        expect.objectContaining({
+          kind: "approval_notification",
+          status: "queued",
+          actorContext: expect.objectContaining({
+            subjectUserId: "user-slack"
+          }),
+          payload: expect.objectContaining({
+            type: "approval_notification",
+            approvalId: "approval-safe",
+            goalId: "goal-1",
+            taskId: "task-1",
+            decision: "approved",
+            channel: "slack_receipt",
+            slackChannelId: "C123",
+            slackMessageTs: "1710000000.000100"
+          })
+        })
+      ])
+    );
+    expect(updateMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("queues follow-up jobs with the mapped Slack actor context", async () => {
+    const saveMemory = vi.fn(async (record) => record);
+    const repository = createFakeRepository({
+      getGoalBundleForUser: async (goalId, userId) =>
+        goalId === "goal-1" && userId === "user-slack"
+          ? {
+              goal: {
+                id: "goal-1",
+                userId,
+                request: "Review my inbox",
+                title: "Review inbox",
+                explanation: "Review inbox and draft responses.",
+                intent: "communications-triage",
+                status: "running",
+                workspaceId: "workspace-personal-system-user",
+                workflowId: "workflow-1",
+                confidence: 0.84,
+                createdAt: "2024-01-01T00:00:00.000Z",
+                updatedAt: "2024-01-01T00:00:00.000Z"
+              },
+              workflow: {
+                id: "workflow-1",
+                goalId: "goal-1",
+                workspaceId: "workspace-personal-system-user",
+                status: "running",
+                currentStep: "Awaiting approval",
+                checkpoint: "approval-gate",
+                createdAt: "2024-01-01T00:00:00.000Z",
+                updatedAt: "2024-01-01T00:00:00.000Z"
+              },
+              tasks: [
+                {
+                  id: "task-1",
+                  goalId: "goal-1",
+                  workflowId: "workflow-1",
+                  title: "Draft reply",
+                  summary: "Prepare an external response.",
+                  assignedAgent: "communications",
+                  state: "waiting",
+                  priority: "P1",
+                  riskClass: "R3",
+                  needsApproval: true,
+                  requiresApproval: true,
+                  toolCapabilities: ["draft", "send"],
+                  dependsOn: [],
+                  artifactIds: [],
+                  createdAt: "2024-01-01T00:00:00.000Z",
+                  updatedAt: "2024-01-01T00:00:00.000Z"
+                }
+              ],
+              approvals: [
+                {
+                  id: "approval-safe",
+                  goalId: "goal-1",
+                  taskId: "task-1",
+                  title: "Send reply",
+                  rationale: "External email send.",
+                  riskClass: "R3",
+                  decision: "pending",
+                  requestedAction: "Send the drafted reply",
+                  preview: {
+                    actionType: "send",
+                    target: "customer@example.com",
+                    summary: "Send the drafted reply to the customer.",
+                    changes: [],
+                    impact: {
+                      affectedPeople: ["customer@example.com"],
+                      affectedSystems: ["email"],
+                      permissions: ["send"],
+                      rollback: "manual"
+                    }
+                  },
+                  decisionScope: null,
+                  decisionRationale: null,
+                  history: [],
+                  createdAt: "2024-01-01T00:00:00.000Z",
+                  expiryAt: "2099-01-01T00:00:00.000Z",
+                  respondedAt: null
+                }
+              ],
+              artifacts: [],
+              memories: [],
+              watchers: [],
+              actionLogs: []
+            }
+          : null,
+      respondToApproval: async (input) => ({
+        goal: {
+          id: "goal-1",
+          userId: input.actor.subjectUserId,
+          request: "Review my inbox",
+          title: "Review inbox",
+          explanation: "Review inbox and draft responses.",
+          intent: "communications-triage",
+          status: "completed",
+          workspaceId: "workspace-personal-system-user",
+          workflowId: "workflow-1",
+          confidence: 0.84,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          updatedAt: "2024-01-01T00:00:00.000Z"
+        },
+        workflow: {
+          id: "workflow-1",
+          goalId: "goal-1",
+          workspaceId: "workspace-personal-system-user",
+          status: "completed",
+          checkpoint: "done",
+          summary: "Completed after rejection.",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          updatedAt: "2024-01-01T00:00:00.000Z"
+        },
+        tasks: [
+          {
+            id: "task-1",
+            goalId: "goal-1",
+            workflowId: "workflow-1",
+            title: "Draft reply",
+            summary: "Prepare an external response.",
+            assignedAgent: "communications",
+            state: "completed",
+            priority: "P1",
+            riskClass: "R3",
+            needsApproval: true,
+            requiresApproval: true,
+            toolCapabilities: ["draft", "send"],
+            dependsOn: [],
+            artifactIds: [],
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z"
+          }
+        ],
+        approvals: [
+          {
+            id: input.approvalId,
+            goalId: "goal-1",
+            taskId: "task-1",
+            title: "Send reply",
+            rationale: "External email send.",
+            riskClass: "R3",
+            decision: input.decision,
+            requestedAction: "Send the drafted reply",
+            preview: {
+              actionType: "send",
+              target: "customer@example.com",
+              summary: "Send the drafted reply to the customer.",
+              changes: [],
+              impact: {
+                affectedPeople: ["customer@example.com"],
+                affectedSystems: ["email"],
+                permissions: ["send"],
+                rollback: "manual"
+              }
+            },
+            decisionScope: input.scope ?? null,
+            decisionRationale: input.rationale ?? null,
+            history: [
+              {
+                decision: input.decision,
+                scope: input.scope ?? "once",
+                rationale: input.rationale ?? null,
+                actor: input.actor.executor.userId ?? input.actor.executor.label,
+                actorContext: input.actor,
+                createdAt: "2024-01-01T00:00:00.000Z"
+              }
+            ],
+            createdAt: "2024-01-01T00:00:00.000Z",
+            expiryAt: null,
+            respondedAt: "2024-01-01T00:00:00.000Z"
+          }
+        ],
+        artifacts: [],
+        memories: [],
+        watchers: [],
+        actionLogs: []
+      }),
+      saveGoalBundle: async (bundle) => bundle,
+      saveMemory
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", repository);
 
     const response = await slackWebhookRoute(
       buildSlackRequest(
@@ -721,16 +987,47 @@ describe("slack webhook route", () => {
       )
     );
     const payload = (await response.json()) as { ok?: boolean };
+    const queuedJobs = await repository.listJobs({ userId: "user-slack" });
 
     expect(response.status).toBe(200);
     expect(payload.ok).toBe(true);
-    expect(savedMemories).toHaveLength(3);
-    expect(savedMemories.every((memory) => memory.actorContext?.subjectUserId === "user-slack")).toBe(true);
-    expect(savedMemories.map((memory) => memory.category).sort()).toEqual([
-      "preferences",
-      "projects",
-      "working-style"
-    ]);
+    expect(saveMemory).not.toHaveBeenCalled();
+    expect(queuedJobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "approval_follow_up",
+          status: "queued",
+          actorContext: expect.objectContaining({
+            subjectUserId: "user-slack"
+          }),
+          payload: expect.objectContaining({
+            type: "approval_follow_up",
+            approvalId: "approval-safe",
+            goalId: "goal-1",
+            taskId: "task-1",
+            decision: "rejected"
+          })
+        }),
+        expect.objectContaining({
+          kind: "approval_notification",
+          status: "queued",
+          actorContext: expect.objectContaining({
+            subjectUserId: "user-slack"
+          }),
+          payload: expect.objectContaining({
+            type: "approval_notification",
+            approvalId: "approval-safe",
+            goalId: "goal-1",
+            taskId: "task-1",
+            decision: "rejected",
+            channel: "slack_receipt",
+            slackChannelId: "C123",
+            slackMessageTs: "1710000000.000100"
+          })
+        })
+      ])
+    );
+    expect(updateMessageMock).not.toHaveBeenCalled();
   });
 
   it("rejects approvals from unmapped Slack actors", async () => {

@@ -1,9 +1,13 @@
 import {
+  ActionIntentSchema,
   AgentResultSchema,
   ArtifactSchema,
+  deriveAgentImplementationTier,
   nowIso,
+  type ActionIntent,
   type AgentDefinition,
   type AgentExecutionMode,
+  type AgentImplementationTier,
   type AgentName,
   type AgentResult,
   type ArtifactType,
@@ -14,6 +18,7 @@ import { assertCapabilitiesWithinAllowlist } from "@agentic/integrations";
 // Options for running an agent with custom configuration
 export type RunAgentOptions = {
   agentDefinition?: AgentDefinition;
+  requestContext?: string;
 };
 
 function buildArtifact(
@@ -22,6 +27,8 @@ function buildArtifact(
   content: string,
   artifactType: ArtifactType,
   executionMode: AgentExecutionMode,
+  implementationTier: AgentImplementationTier,
+  actionIntent?: ActionIntent | null,
   agentId?: string
 ) {
   return ArtifactSchema.parse({
@@ -34,7 +41,10 @@ function buildArtifact(
     metadata: {
       agent: task.assignedAgent,
       executionMode,
+      implementationTier,
       requiresManualReview: executionMode === "manual_review_required",
+      // Keep the legacy alias populated while orchestration still accepts both keys.
+      ...(actionIntent ? { actionIntent, executionIntent: actionIntent } : {}),
       ...(agentId && { agentDefinitionId: agentId })
     },
     createdAt: nowIso()
@@ -49,10 +59,172 @@ type AgentContent = {
   explanation: string;
   nextSteps: string[];
   confidence: number;
+  actionIntent?: ActionIntent | null;
 };
+
+const SELECTED_WEDGE_EXECUTION_MODE: AgentExecutionMode = "governed_specialist";
+
+function buildLabeledFieldPattern(labels: readonly string[]): RegExp {
+  const escapedLabels = labels
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+    .sort((left, right) => right.length - left.length);
+
+  return new RegExp(`\\b(${escapedLabels.join("|")})\\s*:`, "giu");
+}
+
+function normalizeLabeledFieldValue(value: string): string {
+  const trimmed = value.trim();
+
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+
+  return trimmed;
+}
+
+function readLabeledFields(input: string, labels: readonly string[]): Map<string, string> {
+  const fields = new Map<string, string>();
+  const pattern = buildLabeledFieldPattern(labels);
+  const matches = Array.from(input.matchAll(pattern));
+
+  for (const [index, match] of matches.entries()) {
+    const label = match[1]?.toLowerCase();
+    const valueStart = (match.index ?? 0) + match[0].length;
+    const valueEnd = matches[index + 1]?.index ?? input.length;
+    const normalizedValue = normalizeLabeledFieldValue(input.slice(valueStart, valueEnd));
+
+    if (label && normalizedValue) {
+      fields.set(label, normalizedValue);
+    }
+  }
+
+  return fields;
+}
+
+function maybeBuildCommunicationsActionIntent(task: Task, scenario: string): ActionIntent | null {
+  if (!task.toolCapabilities.includes("draft") && !task.toolCapabilities.includes("send")) {
+    return null;
+  }
+
+  const fields = readLabeledFields(scenario, ["To", "Subject", "Body", "Mode", "Thread-ID", "Thread ID"]);
+  const to = fields.get("to");
+  const subject = fields.get("subject");
+  const body = fields.get("body");
+
+  if (!to || !subject || !body) {
+    return null;
+  }
+
+  const requestedMode = fields.get("mode")?.toLowerCase();
+  const mode =
+    requestedMode === "send"
+      ? "send"
+      : requestedMode === "draft"
+        ? "draft"
+        : task.toolCapabilities.includes("draft")
+          ? "draft"
+          : task.toolCapabilities.includes("send")
+            ? "send"
+            : null;
+
+  if (!mode) {
+    return null;
+  }
+
+  if (mode === "send" && !task.toolCapabilities.includes("send")) {
+    return null;
+  }
+
+  if (mode === "draft" && !task.toolCapabilities.includes("draft") && !task.toolCapabilities.includes("send")) {
+    return null;
+  }
+
+  const parsed = ActionIntentSchema.safeParse({
+    type: "send_message",
+    to,
+    subject,
+    body,
+    mode,
+    threadId: fields.get("thread-id") ?? fields.get("thread id") ?? null
+  });
+
+  return parsed.success ? parsed.data : null;
+}
+
+function maybeBuildCalendarActionIntent(task: Task, scenario: string): ActionIntent | null {
+  if (!task.toolCapabilities.includes("schedule")) {
+    return null;
+  }
+
+  const fields = readLabeledFields(scenario, ["Event", "Start", "End", "Attendees", "Description"]);
+  const summary = fields.get("event");
+  const start = fields.get("start");
+  const end = fields.get("end");
+
+  if (!summary || !start || !end) {
+    return null;
+  }
+
+  const attendees =
+    fields
+      .get("attendees")
+      ?.split(",")
+      .map((attendee) => attendee.trim())
+      .filter(Boolean) ?? [];
+  const parsed = ActionIntentSchema.safeParse({
+    type: "schedule_event",
+    summary,
+    start,
+    end,
+    attendees,
+    description: fields.get("description") ?? null
+  });
+
+  return parsed.success ? parsed.data : null;
+}
 
 function summarizePrompt(systemPrompt: string): string {
   return systemPrompt.replace(/\s+/gu, " ").trim().slice(0, 200);
+}
+
+function buildWorkflowScaffoldContent(scenario: string): string {
+  return (
+    `Scenario: ${scenario}\n\nChecklist:\n` +
+    "- Capture the top-level goal and dependencies.\n" +
+    "- Create low-risk reminders and internal tasks.\n" +
+    "- Keep resumable checkpoints for waiting states or partial completion."
+  );
+}
+
+function buildCommunicationsSpecialistContent(scenario: string, actionIntent: ActionIntent | null): string {
+  return (
+    `Scenario: ${scenario}\n\nCommunications execution:\n` +
+    "- Review the highest-signal threads and rank them for follow-up.\n" +
+    "- Prepare a reply-ready artifact with explicit outbound guardrails.\n" +
+    "- Capture unresolved dependencies before external delivery.\n" +
+    `${
+      actionIntent
+        ? "- A typed outbound message intent was captured from explicit request cues and remains approval-gated."
+        : "- No typed outbound message intent was captured, so execution remains artifact-first until explicit send details are provided."
+    }`
+  );
+}
+
+function buildCalendarSpecialistContent(scenario: string, actionIntent: ActionIntent | null): string {
+  return (
+    `Scenario: ${scenario}\n\nScheduling execution:\n` +
+    "- Consolidate the current commitments, deadlines, and overload windows.\n" +
+    "- Produce a reviewable weekly operating plan with bounded tradeoffs.\n" +
+    "- Keep any calendar mutation behind approval or review.\n" +
+    `${
+      actionIntent
+        ? "- A typed scheduling intent was captured from explicit request cues and remains governance-bound until approved."
+        : "- No typed scheduling intent was captured, so execution remains planning-first until explicit event details are provided."
+    }`
+  );
 }
 
 // Generate content for dynamic agent definitions
@@ -86,56 +258,60 @@ function contentForDynamicAgent(
 // Generate content for built-in agents (fallback)
 function contentForBuiltInAgent(task: Task, scenario: string): AgentContent {
   switch (task.assignedAgent) {
-    case "communications":
+    case "communications": {
+      const actionIntent = maybeBuildCommunicationsActionIntent(task, scenario);
       return {
-        summary: "Prepared a deterministic communications playbook artifact.",
+        summary: "Prepared a governed communications execution artifact.",
         artifactType: "summary",
-        content:
-          `Scenario: ${scenario}\n\nFocus areas:\n` +
-          "- Prioritize urgent threads and VIP senders.\n" +
-          "- Extract promised follow-ups and pending external dependencies.\n" +
-          "- Hold outbound sending behind approval when the policy outcome requires it.",
-        executionMode: "deterministic_scaffold",
-        explanation: `communications produced a deterministic playbook artifact for "${task.title}" rather than simulating external execution.`,
+        content: buildCommunicationsSpecialistContent(scenario, actionIntent),
+        executionMode: SELECTED_WEDGE_EXECUTION_MODE,
+        explanation:
+          `communications ran through the selected governed specialist wedge for "${task.title}", keeping any external side effect behind approval.`,
         nextSteps: [
           "Persist the artifact on the goal timeline.",
           "Respect approval gates before any external side effect."
         ],
-        confidence: task.riskClass === "R1" ? 0.82 : 0.73
+        confidence: task.riskClass === "R1" ? 0.82 : 0.73,
+        actionIntent
       };
-    case "calendar":
+    }
+    case "calendar": {
+      const actionIntent = maybeBuildCalendarActionIntent(task, scenario);
       return {
-        summary: "Prepared a deterministic calendar review artifact.",
+        summary: "Prepared a governed scheduling execution artifact.",
         artifactType: "brief",
-        content:
-          `Scenario: ${scenario}\n\nCalendar findings:\n` +
-          "- Map existing commitments against the requested goal.\n" +
-          "- Flag overload windows and reschedule candidates.\n" +
-          "- Preserve external commitments until the user approves changes.",
-        executionMode: "deterministic_scaffold",
-        explanation: `calendar produced a deterministic planning artifact for "${task.title}" rather than changing schedule state directly.`,
+        content: buildCalendarSpecialistContent(scenario, actionIntent),
+        executionMode: SELECTED_WEDGE_EXECUTION_MODE,
+        explanation:
+          `calendar ran through the selected governed specialist wedge for "${task.title}", keeping schedule mutations behind review.`,
         nextSteps: [
           "Persist the artifact on the goal timeline.",
           "Respect approval gates before any calendar side effect."
         ],
-        confidence: task.riskClass === "R1" ? 0.82 : 0.73
+        confidence: task.riskClass === "R1" ? 0.82 : 0.73,
+        actionIntent
       };
+    }
     case "workflow":
+      const content = buildWorkflowScaffoldContent(scenario);
       return {
         summary: "Prepared a deterministic workflow scaffold.",
         artifactType: "checklist",
-        content:
-          `Scenario: ${scenario}\n\nChecklist:\n` +
-          "- Capture the top-level goal and dependencies.\n" +
-          "- Create low-risk reminders and internal tasks.\n" +
-          "- Keep resumable checkpoints for waiting states or partial completion.",
+        content,
         executionMode: "deterministic_scaffold",
         explanation: `workflow produced a deterministic execution scaffold for "${task.title}".`,
         nextSteps: [
           "Persist the artifact on the goal timeline.",
           "Use the scaffold to drive the next approved workflow step."
         ],
-        confidence: task.riskClass === "R1" ? 0.82 : 0.73
+        confidence: task.riskClass === "R1" ? 0.82 : 0.73,
+        actionIntent: task.toolCapabilities.includes("create")
+          ? ActionIntentSchema.parse({
+              type: "create_note",
+              title: task.title,
+              content
+            })
+          : null
       };
     case "research":
       return {
@@ -196,18 +372,30 @@ export function runAgent(task: Task, scenario: string, options?: RunAgentOptions
   assertCapabilitiesWithinAllowlist(task.assignedAgent, task.toolCapabilities);
 
   // Use dynamic agent definition if provided, otherwise fall back to built-in
+  const executionContext = options?.requestContext ?? scenario;
   const result = options?.agentDefinition
-    ? contentForDynamicAgent(options.agentDefinition, task, scenario)
-    : contentForBuiltInAgent(task, scenario);
+    ? contentForDynamicAgent(options.agentDefinition, task, executionContext)
+    : contentForBuiltInAgent(task, executionContext);
+  const implementationTier = deriveAgentImplementationTier(result.executionMode);
 
   const agentId = options?.agentDefinition?.id;
-  const artifact = buildArtifact(task, `${task.title} output`, result.content, result.artifactType, result.executionMode, agentId);
+  const artifact = buildArtifact(
+    task,
+    `${task.title} output`,
+    result.content,
+    result.artifactType,
+    result.executionMode,
+    implementationTier,
+    result.actionIntent,
+    agentId
+  );
 
   return AgentResultSchema.parse({
     agent: task.assignedAgent satisfies AgentName,
     summary: result.summary,
     confidence: result.confidence,
     executionMode: result.executionMode,
+    implementationTier,
     artifacts: [artifact],
     proposedToolCalls: [],
     nextSteps: result.nextSteps,
