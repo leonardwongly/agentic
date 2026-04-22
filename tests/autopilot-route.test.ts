@@ -162,6 +162,62 @@ describe("autopilot events route", () => {
     await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
   });
 
+  it("simulates connector-failure events without persisting execution state", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await autopilotEventsRoute(
+      buildRequest({
+        kind: "connector_failed",
+        sourceId: "gmail-sync",
+        mode: "draft_goal",
+        dryRun: true,
+        details: {
+          connector: "gmail",
+          error: "Provider timeout while syncing inbound queue",
+          impact: "VIP inbox triage is blocked"
+        }
+      })
+    );
+    const payload = (await response.json()) as {
+      simulated: boolean;
+      event: {
+        status: string;
+        summary: string;
+        details: {
+          eventEnvelope?: {
+            family: string;
+            trigger: string;
+            priority: string;
+          };
+          suppression?: {
+            outcome: string;
+          };
+        };
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.simulated).toBe(true);
+    expect(payload.event.status).toBe("simulated");
+    expect(payload.event.summary).toBe("Connector failure: gmail");
+    expect(payload.event.details).toMatchObject({
+      eventEnvelope: {
+        family: "connector",
+        trigger: "connector_failed",
+        priority: "critical"
+      },
+      suppression: {
+        outcome: "allowed"
+      }
+    });
+    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+  });
+
   it("rate limits autopilot event creation with a route-scoped abuse key", async () => {
     const seenKeys: string[] = [];
     const store: AuthSessionStateStore = {
@@ -827,6 +883,68 @@ describe("autopilot events route", () => {
     expect(events[0]?.status).toBe("executed");
     expect(events[0]?.resultGoalId).toBeTruthy();
     expect(dashboard.briefingHistory.some((entry) => entry.goalId === events[0]?.resultGoalId)).toBe(true);
+    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
+  });
+
+  it("executes approval-sla-breached events and records the resulting goal", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await autopilotEventsRoute(
+      buildRequest({
+        kind: "approval_sla_breached",
+        sourceId: "approval-security-review",
+        mode: "draft_goal",
+        details: {
+          approvalTitle: "Security review for outbound send",
+          approver: "Ops on-call",
+          status: "Waiting 4 hours past the review SLO"
+        }
+      })
+    );
+    const payload = (await response.json()) as {
+      event: {
+        id: string;
+        status: string;
+        summary: string;
+        resultGoalId: string | null;
+        details: {
+          eventEnvelope?: {
+            family: string;
+            trigger: string;
+            priority: string;
+          };
+        };
+      };
+      job: {
+        id: string;
+      };
+      queued: boolean;
+    };
+    const workerResult = await runAutopilotWorker(repository);
+    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+
+    expect(response.status).toBe(202);
+    expect(payload.queued).toBe(true);
+    expect(payload.event.status).toBe("pending");
+    expect(payload.event.resultGoalId).toBeNull();
+    expect(payload.event.summary).toBe("Approval SLA breached: Security review for outbound send");
+    expect(payload.event.details.eventEnvelope).toMatchObject({
+      family: "approval",
+      trigger: "approval_sla_breached",
+      priority: "critical"
+    });
+    expect(workerResult).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(events[0]?.status).toBe("executed");
+    expect(events[0]?.resultGoalId).toBeTruthy();
+    expect(events[0]?.summary).toBe("Approval SLA breached: Security review for outbound send");
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
   });
 });

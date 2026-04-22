@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   AutopilotEventBudgetSchema,
   AutopilotEventDetailsSchema,
+  type AutopilotEventFamily,
   AutopilotEventKindSchema,
   AutopilotEventPrioritySchema,
   AutopilotEventSchema,
@@ -50,17 +51,178 @@ const TriggerAutopilotEventSchema = z
   })
   .strict();
 
-const autopilotFamilyByKind: Record<AutopilotEventKind, "watcher" | "template" | "briefing"> = {
+type GenericAutopilotEventKind = Exclude<AutopilotEventKind, "watcher_triggered" | "template_due" | "briefing_due">;
+
+type AutopilotOperatorRoute = {
+  section: "goals" | "approvals" | "watchers" | "operations";
+  itemId?: string;
+  label: string;
+  actionLabel?: string;
+};
+
+type ResolvedAutopilotSource = {
+  summary: string;
+  details: Record<string, unknown>;
+  operatorRoute?: AutopilotOperatorRoute | null;
+};
+
+const autopilotFamilyByKind: Record<AutopilotEventKind, AutopilotEventFamily> = {
   watcher_triggered: "watcher",
   template_due: "template",
-  briefing_due: "briefing"
+  briefing_due: "briefing",
+  communication_received: "communication",
+  deadline_drift_detected: "deadline",
+  workflow_stalled: "workflow",
+  approval_sla_breached: "approval",
+  connector_failed: "connector",
+  dormant_workflow_review_due: "workflow"
 };
 
 const autopilotPriorityByKind: Record<AutopilotEventKind, AutopilotEventPriority> = {
   watcher_triggered: "high",
   template_due: "medium",
-  briefing_due: "low"
+  briefing_due: "low",
+  communication_received: "high",
+  deadline_drift_detected: "high",
+  workflow_stalled: "high",
+  approval_sla_breached: "critical",
+  connector_failed: "critical",
+  dormant_workflow_review_due: "medium"
 };
+
+const autopilotQueueByKind: Record<AutopilotEventKind, string> = {
+  watcher_triggered: "watcher_queue",
+  template_due: "scheduled_templates",
+  briefing_due: "scheduled_briefings",
+  communication_received: "communications_inbox",
+  deadline_drift_detected: "deadline_recovery",
+  workflow_stalled: "workflow_recovery",
+  approval_sla_breached: "approval_escalations",
+  connector_failed: "connector_incidents",
+  dormant_workflow_review_due: "workflow_review"
+};
+
+const autopilotDefaultTagsByKind: Record<AutopilotEventKind, string[]> = {
+  watcher_triggered: ["watcher", "queue"],
+  template_due: ["template", "schedule"],
+  briefing_due: ["briefing", "schedule"],
+  communication_received: ["communications", "triage"],
+  deadline_drift_detected: ["deadline", "recovery"],
+  workflow_stalled: ["workflow", "stalled"],
+  approval_sla_breached: ["approval", "escalation"],
+  connector_failed: ["connector", "incident"],
+  dormant_workflow_review_due: ["workflow", "review"]
+};
+
+function normalizeEventText(value: unknown, maxLength = 120): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/\s+/g, " ");
+
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.slice(0, maxLength);
+}
+
+function readEventText(details: Record<string, unknown> | undefined, keys: readonly string[], maxLength = 120): string | null {
+  if (!details) {
+    return null;
+  }
+
+  for (const key of keys) {
+    const value = normalizeEventText(details[key], maxLength);
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function buildGenericAutopilotSummary(
+  kind: GenericAutopilotEventKind,
+  sourceId: string,
+  details?: Record<string, unknown>
+): string {
+  const sourceLabel = normalizeEventText(sourceId, 120) ?? "unknown-source";
+
+  switch (kind) {
+    case "communication_received": {
+      const sender = readEventText(details, ["sender", "from", "contact", "customer"], 80);
+      const subject = readEventText(details, ["subject", "threadSubject", "title"], 120);
+
+      if (sender && subject) {
+        return `Inbound communication from ${sender}: ${subject}`;
+      }
+
+      if (sender) {
+        return `Inbound communication from ${sender}`;
+      }
+
+      if (subject) {
+        return `Inbound communication: ${subject}`;
+      }
+
+      return `Inbound communication received: ${sourceLabel}`;
+    }
+    case "deadline_drift_detected": {
+      const workflow = readEventText(details, ["workflowName", "goalTitle", "title"], 120);
+      const deadline = readEventText(details, ["deadline", "deadlineAt", "dueAt"], 80);
+
+      if (workflow && deadline) {
+        return `Deadline drift detected for ${workflow} (${deadline})`;
+      }
+
+      return workflow ? `Deadline drift detected for ${workflow}` : `Deadline drift detected: ${sourceLabel}`;
+    }
+    case "approval_sla_breached": {
+      const approval = readEventText(details, ["approvalTitle", "title", "queue"], 120);
+      return approval ? `Approval SLA breached: ${approval}` : `Approval SLA breached: ${sourceLabel}`;
+    }
+    case "workflow_stalled": {
+      const workflow = readEventText(details, ["workflowName", "goalTitle", "title"], 120);
+      return workflow ? `Workflow stalled: ${workflow}` : `Workflow stalled: ${sourceLabel}`;
+    }
+    case "connector_failed": {
+      const connector = readEventText(details, ["connector", "provider", "service"], 120);
+      return connector ? `Connector failure: ${connector}` : `Connector failure: ${sourceLabel}`;
+    }
+    case "dormant_workflow_review_due": {
+      const workflow = readEventText(details, ["workflowName", "goalTitle", "title"], 120);
+      return workflow ? `Dormant workflow review due: ${workflow}` : `Dormant workflow review due: ${sourceLabel}`;
+    }
+  }
+}
+
+function buildSimulatedAutopilotEvent(params: {
+  userId: string;
+  kind: AutopilotEventKind;
+  sourceId: string;
+  mode: AutopilotMode;
+  summary: string;
+  details: AutopilotEventDetails;
+  idempotencyKey?: string | null;
+  actorContext: ActorContext;
+}) {
+  return AutopilotEventSchema.parse({
+    ...buildPendingEvent({
+      userId: params.userId,
+      kind: params.kind,
+      sourceId: params.sourceId,
+      mode: params.mode,
+      summary: params.summary,
+      details: params.details,
+      idempotencyKey: params.idempotencyKey,
+      actorContext: params.actorContext
+    }),
+    status: "simulated"
+  });
+}
 
 function buildAutopilotEventDetails(params: {
   kind: AutopilotEventKind;
@@ -71,6 +233,7 @@ function buildAutopilotEventDetails(params: {
   correlationKey?: string | null;
   budget?: AutopilotEventBudget | null;
   details?: Record<string, unknown>;
+  operatorRoute?: AutopilotOperatorRoute | null;
   suppression?: {
     outcome: "allowed" | "duplicate" | "debounced" | "budget_exhausted";
     reason?: string | null;
@@ -81,21 +244,29 @@ function buildAutopilotEventDetails(params: {
 }): AutopilotEventDetails {
   const tags = Array.from(
     new Set(
-      (params.tags ?? [])
+      [...autopilotDefaultTagsByKind[params.kind], ...(params.tags ?? [])]
         .map((tag) => tag.trim().toLowerCase())
         .filter((tag) => tag.length > 0)
     )
   );
+  const effectivePriority = params.priority ?? autopilotPriorityByKind[params.kind];
 
   return AutopilotEventDetailsSchema.parse({
     ...(params.details ?? {}),
     eventEnvelope: {
       family: autopilotFamilyByKind[params.kind],
       trigger: params.kind,
-      priority: params.priority ?? autopilotPriorityByKind[params.kind],
+      priority: effectivePriority,
       tags,
       correlationKey: params.correlationKey?.trim() || params.idempotencyKey?.trim() || `${params.kind}:${params.sourceId}`
     },
+    policy: {
+      family: autopilotFamilyByKind[params.kind],
+      severity: effectivePriority,
+      queue: autopilotQueueByKind[params.kind],
+      modeRecommendation: params.kind === "approval_sla_breached" || params.kind === "connector_failed" ? "notify_only" : null
+    },
+    operatorRoute: params.operatorRoute ?? null,
     budget: params.budget ?? null,
     suppression: params.suppression ?? {
       outcome: "allowed"
@@ -152,8 +323,7 @@ function summarizeEnqueueFailure(createdAt: string, processedAt: string): Record
   };
 }
 
-async function resolveWatcherSource(sourceId: string, userId: string) {
-  const repository = await getSeededRepository();
+async function resolveWatcherSource(repository: AgenticRepository, sourceId: string, userId: string) {
   const watchers = await repository.listWatchers({ userId });
   const watcher = watchers.find((candidate) => candidate.id === sourceId);
 
@@ -174,8 +344,7 @@ async function resolveWatcherSource(sourceId: string, userId: string) {
   return { repository, watcher, goal };
 }
 
-async function resolveTemplateSource(sourceId: string, userId: string) {
-  const repository = await getSeededRepository();
+async function resolveTemplateSource(repository: AgenticRepository, sourceId: string, userId: string) {
   const templates = await repository.listTemplates(userId);
   const template = templates.find((candidate) => candidate.id === sourceId);
 
@@ -190,8 +359,7 @@ async function resolveTemplateSource(sourceId: string, userId: string) {
   return { repository, template };
 }
 
-async function resolveBriefingSource(sourceId: string, userId: string) {
-  const repository = await getSeededRepository();
+async function resolveBriefingSource(repository: AgenticRepository, sourceId: string, userId: string) {
   const type = BriefingTypeSchema.parse(sourceId) as BriefingType;
   const preferences = await repository.getBriefingPreferences(userId);
   const schedule = preferences.schedules.find((candidate) => candidate.type === type);
@@ -201,6 +369,258 @@ async function resolveBriefingSource(sourceId: string, userId: string) {
   }
 
   return { repository, type, preferences };
+}
+
+async function resolveGoalSource(repository: AgenticRepository, sourceId: string, userId: string) {
+  const directGoal = await repository.getGoalBundleForUser(sourceId, userId);
+
+  if (directGoal) {
+    return directGoal;
+  }
+
+  const goals = await repository.listGoals(userId);
+  return goals.find((candidate) => candidate.workflow.id === sourceId) ?? null;
+}
+
+async function resolveApprovalSource(repository: AgenticRepository, sourceId: string, userId: string) {
+  const approvals = await repository.listApprovals(userId);
+  return approvals.find((candidate) => candidate.id === sourceId) ?? null;
+}
+
+async function resolveConnectorSource(
+  repository: AgenticRepository,
+  sourceId: string,
+  userId: string,
+  details?: Record<string, unknown>
+) {
+  const normalizedSourceId = sourceId.trim().toLowerCase();
+  const connectorHint = readEventText(details, ["connector", "provider", "service"], 120)?.toLowerCase() ?? null;
+  const [credentials, integrations] = await Promise.all([
+    repository.listProviderCredentials(userId),
+    repository.listIntegrations(userId)
+  ]);
+
+  const credential =
+    credentials.find((candidate) => candidate.id === sourceId) ??
+    credentials.find((candidate) =>
+      [candidate.provider, candidate.displayName, candidate.accountEmail, candidate.accountId]
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+        .some((value) => value.toLowerCase() === normalizedSourceId || value.toLowerCase() === connectorHint)
+    ) ??
+    null;
+  const integration =
+    integrations.find((candidate) => candidate.id === sourceId) ??
+    integrations.find((candidate) =>
+      [candidate.system, candidate.name]
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+        .some((value) => value.toLowerCase() === normalizedSourceId || value.toLowerCase() === connectorHint)
+    ) ??
+    null;
+
+  return {
+    credential,
+    integration
+  };
+}
+
+async function resolveGenericAutopilotSource(params: {
+  repository: AgenticRepository;
+  kind: GenericAutopilotEventKind;
+  sourceId: string;
+  userId: string;
+  details?: Record<string, unknown>;
+}): Promise<ResolvedAutopilotSource> {
+  const { repository, kind, sourceId, userId, details } = params;
+  const summary = buildGenericAutopilotSummary(kind, sourceId, details);
+
+  switch (kind) {
+    case "communication_received": {
+      const linkedGoalId = normalizeEventText(details?.goalId, 200);
+      const goal = linkedGoalId ? await resolveGoalSource(repository, linkedGoalId, userId) : null;
+
+      return {
+        summary,
+        details: {
+          ...(details ?? {}),
+          goalId: goal?.goal.id ?? linkedGoalId ?? null,
+          workflowId: goal?.workflow.id ?? null,
+          workspaceId: goal?.workflow.workspaceId ?? null,
+          goalTitle: goal?.goal.title ?? readEventText(details, ["goalTitle", "title"], 160)
+        },
+        operatorRoute: goal
+          ? {
+              section: "goals",
+              itemId: goal.goal.id,
+              label: goal.goal.title,
+              actionLabel: "Open goal"
+            }
+          : {
+              section: "operations",
+              label: summary,
+              actionLabel: "Open operations"
+            }
+      };
+    }
+    case "deadline_drift_detected":
+    case "workflow_stalled":
+    case "dormant_workflow_review_due": {
+      const goal = await resolveGoalSource(repository, sourceId, userId);
+
+      return {
+        summary,
+        details: {
+          ...(details ?? {}),
+          goalId: goal?.goal.id ?? normalizeEventText(details?.goalId, 200) ?? null,
+          workflowId: goal?.workflow.id ?? normalizeEventText(details?.workflowId, 200) ?? null,
+          workspaceId: goal?.workflow.workspaceId ?? normalizeEventText(details?.workspaceId, 200) ?? null,
+          goalTitle: goal?.goal.title ?? readEventText(details, ["goalTitle", "title"], 160),
+          workflowName:
+            readEventText(details, ["workflowName"], 160) ??
+            (goal ? `${goal.goal.title} / ${goal.workflow.currentStep}` : null)
+        },
+        operatorRoute: goal
+          ? {
+              section: "goals",
+              itemId: goal.goal.id,
+              label: goal.goal.title,
+              actionLabel: kind === "dormant_workflow_review_due" ? "Review workflow" : "Open goal"
+            }
+          : {
+              section: "operations",
+              label: summary,
+              actionLabel: "Open operations"
+            }
+      };
+    }
+    case "approval_sla_breached": {
+      const approval = await resolveApprovalSource(repository, sourceId, userId);
+      const approvalGoal = approval ? await repository.getGoalBundleForUser(approval.goalId, userId) : null;
+
+      return {
+        summary: approval ? `Approval SLA breached: ${approval.title}` : summary,
+        details: {
+          ...(details ?? {}),
+          approvalId: approval?.id ?? normalizeEventText(details?.approvalId, 200) ?? null,
+          goalId: approval?.goalId ?? normalizeEventText(details?.goalId, 200) ?? null,
+          taskId: approval?.taskId ?? normalizeEventText(details?.taskId, 200) ?? null,
+          approvalTitle: approval?.title ?? readEventText(details, ["approvalTitle", "title"], 160),
+          workspaceId: approvalGoal?.workflow.workspaceId ?? null,
+          riskClass: approval?.riskClass ?? null
+        },
+        operatorRoute: approval
+          ? {
+              section: "approvals",
+              itemId: approval.id,
+              label: approval.title,
+              actionLabel: "Open approval"
+            }
+          : {
+              section: "operations",
+              label: summary,
+              actionLabel: "Open operations"
+            }
+      };
+    }
+    case "connector_failed": {
+      const connector = await resolveConnectorSource(repository, sourceId, userId, details);
+      const connectorLabel =
+        connector.integration?.name ??
+        connector.integration?.system ??
+        connector.credential?.displayName ??
+        connector.credential?.provider ??
+        readEventText(details, ["connector", "provider", "service"], 120) ??
+        sourceId;
+
+      return {
+        summary: `Connector failure: ${connectorLabel}`,
+        details: {
+          ...(details ?? {}),
+          connector: connectorLabel,
+          credentialId: connector.credential?.id ?? null,
+          integrationId: connector.integration?.id ?? null,
+          workspaceId: connector.credential?.workspaceId ?? null,
+          provider: connector.credential?.provider ?? null,
+          connectorStatus: connector.credential?.status ?? connector.integration?.status ?? null
+        },
+        operatorRoute: {
+          section: "operations",
+          label: connectorLabel,
+          actionLabel: "Open operations"
+        }
+      };
+    }
+  }
+}
+
+async function resolveAutopilotSource(params: {
+  repository: AgenticRepository;
+  kind: AutopilotEventKind;
+  sourceId: string;
+  userId: string;
+  details?: Record<string, unknown>;
+}): Promise<ResolvedAutopilotSource> {
+  const { repository, kind, sourceId, userId, details } = params;
+
+  switch (kind) {
+    case "watcher_triggered": {
+      const { watcher, goal } = await resolveWatcherSource(repository, sourceId, userId);
+      return {
+        summary: `Watcher triggered: ${watcher.targetEntity}`,
+        details: {
+          ...(details ?? {}),
+          watcherId: watcher.id,
+          goalId: goal.goal.id,
+          workflowId: goal.workflow.id,
+          workspaceId: goal.workflow.workspaceId ?? null,
+          goalTitle: goal.goal.title
+        },
+        operatorRoute: {
+          section: "watchers",
+          itemId: watcher.id,
+          label: watcher.targetEntity,
+          actionLabel: "Open watcher"
+        }
+      };
+    }
+    case "template_due": {
+      const { template } = await resolveTemplateSource(repository, sourceId, userId);
+      return {
+        summary: `Template due: ${template.name}`,
+        details: {
+          ...(details ?? {}),
+          templateId: template.id
+        },
+        operatorRoute: {
+          section: "operations",
+          label: template.name,
+          actionLabel: "Open operations"
+        }
+      };
+    }
+    case "briefing_due": {
+      const { type } = await resolveBriefingSource(repository, sourceId, userId);
+      return {
+        summary: `Briefing due: ${type}`,
+        details: {
+          ...(details ?? {}),
+          briefingType: type
+        },
+        operatorRoute: {
+          section: "operations",
+          label: `Briefing ${type}`,
+          actionLabel: "Open operations"
+        }
+      };
+    }
+    default:
+      return resolveGenericAutopilotSource({
+        repository,
+        kind,
+        sourceId,
+        userId,
+        details
+      });
+  }
 }
 
 async function findAutopilotProcessJob(
@@ -271,8 +691,14 @@ export async function POST(request: Request) {
       const settings = await repository.getAutopilotSettings(principal.userId);
       const body = await parseJsonBody(request, TriggerAutopilotEventSchema);
       const effectiveMode = body.mode ?? settings.mode;
-      let summary = body.summary?.trim() ?? "";
-      let sourceDetails: Record<string, unknown> = {};
+      const resolvedSource = await resolveAutopilotSource({
+        repository,
+        kind: body.kind,
+        sourceId: body.sourceId,
+        userId: principal.userId,
+        details: body.details
+      });
+      const summary = body.summary?.trim() || resolvedSource.summary;
 
       if (effectiveMode === "auto_run" && repository.backend !== "postgres") {
         return authenticatedJson(
@@ -284,135 +710,6 @@ export async function POST(request: Request) {
         );
       }
 
-      if (body.kind === "watcher_triggered") {
-        const { watcher } = await resolveWatcherSource(body.sourceId, principal.userId);
-        summary ||= `Watcher triggered: ${watcher.targetEntity}`;
-        sourceDetails = {
-          watcherId: watcher.id
-        };
-
-        if (body.dryRun) {
-          const event = AutopilotEventSchema.parse({
-            ...buildPendingEvent({
-              userId: principal.userId,
-              kind: body.kind,
-              sourceId: body.sourceId,
-              mode: effectiveMode,
-              summary,
-              details: buildAutopilotEventDetails({
-                kind: body.kind,
-                sourceId: body.sourceId,
-                idempotencyKey: body.idempotencyKey ?? null,
-                priority: body.priority,
-                tags: body.tags,
-                correlationKey: body.correlationKey,
-                budget: body.budget ?? null,
-                details: {
-                  ...(body.details ?? {}),
-                  watcherId: watcher.id,
-                  dryRun: true
-                }
-              }),
-              idempotencyKey: body.idempotencyKey,
-              actorContext
-            }),
-            status: "simulated"
-          });
-
-          return authenticatedJson({
-            event,
-            simulated: true,
-            dashboard: await repository.getDashboardData(principal.userId)
-          });
-        }
-      }
-
-      if (body.kind === "template_due") {
-        const { template } = await resolveTemplateSource(body.sourceId, principal.userId);
-        summary ||= `Template due: ${template.name}`;
-        sourceDetails = {
-          templateId: template.id
-        };
-
-        if (body.dryRun) {
-          const event = AutopilotEventSchema.parse({
-            ...buildPendingEvent({
-              userId: principal.userId,
-              kind: body.kind,
-              sourceId: body.sourceId,
-              mode: effectiveMode,
-              summary,
-              details: buildAutopilotEventDetails({
-                kind: body.kind,
-                sourceId: body.sourceId,
-                idempotencyKey: body.idempotencyKey ?? null,
-                priority: body.priority,
-                tags: body.tags,
-                correlationKey: body.correlationKey,
-                budget: body.budget ?? null,
-                details: {
-                  ...(body.details ?? {}),
-                  templateId: template.id,
-                  dryRun: true
-                }
-              }),
-              idempotencyKey: body.idempotencyKey,
-              actorContext
-            }),
-            status: "simulated"
-          });
-
-          return authenticatedJson({
-            event,
-            simulated: true,
-            dashboard: await repository.getDashboardData(principal.userId)
-          });
-        }
-      }
-
-      if (body.kind === "briefing_due") {
-        const { type } = await resolveBriefingSource(body.sourceId, principal.userId);
-        summary ||= `Briefing due: ${type}`;
-        sourceDetails = {
-          briefingType: type
-        };
-
-        if (body.dryRun) {
-          const event = AutopilotEventSchema.parse({
-            ...buildPendingEvent({
-              userId: principal.userId,
-              kind: body.kind,
-              sourceId: body.sourceId,
-              mode: effectiveMode,
-              summary,
-              details: buildAutopilotEventDetails({
-                kind: body.kind,
-                sourceId: body.sourceId,
-                idempotencyKey: body.idempotencyKey ?? null,
-                priority: body.priority,
-                tags: body.tags,
-                correlationKey: body.correlationKey,
-                budget: body.budget ?? null,
-                details: {
-                  ...(body.details ?? {}),
-                  briefingType: type,
-                  dryRun: true
-                }
-              }),
-              idempotencyKey: body.idempotencyKey,
-              actorContext
-            }),
-            status: "simulated"
-          });
-
-          return authenticatedJson({
-            event,
-            simulated: true,
-            dashboard: await repository.getDashboardData(principal.userId)
-          });
-        }
-      }
-
       const normalizedDetails = buildAutopilotEventDetails({
         kind: body.kind,
         sourceId: body.sourceId,
@@ -422,10 +719,30 @@ export async function POST(request: Request) {
         correlationKey: body.correlationKey,
         budget: body.budget ?? null,
         details: {
-          ...(body.details ?? {}),
-          ...sourceDetails
-        }
+          ...resolvedSource.details,
+          ...(body.dryRun ? { dryRun: true } : {})
+        },
+        operatorRoute: resolvedSource.operatorRoute ?? null
       });
+
+      if (body.dryRun) {
+        const event = buildSimulatedAutopilotEvent({
+          userId: principal.userId,
+          kind: body.kind,
+          sourceId: body.sourceId,
+          mode: effectiveMode,
+          summary,
+          details: normalizedDetails,
+          idempotencyKey: body.idempotencyKey,
+          actorContext
+        });
+
+        return authenticatedJson({
+          event,
+          simulated: true,
+          dashboard: await repository.getDashboardData(principal.userId)
+        });
+      }
 
       const claim = await repository.claimAutopilotEvent({
         userId: principal.userId,

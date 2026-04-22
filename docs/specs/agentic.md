@@ -106,7 +106,7 @@ The HTTP JSON API supports the UI and bounded automation:
 | `/api/memory` | `GET`, `POST` | Review and add memory records |
 | `/api/watchers` | `GET`, `POST` | Register persistent monitors |
 | `/api/autopilot/settings` | `GET`, `POST` | Inspect or update autopilot mode and scheduling controls |
-| `/api/autopilot/events` | `POST` | Queue deduplicated autopilot work from watcher, template, or briefing triggers |
+| `/api/autopilot/events` | `POST` | Queue deduplicated autopilot work from watcher, template, briefing, communication, deadline, approval, connector, or dormant-workflow triggers |
 | `/api/integrations` | `GET`, `POST` | Inspect or update adapter state and readiness |
 | `/api/governance/privacy` | `GET`, `POST` | Inspect or queue retention, export, and deletion operations |
 | `/api/governance/audit` | `GET` | Review governance and audit outputs |

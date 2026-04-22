@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireApiSession } from "../../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
+import { GOAL_SHARE_MUTATION_DENIED_REASON, canManageGoalSharesForRole } from "../../../../../lib/workspace-role-permissions";
 import {
   buildGoalShareUrl,
   createGoalShareCreatedLog,
@@ -24,6 +25,28 @@ type RouteContext = {
   }>;
 };
 
+async function assertCanManageGoalShares(
+  repository: Awaited<ReturnType<typeof getSeededRepository>>,
+  workspaceId: string | null,
+  goalUserId: string,
+  userId: string
+) {
+  if (!workspaceId) {
+    if (goalUserId !== userId) {
+      throw new ApiRouteError(403, GOAL_SHARE_MUTATION_DENIED_REASON);
+    }
+
+    return;
+  }
+
+  const workspaceMembers = await repository.listWorkspaceMembers(workspaceId, userId);
+  const role = workspaceMembers.find((member) => member.userId === userId)?.role;
+
+  if (!canManageGoalSharesForRole(role)) {
+    throw new ApiRouteError(403, GOAL_SHARE_MUTATION_DENIED_REASON);
+  }
+}
+
 export async function POST(request: Request, context: RouteContext) {
   try {
     const principal = await requireApiSession(request);
@@ -36,6 +59,8 @@ export async function POST(request: Request, context: RouteContext) {
     if (!bundle) {
       throw new ApiRouteError(404, `Goal ${goalId} was not found.`);
     }
+
+    await assertCanManageGoalShares(repository, bundle.goal.workspaceId, bundle.goal.userId, principal.userId);
 
     const expiresAt = getGoalShareExpiry();
     const createdAt = new Date().toISOString();
@@ -89,6 +114,8 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (!bundle || !share || share.goalId !== goalId) {
       throw new ApiRouteError(404, `Share ${shareId} was not found for goal ${goalId}.`);
     }
+
+    await assertCanManageGoalShares(repository, bundle.goal.workspaceId, bundle.goal.userId, principal.userId);
 
     if (share.status !== "revoked") {
       const revokedAt = new Date().toISOString();

@@ -384,6 +384,35 @@ describe("worker runtime", () => {
     };
   }
 
+  async function createGenericAutopilotFixture() {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const claimed = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "connector_failed",
+      sourceId: "gmail-sync",
+      idempotencyKey: "worker-runtime-connector-failure-1",
+      mode: "draft_goal",
+      summary: "Connector failure: gmail",
+      details: {
+        connector: "gmail",
+        error: "Provider timeout while syncing inbound queue",
+        impact: "VIP inbox triage is blocked"
+      },
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      debounceMinutes: 15
+    });
+
+    if (claimed.outcome !== "claimed") {
+      throw new Error(`Expected claimed autopilot event, received ${claimed.outcome}.`);
+    }
+
+    return {
+      repository,
+      selfImprovementRepository,
+      event: claimed.event
+    };
+  }
+
   it("processes queued goal jobs through the worker loop and persists completion state", async () => {
     const { repository, selfImprovementRepository } = await createTestRuntime();
     const memoryCountBefore = (await repository.listMemory(SYSTEM_USER_ID)).length;
@@ -1497,6 +1526,52 @@ describe("worker runtime", () => {
     expect(goalsAfterSecondAttempt).toHaveLength(2);
     expect(goalsAfterSecondAttempt.map((bundle) => bundle.goal.id).sort()).toEqual(
       goalsAfterFirstAttempt.map((bundle) => bundle.goal.id).sort()
+    );
+    expect(eventAfterFirstAttempt).toMatchObject({
+      id: event.id,
+      status: "executed",
+      resultGoalId: `autopilot-goal-${event.id}`
+    });
+    expect(eventAfterSecondAttempt).toMatchObject({
+      id: event.id,
+      status: "executed",
+      resultGoalId: `autopilot-goal-${event.id}`
+    });
+  });
+
+  it("keeps generic autopilot execution idempotent across repeated worker attempts", async () => {
+    const { repository, selfImprovementRepository, event } = await createGenericAutopilotFixture();
+    const job = await enqueueAutopilotProcessJob({
+      repository,
+      autopilotEvent: event
+    });
+
+    await executeAutopilotProcessJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterFirstAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const eventAfterFirstAttempt = (await repository.listAutopilotEvents(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === event.id
+    );
+
+    await executeAutopilotProcessJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterSecondAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const eventAfterSecondAttempt = (await repository.listAutopilotEvents(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === event.id
+    );
+
+    expect(goalsAfterFirstAttempt).toHaveLength(1);
+    expect(goalsAfterSecondAttempt).toHaveLength(1);
+    expect(goalsAfterSecondAttempt.map((bundle) => bundle.goal.id)).toEqual(
+      goalsAfterFirstAttempt.map((bundle) => bundle.goal.id)
     );
     expect(eventAfterFirstAttempt).toMatchObject({
       id: event.id,

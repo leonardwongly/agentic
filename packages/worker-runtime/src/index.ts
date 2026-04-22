@@ -760,6 +760,157 @@ function buildWatcherAutopilotRequest(watcher: Watcher): string {
     .join(" ");
 }
 
+type GenericAutopilotExecutionKind = Exclude<AutopilotEvent["kind"], "watcher_triggered" | "template_due" | "briefing_due">;
+
+function normalizeAutopilotText(value: unknown, maxLength = 160): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/\s+/g, " ");
+
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.slice(0, maxLength);
+}
+
+function readAutopilotDetail(details: AutopilotEvent["details"], keys: readonly string[], maxLength = 160): string | null {
+  for (const key of keys) {
+    const direct = normalizeAutopilotText(details[key], maxLength);
+
+    if (direct) {
+      return direct;
+    }
+
+    const value = details[key];
+
+    if (Array.isArray(value)) {
+      const items = value
+        .map((candidate) => normalizeAutopilotText(candidate, Math.min(80, maxLength)))
+        .filter((candidate): candidate is string => Boolean(candidate))
+        .slice(0, 4);
+
+      if (items.length > 0) {
+        return items.join(", ");
+      }
+    }
+  }
+
+  return null;
+}
+
+function appendAutopilotDetail(lines: string[], label: string, value: string | null) {
+  if (value) {
+    lines.push(`${label}: ${value}.`);
+  }
+}
+
+function buildGenericAutopilotRequest(event: AutopilotEvent): string {
+  const summary = normalizeAutopilotText(event.summary, 240) ?? "No summary provided";
+  const sourceId = normalizeAutopilotText(event.sourceId, 120) ?? "unknown-source";
+  const lines = [`Autopilot trigger "${event.kind}" needs follow-up.`, `Summary: ${summary}.`, `Source reference: ${sourceId}.`];
+
+  switch (event.kind as GenericAutopilotExecutionKind) {
+    case "communication_received":
+      appendAutopilotDetail(lines, "Sender", readAutopilotDetail(event.details, ["sender", "from", "contact", "customer"], 80));
+      appendAutopilotDetail(lines, "Channel", readAutopilotDetail(event.details, ["channel", "provider", "service"], 80));
+      appendAutopilotDetail(lines, "Subject", readAutopilotDetail(event.details, ["subject", "threadSubject", "title"], 140));
+      appendAutopilotDetail(lines, "Message excerpt", readAutopilotDetail(event.details, ["snippet", "message", "bodyPreview"], 220));
+      lines.push("Triage urgency, identify the required next response, and draft the safest follow-up workflow.");
+      break;
+    case "deadline_drift_detected":
+      appendAutopilotDetail(lines, "Workflow", readAutopilotDetail(event.details, ["workflowName", "goalTitle", "title"], 140));
+      appendAutopilotDetail(lines, "Deadline", readAutopilotDetail(event.details, ["deadline", "deadlineAt", "dueAt"], 100));
+      appendAutopilotDetail(lines, "Owner", readAutopilotDetail(event.details, ["owner", "assignee"], 100));
+      appendAutopilotDetail(lines, "Risk signal", readAutopilotDetail(event.details, ["reason", "status", "risk"], 180));
+      lines.push("Assess the slip risk, identify blockers, and produce a recovery workflow that gets execution back on track.");
+      break;
+    case "workflow_stalled":
+      appendAutopilotDetail(lines, "Workflow", readAutopilotDetail(event.details, ["workflowName", "goalTitle", "title"], 140));
+      appendAutopilotDetail(lines, "Blocked step", readAutopilotDetail(event.details, ["blockedStep", "pendingTasks", "blockedTasks"], 140));
+      appendAutopilotDetail(lines, "Owner", readAutopilotDetail(event.details, ["owner", "assignee"], 100));
+      appendAutopilotDetail(lines, "Stall reason", readAutopilotDetail(event.details, ["reason", "status", "risk"], 180));
+      lines.push("Diagnose the stall, recommend the next unblock path, and create a governed recovery workflow.");
+      break;
+    case "approval_sla_breached":
+      appendAutopilotDetail(lines, "Approval", readAutopilotDetail(event.details, ["approvalTitle", "title", "queue"], 140));
+      appendAutopilotDetail(lines, "Approver", readAutopilotDetail(event.details, ["approver", "owner"], 100));
+      appendAutopilotDetail(lines, "Escalation channel", readAutopilotDetail(event.details, ["channel", "escalationPath"], 120));
+      appendAutopilotDetail(lines, "Current status", readAutopilotDetail(event.details, ["status", "reason"], 180));
+      lines.push("Prepare the safest escalation, document the overdue approval risk, and recommend the next governed action.");
+      break;
+    case "connector_failed":
+      appendAutopilotDetail(lines, "Connector", readAutopilotDetail(event.details, ["connector", "provider", "service"], 120));
+      appendAutopilotDetail(lines, "Failure mode", readAutopilotDetail(event.details, ["error", "failureMode", "reason"], 180));
+      appendAutopilotDetail(lines, "Impact", readAutopilotDetail(event.details, ["impact", "workflowName", "goalTitle"], 180));
+      appendAutopilotDetail(lines, "Retry posture", readAutopilotDetail(event.details, ["retryAfter", "retryWindow", "nextRetryAt"], 120));
+      lines.push("Assess blast radius, recommend the safest recovery plan, and capture any manual fallback steps operators should take.");
+      break;
+    case "dormant_workflow_review_due":
+      appendAutopilotDetail(lines, "Workflow", readAutopilotDetail(event.details, ["workflowName", "goalTitle", "title"], 140));
+      appendAutopilotDetail(lines, "Dormant since", readAutopilotDetail(event.details, ["inactiveSince", "lastUpdatedAt", "lastActivityAt"], 120));
+      appendAutopilotDetail(lines, "Pending work", readAutopilotDetail(event.details, ["pendingTasks", "blockedTasks", "openApprovals"], 140));
+      appendAutopilotDetail(lines, "Review reason", readAutopilotDetail(event.details, ["reason", "status"], 180));
+      lines.push("Review whether the workflow should be reactivated, closed, or re-scoped, and produce the appropriate follow-up plan.");
+      break;
+  }
+
+  return lines.join(" ");
+}
+
+async function executeGenericAutopilotEvent(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  userId: string;
+  actorContext: ActorContext | null;
+  event: AutopilotEvent;
+  jobId: string;
+}) {
+  const requestedWorkspaceId = normalizeAutopilotText(params.event.details.workspaceId, 200);
+  let workspaceId = requestedWorkspaceId;
+  let workspaceGovernance = requestedWorkspaceId
+    ? await params.repository.getWorkspaceGovernance(requestedWorkspaceId, params.userId)
+    : null;
+
+  if (!workspaceId) {
+    const dashboardContext = await resolveDashboardWorkspaceContext(params.repository, params.userId);
+    workspaceId = dashboardContext.workspaceId;
+    workspaceGovernance = dashboardContext.workspaceGovernance;
+  }
+
+  const [memories, integrations, episodes] = await Promise.all([
+    params.repository.listMemory(params.userId),
+    params.repository.listIntegrations(params.userId),
+    params.selfImprovementRepository.listEpisodes()
+  ]);
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
+  const bundle = await processUserRequest({
+    userId: params.userId,
+    workspaceId,
+    governance: workspaceGovernance,
+    request: buildGenericAutopilotRequest(params.event),
+    memories,
+    integrations,
+    goalId: buildAutopilotGoalId(params.event.id),
+    workflowId: buildAutopilotWorkflowId(params.event.id),
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId),
+    resolvePolicyReplayValidation
+  });
+
+  await params.repository.saveGoalBundle(bundle);
+  await persistCapturedMemories({
+    repository: params.repository,
+    selfImprovementRepository: params.selfImprovementRepository,
+    userId: params.userId,
+    actorContext: params.actorContext,
+    jobId: params.jobId,
+    bundle
+  });
+  return bundle;
+}
+
 function measureProcessingLatencyMs(createdAt: string, processedAt: string): number {
   const createdMs = Date.parse(createdAt);
   const processedMs = Date.parse(processedAt);
@@ -1825,7 +1976,7 @@ export async function executeAutopilotProcessJob(params: {
         eventId: event.id,
         jobId: job.id
       });
-    } else {
+    } else if (job.payload.kind === "briefing_due") {
       const { type } = await resolveBriefingExecutionSource(repository, job.payload.sourceId, job.userId);
       bundle = await executeBriefingEvent({
         repository,
@@ -1834,6 +1985,15 @@ export async function executeAutopilotProcessJob(params: {
         actorContext: job.actorContext,
         type,
         eventId: event.id,
+        jobId: job.id
+      });
+    } else {
+      bundle = await executeGenericAutopilotEvent({
+        repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        userId: job.userId,
+        actorContext: job.actorContext,
+        event,
         jobId: job.id
       });
     }
