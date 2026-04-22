@@ -589,6 +589,37 @@ export function createDb(url: string) {
 
 const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const SCHEMA_MIGRATIONS_TABLE = "agentic_schema_migrations";
+const LEGACY_AGENT_DEFINITIONS_BOOTSTRAP_SQL = `
+  create table if not exists agent_definitions (
+    id text primary key,
+    user_id text not null,
+    name text not null,
+    display_name text not null,
+    description text not null,
+    icon text not null,
+    category text not null,
+    tags jsonb not null default '[]'::jsonb,
+    system_prompt text not null,
+    prompt_variables jsonb not null default '[]'::jsonb,
+    artifact_type text not null,
+    behavior_config jsonb not null default '{}'::jsonb,
+    allowed_capabilities jsonb not null default '[]'::jsonb,
+    blocked_capabilities jsonb not null default '[]'::jsonb,
+    max_risk_class text not null,
+    integration_permissions jsonb not null default '[]'::jsonb,
+    memory_permissions jsonb not null default '[]'::jsonb,
+    actor_context jsonb,
+    is_built_in boolean not null default false,
+    parent_agent_id text,
+    version integer not null,
+    status text not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+  );
+
+  create unique index if not exists agent_definitions_user_name_idx
+    on agent_definitions (user_id, name);
+`;
 
 type MigrationQueryable = Pick<Pool, "query"> | PoolClient;
 
@@ -686,6 +717,12 @@ async function ensureMigrationMetadataTable(queryable: MigrationQueryable): Prom
       applied_at timestamptz not null default now()
     )
   `);
+}
+
+async function ensureLegacyMigrationBootstrapTables(queryable: MigrationQueryable): Promise<void> {
+  // `0001_init.sql` alters `agent_definitions` before it creates the table. Bootstrap the
+  // final table shape first so fresh databases can apply the legacy migration without drift.
+  await queryable.query(LEGACY_AGENT_DEFINITIONS_BOOTSTRAP_SQL);
 }
 
 async function loadAppliedMigrationRows(
@@ -894,6 +931,7 @@ export async function runDatabaseMigrations(options?: {
       }
 
       await ensureMigrationMetadataTable(queryable);
+      await ensureLegacyMigrationBootstrapTables(queryable);
       const appliedRows = await loadAppliedMigrationRows(queryable);
       const appliedByName = new Map(appliedRows.map((row) => [row.name, row]));
 
