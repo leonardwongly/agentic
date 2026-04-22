@@ -1,5 +1,20 @@
 // Core UI Components
 export { Badge, StatusBadge, RiskBadge, type BadgeVariant, type BadgeSize } from "./badge";
+export {
+  ExecutionModeBadge,
+  ImplementationTierBadge,
+  approvalMatchesExecutionModeFilter,
+  bundleMatchesExecutionModeFilter,
+  executionModeFilterOptions,
+  extractArtifactExecutionMode,
+  findTaskExecutionMode,
+  formatConfidencePercentage,
+  getExecutionModeFilterOption,
+  getImplementationTierPresentation,
+  getExecutionModePresentation,
+  matchesExecutionModeFilter,
+  type ExecutionModeFilterValue
+} from "./execution-mode";
 export { CopyButton, CopyableText } from "./copy-button";
 export { RelativeTime, AbsoluteTime } from "./relative-time";
 export { KeyboardShortcutsProvider, useKeyboardShortcuts, useShortcut, useListNavigation } from "./keyboard-shortcuts";

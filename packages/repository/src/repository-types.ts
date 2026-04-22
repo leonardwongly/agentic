@@ -82,6 +82,7 @@ export type DashboardData = {
 export type DashboardDiagnosticKind =
   | "expired_approvals"
   | "stale_memories"
+  | "context_conflicts"
   | "stuck_workflows"
   | "orphan_watchers"
   | "async_execution_issues"
@@ -197,6 +198,10 @@ export type WorkspaceDeleteParams = {
 
 export type AutopilotEventClaim =
   | {
+      outcome: "ignored";
+      event: AutopilotEvent;
+    }
+  | {
       outcome: "claimed";
       event: AutopilotEvent;
     }
@@ -217,7 +222,7 @@ export class JobMutationError extends Error {
 
 export class ApprovalMutationError extends Error {
   constructor(
-    public readonly code: "not_found" | "already_handled" | "expired",
+    public readonly code: "not_found" | "already_handled" | "expired" | "forbidden",
     message: string
   ) {
     super(message);
@@ -290,7 +295,7 @@ export type AgenticRepository = {
     details?: Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
-    reliabilityControls: AutopilotSettings["reliabilityControls"];
+    reliabilityControls?: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim>;
   saveAutopilotEvent(event: AutopilotEvent): Promise<AutopilotEvent>;
   listJobs(params?: {

@@ -92,6 +92,7 @@ export const goals = pgTable("goals", {
   status: text("status").notNull(),
   confidence: real("confidence").notNull(),
   explanation: text("explanation").notNull(),
+  goalContract: jsonb("goal_contract").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -109,6 +110,7 @@ export const tasks = pgTable("tasks", {
   dependsOn: jsonb("depends_on").$type<string[]>().notNull(),
   toolCapabilities: jsonb("tool_capabilities").$type<string[]>().notNull(),
   artifactIds: jsonb("artifact_ids").$type<string[]>().notNull(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -153,6 +155,7 @@ export const approvalRequests = pgTable("approval_requests", {
   decisionScope: text("decision_scope"),
   decisionRationale: text("decision_rationale"),
   history: jsonb("history").$type<Array<Record<string, unknown>>>().notNull(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   expiryAt: timestamp("expiry_at", { withTimezone: true }).notNull(),
   respondedAt: timestamp("responded_at", { withTimezone: true })
@@ -211,6 +214,7 @@ export const workspaceGovernance = pgTable("workspace_governance", {
   maxAutoRunRiskClass: text("max_auto_run_risk_class").notNull(),
   externalSendRequiresApproval: boolean("external_send_requires_approval").notNull(),
   calendarWriteRequiresApproval: boolean("calendar_write_requires_approval").notNull(),
+  shadowReplayPolicy: jsonb("shadow_replay_policy").$type<Record<string, unknown> | null>(),
   retentionDays: integer("retention_days").notNull(),
   updatedBy: text("updated_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
@@ -327,6 +331,7 @@ export const watchers = pgTable("watchers", {
   status: text("status").notNull(),
   expiryAt: timestamp("expiry_at", { withTimezone: true }),
   actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -377,6 +382,7 @@ export const autopilotEvents = pgTable("autopilot_events", {
   status: text("status").notNull(),
   details: jsonb("details").$type<Record<string, unknown>>().notNull(),
   actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   processedAt: timestamp("processed_at", { withTimezone: true }),
   resultGoalId: text("result_goal_id"),
@@ -583,6 +589,37 @@ export function createDb(url: string) {
 
 const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const SCHEMA_MIGRATIONS_TABLE = "agentic_schema_migrations";
+const LEGACY_AGENT_DEFINITIONS_BOOTSTRAP_SQL = `
+  create table if not exists agent_definitions (
+    id text primary key,
+    user_id text not null,
+    name text not null,
+    display_name text not null,
+    description text not null,
+    icon text not null,
+    category text not null,
+    tags jsonb not null default '[]'::jsonb,
+    system_prompt text not null,
+    prompt_variables jsonb not null default '[]'::jsonb,
+    artifact_type text not null,
+    behavior_config jsonb not null default '{}'::jsonb,
+    allowed_capabilities jsonb not null default '[]'::jsonb,
+    blocked_capabilities jsonb not null default '[]'::jsonb,
+    max_risk_class text not null,
+    integration_permissions jsonb not null default '[]'::jsonb,
+    memory_permissions jsonb not null default '[]'::jsonb,
+    actor_context jsonb,
+    is_built_in boolean not null default false,
+    parent_agent_id text,
+    version integer not null,
+    status text not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+  );
+
+  create unique index if not exists agent_definitions_user_name_idx
+    on agent_definitions (user_id, name);
+`;
 
 type MigrationQueryable = Pick<Pool, "query"> | PoolClient;
 
@@ -680,6 +717,12 @@ async function ensureMigrationMetadataTable(queryable: MigrationQueryable): Prom
       applied_at timestamptz not null default now()
     )
   `);
+}
+
+async function ensureLegacyMigrationBootstrapTables(queryable: MigrationQueryable): Promise<void> {
+  // `0001_init.sql` alters `agent_definitions` before it creates the table. Bootstrap the
+  // final table shape first so fresh databases can apply the legacy migration without drift.
+  await queryable.query(LEGACY_AGENT_DEFINITIONS_BOOTSTRAP_SQL);
 }
 
 async function loadAppliedMigrationRows(
@@ -888,6 +931,7 @@ export async function runDatabaseMigrations(options?: {
       }
 
       await ensureMigrationMetadataTable(queryable);
+      await ensureLegacyMigrationBootstrapTables(queryable);
       const appliedRows = await loadAppliedMigrationRows(queryable);
       const appliedByName = new Map(appliedRows.map((row) => [row.name, row]));
 

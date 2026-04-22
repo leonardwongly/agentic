@@ -5,6 +5,11 @@ import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from 
 import { requireJsonContentType } from "../../../lib/api-errors";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { getSeededRepository } from "../../../lib/server";
+import {
+  canOperateSharedWorkflow,
+  getSharedWorkflowDeniedReason,
+  resolveWorkspaceRoleForUser
+} from "../../../lib/workspace-role-permissions";
 
 const CreateWatcherSchema = z
   .object({
@@ -42,6 +47,15 @@ export async function POST(request: Request) {
       throw new ApiRouteError(404, `Goal ${body.goalId} was not found.`);
     }
 
+    if (goal.goal.workspaceId) {
+      const workspaceMembers = await repository.listWorkspaceMembers(goal.goal.workspaceId, principal.userId);
+      const role = resolveWorkspaceRoleForUser(workspaceMembers, goal.goal.workspaceId, principal.userId);
+
+      if (!canOperateSharedWorkflow({ workspaceId: goal.goal.workspaceId, role })) {
+        throw new ApiRouteError(403, getSharedWorkflowDeniedReason("manage_watchers"));
+      }
+    }
+
     const watcher = WatcherSchema.parse({
       id: crypto.randomUUID(),
       goalId: body.goalId,
@@ -57,10 +71,10 @@ export async function POST(request: Request) {
       updatedAt: nowIso()
     });
 
-    await repository.saveWatcher(watcher);
+    const savedWatcher = await repository.saveWatcher(watcher);
 
     return authenticatedJson({
-      watcher,
+      watcher: savedWatcher,
       dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {

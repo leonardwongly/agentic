@@ -36,7 +36,13 @@ describe("governance simulate route", () => {
           requireAuditExports: true,
           externalSendRequiresApproval: false,
           calendarWriteRequiresApproval: true,
-          maxAutoRunRiskClass: "R3"
+          maxAutoRunRiskClass: "R3",
+          shadowReplayPolicy: {
+            enabled: false,
+            promotionMode: "shadow_only",
+            rollbackOutcome: "allowed_with_confirmation",
+            minimumMatchedEpisodes: 6
+          }
         },
         scenarios: [
           {
@@ -53,6 +59,22 @@ describe("governance simulate route", () => {
       governance: {
         requireAuditExports: boolean;
         externalSendRequiresApproval: boolean;
+        shadowReplayPolicy: {
+          enabled: boolean;
+          promotionMode: string;
+          rollbackOutcome: string;
+          minimumMatchedEpisodes: number;
+          minimumPrecision: number;
+        };
+      };
+      autonomyBudget: {
+        governanceCeilingRiskClass: string;
+        r3AutonomyEligible: boolean;
+        requiresExplicitApprovalCapabilities: string[];
+        shadowReplay: {
+          enabled: boolean;
+          required: boolean;
+        };
       };
       conformance: {
         status: string;
@@ -74,7 +96,25 @@ describe("governance simulate route", () => {
     expect(response.status).toBe(200);
     expect(payload.governance).toMatchObject({
       requireAuditExports: true,
-      externalSendRequiresApproval: false
+      externalSendRequiresApproval: false,
+      shadowReplayPolicy: {
+        enabled: false,
+        promotionMode: "shadow_only",
+        rollbackOutcome: "allowed_with_confirmation",
+        minimumMatchedEpisodes: 6,
+        minimumPrecision: 0.8
+      }
+    });
+    expect(payload.autonomyBudget).toMatchObject({
+      governanceCeilingRiskClass: "R3",
+      r3AutonomyEligible: true,
+      requiresExplicitApprovalCapabilities: ["schedule"],
+      shadowReplay: {
+        enabled: false,
+        required: true,
+        promotionMode: "shadow_only",
+        rollbackOutcome: "allowed_with_confirmation"
+      }
     });
     expect(payload.conformance).toMatchObject({
       status: "non_conformant"

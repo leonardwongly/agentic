@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { CapabilitySchema, WorkspaceGovernanceSchema } from "@agentic/contracts";
+import { CapabilitySchema, WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema } from "@agentic/contracts";
 import {
   assessWorkspaceGovernanceConformance,
+  buildAutonomyBudget,
   buildGovernanceSimulationScenarios,
   simulateGovernanceScenarios
 } from "@agentic/policy";
@@ -36,6 +37,7 @@ const GovernanceSimulationRequestSchema = z
         maxAutoRunRiskClass: WorkspaceGovernanceSchema.shape.maxAutoRunRiskClass.optional(),
         externalSendRequiresApproval: z.boolean().optional(),
         calendarWriteRequiresApproval: z.boolean().optional(),
+        shadowReplayPolicy: WorkspaceShadowReplayPolicySchema.partial().strict().optional(),
         retentionDays: WorkspaceGovernanceSchema.shape.retentionDays.optional()
       })
       .strict()
@@ -63,6 +65,7 @@ async function resolveWorkspaceContext(userId: string) {
       maxAutoRunRiskClass: "R1",
       externalSendRequiresApproval: true,
       calendarWriteRequiresApproval: true,
+      shadowReplayPolicy: {},
       retentionDays: 365,
       updatedBy: userId,
       createdAt: activeWorkspace.createdAt,
@@ -94,6 +97,10 @@ export async function POST(request: Request) {
     const effectiveGovernance = WorkspaceGovernanceSchema.parse({
       ...currentGovernance,
       ...body.governance,
+      shadowReplayPolicy: {
+        ...currentGovernance.shadowReplayPolicy,
+        ...(body.governance?.shadowReplayPolicy ?? {})
+      },
       updatedBy: currentGovernance.updatedBy,
       updatedAt: currentGovernance.updatedAt
     });
@@ -109,6 +116,7 @@ export async function POST(request: Request) {
 
     return authenticatedJson({
       governance: effectiveGovernance,
+      autonomyBudget: buildAutonomyBudget(effectiveGovernance),
       conformance: assessWorkspaceGovernanceConformance(effectiveGovernance),
       simulations: simulateGovernanceScenarios({
         governance: effectiveGovernance,

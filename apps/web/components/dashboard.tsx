@@ -2,6 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  commitmentInboxBucketValues,
   privacyOperationKindValues,
   workspaceRoleValues,
   DEFAULT_COMMITMENT_INBOX_LIMIT,
@@ -12,16 +13,21 @@ import {
   type AgentDefinition,
   type AutopilotSettings,
   type ApprovalDecisionScope,
+  type AutonomyBudget,
   type BriefingPreferences,
   type BriefingType,
   type CommitmentInboxBucket,
   type CommitmentInboxPage,
   type GoalTemplate,
+  type PolicyDecision,
+  type PolicyReplayValidation,
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/integrations/client";
 import { getMemoryFreshness } from "@agentic/memory";
+import type { PolicyLearningInfluenceComparison, PolicyShadowReplayReadiness } from "@agentic/policy";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
+import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
 import { DashboardCommandCenter } from "./dashboard-command-center";
 import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
@@ -33,9 +39,28 @@ import {
 } from "../lib/command-center";
 import { isAdvancedDashboardSection } from "../lib/dashboard-surface";
 import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-loop-telemetry";
-import { deriveFeatureCapabilityReadiness, summarizeFeatureCapabilities } from "../lib/feature-capabilities";
+import {
+  deriveFeatureCapabilityReadiness,
+  resolveFeatureCapabilities,
+  summarizeFeatureCapabilities
+} from "../lib/feature-capabilities";
 import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
 import { getGoalShareSuccessMessage } from "../lib/share-client";
+import {
+  GOAL_SHARE_MUTATION_DENIED_REASON,
+  canManageGoalSharesForRole,
+  canOperateSharedWorkflow,
+  getSharedWorkflowDeniedReason,
+  resolveWorkspaceRoleForUser
+} from "../lib/workspace-role-permissions";
+import {
+  buildGoalRecommendationQuery,
+  buildRecommendationFeedbackPayload,
+  buildRecommendationRefinementSource,
+  formatRecommendationOperatorActionLabel,
+  isGoalRecommendationEligible,
+  type RecommendationRefinementSource
+} from "../lib/workflow-recommendations";
 import { AgentsPanel } from "./agents";
 import { CommandPalette } from "./command-palette";
 import {
@@ -59,6 +84,17 @@ import { DashboardOperationsSections } from "./dashboard-operations-sections";
 import {
   StatusBadge,
   RiskBadge,
+  ExecutionModeBadge,
+  ImplementationTierBadge,
+  approvalMatchesExecutionModeFilter,
+  bundleMatchesExecutionModeFilter,
+  executionModeFilterOptions,
+  extractArtifactExecutionMode,
+  formatConfidencePercentage,
+  getExecutionModeFilterOption,
+  getImplementationTierPresentation,
+  getExecutionModePresentation,
+  matchesExecutionModeFilter,
   CopyButton,
   CopyableText,
   RelativeTime,
@@ -126,7 +162,8 @@ import {
   HealthIndicator,
   InlineGoalProgress,
   useGoalProgress,
-  AgentOverride
+  AgentOverride,
+  type ExecutionModeFilterValue
 } from "./ui";
 
 type DashboardProps = {
@@ -176,6 +213,58 @@ type OperatorProductPayload = {
   templates: GoalTemplate[];
 };
 
+type GoalRecommendationsApiResponse = {
+  recommendations: WorkflowRecommendation[];
+  summary: {
+    totalEpisodes: number;
+    matchedEpisodes: number;
+    consideredEpisodes: number;
+    suggestedPatterns: number;
+    guardedPatterns: number;
+    sparsePatterns: number;
+    safeSuggestionPrecision: number;
+    currentSafeRecallProxy: number;
+    currentNegativeOutcomeRate: number;
+    currentFailureCostRate: number;
+    driftStatus: "improving" | "stable" | "regressing" | "insufficient_data";
+    returnedCount: number;
+  };
+  analytics: {
+    current: {
+      episodeCount: number;
+      consideredEpisodes: number;
+      suggestedPatterns: number;
+      safeSuggestionPrecision: number;
+      safeRecallProxy: number;
+      negativeOutcomeRate: number;
+      failureCostRate: number;
+    };
+    timeline: Array<{ key: string }>;
+  };
+  policyPromotion: {
+    workspaceId: string;
+    autonomyBudget: AutonomyBudget | null;
+    safeRecallProxy: number;
+    learningValidation: PolicyReplayValidation;
+    shadowReplayReadiness: PolicyShadowReplayReadiness;
+    comparison: PolicyLearningInfluenceComparison;
+  } | null;
+  filters: Record<string, unknown>;
+};
+
+type RecommendationFeedbackApiResponse = {
+  goalId: string;
+  message: string;
+  dashboard: DashboardData;
+};
+
+type RecommendationLoadState = {
+  status: "idle" | "loading" | "ready" | "error";
+  query: string | null;
+  recommendations: WorkflowRecommendation[];
+  policyPromotion: GoalRecommendationsApiResponse["policyPromotion"];
+  error: string | null;
+};
 function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt"> {
   return {
     approvalMode: governance?.approvalMode ?? "risk_based",
@@ -183,6 +272,15 @@ function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): 
     maxAutoRunRiskClass: governance?.maxAutoRunRiskClass ?? "R1",
     externalSendRequiresApproval: governance?.externalSendRequiresApproval ?? true,
     calendarWriteRequiresApproval: governance?.calendarWriteRequiresApproval ?? true,
+    shadowReplayPolicy: {
+      enabled: governance?.shadowReplayPolicy.enabled ?? true,
+      promotionMode: governance?.shadowReplayPolicy.promotionMode ?? "validated_autonomy",
+      rollbackOutcome: governance?.shadowReplayPolicy.rollbackOutcome ?? "allowed_with_confirmation",
+      minimumMatchedEpisodes: governance?.shadowReplayPolicy.minimumMatchedEpisodes ?? 3,
+      minimumPrecision: governance?.shadowReplayPolicy.minimumPrecision ?? 0.8,
+      maximumNegativeOutcomeRate: governance?.shadowReplayPolicy.maximumNegativeOutcomeRate ?? 0.15,
+      maximumFailureCostRate: governance?.shadowReplayPolicy.maximumFailureCostRate ?? 0.2
+    },
     retentionDays: governance?.retentionDays ?? 365
   };
 }
@@ -201,6 +299,65 @@ const briefingFocusLabels: Record<BriefingPreferences["focus"], string> = {
   deep: "Deep work"
 };
 
+function formatLearningPromotionMode(mode: NonNullable<AutonomyBudget>["shadowReplay"]["promotionMode"]): string {
+  switch (mode) {
+    case "validated_autonomy":
+      return "Validated autonomy";
+    case "shadow_only":
+      return "Shadow only";
+    case "disabled":
+      return "Disabled";
+  }
+}
+
+function formatLearningRollbackOutcome(
+  outcome: NonNullable<AutonomyBudget>["shadowReplay"]["rollbackOutcome"]
+): string {
+  switch (outcome) {
+    case "allowed_with_confirmation":
+      return "Approval fallback";
+    case "downgrade_to_draft":
+      return "Draft fallback";
+  }
+}
+
+function formatShadowReplayReadinessLabel(status: PolicyShadowReplayReadiness["status"]): string {
+  switch (status) {
+    case "ready":
+      return "Ready";
+    case "missing":
+      return "Missing validation";
+    case "insufficient":
+      return "Below threshold";
+    case "disabled":
+      return "Disabled";
+    case "shadow_only":
+      return "Shadow only";
+    case "not_required":
+      return "Not required";
+  }
+}
+
+function getShadowReplayReadinessTone(status: PolicyShadowReplayReadiness["status"]): "success" | "error" | "warn" | "idle" {
+  switch (status) {
+    case "ready":
+      return "success";
+    case "missing":
+    case "insufficient":
+      return "warn";
+    case "disabled":
+      return "error";
+    case "shadow_only":
+    case "not_required":
+      return "idle";
+  }
+}
+
+function formatPolicyDecisionSummary(decision: PolicyDecision): string {
+  const approvalLabel = decision.requiresApproval ? "approval required" : "no approval";
+  return `${decision.outcome.replaceAll("_", " ")} · ${decision.riskClass} · ${approvalLabel}`;
+}
+
 type ApprovalResponseOptions = {
   scope?: ApprovalDecisionScope;
   rationale?: string | null;
@@ -214,6 +371,9 @@ function formatCommitmentUrgencyLabel(value: string): string {
   return value.replace(/_/gu, " ");
 }
 
+function isCommitmentInboxBucket(value: string | undefined): value is CommitmentInboxBucket {
+  return value !== undefined && commitmentInboxBucketValues.includes(value as CommitmentInboxBucket);
+}
 const commitmentInboxSections: Array<{
   bucket: CommitmentInboxBucket;
   label: string;
@@ -266,7 +426,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [operatorProductTemplates, setOperatorProductTemplates] = useState<GoalTemplate[]>([]);
   const [operatorProductState, setOperatorProductState] = useState<RequestState>({ kind: "idle", message: "" });
   const [refinementInputs, setRefinementInputs] = useState<Record<string, string>>({});
+  const [refinementSourceByGoal, setRefinementSourceByGoal] = useState<Record<string, RecommendationRefinementSource>>({});
   const [refinementState, setRefinementState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [recommendationState, setRecommendationState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [recommendationResultsByGoal, setRecommendationResultsByGoal] = useState<Record<string, RecommendationLoadState>>({});
+  const [recommendationPendingByGoal, setRecommendationPendingByGoal] = useState<Record<string, boolean>>({});
   const [slideOutPanel, setSlideOutPanel] = useState<{ type: string; data: unknown } | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
@@ -277,6 +441,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [commitmentInbox, setCommitmentInbox] = useState(initialCommitmentInbox);
   const [commitmentInboxState, setCommitmentInboxState] = useState<RequestState>({ kind: "idle", message: "" });
   const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
+  const [executionModeFilter, setExecutionModeFilter] = useState<ExecutionModeFilterValue>("all");
   const [briefingPreferencesDraft, setBriefingPreferencesDraft] = useState<BriefingPreferences>(initialData.briefingPreferences);
   const [autopilotDraft, setAutopilotDraft] = useState<AutopilotSettings>(initialData.autopilotSettings);
   const [workspaceName, setWorkspaceName] = useState("");
@@ -290,6 +455,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const selectedNoteTitleRef = useRef("");
   const selectedNoteContentRef = useRef("");
   const commitmentInboxRequestIdRef = useRef(0);
+  const recommendationQueriesRef = useRef<Record<string, string | null>>({});
 
   // 10x Dashboard Hooks - Phase 1
   const statsBar = useStatsBar(data);
@@ -303,9 +469,40 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   // 10x Dashboard Hooks - Phase 2
   const undo = useUndo();
   const [approvalGroupBy, setApprovalGroupBy] = useState<GroupBy>("none");
-  const approvalGroups = useApprovalGroups(data.approvals.filter((a) => a.decision === "pending"), approvalGroupBy);
   const memoryBulkSelection = useBulkMemorySelection();
   const timelineFilters = useFilteredTimeline(data.actionLogs);
+  const pendingApprovals = useMemo(
+    () => data.approvals.filter((approval) => approval.decision === "pending"),
+    [data.approvals]
+  );
+  const goalBundleById = useMemo(
+    () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle])),
+    [data.goals]
+  );
+  const goalConfidenceById = useMemo(
+    () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.confidence])),
+    [data.goals]
+  );
+  const filteredGoalBundles = useMemo(
+    () => data.goals.filter((bundle) => bundleMatchesExecutionModeFilter(bundle, executionModeFilter)),
+    [data.goals, executionModeFilter]
+  );
+  const filteredPendingApprovals = useMemo(
+    () =>
+      pendingApprovals.filter((approval) =>
+        approvalMatchesExecutionModeFilter(approval, goalBundleById.get(approval.goalId), executionModeFilter)
+      ),
+    [executionModeFilter, goalBundleById, pendingApprovals]
+  );
+  const filteredLatestArtifacts = useMemo(
+    () =>
+      data.latestArtifacts.filter((artifact) =>
+        matchesExecutionModeFilter(extractArtifactExecutionMode(artifact), executionModeFilter)
+      ),
+    [data.latestArtifacts, executionModeFilter]
+  );
+  const approvalGroups = useApprovalGroups(filteredPendingApprovals, approvalGroupBy);
+  const selectedExecutionModeFilter = getExecutionModeFilterOption(executionModeFilter);
   
   // NL Executor for dashboard commands
   const executeNlIntent = useCallback(
@@ -406,15 +603,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   });
   
   // Batch selection for approvals
-  const approvalBatch = useBatchSelection(
-    data.approvals.filter((a) => a.decision === "pending"),
-    "approval"
-  );
-
-  const pendingApprovals = useMemo(
-    () => data.approvals.filter((approval) => approval.decision === "pending"),
-    [data.approvals]
-  );
+  const approvalBatch = useBatchSelection(filteredPendingApprovals, "approval");
   const nlCapabilitySummary = useMemo(
     () =>
       buildNlCapabilitySummary({
@@ -429,17 +618,46 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     () => data.integrations.filter((integration) => integration.status === "ready").length,
     [data.integrations]
   );
-  const featureCapabilitySummary = useMemo(
+  const resolvedFeatureCapabilities = useMemo(
     () =>
-      summarizeFeatureCapabilities(
-        deriveFeatureCapabilityReadiness({
-          autopilotSettings: data.autopilotSettings,
-          autopilotEvents: data.autopilotEvents,
-          watchers: data.watchers,
-          diagnostics: data.diagnostics
-        })
-      ),
+      resolveFeatureCapabilities({
+        activeWorkspaceName: data.activeWorkspace?.name ?? null,
+        watcherCount: data.watchers.filter((watcher) => watcher.status === "active").length,
+        autopilotMode: data.autopilotSettings.mode,
+        operations: data.operations
+          ? {
+              asyncExecutionStatus: data.operations.asyncExecution.status,
+              asyncIssueCount: data.operations.asyncExecution.issueCount,
+              connectorHealthStatus: data.operations.connectorHealth.status,
+              connectorIssueCount: data.operations.connectorHealth.issueCount,
+              autonomyPostureStatus: data.operations.autonomyPosture.status,
+              hasOverridePaths: data.operations.autonomyPosture.overridePaths.length > 0
+            }
+          : null
+      }),
+    [data.activeWorkspace?.name, data.autopilotSettings.mode, data.operations, data.watchers]
+  );
+  const featureCapabilityReadiness = useMemo(
+    () =>
+      deriveFeatureCapabilityReadiness({
+        autopilotSettings: data.autopilotSettings,
+        autopilotEvents: data.autopilotEvents,
+        watchers: data.watchers,
+        diagnostics: data.diagnostics
+      }),
     [data.autopilotEvents, data.autopilotSettings, data.diagnostics, data.watchers]
+  );
+  const featureCapabilitySummary = useMemo(
+    () => summarizeFeatureCapabilities(featureCapabilityReadiness),
+    [featureCapabilityReadiness]
+  );
+  const watcherCapability = useMemo(
+    () => resolvedFeatureCapabilities.find((feature) => feature.id === "watchers") ?? null,
+    [resolvedFeatureCapabilities]
+  );
+  const autopilotCapability = useMemo(
+    () => resolvedFeatureCapabilities.find((feature) => feature.id === "autopilot-control") ?? null,
+    [resolvedFeatureCapabilities]
   );
   const coreLoopSummary = useMemo(() => summarizeCoreLoopTelemetry(data), [data]);
   const coreLoopHealthCopy = useMemo(() => describeCoreLoopHealth(coreLoopSummary), [coreLoopSummary]);
@@ -492,6 +710,62 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         })
       ),
     [data.goalShares, data.goals]
+  );
+  const currentDashboardUserId =
+    data.workspaceSelection?.userId ?? data.briefingPreferences.userId ?? data.autopilotSettings.userId ?? null;
+  const canManageGoalShares = Boolean(data.activeWorkspace) && canManageGoalSharesForRole(data.operatingSections.roleView.role);
+  const goalSharePermissionReason = data.activeWorkspace
+    ? GOAL_SHARE_MUTATION_DENIED_REASON
+    : "Select a workspace before managing public goal share links.";
+  const resolveSharedWorkflowMutationState = useCallback(
+    (
+      workspaceId: string | null | undefined,
+      operation: "refine_goal" | "manage_watchers" | "replay_dead_letter_job"
+    ) => {
+      const workspaceRole =
+        resolveWorkspaceRoleForUser(data.workspaceMembers, workspaceId, currentDashboardUserId) ??
+        (workspaceId === data.activeWorkspace?.id ? data.operatingSections.roleView.role : null);
+      const allowed = canOperateSharedWorkflow({ workspaceId, role: workspaceRole });
+
+      return {
+        allowed,
+        reason: allowed ? null : getSharedWorkflowDeniedReason(operation)
+      };
+    },
+    [
+      currentDashboardUserId,
+      data.activeWorkspace?.id,
+      data.operatingSections.roleView.role,
+      data.workspaceMembers
+    ]
+  );
+  const goalRefinementStateById = useMemo(
+    () =>
+      new Map(
+        data.goals.map((bundle) => [
+          bundle.goal.id,
+          resolveSharedWorkflowMutationState(bundle.goal.workspaceId, "refine_goal")
+        ])
+      ),
+    [data.goals, resolveSharedWorkflowMutationState]
+  );
+  const watcherMutationStateById = useMemo(
+    () =>
+      new Map(
+        data.watchers.map((watcher) => {
+          const goalBundle = goalBundleById.get(watcher.goalId);
+          return [watcher.id, resolveSharedWorkflowMutationState(goalBundle?.goal.workspaceId ?? null, "manage_watchers")];
+        })
+      ),
+    [data.watchers, goalBundleById, resolveSharedWorkflowMutationState]
+  );
+  const sharedJobReplayState = useMemo(
+    () =>
+      resolveSharedWorkflowMutationState(
+        data.activeWorkspace && !data.activeWorkspace.isPersonal ? data.activeWorkspace.id : null,
+        "replay_dead_letter_job"
+      ),
+    [data.activeWorkspace, resolveSharedWorkflowMutationState]
   );
 
   const reliabilityHealth = useMemo(() => {
@@ -552,6 +826,15 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     scrollToSectionTarget(section, itemId);
   }, [deepLink, scrollToSectionTarget, showAdvancedOperations]);
 
+  const openView = useCallback((section: string, itemId?: string, filter?: CommitmentInboxBucket | null) => {
+    if (section === "commitments" && filter) {
+      setCommitmentBucket(filter);
+      deepLink.setFilter(filter);
+    }
+
+    navigateToSection(section, itemId);
+  }, [deepLink, navigateToSection]);
+
   const openDiagnosticTarget = useCallback((target: DashboardDiagnosticTarget) => {
     navigateToSection(target.section, target.itemId);
   }, [navigateToSection]);
@@ -591,6 +874,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   }, [data, deepLink.state.item, deepLink.state.section, scrollToSectionTarget, showAdvancedOperations]);
 
   useEffect(() => {
+    if (!isCommitmentInboxBucket(deepLink.state.filter) || deepLink.state.filter === commitmentBucket) {
+      return;
+    }
+
+    setCommitmentBucket(deepLink.state.filter);
+  }, [commitmentBucket, deepLink.state.filter]);
+
+  useEffect(() => {
     setBriefingPreferencesDraft(data.briefingPreferences);
   }, [data.briefingPreferences]);
 
@@ -606,6 +897,100 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     void loadOperatorProducts();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    for (const bundle of filteredGoalBundles.slice(0, 4)) {
+      const query = buildGoalRecommendationQuery(bundle);
+      const goalId = bundle.goal.id;
+
+      if (!query) {
+        recommendationQueriesRef.current[goalId] = null;
+        setRecommendationResultsByGoal((prev) => {
+          const existing = prev[goalId];
+
+          if (existing?.status === "ready" && existing.query === null && existing.recommendations.length === 0 && existing.error === null) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            [goalId]: {
+              status: "ready",
+              query: null,
+              recommendations: [],
+              policyPromotion: null,
+              error: null
+            }
+          };
+        });
+        continue;
+      }
+
+      const queryString = query.toString();
+
+      if (recommendationQueriesRef.current[goalId] === queryString) {
+        continue;
+      }
+
+      recommendationQueriesRef.current[goalId] = queryString;
+      setRecommendationResultsByGoal((prev) => ({
+        ...prev,
+        [goalId]: {
+          status: "loading",
+          query: queryString,
+          recommendations: prev[goalId]?.recommendations ?? [],
+          policyPromotion: prev[goalId]?.policyPromotion ?? null,
+          error: null
+        }
+      }));
+
+      void (async () => {
+        try {
+          const payload = await readJson<GoalRecommendationsApiResponse>(
+            await fetch(`/api/memory/recommendations?${queryString}`, {
+              cache: "no-store"
+            })
+          );
+
+          if (cancelled) {
+            return;
+          }
+
+          setRecommendationResultsByGoal((prev) => ({
+            ...prev,
+            [goalId]: {
+              status: "ready",
+              query: queryString,
+              recommendations: payload.recommendations,
+              policyPromotion: payload.policyPromotion,
+              error: null
+            }
+          }));
+        } catch (error) {
+          if (cancelled) {
+            return;
+          }
+
+          setRecommendationResultsByGoal((prev) => ({
+            ...prev,
+            [goalId]: {
+              status: "error",
+              query: queryString,
+              recommendations: [],
+              policyPromotion: null,
+              error: error instanceof Error ? error.message : "Failed to load recommendation history."
+            }
+          }));
+        }
+      })();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredGoalBundles]);
+ 
   useEffect(() => {
     setCommandCenterRole(getPreferredCommandCenterRole(selectedOperatorProduct));
   }, [selectedOperatorProduct]);
@@ -720,6 +1105,53 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const pollDocsRenderJobUntilSettled = useCallback((statusUrl: string) => {
     return pollJobStatusUntilSettled<DocsRenderJobStatusApiResponse>(statusUrl);
   }, []);
+
+  const submitRecommendationFeedback = useCallback(
+    async (goalId: string, recommendation: WorkflowRecommendation, decision: "accepted" | "edited" | "rejected" | "ignored", goalTitle: string) => {
+      setRecommendationPendingByGoal((prev) => ({ ...prev, [goalId]: true }));
+
+      try {
+        const payload = await readJson<RecommendationFeedbackApiResponse>(
+          await fetch(`/api/goals/${goalId}/recommendations/feedback`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json"
+            },
+            body: JSON.stringify(buildRecommendationFeedbackPayload(recommendation, decision))
+          })
+        );
+
+        startTransition(() => {
+          setData(payload.dashboard);
+          statsBar.updateSync();
+        });
+
+        if (decision === "edited") {
+          const sourceRecommendation = buildRecommendationRefinementSource(recommendation, goalTitle);
+
+          setRefinementInputs((prev) => ({
+            ...prev,
+            [goalId]: sourceRecommendation.suggestedMessage
+          }));
+          setRefinementSourceByGoal((prev) => ({
+            ...prev,
+            [goalId]: sourceRecommendation
+          }));
+        }
+
+        const successMessage = payload.message;
+        setRecommendationState({ kind: "success", message: successMessage });
+        toast.success(successMessage);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Failed to record recommendation feedback.";
+        setRecommendationState({ kind: "error", message: errorMessage });
+        toast.error("Recommendation feedback failed", errorMessage);
+      } finally {
+        setRecommendationPendingByGoal((prev) => ({ ...prev, [goalId]: false }));
+      }
+    },
+    [statsBar]
+  );
 
   const submitGoalRequest = useCallback(async (nextRequest: string, agentId?: string) => {
     setIsPending(true);
@@ -1425,6 +1857,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
   const refineGoal = async (goalId: string) => {
     const message = (refinementInputs[goalId] ?? "").trim();
+    const sourceRecommendation = refinementSourceByGoal[goalId];
 
     if (!message) {
       setRefinementState({ kind: "error", message: "Enter a refinement message before submitting." });
@@ -1442,7 +1875,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             "content-type": "application/json",
             "x-idempotency-key": buildClientIdempotencyKey()
           },
-          body: JSON.stringify({ message })
+          body: JSON.stringify({
+            message,
+            ...(sourceRecommendation ? { sourceRecommendation } : {})
+          })
         })
       );
       const settled = await pollGoalJobUntilSettled(queued.statusUrl);
@@ -1462,6 +1898,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       startTransition(() => {
         setData(snapshot.dashboard);
         setRefinementInputs((prev) => ({ ...prev, [goalId]: "" }));
+        setRefinementSourceByGoal((prev) => {
+          const { [goalId]: _removed, ...rest } = prev;
+          return rest;
+        });
         setRefinementState({ kind: "success", message: "Goal refined successfully." });
         toast.success("Goal refined successfully.");
         statsBar.updateSync();
@@ -1998,7 +2438,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           openTarget={navigateToSection}
         />
 
-        <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openTarget={deepLink.openTarget} />
+        <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openView={openView} />
 
         {/* Recent Actions */}
         {recentActions.recentActions.length > 0 && (
@@ -2082,7 +2522,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           {data.diagnostics.items.length === 0 ? (
             <p className="empty-state">
               The dashboard is clear. New reliability issues will appear here as soon as approvals expire, memories go stale,
-              queues degrade, connectors lose health, workflows block, or watchers outlive their goals.
+              context signals conflict, queues degrade, connectors lose health, workflows block, or watchers outlive their goals.
             </p>
           ) : (
             <div className="diagnostic-grid">
@@ -2236,6 +2676,16 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             totalIntegrations={data.integrations.length}
             watcherCount={data.watchers.length}
             autopilotMode={data.autopilotSettings.mode}
+            watchersReadiness={watcherCapability?.readiness ?? "preview"}
+            watchersReason={
+              watcherCapability?.runtimeReason ??
+              "Operational telemetry is unavailable, so watcher readiness stays fail-closed."
+            }
+            autopilotReadiness={autopilotCapability?.readiness ?? "preview"}
+            autopilotReason={
+              autopilotCapability?.runtimeReason ??
+              "Operational telemetry is unavailable, so autopilot readiness stays fail-closed."
+            }
             coreOperationalCount={featureCapabilitySummary.core.operationalOrBetter}
             coreTotalCount={featureCapabilitySummary.core.total}
             advancedOperationalCount={featureCapabilitySummary.advanced.operationalOrBetter}
@@ -2290,6 +2740,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               highlightedItemId={highlightedItemId}
               getItemAnchorId={getDashboardItemAnchorId}
               navigateToSection={navigateToSection}
+              canReplayDeadLetterJobs={sharedJobReplayState.allowed}
+              replayPermissionReason={sharedJobReplayState.reason ?? ""}
             />
           ) : null}
 
@@ -2466,7 +2918,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                   key={section.bucket}
                   type="button"
                   className={`filter-chip ${commitmentBucket === section.bucket ? "active" : ""}`}
-                  onClick={() => setCommitmentBucket(section.bucket)}
+                  onClick={() => {
+                    setCommitmentBucket(section.bucket);
+                    deepLink.setFilter(section.bucket);
+                  }}
                 >
                   {section.label} ({commitmentInbox.counts[section.bucket]})
                 </button>
@@ -2690,10 +3145,34 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             </div>
           </article>
 
+        <article className="card">
+          <div className="card-header">
+            <h2>Execution visibility</h2>
+            <span>Filters goals, approvals, and artifacts together</span>
+          </div>
+          <div className="approval-actions">
+            <label className="field">
+              <span>Execution mode</span>
+              <select
+                aria-label="Execution mode filter"
+                value={executionModeFilter}
+                onChange={(event) => setExecutionModeFilter(event.target.value as ExecutionModeFilterValue)}
+              >
+                {executionModeFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="detail-list-summary">{selectedExecutionModeFilter.description}</p>
+          </div>
+        </article>
+
         <article className="card request-card" id="section-goals">
           <div className="card-header">
             <h2>Request work</h2>
-            <span>{data.goals.length} goals</span>
+            <span>{filteredGoalBundles.length} / {data.goals.length} goals</span>
           </div>
             {/* Smart suggestion */}
             <ContextualSuggestion
@@ -2740,11 +3219,27 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             {refinementState.message ? (
               <p className={`status-chip ${refinementState.kind}`}>{refinementState.message}</p>
             ) : null}
+            {recommendationState.message ? (
+              <p className={`status-chip ${recommendationState.kind}`}>{recommendationState.message}</p>
+            ) : null}
             <div className="list-stack">
-              {data.goals.length === 0 && <NoGoalsEmpty onCreate={focusRequestComposer} />}
-              {data.goals.slice(0, 4).map((bundle) => {
+              {filteredGoalBundles.length === 0 ? (
+                data.goals.length === 0 ? (
+                  <NoGoalsEmpty onCreate={focusRequestComposer} />
+                ) : (
+                  <p className="status-chip idle">No goals match the current execution-mode filter.</p>
+                )
+              ) : null}
+              {filteredGoalBundles.slice(0, 4).map((bundle) => {
                 const refinementLogs = bundle.actionLogs.filter((log) => log.kind === "goal.refined");
                 const isActive = bundle.goal.status !== "completed";
+                const refinementPermission = goalRefinementStateById.get(bundle.goal.id) ?? {
+                  allowed: true,
+                  reason: null
+                };
+                const recommendationStateForGoal = recommendationResultsByGoal[bundle.goal.id];
+                const recommendationEligible = isActive && isGoalRecommendationEligible(bundle);
+                const recommendationPending = recommendationPendingByGoal[bundle.goal.id] ?? false;
                 return (
                   <div
                     className={`list-item vertical ${highlightedItemId === bundle.goal.id ? "selection-highlight" : ""}`}
@@ -2758,7 +3253,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                   <div className="goal-item-actions">
                     <StatusBadge status={bundle.goal.status} />
                     <CopyableText value={bundle.goal.id} />
-                    <button type="button" className="secondary-button" onClick={() => shareGoal(bundle.goal.id, bundle.goal.title)} disabled={isPending}>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => shareGoal(bundle.goal.id, bundle.goal.title)}
+                      disabled={isPending || !canManageGoalShares}
+                      title={!canManageGoalShares ? goalSharePermissionReason : undefined}
+                    >
                       Copy share link
                     </button>
                     {bundle.goal.status === "completed" ? (
@@ -2786,15 +3287,142 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                         }
                         placeholder="Refine this goal..."
                         maxLength={2000}
+                        disabled={isPending || !refinementPermission.allowed}
+                        title={!refinementPermission.allowed ? refinementPermission.reason ?? undefined : undefined}
                       />
                       <button
                         type="button"
                         className="secondary-button"
                         onClick={() => refineGoal(bundle.goal.id)}
-                        disabled={isPending || !(refinementInputs[bundle.goal.id] ?? "").trim()}
+                        disabled={
+                          isPending ||
+                          !refinementPermission.allowed ||
+                          !(refinementInputs[bundle.goal.id] ?? "").trim()
+                        }
+                        title={!refinementPermission.allowed ? refinementPermission.reason ?? undefined : undefined}
                       >
                         Refine
                       </button>
+                    </div>
+                  ) : null}
+                  {isActive && !refinementPermission.allowed && refinementPermission.reason ? (
+                    <small className="operator-product-subtitle">{refinementPermission.reason}</small>
+                  ) : null}
+                  {recommendationEligible ? (
+                    <div className="refinement-history">
+                      <strong>Recommendation-backed suggestions</strong>
+                      <small className="refinement-log">
+                        Outcome traces stay operator-visible before any wider reuse or auto-application.
+                      </small>
+                      {recommendationStateForGoal?.status === "ready" && recommendationStateForGoal.policyPromotion ? (
+                        <div className="list-item vertical">
+                          <div className="goal-item-actions">
+                            <span className={`status-chip ${getShadowReplayReadinessTone(recommendationStateForGoal.policyPromotion.shadowReplayReadiness.status)}`}>
+                              {formatShadowReplayReadinessLabel(recommendationStateForGoal.policyPromotion.shadowReplayReadiness.status)}
+                            </span>
+                            <span className="status-chip idle">
+                              {formatLearningPromotionMode(
+                                recommendationStateForGoal.policyPromotion.autonomyBudget?.shadowReplay.promotionMode ??
+                                  "validated_autonomy"
+                              )}
+                            </span>
+                            <span className="status-chip idle">
+                              {formatLearningRollbackOutcome(
+                                recommendationStateForGoal.policyPromotion.autonomyBudget?.shadowReplay.rollbackOutcome ??
+                                  "allowed_with_confirmation"
+                              )}
+                            </span>
+                          </div>
+                          <p>{recommendationStateForGoal.policyPromotion.comparison.summary}</p>
+                          <small className="refinement-log">
+                            Replay precision {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.learningValidation.safeSuggestionPrecision)} ·
+                            Recall proxy {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.safeRecallProxy)}
+                          </small>
+                          <small className="refinement-log">
+                            Negative rate {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.learningValidation.negativeOutcomeRate)} ·
+                            Failure cost {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.learningValidation.failureCostRate)} ·
+                            Drift {recommendationStateForGoal.policyPromotion.learningValidation.driftStatus.replaceAll("_", " ")}
+                          </small>
+                          <small className="refinement-log">
+                            Without learning: {formatPolicyDecisionSummary(recommendationStateForGoal.policyPromotion.comparison.baseline)}
+                          </small>
+                          <small className="refinement-log">
+                            With learning: {formatPolicyDecisionSummary(recommendationStateForGoal.policyPromotion.comparison.influenced)}
+                          </small>
+                          <small className="refinement-log">{recommendationStateForGoal.policyPromotion.shadowReplayReadiness.summary}</small>
+                          {recommendationStateForGoal.policyPromotion.shadowReplayReadiness.thresholdSummary.length > 0 ? (
+                            <small className="refinement-log">
+                              Thresholds: {recommendationStateForGoal.policyPromotion.shadowReplayReadiness.thresholdSummary.join(" · ")}
+                            </small>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {recommendationStateForGoal?.status === "error" ? (
+                        <small className="status-chip error">{recommendationStateForGoal.error ?? "Failed to load recommendation history."}</small>
+                      ) : null}
+                      {recommendationStateForGoal?.status === "ready" && recommendationStateForGoal.recommendations.length === 0 ? (
+                        <small className="refinement-log">No recommendation-backed suggestions yet.</small>
+                      ) : null}
+                      {recommendationStateForGoal?.status === "ready" && recommendationStateForGoal.recommendations.length > 0 ? (
+                        <div className="list-stack">
+                          {recommendationStateForGoal.recommendations.map((recommendation) => (
+                            <div key={recommendation.key} className="list-item vertical">
+                              <div className="goal-item-actions">
+                                <span className="status-chip idle">
+                                  {formatRecommendationOperatorActionLabel(recommendation.reuse.operatorAction)}
+                                </span>
+                                <small className="share-metric">
+                                  {recommendation.workflow.agent} · {recommendation.workflow.action}
+                                </small>
+                                <RelativeTime date={recommendation.evidence.lastSeenAt} />
+                              </div>
+                              <p>{recommendation.reuse.rationale}</p>
+                              <small className="refinement-log">
+                                Capabilities: {recommendation.workflow.capabilities.join(", ")} · Evidence {recommendation.evidence.count} · Success{" "}
+                                {formatConfidencePercentage(recommendation.evidence.successRate)} · Score{" "}
+                                {formatConfidencePercentage(recommendation.evidence.score)}
+                              </small>
+                              <div className="goal-item-actions">
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "accepted", bundle.goal.title)}
+                                  disabled={isPending || recommendationPending}
+                                >
+                                  Accept
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "edited", bundle.goal.title)}
+                                  disabled={isPending || recommendationPending}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "ignored", bundle.goal.title)}
+                                  disabled={isPending || recommendationPending}
+                                >
+                                  Ignore
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "rejected", bundle.goal.title)}
+                                  disabled={isPending || recommendationPending}
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {!recommendationStateForGoal || recommendationStateForGoal.status === "idle" || recommendationStateForGoal.status === "loading" ? (
+                        <small className="refinement-log">Loading suggestion history…</small>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -2811,7 +3439,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                 value={approvalGroupBy}
                 onChange={setApprovalGroupBy}
               />
-              <span>{pendingApprovals.length} pending</span>
+              <span>{filteredPendingApprovals.length} / {pendingApprovals.length} pending</span>
               <FocusModeButton
                 sectionId="approvals"
                 sectionTitle="Approvals"
@@ -2859,7 +3487,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                 >
                   {group.approvals.map((approval, idx) => {
                     // Get global index for keyboard navigation
-                    const globalIndex = pendingApprovals.findIndex(a => a.id === approval.id);
+                    const globalIndex = filteredPendingApprovals.findIndex(a => a.id === approval.id);
                     return (
                       <KeyboardApprovalItem
                         key={approval.id}
@@ -2926,8 +3554,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             </div>
           ) : (
           <div className="list-stack">
-            {pendingApprovals.length === 0 ? <NoApprovalsEmpty /> : null}
-            {pendingApprovals.map((approval, index) => (
+            {filteredPendingApprovals.length === 0 ? (
+              pendingApprovals.length === 0 ? (
+                <NoApprovalsEmpty />
+              ) : (
+                <p className="status-chip idle">No pending approvals match the current execution-mode filter.</p>
+              )
+            ) : null}
+            {filteredPendingApprovals.map((approval, index) => (
               <KeyboardApprovalItem
                 key={approval.id}
                 index={index}
@@ -2996,24 +3630,48 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             <FeatureHelp feature="artifacts">
               <h2>Artifacts</h2>
             </FeatureHelp>
-            <span>{data.latestArtifacts.length} recent</span>
+            <span>{filteredLatestArtifacts.length} / {data.latestArtifacts.length} recent</span>
           </div>
           <div className="artifact-stack">
-            {data.latestArtifacts.length === 0 && <NoArtifactsEmpty />}
-            {data.latestArtifacts.map((artifact) => (
-              <div className="artifact-card" key={artifact.id}>
-                <div className="card-header">
-                  <ArtifactPreview artifact={artifact}>
-                    <strong>{artifact.title}</strong>
-                  </ArtifactPreview>
-                  <StatusBadge status={artifact.artifactType} />
+            {filteredLatestArtifacts.length === 0 ? (
+              data.latestArtifacts.length === 0 ? (
+                <NoArtifactsEmpty />
+              ) : (
+                <p className="status-chip idle">No artifacts match the current execution-mode filter.</p>
+              )
+            ) : null}
+            {filteredLatestArtifacts.map((artifact) => {
+              const executionMode = extractArtifactExecutionMode(artifact);
+              const goalConfidence = goalConfidenceById.get(artifact.goalId);
+
+              return (
+                <div className="artifact-card" key={artifact.id}>
+                  <div className="card-header">
+                    <ArtifactPreview artifact={artifact}>
+                      <strong>{artifact.title}</strong>
+                    </ArtifactPreview>
+                    <div className="detail-list-badges">
+                      <StatusBadge status={artifact.artifactType} />
+                      <ImplementationTierBadge mode={executionMode} />
+                      <ExecutionModeBadge mode={executionMode} />
+                    </div>
+                  </div>
+                  <div className="detail-list-meta">
+                    <span>Implementation tier: <strong>{getImplementationTierPresentation(executionMode).label}</strong></span>
+                  </div>
+                  <div className="detail-list-meta">
+                    <span>Execution mode: <strong>{getExecutionModePresentation(executionMode).label}</strong></span>
+                    <span>
+                      Goal confidence: <strong>{typeof goalConfidence === "number" ? formatConfidencePercentage(goalConfidence) : "Unavailable"}</strong>
+                    </span>
+                  </div>
+                  <pre>{artifact.content}</pre>
+                  <div className="artifact-actions">
+                    <CopyButton value={artifact.content} label="Copy content" />
+                  </div>
                 </div>
-                <pre>{artifact.content}</pre>
-                <div className="artifact-actions">
-                  <CopyButton value={artifact.content} label="Copy content" />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </article>
 
@@ -3313,42 +3971,52 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           </div>
           <div className="list-stack">
             {data.watchers.length === 0 ? <NoWatchersEmpty /> : null}
-            {data.watchers.map((watcher) => (
-              <div
-                className={`list-item vertical ${highlightedItemId === watcher.id ? "selection-highlight" : ""}`}
-                id={getDashboardItemAnchorId(watcher.id)}
-                key={watcher.id}
-              >
-                <div>
-                  <strong>{watcher.targetEntity}</strong>
-                  <p>{watcher.condition}</p>
-                </div>
-                <div className="approval-actions">
-                  <StatusBadge status={watcher.status} />
-                  <span className="pill">{watcher.frequency}</span>
-                  {watcher.status === "active" ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => void updateWatcher(watcher.id, "pause")}
-                      disabled={isPending}
-                    >
-                      Pause
-                    </button>
+            {data.watchers.map((watcher) => {
+              const watcherMutation = watcherMutationStateById.get(watcher.id) ?? {
+                allowed: true,
+                reason: null
+              };
+
+              return (
+                <div
+                  className={`list-item vertical ${highlightedItemId === watcher.id ? "selection-highlight" : ""}`}
+                  id={getDashboardItemAnchorId(watcher.id)}
+                  key={watcher.id}
+                >
+                  <div>
+                    <strong>{watcher.targetEntity}</strong>
+                    <p>{watcher.condition}</p>
+                  </div>
+                  <div className="approval-actions" style={{ opacity: watcherMutation.allowed ? 1 : 0.65 }}>
+                    <StatusBadge status={watcher.status} />
+                    <span className="pill">{watcher.frequency}</span>
+                    {watcher.status === "active" ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void updateWatcher(watcher.id, "pause")}
+                        disabled={isPending || !watcherMutation.allowed}
+                      >
+                        Pause
+                      </button>
+                    ) : null}
+                    {watcher.status === "paused" ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void updateWatcher(watcher.id, "resume")}
+                        disabled={isPending || !watcherMutation.allowed}
+                      >
+                        Resume
+                      </button>
+                    ) : null}
+                  </div>
+                  {!watcherMutation.allowed && watcherMutation.reason ? (
+                    <p className="operator-product-subtitle">{watcherMutation.reason}</p>
                   ) : null}
-                  {watcher.status === "paused" ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => void updateWatcher(watcher.id, "resume")}
-                      disabled={isPending}
-                    >
-                      Resume
-                    </button>
-                  ) : null}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </article>
 

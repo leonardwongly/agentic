@@ -1,16 +1,15 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createHumanActorContext } from "@agentic/contracts";
-import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
 import {
   answerTelegramCallbackQuery,
-  createLocalNote,
-  updateTelegramMessage,
   verifyTelegramWebhookSecret
 } from "@agentic/integrations";
 import { ApprovalMutationError } from "@agentic/repository";
-import { resolveGoogleWorkspaceAdapters } from "../../../../lib/google-provider-adapters";
-import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
+import {
+  enqueueApprovalFollowUpJob,
+  enqueueApprovalNotificationJob
+} from "@agentic/worker-runtime";
 import {
   consumeTelegramApprovalActions,
   getTelegramApprovalAction,
@@ -19,6 +18,7 @@ import {
 import { getSeededRepository } from "../../../../lib/server";
 
 const TelegramIdentifierSchema = z.union([z.string().trim().min(1), z.number().int()]).transform((value) => String(value).trim());
+const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
 const TelegramCallbackQuerySchema = z
   .object({
@@ -127,7 +127,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, skipped: true, reason: "workspace_mismatch" });
     }
 
-    let updatedBundle = await (async () => {
+    const updatedBundle = await (async () => {
       try {
         return await repository.respondToApproval({
           approvalId: action.approvalId,
@@ -143,6 +143,11 @@ export async function POST(request: Request) {
             return NextResponse.json({ ok: true, skipped: true, reason: "approval_not_found" });
           }
 
+          if (error.code === "forbidden") {
+            await acknowledgeTelegramCallback(callbackQuery.id, SHARED_APPROVAL_OWNER_MESSAGE, true);
+            return NextResponse.json({ ok: true, skipped: true, reason: "forbidden" });
+          }
+
           await acknowledgeTelegramCallback(callbackQuery.id, "This approval was already handled.");
           return NextResponse.json({ ok: true, skipped: true, reason: error.code });
         }
@@ -156,91 +161,39 @@ export async function POST(request: Request) {
       return updatedBundle;
     }
 
-    let executionResults: ExecutionResult[] = [];
+    const approval = updatedBundle.approvals.find((candidate) => candidate.id === action.approvalId);
 
-    if (action.decision === "approved") {
-      const approval = updatedBundle.approvals.find((candidate) => candidate.id === action.approvalId);
-
-      if (approval) {
-        try {
-          const googleAdapters = await resolveGoogleWorkspaceAdapters({
-            repository,
-            userId: actorUserId,
-            workspaceId: updatedBundle.goal.workspaceId
-          });
-          const adapters = {
-            gmail: googleAdapters?.gmail,
-            calendar: googleAdapters?.calendar,
-            notes: { createLocalNote }
-          };
-          const governance = updatedBundle.goal.workspaceId
-            ? await repository.getWorkspaceGovernance(updatedBundle.goal.workspaceId, actorUserId)
-            : null;
-          const { results, logs } = await executeApprovedTasks({
-            bundle: updatedBundle,
-            approvedTaskIds: [approval.taskId],
-            adapters,
-            governance
-          });
-          executionResults = results;
-          updatedBundle = reconcileExecutionResults({
-            bundle: updatedBundle,
-            results,
-            logs
-          });
-        } catch (error) {
-          console.error("[telegram-webhook][execution] Failed to execute approved task:", error);
-        }
-      }
+    if (!approval) {
+      throw new Error(`Approval ${action.approvalId} is missing after Telegram response mutation.`);
     }
 
-    await repository.saveGoalBundle(updatedBundle);
+    await enqueueApprovalFollowUpJob({
+      repository,
+      userId: actorUserId,
+      approvalId: approval.id,
+      goalId: updatedBundle.goal.id,
+      taskId: approval.taskId,
+      decision: action.decision,
+      workspaceId: updatedBundle.goal.workspaceId,
+      actorContext
+    });
+
     await consumeTelegramApprovalActions(action.approvalId);
 
-    if (executionResults.length > 0) {
-      try {
-        await persistCapturedMemories({
-          repository,
-          captured: captureExecutionOutcomeSignals(updatedBundle, actorUserId, executionResults, actorContext),
-          goalId: updatedBundle.goal.id,
-          label: "telegram-execution-capture",
-          actorContext
-        });
-      } catch (error) {
-        console.error("[telegram-webhook][execution-capture] Failed to persist execution outcome signals:", error);
-      }
-    }
-
-    if (updatedBundle.goal.status === "completed") {
-      try {
-        await persistCapturedMemories({
-          repository,
-          captured: captureMemoriesFromBundle(updatedBundle, actorUserId, actorContext),
-          goalId: updatedBundle.goal.id,
-          label: "telegram-auto-capture",
-          actorContext
-        });
-      } catch (error) {
-        console.error("[telegram-webhook][auto-capture] Failed to persist captured memories:", error);
-      }
-    }
-
     if (callbackQuery.message?.chat.id) {
-      const taskTitle =
-        updatedBundle.tasks.find((task) => task.id === updatedBundle.approvals.find((approval) => approval.id === action.approvalId)?.taskId)
-          ?.title ?? "Unknown task";
-      const statusLabel = action.decision === "approved" ? "Approved" : "Rejected";
-      const statusEmoji = action.decision === "approved" ? "\u2705" : "\u274c";
-
-      try {
-        await updateTelegramMessage({
-          chatId: callbackQuery.message.chat.id,
-          messageId: callbackQuery.message.message_id,
-          text: `${statusEmoji} ${statusLabel}: ${taskTitle}`
-        });
-      } catch (error) {
-        console.error("[telegram-webhook] Failed to update Telegram message:", error);
-      }
+      await enqueueApprovalNotificationJob({
+        repository,
+        userId: actorUserId,
+        approvalId: approval.id,
+        goalId: updatedBundle.goal.id,
+        taskId: approval.taskId,
+        decision: action.decision,
+        channel: "telegram_receipt",
+        telegramChatId: callbackQuery.message.chat.id,
+        telegramMessageId: callbackQuery.message.message_id,
+        workspaceId: updatedBundle.goal.workspaceId,
+        actorContext
+      });
     }
 
     await acknowledgeTelegramCallback(

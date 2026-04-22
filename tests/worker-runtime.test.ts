@@ -22,11 +22,44 @@ const { runDocsBuildMock } = vi.hoisted(() => ({
   }))
 }));
 
+const { createLocalNoteMock } = vi.hoisted(() => ({
+  createLocalNoteMock: vi.fn(async ({ title }: { title: string; content: string }) => ({
+    slug: title.toLowerCase().replace(/\s+/g, "-")
+  }))
+}));
+
+const { isSlackReadyMock, isTelegramReadyMock, sendNotificationMock, updateMessageMock, updateTelegramMessageMock } = vi.hoisted(() => ({
+  isSlackReadyMock: vi.fn(() => false),
+  isTelegramReadyMock: vi.fn(() => false),
+  sendNotificationMock: vi.fn(async () => undefined),
+  updateMessageMock: vi.fn(async () => undefined),
+  updateTelegramMessageMock: vi.fn(async () => ({ ok: true }))
+}));
+
 vi.mock("@agentic/docs-runtime", () => ({
   runDocsBuild: runDocsBuildMock
 }));
 
+vi.mock("@agentic/integrations", async () => {
+  const actual = await vi.importActual<typeof import("@agentic/integrations")>("@agentic/integrations");
+
+  return {
+    ...actual,
+    withSpan: actual.withSpan,
+    withTelemetryContext: actual.withTelemetryContext,
+    createActionLog: actual.createActionLog,
+    createLocalNote: createLocalNoteMock,
+    isSlackReady: isSlackReadyMock,
+    isTelegramReady: isTelegramReadyMock,
+    sendNotification: sendNotificationMock,
+    updateMessage: updateMessageMock,
+    updateTelegramMessage: updateTelegramMessageMock
+  };
+});
+
 import {
+  enqueueApprovalFollowUpJob,
+  executeApprovalNotificationJob,
   enqueueBriefingCreateJob,
   enqueueAutopilotProcessJob,
   enqueueDocsRenderJob,
@@ -35,6 +68,7 @@ import {
   enqueuePrivacyOperationJob,
   enqueuePublicShareViewJob,
   enqueueTemplateRunJob,
+  executeApprovalFollowUpJob,
   executeAutopilotProcessJob,
   executeBriefingCreateJob,
   executeDocsRenderJob,
@@ -54,6 +88,20 @@ describe("worker runtime", () => {
       stdout: "docs ok",
       stderr: ""
     });
+    createLocalNoteMock.mockReset();
+    createLocalNoteMock.mockImplementation(async ({ title }: { title: string; content: string }) => ({
+      slug: title.toLowerCase().replace(/\s+/g, "-")
+    }));
+    isSlackReadyMock.mockReset();
+    isSlackReadyMock.mockImplementation(() => false);
+    isTelegramReadyMock.mockReset();
+    isTelegramReadyMock.mockImplementation(() => false);
+    sendNotificationMock.mockReset();
+    sendNotificationMock.mockResolvedValue(undefined);
+    updateMessageMock.mockReset();
+    updateMessageMock.mockResolvedValue(undefined);
+    updateTelegramMessageMock.mockReset();
+    updateTelegramMessageMock.mockResolvedValue({ ok: true });
   });
 
   async function createTestRuntime() {
@@ -152,6 +200,111 @@ describe("worker runtime", () => {
     });
   }
 
+  function buildApprovalFollowUpBundle(
+    goalId: string,
+    workflowId: string,
+    decision: "approved" | "rejected" = "approved"
+  ) {
+    const decisionRationale =
+      decision === "approved"
+        ? "Approved for one follow-up execution."
+        : "Rejected for follow-up execution in this fixture.";
+
+    return GoalBundleSchema.parse({
+      goal: {
+        id: goalId,
+        userId: SYSTEM_USER_ID,
+        workspaceId: null,
+        workflowId,
+        title: "Capture reviewer-safe follow-up notes",
+        request: "Capture the approved operating note in the local notes surface.",
+        intent: "approval-follow-up-note",
+        status: "running",
+        confidence: 0.9,
+        explanation: "Approval follow-up fixture for durable execution tests.",
+        createdAt: "2026-04-16T00:00:00.000Z",
+        updatedAt: "2026-04-16T00:00:00.000Z"
+      },
+      workflow: {
+        id: workflowId,
+        goalId,
+        workspaceId: null,
+        status: "running",
+        currentStep: "approval_follow_up",
+        checkpoint: "approval-gate",
+        createdAt: "2026-04-16T00:00:00.000Z",
+        updatedAt: "2026-04-16T00:00:00.000Z"
+      },
+      tasks: [
+        {
+          id: "task-approval-follow-up",
+          goalId,
+          workflowId,
+          title: "Create the approved local note",
+          summary: "Persist the approved reviewer note as a local note.",
+          assignedAgent: "workflow",
+          state: "queued",
+          riskClass: "R2",
+          requiresApproval: true,
+          dependsOn: [],
+          toolCapabilities: ["create"],
+          artifactIds: [],
+          createdAt: "2026-04-16T00:00:00.000Z",
+          updatedAt: "2026-04-16T00:00:00.000Z"
+        }
+      ],
+      artifacts: [],
+      approvals: [
+        {
+          id: "approval-follow-up-runtime",
+          goalId,
+          taskId: "task-approval-follow-up",
+          title: "Create local note",
+          rationale: "Persist the approved note without repeating the side effect on retries.",
+          riskClass: "R2",
+          decision,
+          requestedAction: "Create a local note with the approved operating summary.",
+          actionIntent: {
+            type: "create_note",
+            adapter: "notes",
+            title: "Approved operating summary",
+            content: "Summarize the approved operating updates and next actions."
+          },
+          preview: {
+            actionType: "create",
+            target: "Local notes",
+            summary: "Create a local note with the approved operating summary.",
+            changes: [],
+            impact: {
+              affectedPeople: [],
+              affectedSystems: ["notes"],
+              permissions: ["create"],
+              rollback: "manual"
+            }
+          },
+          decisionScope: "once",
+          decisionRationale,
+          history: [
+            {
+              decision,
+              scope: "once",
+              rationale: decisionRationale,
+              actor: SYSTEM_USER_ID,
+              actorContext: createSystemActorContext(SYSTEM_USER_ID),
+              createdAt: "2026-04-16T00:00:00.000Z"
+            }
+          ],
+          explanation: null,
+          createdAt: "2026-04-16T00:00:00.000Z",
+          expiryAt: "2026-04-18T00:00:00.000Z",
+          respondedAt: "2026-04-16T00:00:00.000Z"
+        }
+      ],
+      watchers: [],
+      actionLogs: []
+    });
+  }
+
   async function createPublicShareFixture(repository: Awaited<ReturnType<typeof createTestRuntime>>["repository"]) {
     const bundle = await orchestrator.processUserRequest({
       userId: SYSTEM_USER_ID,
@@ -230,6 +383,36 @@ describe("worker runtime", () => {
       selfImprovementRepository,
       sourceBundle,
       watcher,
+      event: claimed.event
+    };
+  }
+
+  async function createGenericAutopilotFixture() {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const claimed = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "connector_failed",
+      sourceId: "gmail-sync",
+      idempotencyKey: "worker-runtime-connector-failure-1",
+      mode: "draft_goal",
+      summary: "Connector failure: gmail",
+      details: {
+        connector: "gmail",
+        error: "Provider timeout while syncing inbound queue",
+        impact: "VIP inbox triage is blocked"
+      },
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
+    });
+
+    if (claimed.outcome !== "claimed") {
+      throw new Error(`Expected claimed autopilot event, received ${claimed.outcome}.`);
+    }
+
+    return {
+      repository,
+      selfImprovementRepository,
       event: claimed.event
     };
   }
@@ -408,7 +591,13 @@ describe("worker runtime", () => {
       refinement: "Add a handoff summary and explicit review checkpoints.",
       workspaceId: bundle.goal.workspaceId,
       actorContext: createSystemActorContext(SYSTEM_USER_ID),
-      idempotencyKey: "worker-runtime-goal-refine-1"
+      idempotencyKey: "worker-runtime-goal-refine-1",
+      sourceRecommendation: {
+        key: "execution_path:communications:send_message:R3:send",
+        source: "outcome_trace",
+        suggestedMessage:
+          'Refine "Prepare a weekly operating plan that needs reviewer-specific follow-up." to follow the communications send_message recommendation. Preserve the draft, send capability path.'
+      }
     });
 
     const result = await runWorkerRuntime({
@@ -429,11 +618,46 @@ describe("worker runtime", () => {
     expect(persistedJob).toMatchObject({
       id: queued.id,
       status: "completed",
-      attemptCount: 1
+      attemptCount: 1,
+      payload: {
+        metadata: {
+          sourceRecommendation: {
+            key: "execution_path:communications:send_message:R3:send",
+            source: "outcome_trace"
+          }
+        }
+      }
     });
     expect(persistedBundle?.goal.id).toBe(bundle.goal.id);
     expect(refinementLogs).not.toHaveLength(0);
-    expect(refinementLogs.at(-1)?.details.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    const finalRefinementDetails = refinementLogs.at(-1)?.details as Record<string, unknown> | undefined;
+    const sourceRecommendation =
+      finalRefinementDetails?.sourceRecommendation &&
+      typeof finalRefinementDetails.sourceRecommendation === "object"
+        ? (finalRefinementDetails.sourceRecommendation as Record<string, unknown>)
+        : null;
+    const recommendationEditDistance =
+      finalRefinementDetails?.recommendationEditDistance &&
+      typeof finalRefinementDetails.recommendationEditDistance === "object"
+        ? (finalRefinementDetails.recommendationEditDistance as Record<string, unknown>)
+        : null;
+
+    expect(finalRefinementDetails?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(sourceRecommendation).toEqual({
+      key: "execution_path:communications:send_message:R3:send",
+      source: "outcome_trace"
+    });
+    expect(recommendationEditDistance).toEqual(
+      expect.objectContaining({
+        baselineLength: expect.any(Number),
+        submittedLength: expect.any(Number),
+        editDistance: expect.any(Number),
+        normalizedEditDistance: expect.any(Number)
+      })
+    );
+    expect(typeof recommendationEditDistance?.normalizedEditDistance).toBe("number");
+    expect((recommendationEditDistance?.normalizedEditDistance as number) > 0).toBe(true);
+    expect((recommendationEditDistance?.normalizedEditDistance as number) <= 1).toBe(true);
   });
 
   it("fails goal-refine execution when the target bundle is missing", async () => {
@@ -459,6 +683,223 @@ describe("worker runtime", () => {
         job
       })
     ).rejects.toThrow("Goal goal-missing-refine-target was not found.");
+  });
+
+  it("keeps approval follow-up execution idempotent and does not repeat typed side effects across retries", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const bundle = buildApprovalFollowUpBundle("goal-approval-follow-up-runtime", "workflow-approval-follow-up-runtime");
+
+    await repository.saveGoalBundle(bundle);
+
+    const job = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: "approval-follow-up-runtime",
+      goalId: bundle.goal.id,
+      taskId: "task-approval-follow-up",
+      decision: "approved",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-approval-follow-up-1"
+    });
+
+    await executeApprovalFollowUpJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const bundleAfterFirstAttempt = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const memoriesAfterFirstAttempt = await repository.listMemory(SYSTEM_USER_ID);
+    const episodesAfterFirstAttempt = await selfImprovementRepository.listEpisodes();
+
+    await executeApprovalFollowUpJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const bundleAfterSecondAttempt = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const memoriesAfterSecondAttempt = await repository.listMemory(SYSTEM_USER_ID);
+    const episodesAfterSecondAttempt = await selfImprovementRepository.listEpisodes();
+
+    expect(createLocalNoteMock).toHaveBeenCalledTimes(1);
+    expect(createLocalNoteMock).toHaveBeenCalledWith({
+      title: "Approved operating summary",
+      content: "Summarize the approved operating updates and next actions."
+    });
+    expect(bundleAfterFirstAttempt?.goal.status).toBe("completed");
+    expect(bundleAfterSecondAttempt?.goal.status).toBe("completed");
+    expect(
+      bundleAfterSecondAttempt?.tasks.find((task) => task.id === "task-approval-follow-up")?.state
+    ).toBe("completed");
+    expect(bundleAfterSecondAttempt?.actionLogs.map((log) => log.id)).toEqual(
+      bundleAfterFirstAttempt?.actionLogs.map((log) => log.id)
+    );
+    expect(memoriesAfterSecondAttempt.map((memory) => memory.id)).toEqual(
+      memoriesAfterFirstAttempt.map((memory) => memory.id)
+    );
+    expect(episodesAfterSecondAttempt.map((episode) => episode.id)).toEqual(
+      episodesAfterFirstAttempt.map((episode) => episode.id)
+    );
+  });
+
+  it("moves approval Slack delivery onto a separate durable notification job without repeating the governed side effect", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const bundle = buildApprovalFollowUpBundle(
+      "goal-approval-notification-runtime",
+      "workflow-approval-notification-runtime"
+    );
+
+    await repository.saveGoalBundle(bundle);
+    isSlackReadyMock.mockReturnValue(true);
+
+    const job = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: "approval-follow-up-runtime",
+      goalId: bundle.goal.id,
+      taskId: "task-approval-follow-up",
+      decision: "approved",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-approval-follow-up-notification"
+    });
+
+    await executeApprovalFollowUpJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+    await executeApprovalFollowUpJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const approvalNotificationJobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["approval_notification"]
+    });
+
+    expect(createLocalNoteMock).toHaveBeenCalledTimes(1);
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+    expect(approvalNotificationJobs).toHaveLength(1);
+    expect(approvalNotificationJobs[0]).toMatchObject({
+      kind: "approval_notification",
+      status: "queued",
+      payload: {
+        type: "approval_notification",
+        goalId: bundle.goal.id,
+        approvalId: "approval-follow-up-runtime",
+        taskId: "task-approval-follow-up",
+        decision: "approved",
+        channel: "slack"
+      },
+      journal: {
+        sideEffectTarget: "approval-notification:approval-follow-up-runtime:slack"
+      }
+    });
+
+    await executeApprovalNotificationJob({
+      repository,
+      job: approvalNotificationJobs[0]!
+    });
+
+    expect(sendNotificationMock).toHaveBeenCalledTimes(1);
+    expect(sendNotificationMock).toHaveBeenCalledWith({
+      channel: "#approvals",
+      text: "\u2713 Approved: Create the approved local note"
+    });
+  });
+
+  it("executes queued Slack receipt notification jobs through the worker instead of the webhook request path", async () => {
+    const { repository } = await createTestRuntime();
+    const bundle = buildApprovalFollowUpBundle(
+      "goal-approval-slack-receipt-runtime",
+      "workflow-approval-slack-receipt-runtime"
+    );
+
+    await repository.saveGoalBundle(bundle);
+    isSlackReadyMock.mockReturnValue(true);
+
+    const job = await createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "approval_notification",
+      payload: {
+        type: "approval_notification",
+        approvalId: "approval-follow-up-runtime",
+        goalId: bundle.goal.id,
+        taskId: "task-approval-follow-up",
+        decision: "approved",
+        channel: "slack_receipt",
+        slackChannelId: "C123",
+        slackMessageTs: "1710000000.000100",
+        workspaceId: null,
+        metadata: {}
+      },
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-slack-receipt"
+    });
+
+    await executeApprovalNotificationJob({
+      repository,
+      job
+    });
+
+    expect(updateMessageMock).toHaveBeenCalledTimes(1);
+    expect(updateMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        ts: "1710000000.000100",
+        text: "\u2713 Approved: Create the approved local note"
+      })
+    );
+    expect(sendNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("executes queued Telegram receipt notification jobs through the worker instead of the webhook request path", async () => {
+    const { repository } = await createTestRuntime();
+    const bundle = buildApprovalFollowUpBundle(
+      "goal-approval-telegram-receipt-runtime",
+      "workflow-approval-telegram-receipt-runtime",
+      "rejected"
+    );
+
+    await repository.saveGoalBundle(bundle);
+    isTelegramReadyMock.mockReturnValue(true);
+
+    const job = await createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "approval_notification",
+      payload: {
+        type: "approval_notification",
+        approvalId: "approval-follow-up-runtime",
+        goalId: bundle.goal.id,
+        taskId: "task-approval-follow-up",
+        decision: "rejected",
+        channel: "telegram_receipt",
+        telegramChatId: "-100123456",
+        telegramMessageId: 77,
+        workspaceId: null,
+        metadata: {}
+      },
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-telegram-receipt"
+    });
+
+    await executeApprovalNotificationJob({
+      repository,
+      job
+    });
+
+    expect(updateTelegramMessageMock).toHaveBeenCalledTimes(1);
+    expect(updateTelegramMessageMock).toHaveBeenCalledWith({
+      chatId: "-100123456",
+      messageId: 77,
+      text: "\u274c Rejected: Create the approved local note"
+    });
+    expect(sendNotificationMock).not.toHaveBeenCalled();
   });
 
   it("processes queued briefing jobs through the worker loop and persists the generated briefing bundle", async () => {
@@ -1278,6 +1719,52 @@ describe("worker runtime", () => {
     });
     expect(persistedEvent?.details.jobStatus).toBe("completed");
     expect(resultBundle?.goal.workspaceId).toBe(dashboard.activeWorkspace?.id ?? null);
+  });
+
+  it("keeps generic autopilot execution idempotent across repeated worker attempts", async () => {
+    const { repository, selfImprovementRepository, event } = await createGenericAutopilotFixture();
+    const job = await enqueueAutopilotProcessJob({
+      repository,
+      autopilotEvent: event
+    });
+
+    await executeAutopilotProcessJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterFirstAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const eventAfterFirstAttempt = (await repository.listAutopilotEvents(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === event.id
+    );
+
+    await executeAutopilotProcessJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const goalsAfterSecondAttempt = await repository.listGoals(SYSTEM_USER_ID);
+    const eventAfterSecondAttempt = (await repository.listAutopilotEvents(SYSTEM_USER_ID)).find(
+      (candidate) => candidate.id === event.id
+    );
+
+    expect(goalsAfterFirstAttempt).toHaveLength(1);
+    expect(goalsAfterSecondAttempt).toHaveLength(1);
+    expect(goalsAfterSecondAttempt.map((bundle) => bundle.goal.id)).toEqual(
+      goalsAfterFirstAttempt.map((bundle) => bundle.goal.id)
+    );
+    expect(eventAfterFirstAttempt).toMatchObject({
+      id: event.id,
+      status: "executed",
+      resultGoalId: `autopilot-goal-${event.id}`
+    });
+    expect(eventAfterSecondAttempt).toMatchObject({
+      id: event.id,
+      status: "executed",
+      resultGoalId: `autopilot-goal-${event.id}`
+    });
   });
 
   it("records sanitized dead-letter recovery details when autopilot execution exhausts retries", async () => {

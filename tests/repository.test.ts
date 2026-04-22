@@ -16,6 +16,7 @@ import {
   WorkspaceSchema,
   WorkspaceSelectionSchema,
   briefingTypeValues,
+  createHumanActorContext,
   createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
@@ -260,10 +261,44 @@ describe("repository", () => {
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan my week around focus time and meetings.");
 
     const reloaded = await repository.getGoalBundle(bundle.goal.id);
-    const persisted = JSON.parse(await readFile(storePath, "utf8")) as { goals: Array<{ id: string }> };
+    const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+      goals: Array<{
+        id: string;
+        wedge?: { key: string; selection: string };
+        completionContract?: { id: string };
+      }>;
+    };
 
     expect(reloaded?.goal.id).toBe(bundle.goal.id);
+    expect(reloaded?.goal.wedge).toMatchObject({
+      key: "scheduling_execution",
+      selection: "selected_production"
+    });
+    expect(reloaded?.goal.completionContract).toMatchObject({
+      id: "scheduling-execution-v1"
+    });
     expect(persisted.goals.some((goal) => goal.id === bundle.goal.id)).toBe(true);
+    expect(
+      persisted.goals.find((goal) => goal.id === bundle.goal.id)
+    ).toMatchObject({
+      wedge: {
+        key: "scheduling_execution",
+        selection: "selected_production"
+      },
+      completionContract: {
+        id: "scheduling-execution-v1"
+      }
+    });
+    expect(reloaded?.goal.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(reloaded?.goal.responsibility.reviewer?.label).toBe("Goal reviewer");
+    expect(reloaded?.tasks[0]?.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(reloaded?.tasks[0]?.responsibility.delegate?.kind).toBe("system_actor");
+    expect(reloaded?.tasks[0]?.responsibility.delegate?.label).toContain("execution lane");
+
+    if (reloaded?.approvals.length) {
+      expect(reloaded.approvals[0].responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+      expect(reloaded.approvals[0].responsibility.reviewer?.label).toBe("Approval reviewer");
+    }
   }, 15_000);
 
   it("rejects duplicate approval responses once the first decision is committed", async () => {
@@ -310,6 +345,386 @@ describe("repository", () => {
     });
   }, 15_000);
 
+  it("hides approval responses from other users and keeps the approval pending", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const secondaryUserId = "user-secondary";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(secondaryUserId);
+
+    const bundle = await createGoalForUser(repository, secondaryUserId, "Review my inbox and send one external reply.");
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    await expect(
+      repository.respondToApproval({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: systemActor,
+        scope: "similar_24h",
+        rationale: "This should stay hidden from other users."
+      })
+    ).rejects.toThrow(/was not found/);
+
+    const hiddenEvidence = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+    const visibleBundle = await repository.getGoalBundleForUser(bundle.goal.id, secondaryUserId);
+    const visibleApproval = visibleBundle?.approvals.find((candidate) => candidate.id === approval!.id);
+
+    expect(hiddenEvidence).toEqual([]);
+    expect(visibleApproval).toMatchObject({
+      id: approval!.id,
+      decision: "pending",
+      respondedAt: null
+    });
+    expect(visibleApproval?.history).toEqual([]);
+  });
+
+  it("requires the workspace owner to respond to shared approvals and preserves audit evidence", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const editorUserId = "user-editor";
+    const viewerUserId = "user-viewer";
+    const timestamp = nowIso();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(editorUserId);
+    await repository.seedDefaults(viewerUserId);
+
+    const sharedWorkspace = WorkspaceSchema.parse({
+      id: "workspace-owner-boundary",
+      ownerUserId: SYSTEM_USER_ID,
+      slug: "owner-boundary",
+      name: "Owner Boundary",
+      description: "Shared approvals stay with the workspace owner.",
+      isPersonal: false,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+
+    await repository.saveWorkspace(sharedWorkspace, systemActor);
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-owner-boundary-owner",
+        workspaceId: sharedWorkspace.id,
+        userId: SYSTEM_USER_ID,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-owner-boundary-editor",
+        workspaceId: sharedWorkspace.id,
+        userId: editorUserId,
+        role: "editor",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-owner-boundary-viewer",
+        workspaceId: sharedWorkspace.id,
+        userId: viewerUserId,
+        role: "viewer",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Review my inbox and send one external reply.",
+      sharedWorkspace.id
+    );
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+    await expect(repository.getGoalBundleForUser(bundle.goal.id, editorUserId)).resolves.not.toBeNull();
+    await expect(repository.getGoalBundleForUser(bundle.goal.id, viewerUserId)).resolves.not.toBeNull();
+
+    await expect(
+      repository.respondToApproval({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: createHumanActorContext(editorUserId),
+        scope: "once",
+        rationale: "Editors should not be able to clear shared-team approvals."
+      })
+    ).rejects.toThrow("Only the workspace owner can respond to shared approvals.");
+    await expect(
+      repository.respondToApproval({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: createHumanActorContext(viewerUserId),
+        scope: "once",
+        rationale: "Viewers should remain read-only on shared-team approvals."
+      })
+    ).rejects.toThrow("Only the workspace owner can respond to shared approvals.");
+
+    const pendingBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const pendingApproval = pendingBundle?.approvals.find((candidate) => candidate.id === approval!.id);
+
+    expect(pendingApproval).toMatchObject({
+      id: approval!.id,
+      decision: "pending",
+      respondedAt: null
+    });
+    expect(pendingApproval?.history).toEqual([]);
+    await expect(
+      repository.listEvidenceRecords({
+        userId: SYSTEM_USER_ID,
+        approvalId: approval!.id
+      })
+    ).resolves.toEqual([]);
+
+    const approvedBundle = await repository.respondToApproval({
+      approvalId: approval!.id,
+      decision: "approved",
+      actor: systemActor,
+      scope: "similar_24h",
+      rationale: "Owner approved the shared-team send after reviewing the delegated draft."
+    });
+    const approvedApproval = approvedBundle.approvals.find((candidate) => candidate.id === approval!.id);
+    const ownerEvidence = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+
+    expect(approvedApproval).toMatchObject({
+      decision: "approved",
+      decisionScope: "similar_24h",
+      decisionRationale: "Owner approved the shared-team send after reviewing the delegated draft."
+    });
+    expect(ownerEvidence).toHaveLength(1);
+    expect(ownerEvidence[0]).toMatchObject({
+      approvalId: approval!.id,
+      decision: "approved",
+      actorContext: systemActor
+    });
+  });
+
+  it("surfaces dead-lettered approval follow-up jobs as replayable async execution issues", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and draft responses.");
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    const updatedBundle = await repository.respondToApproval({
+      approvalId: approval!.id,
+      decision: "rejected",
+      actor: systemActor,
+      scope: "once",
+      rationale: "Keep this in manual review until an operator inspects the draft."
+    });
+    const queuedJob = await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "approval_follow_up",
+        actorContext: systemActor,
+        maxAttempts: 1,
+        payload: {
+          type: "approval_follow_up",
+          approvalId: approval!.id,
+          goalId: updatedBundle.goal.id,
+          taskId: approval!.taskId,
+          decision: "rejected",
+          workspaceId: updatedBundle.goal.workspaceId,
+          metadata: {
+            replayedFromJobId: null
+          }
+        }
+      })
+    );
+    const claimedJob = await repository.claimNextJob({
+      userId: SYSTEM_USER_ID,
+      kinds: ["approval_follow_up"],
+      runnerId: "worker-dashboard-approval-replay",
+      leaseMs: 30_000,
+      now: "2099-04-19T02:00:00.000Z"
+    });
+
+    expect(claimedJob?.id).toBe(queuedJob.id);
+
+    await repository.deadLetterJob({
+      jobId: queuedJob.id,
+      runnerId: "worker-dashboard-approval-replay",
+      deadLetteredAt: "2026-04-19T02:01:00.000Z",
+      error: "approval follow-up replay test failure"
+    });
+
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const asyncIssue = dashboard.operations?.asyncExecution.items.find((item) => item.jobId === queuedJob.id);
+    const storedJob = await repository.getJob(queuedJob.id, SYSTEM_USER_ID);
+
+    expect(storedJob?.journal).toMatchObject({
+      lifecycleState: "dead_letter",
+      retryCount: 1,
+      sideEffectTarget: `goal:${updatedBundle.goal.id}:task:${approval!.taskId}`,
+      recovery: {
+        strategy: "replay_job",
+        statusUrl: `/api/approvals/jobs/${queuedJob.id}`,
+        operatorActionLabel: "Replay job"
+      }
+    });
+    expect(storedJob?.journal.entries.at(-1)).toMatchObject({
+      state: "dead_letter",
+      attempt: 1,
+      error: "approval follow-up replay test failure"
+    });
+
+    expect(asyncIssue).toMatchObject({
+      id: `operations-job-${queuedJob.id}`,
+      jobId: queuedJob.id,
+      label: `Approval follow-up · ${updatedBundle.goal.title}`,
+      summary: "Dead-lettered after 1/1 attempts.",
+      severity: "critical",
+      status: "dead_letter",
+      target: {
+        section: "goals",
+        itemId: updatedBundle.goal.id,
+        label: updatedBundle.goal.title
+      },
+      remediation: {
+        kind: "replay_job",
+        label: "Replay job",
+        note: "Replay the approval follow-up job to recover the queued side effect without manual state edits.",
+        permission: "owner",
+        statusUrl: `/api/approvals/jobs/${queuedJob.id}`
+      }
+    });
+  }, 15_000);
+
+  it("surfaces dead-lettered autopilot jobs as replayable async execution issues", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const autopilotEvent = await repository.saveAutopilotEvent(
+      AutopilotEventSchema.parse({
+        id: "autopilot-event-dashboard-replay",
+        userId: SYSTEM_USER_ID,
+        kind: "watcher_triggered",
+        sourceId: "watcher-dashboard-replay",
+        idempotencyKey: "watcher-dashboard-replay",
+        mode: "draft_goal",
+        summary: "Replay a dead-lettered autopilot watcher event.",
+        status: "failed",
+        details: {
+          failureStage: "execution",
+          requiresReview: true,
+          recoveryAction: "review_event_error"
+        },
+        actorContext: systemActor,
+        createdAt: nowIso(),
+        processedAt: nowIso(),
+        resultGoalId: null,
+        error: "Autopilot execution failed."
+      })
+    );
+    const queuedJob = await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "autopilot_process",
+        actorContext: systemActor,
+        maxAttempts: 1,
+        payload: {
+          type: "autopilot_process",
+          autopilotEventId: autopilotEvent.id,
+          kind: autopilotEvent.kind,
+          sourceId: autopilotEvent.sourceId,
+          mode: autopilotEvent.mode,
+          metadata: {}
+        }
+      })
+    );
+    const claimedJob = await repository.claimNextJob({
+      userId: SYSTEM_USER_ID,
+      kinds: ["autopilot_process"],
+      runnerId: "worker-dashboard-autopilot-replay",
+      leaseMs: 30_000,
+      now: "2099-04-19T02:00:00.000Z"
+    });
+
+    expect(claimedJob?.id).toBe(queuedJob.id);
+
+    await repository.deadLetterJob({
+      jobId: queuedJob.id,
+      runnerId: "worker-dashboard-autopilot-replay",
+      deadLetteredAt: "2026-04-19T02:01:00.000Z",
+      error: "autopilot replay test failure"
+    });
+
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const asyncIssue = dashboard.operations?.asyncExecution.items.find((item) => item.jobId === queuedJob.id);
+    const storedJob = await repository.getJob(queuedJob.id, SYSTEM_USER_ID);
+
+    expect(storedJob?.journal).toMatchObject({
+      lifecycleState: "dead_letter",
+      retryCount: 1,
+      sideEffectTarget: `autopilot-event:${autopilotEvent.id}`,
+      recovery: {
+        strategy: "replay_job",
+        statusUrl: `/api/jobs/${queuedJob.id}`,
+        operatorActionLabel: "Replay event"
+      }
+    });
+    expect(storedJob?.journal.entries.at(-1)).toMatchObject({
+      state: "dead_letter",
+      attempt: 1,
+      error: "autopilot replay test failure"
+    });
+
+    expect(asyncIssue).toMatchObject({
+      id: `operations-job-${queuedJob.id}`,
+      jobId: queuedJob.id,
+      label: "Autopilot event · watcher triggered",
+      summary: "Dead-lettered after 1/1 attempts.",
+      severity: "critical",
+      status: "dead_letter",
+      target: {
+        section: "autopilot",
+        itemId: autopilotEvent.id,
+        label: "Open autopilot event"
+      },
+      remediation: {
+        kind: "replay_job",
+        label: "Replay event",
+        note: "Replay the autopilot event job to reprocess the failed trigger without recreating the source event.",
+        permission: "owner",
+        statusUrl: `/api/jobs/${queuedJob.id}`
+      }
+    });
+  }, 15_000);
+
   it("round-trips approval previews and decision history through the file-backed store", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -353,6 +768,40 @@ describe("repository", () => {
       scope: "similar_24h",
       rationale: "This exact external reply pattern is safe for the next day.",
       actorContext: systemActor
+    });
+  });
+
+  it("fails closed to manual review when a persisted approval intent is malformed", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const approval = bundle.approvals[0];
+    const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+      approvals?: Array<{ id: string; action_intent?: unknown }>;
+    };
+    const persistedApproval = persisted.approvals?.find((candidate) => candidate.id === approval?.id);
+
+    expect(persistedApproval).toBeDefined();
+
+    persistedApproval!.action_intent = {
+      type: "send_message",
+      to: "client@example.com"
+    };
+
+    await writeFile(storePath, JSON.stringify(persisted, null, 2));
+
+    const reloaded = await repository.getGoalBundle(bundle.goal.id);
+    const reloadedApproval = reloaded?.approvals.find((candidate) => candidate.id === approval?.id);
+
+    expect(reloadedApproval?.actionIntent).toMatchObject({
+      type: "manual_review",
+      actionType: "send"
     });
   });
 
@@ -1380,6 +1829,91 @@ describe("repository", () => {
     ).rejects.toThrow(/Goal goal-does-not-exist was not found/);
   });
 
+  it("derives shared workspace watcher responsibility from the goal owner and workspace role", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const editorUserId = "user-editor";
+    const timestamp = nowIso();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(editorUserId);
+
+    const sharedWorkspace = WorkspaceSchema.parse({
+      id: "workspace-watcher-responsibility",
+      ownerUserId: SYSTEM_USER_ID,
+      slug: "watcher-responsibility",
+      name: "Watcher Responsibility",
+      description: "Shared watcher ownership should remain explicit.",
+      isPersonal: false,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+
+    await repository.saveWorkspace(sharedWorkspace, systemActor);
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-watcher-responsibility-owner",
+        workspaceId: sharedWorkspace.id,
+        userId: SYSTEM_USER_ID,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-watcher-responsibility-editor",
+        workspaceId: sharedWorkspace.id,
+        userId: editorUserId,
+        role: "editor",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Watch the shared inbox for escalation risk.",
+      sharedWorkspace.id
+    );
+
+    await repository.saveWatcher(
+      WatcherSchema.parse({
+        id: "watcher-shared-responsibility",
+        goalId: bundle.goal.id,
+        targetEntity: "shared-priority-inbox",
+        condition: "an escalation appears",
+        frequency: "hourly",
+        triggerAction: "draft the next response",
+        sourceSystems: ["email"],
+        status: "active",
+        expiryAt: null,
+        actorContext: createHumanActorContext(editorUserId),
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+    );
+
+    const reloaded = await repository.getGoalBundleForUser(bundle.goal.id, editorUserId);
+    const watcher = reloaded?.watchers.find((candidate) => candidate.id === "watcher-shared-responsibility");
+
+    expect(watcher?.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(watcher?.responsibility.delegate).toMatchObject({
+      kind: "workspace_role",
+      workspaceRole: "editor"
+    });
+    expect(watcher?.responsibility.reviewer).toMatchObject({
+      kind: "workspace_role",
+      workspaceRole: "owner"
+    });
+  });
+
   it("returns only watchers owned by the requested user", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -1534,7 +2068,7 @@ describe("repository", () => {
     await expect(repository.listGoalsPage({ userId: SYSTEM_USER_ID, cursor: "not-base64" })).rejects.toMatchObject({
       code: "invalid_cursor"
     });
-  });
+  }, 10_000);
 
   it("bounds dashboard collections to the active workspace scope in the file-backed store", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
@@ -1739,12 +2273,53 @@ describe("repository", () => {
     const collaboratorDashboard = await repository.getDashboardData(collaboratorUserId);
     const collaboratorSharedGoal = await repository.getGoalBundleForUser(sharedBundle.goal.id, collaboratorUserId);
     const collaboratorPrivateGoal = await repository.getGoalBundleForUser(privateBundle.goal.id, collaboratorUserId);
+    const sharedJob = await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "goal_refine",
+        actorContext: systemActor,
+        payload: {
+          type: "goal_refine",
+          goalId: sharedBundle.goal.id,
+          workflowId: sharedBundle.workflow.id,
+          refinement: "Add the shared operator recovery path.",
+          workspaceId: sharedWorkspace.id,
+          metadata: {}
+        }
+      })
+    );
+    const privateJob = await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "goal_refine",
+        actorContext: systemActor,
+        payload: {
+          type: "goal_refine",
+          goalId: privateBundle.goal.id,
+          workflowId: privateBundle.workflow.id,
+          refinement: "Keep this personal workflow private.",
+          workspaceId: privateBundle.goal.workspaceId,
+          metadata: {}
+        }
+      })
+    );
+    const collaboratorVisibleJobs = await repository.listJobs({ userId: collaboratorUserId });
 
     expect(collaboratorDashboard.activeWorkspace?.id).toBe(sharedWorkspace.id);
     expect(collaboratorDashboard.goals.map((bundle) => bundle.goal.id)).toContain(sharedBundle.goal.id);
     expect(collaboratorDashboard.goals.map((bundle) => bundle.goal.id)).not.toContain(privateBundle.goal.id);
     expect(collaboratorSharedGoal?.goal.workspaceId).toBe(sharedWorkspace.id);
     expect(collaboratorPrivateGoal).toBeNull();
+    expect(collaboratorVisibleJobs.map((job) => job.id)).toContain(sharedJob.id);
+    expect(collaboratorVisibleJobs.map((job) => job.id)).not.toContain(privateJob.id);
+    await expect(repository.getJob(sharedJob.id, collaboratorUserId)).resolves.toMatchObject({
+      id: sharedJob.id,
+      payload: {
+        type: "goal_refine",
+        goalId: sharedBundle.goal.id
+      }
+    });
+    await expect(repository.getJob(privateJob.id, collaboratorUserId)).resolves.toBeNull();
 
     await repository.saveWorkspaceSelection(
       WorkspaceSelectionSchema.parse({
@@ -2092,6 +2667,13 @@ describe("repository", () => {
       mode: "draft_goal",
       summary: "Watcher triggered for a VIP thread",
       details: {
+        eventEnvelope: {
+          family: "watcher",
+          trigger: "watcher_triggered",
+          priority: "high",
+          tags: ["vip", "inbox"],
+          correlationKey: "watcher:vip-thread"
+        },
         watcherId: "watcher-vip-thread"
       },
       actorContext: systemActor,
@@ -2133,6 +2715,19 @@ describe("repository", () => {
       idempotencyKey: "watcher-vip-thread-1",
       actorContext: systemActor
     });
+    expect(firstClaim.event.details).toMatchObject({
+      eventEnvelope: {
+        family: "watcher",
+        trigger: "watcher_triggered",
+        priority: "high",
+        tags: ["vip", "inbox"],
+        correlationKey: "watcher:vip-thread"
+      },
+      suppression: {
+        outcome: "allowed"
+      },
+      watcherId: "watcher-vip-thread"
+    });
 
     expect(duplicateClaim).toMatchObject({
       outcome: "duplicate",
@@ -2151,13 +2746,97 @@ describe("repository", () => {
       actorContext: systemActor
     });
     expect(debouncedClaim.event.details).toMatchObject({
-      debouncedByEventId: firstClaim.event.id
+      debouncedByEventId: firstClaim.event.id,
+      suppression: {
+        outcome: "debounced",
+        relatedEventId: firstClaim.event.id
+      }
     });
     expect(debouncedClaim.event.processedAt).toBeTruthy();
 
     expect(events).toHaveLength(2);
     expect(events.map((event) => event.status).sort()).toEqual(["debounced", "pending"]);
     expect(events.every((event) => event.actorContext?.subjectUserId === systemActor.subjectUserId)).toBe(true);
+  });
+
+  it("suppresses autopilot events when a per-source event budget is exhausted", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const budget = {
+      key: "watcher:vip-inbox",
+      windowMinutes: 60,
+      maxEvents: 1,
+      scope: "source" as const
+    };
+
+    const firstClaim = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "watcher_triggered",
+      sourceId: "watcher-vip-budget",
+      idempotencyKey: "watcher-vip-budget-1",
+      mode: "draft_goal",
+      summary: "Watcher triggered for a VIP inbox budget test",
+      details: {
+        eventEnvelope: {
+          family: "watcher",
+          trigger: "watcher_triggered",
+          priority: "high",
+          tags: ["vip"],
+          correlationKey: "watcher:vip-budget"
+        },
+        budget,
+        watcherId: "watcher-vip-budget"
+      },
+      actorContext: systemActor,
+      debounceMinutes: 15
+    });
+
+    const secondClaim = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "watcher_triggered",
+      sourceId: "watcher-vip-budget",
+      idempotencyKey: "watcher-vip-budget-2",
+      mode: "draft_goal",
+      summary: "Watcher triggered again inside the active budget window",
+      details: {
+        eventEnvelope: {
+          family: "watcher",
+          trigger: "watcher_triggered",
+          priority: "critical",
+          tags: ["vip"],
+          correlationKey: "watcher:vip-budget"
+        },
+        budget,
+        watcherId: "watcher-vip-budget"
+      },
+      actorContext: systemActor,
+      debounceMinutes: 15
+    });
+
+    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+
+    expect(firstClaim.outcome).toBe("claimed");
+    expect(secondClaim.outcome).toBe("ignored");
+    expect(secondClaim.event).toMatchObject({
+      status: "ignored",
+      sourceId: "watcher-vip-budget"
+    });
+    expect(secondClaim.event.processedAt).toBeTruthy();
+    expect(secondClaim.event.details).toMatchObject({
+      budget,
+      suppression: {
+        outcome: "budget_exhausted",
+        budgetKey: budget.key,
+        observedCount: 1
+      }
+    });
+    expect(events.map((event) => event.status).sort()).toEqual(["ignored", "pending"]);
   });
 
   it("suppresses new autopilot events when the pending backlog crosses the configured threshold", async () => {
@@ -2200,6 +2879,8 @@ describe("repository", () => {
       }
     });
 
+    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+
     expect(firstClaim.outcome).toBe("claimed");
     expect(secondClaim.outcome).toBe("suppressed");
     expect(secondClaim.event.status).toBe("ignored");
@@ -2210,6 +2891,7 @@ describe("repository", () => {
         maxPendingEvents: 1
       }
     });
+    expect(events.map((event) => event.status).sort()).toEqual(["ignored", "pending"]);
   });
 
   it("suppresses new autopilot events when the event budget for the active window is exhausted", async () => {
@@ -2634,6 +3316,72 @@ describe("repository", () => {
     ]);
     expect(dashboard.operations).toBeDefined();
     expect(dashboard.operations?.generatedAt).toBe(dashboard.diagnostics.generatedAt);
+    expect(dashboard.operations?.autonomyPosture.status).toBe("critical");
+    expect(dashboard.operations?.autonomyPosture.level).toBe("blocked");
+    expect(dashboard.operations?.autonomyPosture.label).toBe("Blocked");
+    expect(dashboard.operations?.autonomyPosture.summary).toBe(
+      "Autonomy is blocked until queue recovery and connector repair return the runtime to policy-safe bounds."
+    );
+    expect(dashboard.operations?.autonomyPosture.stats).toEqual(
+      expect.arrayContaining([
+        "Mode notify only",
+        "Approval risk based",
+        "Max auto R1",
+        "1 pending approval",
+        "0 failed events"
+      ])
+    );
+    expect(dashboard.operations?.autonomyPosture.reasons).toEqual(
+      expect.arrayContaining([
+        "Dead-lettered after 1/2 attempts.",
+        "Token refresh failed, so the connector may stop working until it is revalidated.",
+        "Autopilot mode is notify only, so execution remains operator-controlled.",
+        "1 pending approval still needs operator review."
+      ])
+    );
+    expect(dashboard.operations?.autonomyPosture.overridePaths).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "autonomy-open-queue-recovery",
+          label: "Open queue recovery",
+          permission: "owner",
+          target: {
+            section: "operations",
+            itemId: `operations-job-${asyncIssueJob.id}`,
+            label: blockedBundle.goal.title
+          }
+        }),
+        expect.objectContaining({
+          id: "autonomy-open-connector-repair",
+          label: "Review connector health",
+          permission: "owner",
+          target: {
+            section: "operations",
+            itemId: "operations-connector-google:global:acct-123",
+            label: "Open google integrations"
+          }
+        }),
+        expect.objectContaining({
+          id: "autonomy-review-approval",
+          label: "Review pending approval",
+          permission: "owner",
+          target: {
+            section: "approvals",
+            itemId: "approval-expired",
+            label: "Send the outbound response"
+          }
+        }),
+        expect.objectContaining({
+          id: "autonomy-open-autopilot",
+          label: "Open autopilot controls",
+          permission: "owner",
+          target: {
+            section: "autopilot",
+            label: "Open autopilot controls"
+          }
+        })
+      ])
+    );
     expect(dashboard.operations?.asyncExecution).toMatchObject({
       status: "critical",
       issueCount: 1,
@@ -2661,6 +3409,12 @@ describe("repository", () => {
       id: "operations-connector-google:global:acct-123",
       summary: "Token refresh failed, so the connector may stop working until it is revalidated.",
       severity: "attention",
+      expectedReadinessTier: "approval-grade",
+      expectedReadinessLabel: "Approval-grade",
+      expectedSupportedModes: ["draft", "approval"],
+      linkedIntegrationIds: ["gmail", "google-calendar"],
+      linkedIntegrationNames: ["Gmail Adapter", "Google Calendar Adapter"],
+      meetingReadinessTarget: false,
       target: {
         section: "integrations",
         label: "Open google integrations"
@@ -2702,6 +3456,143 @@ describe("repository", () => {
       stats: expect.arrayContaining(["8 reliability signals", "2 stale memories", "Max auto R1"])
     });
     expect(dashboard.operatingSections.generatedAt).toBe(dashboard.diagnostics.generatedAt);
+    expect(dashboard.operatingSections.roleView).toMatchObject({
+      role: "owner",
+      label: "Owner view",
+      prioritizedSectionKeys: ["now", "execution", "trust", "automation", "build"]
+    });
+    expect(dashboard.operatingSections.roleView.summary).toContain("Recover async execution");
+    expect(dashboard.operatingSections.roleView.focusAreas).toEqual(
+      expect.arrayContaining([
+        "Recover async execution before trusting fresh autopilot or queue activity.",
+        "Clear pending approvals that are holding governed work at the boundary."
+      ])
+    );
+    expect(dashboard.operatingSections.teamWorkflow).toMatchObject({
+      mode: "owner_control",
+      label: "Owner-controlled team workflow",
+      visibilityLabel: "Full queue, approval, and governance visibility",
+      escalationTargetRole: "owner",
+      slaStatus: "critical"
+    });
+    expect(dashboard.operatingSections.teamWorkflow.queueMetrics).toEqual(
+      expect.arrayContaining(["0 collaborators", "1 pending approval", "2 urgent queue items"])
+    );
+    expect(dashboard.operatingSections.teamWorkflow.ownershipAssignments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "shared_queue",
+          ownerRole: "owner",
+          status: "critical"
+        }),
+        expect.objectContaining({
+          key: "approval_boundary",
+          ownerRole: "owner",
+          status: "critical"
+        }),
+        expect.objectContaining({
+          key: "execution_recovery",
+          ownerRole: "owner",
+          status: "critical"
+        })
+      ])
+    );
+    expect(dashboard.operatingSections.teamWorkflow.queues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "mine",
+          label: "Mine",
+          ownerRole: "owner",
+          status: "critical",
+          count: 3,
+          targetSection: "approvals",
+          targetItemId: "approval-expired"
+        }),
+        expect.objectContaining({
+          key: "delegated",
+          label: "Delegated",
+          ownerRole: "owner",
+          status: "critical",
+          count: 0
+        }),
+        expect.objectContaining({
+          key: "escalated",
+          label: "Escalated",
+          ownerRole: "owner",
+          status: "critical",
+          count: 2
+        }),
+        expect.objectContaining({
+          key: "blocked",
+          label: "Blocked",
+          ownerRole: "owner",
+          status: "critical",
+          count: 1,
+          targetSection: "operations"
+        }),
+        expect.objectContaining({
+          key: "waiting",
+          label: "Waiting",
+          ownerRole: "owner",
+          status: "healthy",
+          count: 0
+        })
+      ])
+    );
+    expect(dashboard.operatingSections.teamWorkflow.controls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "open_mine",
+          label: "Open owner lane",
+          status: "critical",
+          targetSection: "approvals",
+          permission: expect.objectContaining({
+            allowed: true
+          })
+        }),
+        expect.objectContaining({
+          key: "rebalance_queue",
+          label: "Rebalance queue ownership",
+          status: "attention",
+          targetSection: "workspaces",
+          permission: expect.objectContaining({
+            allowed: true
+          })
+        }),
+        expect.objectContaining({
+          key: "escalate_overdue",
+          label: "Escalate overdue approvals",
+          status: "critical",
+          targetSection: "approvals",
+          targetItemId: "approval-expired"
+        })
+      ])
+    );
+    expect(dashboard.operatingSections.teamWorkflow.auditCoverage).toMatchObject({
+      required: false,
+      status: "healthy",
+      latestStatus: null,
+      latestCompletedAt: null
+    });
+    expect(dashboard.operatingSections.teamWorkflow.auditCoverage.summary).toContain(
+      "Audit exports are optional right now"
+    );
+    expect(dashboard.operatingSections.teamWorkflow.slaSummary).toContain("exceeded the shared-team response window");
+    expect(dashboard.operatingSections.teamWorkflow.handoffGuidance).toEqual(
+      expect.arrayContaining([
+        "Oldest overdue approval: Send the outbound response",
+        "Use the shared queue ordering before pulling in new ad hoc work."
+      ])
+    );
+    expect(dashboard.operatingSections.nextBestAction).toMatchObject({
+      kind: "recover_execution",
+      label: "Recover async execution",
+      status: "critical",
+      targetSection: "operations",
+      targetItemId: `operations-job-${asyncIssueJob.id}`,
+      role: "owner"
+    });
+    expect(dashboard.operatingSections.nextBestAction.reason).toContain("highest-priority blocker");
     expect(dashboard.operatingSections.sections.map((section) => section.key)).toEqual([
       "now",
       "automation",
@@ -2758,6 +3649,65 @@ describe("repository", () => {
     );
   });
 
+  it("surfaces conflicting memory context as a reviewable dashboard diagnostic", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const primary = createMemoryRecord({
+      userId: SYSTEM_USER_ID,
+      category: "travel",
+      memoryType: "confirmed",
+      content: "Seat preference is aisle.",
+      confidence: 0.95,
+      source: "test-suite",
+      updatedAt: "2026-04-17T08:00:00.000Z"
+    });
+    const conflicting = createMemoryRecord({
+      userId: SYSTEM_USER_ID,
+      category: "travel",
+      memoryType: "observed",
+      content: "Seat preference is window.",
+      confidence: 0.8,
+      source: "test-suite",
+      updatedAt: "2026-04-16T08:00:00.000Z"
+    });
+
+    await repository.saveMemory(primary);
+    await repository.saveMemory(conflicting);
+
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const conflictDiagnostic = dashboard.diagnostics.items.find((item) => item.kind === "context_conflicts");
+
+    expect(conflictDiagnostic).toMatchObject({
+      title: "Conflicting context",
+      count: 1,
+      severity: "warning"
+    });
+    expect(conflictDiagnostic?.reasons).toEqual(
+      expect.arrayContaining(['Conflicting travel context for "seat preference" needs review.'])
+    );
+    expect(conflictDiagnostic?.targets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          section: "memory",
+          itemId: primary.id,
+          action: "review_memory",
+          actionLabel: "Review"
+        }),
+        expect.objectContaining({
+          section: "memory",
+          itemId: conflicting.id,
+          action: "review_memory",
+          actionLabel: "Review"
+        })
+      ])
+    );
+  });
+
   it("round-trips workspace governance and exports a bounded workspace audit report", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -2800,6 +3750,15 @@ describe("repository", () => {
         maxAutoRunRiskClass: "R1",
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
+        shadowReplayPolicy: {
+          enabled: false,
+          promotionMode: "disabled",
+          rollbackOutcome: "allowed_with_confirmation",
+          minimumMatchedEpisodes: 6,
+          minimumPrecision: 0.9,
+          maximumNegativeOutcomeRate: 0.1,
+          maximumFailureCostRate: 0.15
+        },
         retentionDays: 90,
         updatedBy: SYSTEM_USER_ID,
         createdAt: timestamp,
@@ -2826,7 +3785,17 @@ describe("repository", () => {
     const parsedAudit = JSON.parse(audit.content) as {
       generatedAt: string;
       workspace: { id: string };
-      governance: { approvalMode: string; requireAuditExports: boolean };
+      governance: {
+        approvalMode: string;
+        requireAuditExports: boolean;
+        shadowReplayPolicy: {
+          enabled: boolean;
+          promotionMode: string;
+          rollbackOutcome: string;
+          minimumMatchedEpisodes: number;
+          minimumPrecision: number;
+        };
+      };
       goals: Array<{
         goal: { id: string };
         approvals: Array<{ id: string }>;
@@ -2855,14 +3824,28 @@ describe("repository", () => {
       workspaceId: workspace.id,
       approvalMode: "always_review",
       requireAuditExports: true,
-      retentionDays: 90
+      retentionDays: 90,
+      shadowReplayPolicy: {
+        enabled: false,
+        promotionMode: "disabled",
+        rollbackOutcome: "allowed_with_confirmation",
+        minimumMatchedEpisodes: 6,
+        minimumPrecision: 0.9
+      }
     });
     expect(audit.contentType).toBe("application/json");
     expect(audit.fileName).toContain(workspace.slug);
     expect(parsedAudit.workspace.id).toBe(workspace.id);
     expect(parsedAudit.governance).toMatchObject({
       approvalMode: "always_review",
-      requireAuditExports: true
+      requireAuditExports: true,
+      shadowReplayPolicy: {
+        enabled: false,
+        promotionMode: "disabled",
+        rollbackOutcome: "allowed_with_confirmation",
+        minimumMatchedEpisodes: 6,
+        minimumPrecision: 0.9
+      }
     });
     expect(parsedAudit.generatedAt).toBe(audit.generatedAt);
     expect(parsedAudit.goals).toEqual(
@@ -2889,6 +3872,15 @@ describe("repository", () => {
     });
     expect(Array.isArray(auditedGoal?.approvals)).toBe(true);
     expect(auditedGoal?.actionLogs.some((log) => log.kind === "goal.created")).toBe(true);
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+
+    expect(dashboard.operatingSections.teamWorkflow.auditCoverage).toMatchObject({
+      required: true,
+      status: "healthy",
+      latestStatus: "completed",
+      latestCompletedAt: audit.generatedAt
+    });
+    expect(dashboard.operatingSections.teamWorkflow.auditCoverage.summary).toContain(audit.generatedAt);
   });
 
   it("fails fast with a clear error when the file-backed store is corrupted", async () => {

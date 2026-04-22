@@ -93,7 +93,10 @@ export function buildSuppressedAutopilotEvent(params: {
       actorContext: params.actorContext,
       details: {
         ...(params.details ?? {}),
-        suppression: params.suppression
+        suppression: {
+          outcome: "suppressed",
+          ...params.suppression
+        }
       }
     }),
     status: "ignored",

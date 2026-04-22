@@ -14,6 +14,11 @@ import {
 } from "@agentic/contracts";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
 import { Badge, RelativeTime, StatusBadge } from "./ui";
+import {
+  GOAL_SHARE_MUTATION_DENIED_REASON,
+  canManageGoalSharesForRole,
+  resolveWorkspaceRoleForUser
+} from "../lib/workspace-role-permissions";
 
 type RequestState = {
   kind: "idle" | "success" | "error";
@@ -204,6 +209,40 @@ function summarizeGoalShareStatus(share: GoalShareRecord): string {
   return `Expires ${share.expiresAt}`;
 }
 
+function formatAutopilotLabel(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function readAutopilotMetadata(details: Record<string, unknown> | undefined) {
+  const eventEnvelope =
+    details && typeof details.eventEnvelope === "object" && details.eventEnvelope !== null
+      ? (details.eventEnvelope as Record<string, unknown>)
+      : null;
+  const policy =
+    details && typeof details.policy === "object" && details.policy !== null ? (details.policy as Record<string, unknown>) : null;
+  const operatorRoute =
+    details && typeof details.operatorRoute === "object" && details.operatorRoute !== null
+      ? (details.operatorRoute as Record<string, unknown>)
+      : null;
+
+  return {
+    family: typeof eventEnvelope?.family === "string" ? eventEnvelope.family : null,
+    priority: typeof eventEnvelope?.priority === "string" ? eventEnvelope.priority : null,
+    queue: typeof policy?.queue === "string" ? policy.queue : null,
+    operatorRoute:
+      typeof operatorRoute?.section === "string" && typeof operatorRoute?.label === "string"
+        ? {
+            section: operatorRoute.section as DashboardDiagnosticTarget["section"],
+            itemId: typeof operatorRoute.itemId === "string" ? operatorRoute.itemId : undefined,
+            label: operatorRoute.label,
+            actionLabel: typeof operatorRoute.actionLabel === "string" ? operatorRoute.actionLabel : undefined
+          }
+        : null
+  };
+}
+
 export function DashboardOperationsSections(props: DashboardOperationsSectionsProps) {
   const {
     data,
@@ -241,6 +280,20 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
     revokeGoalShare
   } = props;
   const goalTitleById = new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.title]));
+  const teamPermissions = data.operatingSections.teamWorkflow.permissions;
+  const canManageMembers = teamPermissions.manageMembers.allowed && Boolean(data.activeWorkspace);
+  const canEditGovernance = teamPermissions.editGovernance.allowed && Boolean(data.activeWorkspace);
+  const canExportAudit = teamPermissions.exportAudit.allowed && Boolean(data.activeWorkspace);
+  const canManagePrivacyOperations = teamPermissions.managePrivacyOperations.allowed && Boolean(data.activeWorkspace);
+  const activeWorkspaceRole = resolveWorkspaceRoleForUser(
+    data.workspaceMembers,
+    data.activeWorkspace?.id,
+    data.workspaceSelection?.userId ?? null
+  );
+  const canManageGoalShares = Boolean(data.activeWorkspace) && canManageGoalSharesForRole(activeWorkspaceRole);
+  const goalSharePermissionReason = data.activeWorkspace
+    ? GOAL_SHARE_MUTATION_DENIED_REASON
+    : "Select a workspace before managing public goal share links.";
   const governanceConformance = data.governanceConformance ?? null;
   const blockingGovernanceChecks = governanceConformance?.checks.filter((check) => check.status === "fail") ?? [];
   const warningGovernanceChecks = governanceConformance?.checks.filter((check) => check.status === "warn") ?? [];
@@ -329,18 +382,23 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             </div>
           ))}
         </div>
-        <div className="list-stack compact">
+        <div className="list-stack compact" style={{ opacity: canManageMembers ? 1 : 0.65 }}>
           <label className="field">
             <span>Member user ID</span>
             <input
               value={workspaceMemberUserId}
               onChange={(event) => setWorkspaceMemberUserId(event.target.value)}
               placeholder="alex@example.com"
+              disabled={isPending || !canManageMembers}
             />
           </label>
           <label className="field">
             <span>Role</span>
-            <select value={workspaceMemberRole} onChange={(event) => setWorkspaceMemberRole(event.target.value as (typeof workspaceRoleValues)[number])}>
+            <select
+              value={workspaceMemberRole}
+              onChange={(event) => setWorkspaceMemberRole(event.target.value as (typeof workspaceRoleValues)[number])}
+              disabled={isPending || !canManageMembers}
+            >
               {workspaceRoleValues.map((role) => (
                 <option key={role} value={role}>
                   {role}
@@ -348,9 +406,10 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ))}
             </select>
           </label>
-          <button type="button" className="secondary-button" onClick={() => void addWorkspaceMember()} disabled={isPending || !data.activeWorkspace}>
+          <button type="button" className="secondary-button" onClick={() => void addWorkspaceMember()} disabled={isPending || !canManageMembers}>
             Add member
           </button>
+          {!canManageMembers ? <p className="operator-product-subtitle">{teamPermissions.manageMembers.reason}</p> : null}
         </div>
       </article>
 
@@ -362,7 +421,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               Approval policy and audit defaults stay at the workspace boundary so collaboration does not widen autonomy silently.
             </p>
           </div>
-          <button type="button" className="secondary-button" onClick={() => void exportWorkspaceAudit()} disabled={isPending || !data.activeWorkspace}>
+          <button type="button" className="secondary-button" onClick={() => void exportWorkspaceAudit()} disabled={isPending || !canExportAudit}>
             Export audit
           </button>
         </div>
@@ -372,6 +431,8 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ? `Editing governance for ${data.activeWorkspace.name}.`
               : "Select a workspace before editing governance.")}
         </p>
+        <p className="operator-product-subtitle">{teamPermissions.exportAudit.reason}</p>
+        <div className="list-stack compact" style={{ opacity: canEditGovernance ? 1 : 0.65 }}>
         {governanceConformance ? (
           <div className="list-stack compact">
             <div className="list-item vertical">
@@ -435,11 +496,14 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             ) : null}
           </div>
         ) : null}
-        <div className="list-stack compact">
+        </div>
+        <p className="operator-product-subtitle">{teamPermissions.exportAudit.reason}</p>
+        <div className="list-stack compact" style={{ opacity: canEditGovernance ? 1 : 0.65 }}>
           <label className="field">
             <span>Approval mode</span>
             <select
               value={governanceDraft.approvalMode}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -458,6 +522,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <span>Max auto-run risk class</span>
             <select
               value={governanceDraft.maxAutoRunRiskClass}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -479,6 +544,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               min={7}
               max={3650}
               value={governanceDraft.retentionDays}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -491,6 +557,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <input
               type="checkbox"
               checked={governanceDraft.requireAuditExports}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -504,6 +571,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <input
               type="checkbox"
               checked={governanceDraft.externalSendRequiresApproval}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -517,6 +585,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <input
               type="checkbox"
               checked={governanceDraft.calendarWriteRequiresApproval}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -526,9 +595,145 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             />
             Calendar writes always require approval
           </label>
-          <button type="button" className="primary-button" onClick={() => void saveWorkspaceGovernance()} disabled={isPending || !data.activeWorkspace}>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={governanceDraft.shadowReplayPolicy.enabled}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    enabled: event.target.checked
+                  }
+                }))
+              }
+            />
+            Require shadow replay evidence before widening to R3 autonomy
+          </label>
+          <label className="field">
+            <span>Learning promotion mode</span>
+            <select
+              value={governanceDraft.shadowReplayPolicy.promotionMode}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    promotionMode: event.target.value as WorkspaceGovernance["shadowReplayPolicy"]["promotionMode"]
+                  }
+                }))
+              }
+            >
+              <option value="validated_autonomy">validated_autonomy</option>
+              <option value="shadow_only">shadow_only</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Learning rollback outcome</span>
+            <select
+              value={governanceDraft.shadowReplayPolicy.rollbackOutcome}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    rollbackOutcome: event.target.value as WorkspaceGovernance["shadowReplayPolicy"]["rollbackOutcome"]
+                  }
+                }))
+              }
+            >
+              <option value="allowed_with_confirmation">allowed_with_confirmation</option>
+              <option value="downgrade_to_draft">downgrade_to_draft</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Shadow replay minimum matched episodes</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={governanceDraft.shadowReplayPolicy.minimumMatchedEpisodes}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    minimumMatchedEpisodes: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Shadow replay minimum precision</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={governanceDraft.shadowReplayPolicy.minimumPrecision}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    minimumPrecision: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Shadow replay maximum negative outcome rate</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={governanceDraft.shadowReplayPolicy.maximumNegativeOutcomeRate}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    maximumNegativeOutcomeRate: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Shadow replay maximum failure cost rate</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={governanceDraft.shadowReplayPolicy.maximumFailureCostRate}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    maximumFailureCostRate: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <button type="button" className="primary-button" onClick={() => void saveWorkspaceGovernance()} disabled={isPending || !canEditGovernance}>
             Save governance
           </button>
+          {!canEditGovernance ? <p className="operator-product-subtitle">{teamPermissions.editGovernance.reason}</p> : null}
         </div>
       </article>
 
@@ -614,7 +819,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             </div>
           </div>
         )}
-        <div className="list-stack compact">
+        <div className="list-stack compact" style={{ opacity: canManagePrivacyOperations ? 1 : 0.65 }}>
           {privacyOperationKindValues.map((kind) => (
             <div className="list-item vertical" key={kind}>
               <div>
@@ -626,20 +831,23 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
                   type="button"
                   className={kind === "workspace_delete" ? "danger-button" : "secondary-button"}
                   onClick={() => void runPrivacyOperation(kind)}
-                  disabled={isPending || !data.activeWorkspace}
+                  disabled={isPending || !canManagePrivacyOperations}
                 >
                   {privacyOperationLabels[kind]}
                 </button>
               </div>
             </div>
           ))}
+          {!canManagePrivacyOperations ? (
+            <p className="operator-product-subtitle">{teamPermissions.managePrivacyOperations.reason}</p>
+          ) : null}
         </div>
 
         <div className="card-header">
           <h3>Recent share links</h3>
           <span>{data.goalShares.length} tracked</span>
         </div>
-        <div className="list-stack">
+        <div className="list-stack" style={{ opacity: canManageGoalShares ? 1 : 0.65 }}>
           {data.goalShares.length === 0 ? (
             <div className="list-item vertical">
               <div>
@@ -662,7 +870,8 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
                       type="button"
                       className="secondary-button"
                       onClick={() => void revokeGoalShare(share.goalId, share.id, goalTitleById.get(share.goalId) ?? share.goalId)}
-                      disabled={isPending}
+                      disabled={isPending || !canManageGoalShares}
+                      title={!canManageGoalShares ? goalSharePermissionReason : undefined}
                     >
                       Revoke
                     </button>
@@ -672,6 +881,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             ))
           )}
         </div>
+        {!canManageGoalShares ? <p className="operator-product-subtitle">{goalSharePermissionReason}</p> : null}
 
         <div className="card-header">
           <h3>Recent privacy operations</h3>
@@ -768,45 +978,64 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <div className="list-item vertical">
               <div>
                 <strong>No autopilot events yet</strong>
-                <p>Watcher triggers, template schedules, and briefing schedules will appear here once they fire.</p>
+                <p>
+                  Watcher signals, scheduled runs, inbound communications, deadlines, approvals, connector failures,
+                  and dormant workflows will appear here once they fire.
+                </p>
               </div>
             </div>
           ) : (
-            data.autopilotEvents.slice(0, 5).map((event) => (
-              <div
-                className={`list-item vertical ${highlightedItemId === event.id ? "selection-highlight" : ""}`}
-                id={getItemAnchorId(event.id)}
-                key={event.id}
-              >
-                <div>
-                  <strong>{event.summary}</strong>
-                  <p>
-                    {event.kind.replaceAll("_", " ")} via {autopilotModeLabels[event.mode].toLowerCase()}
-                  </p>
+            data.autopilotEvents.slice(0, 5).map((event) => {
+              const metadata = readAutopilotMetadata(event.details);
+
+              return (
+                <div
+                  className={`list-item vertical ${highlightedItemId === event.id ? "selection-highlight" : ""}`}
+                  id={getItemAnchorId(event.id)}
+                  key={event.id}
+                >
+                  <div>
+                    <strong>{event.summary}</strong>
+                    <p>
+                      {formatAutopilotLabel(event.kind)} via {autopilotModeLabels[event.mode].toLowerCase()}
+                      {metadata.queue ? ` · ${formatAutopilotLabel(metadata.queue)}` : ""}
+                    </p>
+                  </div>
+                  <div className="goal-item-actions">
+                    <StatusBadge status={event.status} />
+                    {metadata.family ? <span className="pill">{formatAutopilotLabel(metadata.family)}</span> : null}
+                    {metadata.priority ? <span className="pill">{formatAutopilotLabel(metadata.priority)} priority</span> : null}
+                    <span className="pill">{autopilotModeLabels[event.mode]}</span>
+                    <RelativeTime date={event.processedAt ?? event.createdAt} />
+                    {metadata.operatorRoute ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => openDiagnosticTarget(metadata.operatorRoute!)}
+                      >
+                        {metadata.operatorRoute.actionLabel ?? "Open route"}
+                      </button>
+                    ) : null}
+                    {event.resultGoalId ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() =>
+                          openDiagnosticTarget({
+                            section: "goals",
+                            itemId: event.resultGoalId ?? undefined,
+                            label: event.summary
+                          })
+                        }
+                      >
+                        Open goal
+                      </button>
+                    ) : null}
+                  </div>
+                  {event.error ? <p className="status-chip error">{event.error}</p> : null}
                 </div>
-                <div className="goal-item-actions">
-                  <StatusBadge status={event.status} />
-                  <span className="pill">{autopilotModeLabels[event.mode]}</span>
-                  <RelativeTime date={event.processedAt ?? event.createdAt} />
-                  {event.resultGoalId ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() =>
-                        openDiagnosticTarget({
-                          section: "goals",
-                          itemId: event.resultGoalId ?? undefined,
-                          label: event.summary
-                        })
-                      }
-                    >
-                      Open goal
-                    </button>
-                  ) : null}
-                </div>
-                {event.error ? <p className="status-chip error">{event.error}</p> : null}
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </article>

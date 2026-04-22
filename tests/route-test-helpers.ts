@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import { AGENTIC_ACCESS_KEY_HEADER, AGENTIC_SESSION_COOKIE, buildSessionToken } from "../apps/web/lib/auth";
 import { AUTHENTICATED_API_CACHE_CONTROL, OPERATIONAL_API_CACHE_CONTROL } from "../apps/web/lib/api-response";
 
 export function buildAuthorizedJsonRequest(url: string, body: unknown): Request {
@@ -18,6 +18,26 @@ export function buildAuthorizedGetRequest(url: string): Request {
     method: "GET",
     headers: {
       [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+    }
+  });
+}
+
+export function buildSessionJsonRequest(url: string, body: unknown, userId: string): Request {
+  return new Request(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(userId)}`
+    },
+    body: JSON.stringify(body)
+  });
+}
+
+export function buildSessionGetRequest(url: string, userId: string): Request {
+  return new Request(url, {
+    method: "GET",
+    headers: {
+      cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(userId)}`
     }
   });
 }

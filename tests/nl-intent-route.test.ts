@@ -192,9 +192,10 @@ describe("nl intent route", () => {
       message: string;
       dashboard: { approvals: Array<{ id: string; decision: string; riskClass: string }> };
     };
+    const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
 
     expect(response.status).toBe(200);
-    expect(payload.message).toContain("Approved 1 R2 approval");
+    expect(payload.message).toBe("Approved 1 R2 approval and queued 1 follow-up job.");
     expect(payload.dashboard.approvals).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -204,6 +205,19 @@ describe("nl intent route", () => {
         })
       ])
     );
+    expect(queuedJobs).toEqual([
+      expect.objectContaining({
+        kind: "approval_follow_up",
+        status: "queued",
+        payload: expect.objectContaining({
+          type: "approval_follow_up",
+          approvalId: bundle.approvals[0]!.id,
+          goalId: bundle.goal.id,
+          taskId: bundle.approvals[0]!.taskId,
+          decision: "approved"
+        })
+      })
+    ]);
     expectNoStoreHeaders(response);
   }, 15_000);
 

@@ -2,6 +2,7 @@ import {
   GoalBundleSchema,
   GoalSchema,
   TaskSchema,
+  deriveTaskResponsibility,
   nowIso,
   type ActionLog,
   type ApprovalRequest,
@@ -11,14 +12,17 @@ import {
   type IntegrationAccount,
   type MemoryRecord,
   type AgentMetrics,
+  type Capability,
+  type RiskClass,
   type Task,
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { runAgent } from "@agentic/agents";
 import { createTask, createWorkflowState, recomputeWorkflowStatuses } from "@agentic/execution";
+import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
 import { createActionLog } from "@agentic/observability";
-import { evaluateTaskPolicy } from "@agentic/policy";
+import { buildPolicyDecisionTrace, riskFromCapabilities, simulateTaskPolicy, type PolicyReplayValidation } from "@agentic/policy";
 
 type BriefingTask = {
   title: string;
@@ -228,6 +232,12 @@ export async function generateBriefing(params: {
   goalId?: string;
   workflowId?: string;
   resolveAgentMetrics?: (agentIdOrName: string) => Promise<AgentMetrics | null>;
+  resolvePolicyReplayValidation?: (params: {
+    agent: Task["assignedAgent"];
+    capabilities: Capability[];
+    riskClass: RiskClass;
+    title: string;
+  }) => Promise<PolicyReplayValidation | null>;
 }): Promise<GoalBundle> {
   const definition = briefingCatalog[params.type];
   const dateLabel = formatBriefingDate(defaultTimezone(params.preferences));
@@ -242,6 +252,16 @@ export async function generateBriefing(params: {
   const artifacts = [];
   const scenarioTitle = `${definition.titlePrefix} for ${dateLabel}`;
   const readyIntegrations = params.integrations.filter((integration) => integration.status !== "disabled").length;
+  const contextPack = buildWorkflowContextPack({
+    kind: "briefing",
+    query: `${params.type} briefing ${focus}`,
+    records: params.memories,
+    agent: "orchestrator"
+  });
+  const contextReviewSuffix =
+    contextPack.reviewRequiredMemoryIds.length > 0
+      ? ` ${contextPack.reviewRequiredMemoryIds.length} context signal${contextPack.reviewRequiredMemoryIds.length === 1 ? "" : "s"} still need review.`
+      : "";
 
   const goal = GoalSchema.parse({
     id: goalId,
@@ -253,13 +273,14 @@ export async function generateBriefing(params: {
     intent: `briefing:${params.type}`,
     status: "planned",
     confidence: 0.86,
-    explanation: definition.explanationBuilder({
-      focus,
-      memoryCount: params.memories.length,
-      readyIntegrations,
-      pendingApprovals: params.pendingApprovals.length,
-      activeWatchers: params.activeWatchers.length
-    }),
+    explanation:
+      definition.explanationBuilder({
+        focus,
+        memoryCount: contextPack.selectedMemories.length,
+        readyIntegrations,
+        pendingApprovals: params.pendingApprovals.length,
+        activeWatchers: params.activeWatchers.length
+      }) + contextReviewSuffix,
     createdAt,
     updatedAt: createdAt
   });
@@ -294,6 +315,9 @@ export async function generateBriefing(params: {
         briefingType: params.type,
         briefingFocus: focus,
         memoryCount: params.memories.length,
+        resolvedMemoryCount: contextPack.selectedMemories.length,
+        resolvedMemoryIds: contextPack.selectedMemoryIds,
+        contextPack: summarizeWorkflowContextPack(contextPack),
         integrationCount: params.integrations.length,
         pendingApprovalCount: params.pendingApprovals.length,
         activeWatcherCount: params.activeWatchers.length
@@ -302,15 +326,24 @@ export async function generateBriefing(params: {
   );
 
   for (const planned of definition.tasks) {
+    const policyRiskClass = riskFromCapabilities(planned.capabilities);
     const scorecard = await params.resolveAgentMetrics?.(planned.assignedAgent);
-    const decision = evaluateTaskPolicy({
+    const learningValidation = await params.resolvePolicyReplayValidation?.({
+      agent: planned.assignedAgent,
+      capabilities: planned.capabilities,
+      riskClass: policyRiskClass,
+      title: planned.title
+    });
+    const policyResult = simulateTaskPolicy({
       capabilities: planned.capabilities,
       confidence: planned.confidence,
       title: planned.title,
       memories: params.memories,
       scorecard,
-      governance: params.governance
+      governance: params.governance,
+      learningValidation
     });
+    const decision = policyResult.decision;
 
     const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
     const task = createTask({
@@ -322,6 +355,12 @@ export async function generateBriefing(params: {
       riskClass: decision.riskClass,
       requiresApproval: decision.requiresApproval,
       toolCapabilities: planned.capabilities,
+      responsibility: deriveTaskResponsibility({
+        assignedAgent: planned.assignedAgent,
+        requiresApproval: decision.requiresApproval,
+        ownerUserId: params.userId,
+        workspaceId: params.workspaceId
+      }),
       state
     });
 
@@ -361,6 +400,7 @@ export async function generateBriefing(params: {
         message: `Evaluated policy for "${nextTask.title}".`,
         details: {
           ...decision,
+          policyTrace: buildPolicyDecisionTrace(policyResult),
           briefingType: params.type
         }
       })
@@ -378,6 +418,7 @@ export async function generateBriefing(params: {
           briefingType: params.type,
           confidence: agentResult.confidence,
           executionMode: agentResult.executionMode,
+          implementationTier: agentResult.implementationTier,
           nextSteps: agentResult.nextSteps
         }
       })

@@ -58,6 +58,25 @@ async function buildWorkspaceResponse(repository: Awaited<ReturnType<typeof getS
   });
 }
 
+async function requireOwnedWorkspace(
+  repository: Awaited<ReturnType<typeof getSeededRepository>>,
+  userId: string,
+  workspaceId: string
+) {
+  const workspace =
+    (await repository.listWorkspaces(userId)).find((candidate) => candidate.id === workspaceId) ?? null;
+
+  if (!workspace) {
+    throw new ApiRouteError(404, "Workspace not found.");
+  }
+
+  if (workspace.ownerUserId !== userId) {
+    throw new ApiRouteError(403, "Only the workspace owner can manage members.");
+  }
+
+  return workspace;
+}
+
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
@@ -145,6 +164,8 @@ export async function POST(request: Request) {
     if (!memberUserId) {
       throw new ApiRouteError(400, "Workspace member userId must not be empty.");
     }
+
+    await requireOwnedWorkspace(repository, principal.userId, body.workspaceId);
 
     await repository.saveWorkspaceMember(
       WorkspaceMemberSchema.parse({

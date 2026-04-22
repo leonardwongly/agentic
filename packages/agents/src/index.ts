@@ -2,10 +2,12 @@ import {
   ActionIntentSchema,
   AgentResultSchema,
   ArtifactSchema,
+  deriveAgentImplementationTier,
   nowIso,
   type ActionIntent,
   type AgentDefinition,
   type AgentExecutionMode,
+  type AgentImplementationTier,
   type AgentName,
   type AgentResult,
   type ArtifactType,
@@ -16,6 +18,7 @@ import { assertCapabilitiesWithinAllowlist } from "@agentic/integrations";
 // Options for running an agent with custom configuration
 export type RunAgentOptions = {
   agentDefinition?: AgentDefinition;
+  requestContext?: string;
 };
 
 const SELECTED_WEDGE_EXECUTION_MODE: AgentExecutionMode = "governed_specialist";
@@ -26,6 +29,7 @@ function buildArtifact(
   content: string,
   artifactType: ArtifactType,
   executionMode: AgentExecutionMode,
+  implementationTier: AgentImplementationTier,
   actionIntent?: ActionIntent | null,
   agentId?: string
 ) {
@@ -39,7 +43,9 @@ function buildArtifact(
     metadata: {
       agent: task.assignedAgent,
       executionMode,
+      implementationTier,
       requiresManualReview: executionMode === "manual_review_required",
+      // Keep the legacy alias populated while orchestration still accepts both keys.
       ...(actionIntent ? { actionIntent, executionIntent: actionIntent } : {}),
       ...(agentId && { agentDefinitionId: agentId })
     },
@@ -57,10 +63,6 @@ type AgentContent = {
   confidence: number;
   actionIntent?: ActionIntent | null;
 };
-
-function summarizePrompt(systemPrompt: string): string {
-  return systemPrompt.replace(/\s+/gu, " ").trim().slice(0, 200);
-}
 
 function buildLabeledFieldPattern(labels: readonly string[]): RegExp {
   const escapedLabels = labels
@@ -184,6 +186,47 @@ function maybeBuildCalendarActionIntent(task: Task, scenario: string): ActionInt
   return parsed.success ? parsed.data : null;
 }
 
+function summarizePrompt(systemPrompt: string): string {
+  return systemPrompt.replace(/\s+/gu, " ").trim().slice(0, 200);
+}
+
+function buildWorkflowScaffoldContent(scenario: string): string {
+  return (
+    `Scenario: ${scenario}\n\nChecklist:\n` +
+    "- Capture the top-level goal and dependencies.\n" +
+    "- Create low-risk reminders and internal tasks.\n" +
+    "- Keep resumable checkpoints for waiting states or partial completion."
+  );
+}
+
+function buildCommunicationsSpecialistContent(scenario: string, actionIntent: ActionIntent | null): string {
+  return (
+    `Scenario: ${scenario}\n\nCommunications execution:\n` +
+    "- Review the highest-signal threads and rank them for follow-up.\n" +
+    "- Prepare a reply-ready artifact with explicit outbound guardrails.\n" +
+    "- Capture unresolved dependencies before external delivery.\n" +
+    `${
+      actionIntent
+        ? "- A typed outbound message intent was captured from explicit request cues and remains approval-gated."
+        : "- No typed outbound message intent was captured, so execution remains artifact-first until explicit send details are provided."
+    }`
+  );
+}
+
+function buildCalendarSpecialistContent(scenario: string, actionIntent: ActionIntent | null): string {
+  return (
+    `Scenario: ${scenario}\n\nScheduling execution:\n` +
+    "- Consolidate the current commitments, deadlines, and overload windows.\n" +
+    "- Produce a reviewable weekly operating plan with bounded tradeoffs.\n" +
+    "- Keep any calendar mutation behind approval or review.\n" +
+    `${
+      actionIntent
+        ? "- A typed scheduling intent was captured from explicit request cues and remains governance-bound until approved."
+        : "- No typed scheduling intent was captured, so execution remains planning-first until explicit event details are provided."
+    }`
+  );
+}
+
 // Generate content for dynamic agent definitions
 function contentForDynamicAgent(
   agent: AgentDefinition,
@@ -220,16 +263,7 @@ function contentForBuiltInAgent(task: Task, scenario: string): AgentContent {
       return {
         summary: "Prepared a governed communications execution artifact.",
         artifactType: "summary",
-        content:
-          `Scenario: ${scenario}\n\nCommunications execution:\n` +
-          "- Review the highest-signal threads and rank them for follow-up.\n" +
-          "- Prepare a reply-ready artifact with explicit outbound guardrails.\n" +
-          "- Capture unresolved dependencies before external delivery.\n" +
-          `${
-            actionIntent
-              ? "- A typed outbound message intent was captured from explicit request cues and remains approval-gated."
-              : "- No typed outbound message intent was captured, so execution remains artifact-first until explicit send details are provided."
-          }`,
+        content: buildCommunicationsSpecialistContent(scenario, actionIntent),
         executionMode: SELECTED_WEDGE_EXECUTION_MODE,
         explanation:
           `communications ran through the selected governed specialist wedge for "${task.title}", keeping any external side effect behind approval.`,
@@ -246,19 +280,10 @@ function contentForBuiltInAgent(task: Task, scenario: string): AgentContent {
       return {
         summary: "Prepared a governed scheduling execution artifact.",
         artifactType: "brief",
-        content:
-          `Scenario: ${scenario}\n\nScheduling execution:\n` +
-          "- Consolidate the current commitments, deadlines, and overload windows.\n" +
-          "- Produce a reviewable weekly operating plan with bounded tradeoffs.\n" +
-          "- Keep any calendar mutation behind approval or review.\n" +
-          `${
-            actionIntent
-              ? "- A typed scheduling intent was captured from explicit request cues and remains governance-bound until approved."
-              : "- No typed scheduling intent was captured, so execution remains planning-first until explicit event details are provided."
-          }`,
+        content: buildCalendarSpecialistContent(scenario, actionIntent),
         executionMode: SELECTED_WEDGE_EXECUTION_MODE,
         explanation:
-          `calendar ran through the selected governed specialist wedge for "${task.title}", keeping schedule changes inside the review boundary.`,
+          `calendar ran through the selected governed specialist wedge for "${task.title}", keeping schedule mutations behind review.`,
         nextSteps: [
           "Persist the artifact on the goal timeline.",
           "Respect approval gates before any calendar side effect."
@@ -268,21 +293,25 @@ function contentForBuiltInAgent(task: Task, scenario: string): AgentContent {
       };
     }
     case "workflow":
+      const content = buildWorkflowScaffoldContent(scenario);
       return {
         summary: "Prepared a deterministic workflow scaffold.",
         artifactType: "checklist",
-        content:
-          `Scenario: ${scenario}\n\nChecklist:\n` +
-          "- Capture the top-level goal and dependencies.\n" +
-          "- Create low-risk reminders and internal tasks.\n" +
-          "- Keep resumable checkpoints for waiting states or partial completion.",
+        content,
         executionMode: "deterministic_scaffold",
         explanation: `workflow produced a deterministic execution scaffold for "${task.title}".`,
         nextSteps: [
           "Persist the artifact on the goal timeline.",
           "Use the scaffold to drive the next approved workflow step."
         ],
-        confidence: task.riskClass === "R1" ? 0.82 : 0.73
+        confidence: task.riskClass === "R1" ? 0.82 : 0.73,
+        actionIntent: task.toolCapabilities.includes("create")
+          ? ActionIntentSchema.parse({
+              type: "create_note",
+              title: task.title,
+              content
+            })
+          : null
       };
     case "research":
       return {
@@ -343,9 +372,11 @@ export function runAgent(task: Task, scenario: string, options?: RunAgentOptions
   assertCapabilitiesWithinAllowlist(task.assignedAgent, task.toolCapabilities);
 
   // Use dynamic agent definition if provided, otherwise fall back to built-in
+  const executionContext = options?.requestContext ?? scenario;
   const result = options?.agentDefinition
-    ? contentForDynamicAgent(options.agentDefinition, task, scenario)
-    : contentForBuiltInAgent(task, scenario);
+    ? contentForDynamicAgent(options.agentDefinition, task, executionContext)
+    : contentForBuiltInAgent(task, executionContext);
+  const implementationTier = deriveAgentImplementationTier(result.executionMode);
 
   const agentId = options?.agentDefinition?.id;
   const artifact = buildArtifact(
@@ -354,6 +385,7 @@ export function runAgent(task: Task, scenario: string, options?: RunAgentOptions
     result.content,
     result.artifactType,
     result.executionMode,
+    implementationTier,
     result.actionIntent,
     agentId
   );
@@ -363,6 +395,7 @@ export function runAgent(task: Task, scenario: string, options?: RunAgentOptions
     summary: result.summary,
     confidence: result.confidence,
     executionMode: result.executionMode,
+    implementationTier,
     artifacts: [artifact],
     proposedToolCalls: [],
     nextSteps: result.nextSteps,

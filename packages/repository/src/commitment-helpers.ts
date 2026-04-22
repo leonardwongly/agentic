@@ -16,7 +16,7 @@ import {
   type Task,
   type Watcher
 } from "@agentic/contracts";
-import { getMemoryFreshness } from "@agentic/memory";
+import { detectMemoryConflicts, getMemoryFreshness } from "@agentic/memory";
 import type { DashboardDiagnostic, DashboardDiagnostics } from "./repository-types";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
@@ -573,6 +573,10 @@ export function buildDashboardDiagnostics(params: {
     counts[freshness.freshness] = (counts[freshness.freshness] ?? 0) + 1;
     return counts;
   }, {});
+  const conflictingMemories = detectMemoryConflicts(params.memories, {
+    now
+  });
+  const memoryById = new Map(params.memories.map((record) => [record.id, record]));
 
   const stuckWorkflows = params.goals
     .map((bundle) => {
@@ -673,6 +677,35 @@ export function buildDashboardDiagnostics(params: {
         action: "review_memory" as const,
         actionLabel: "Review"
       }))
+    });
+  }
+
+  if (conflictingMemories.length > 0) {
+    const conflictTargets = [...new Set(conflictingMemories.flatMap((conflict) => conflict.memoryIds))]
+      .slice(0, 3)
+      .flatMap((memoryId) => {
+        const memory = memoryById.get(memoryId);
+
+        if (!memory) {
+          return [];
+        }
+
+        return [{
+          section: "memory" as const,
+          itemId: memory.id,
+          label: `${memory.category}: ${memory.content.slice(0, 36)}${memory.content.length > 36 ? "..." : ""}`,
+          action: "review_memory" as const,
+          actionLabel: "Review"
+        }];
+      });
+
+    items.push({
+      kind: "context_conflicts",
+      title: "Conflicting context",
+      count: conflictingMemories.length,
+      severity: "warning",
+      reasons: conflictingMemories.slice(0, 3).map((conflict) => conflict.reason),
+      targets: conflictTargets
     });
   }
 

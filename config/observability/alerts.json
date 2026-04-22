@@ -82,6 +82,69 @@
       "severity": "warning",
       "rolloutGate": false,
       "description": "Backend export failures should page operators even when retained batches keep telemetry durable."
+    },
+    {
+      "key": "recommendation-safe-precision-decay",
+      "title": "Recommendation safe precision stays above the quality floor",
+      "metric": "product.learning.recommendation.safe_precision",
+      "aggregation": "p95",
+      "operator": ">=",
+      "threshold": 0.75,
+      "minimumSamples": 3,
+      "severity": "warning",
+      "rolloutGate": false,
+      "description": "If replay-backed recommendation precision decays, operators should pause promotion and inspect the learning set before autonomy widens further."
+    },
+    {
+      "key": "recommendation-safe-recall-proxy-decay",
+      "title": "Recommendation safe recall proxy stays above the discovery floor",
+      "metric": "product.learning.recommendation.safe_recall_proxy",
+      "aggregation": "p95",
+      "operator": ">=",
+      "threshold": 0.5,
+      "minimumSamples": 3,
+      "severity": "warning",
+      "rolloutGate": false,
+      "description": "A collapsing recall proxy means safe reusable patterns are no longer being surfaced consistently, even if the remaining suggestions are precise."
+    },
+    {
+      "key": "recommendation-negative-outcome-rate",
+      "title": "Recommendation negative outcome rate stays inside the guardrail",
+      "metric": "product.learning.recommendation.negative_outcome_rate",
+      "aggregation": "p95",
+      "operator": "<=",
+      "threshold": 0.2,
+      "minimumSamples": 3,
+      "severity": "warning",
+      "rolloutGate": false,
+      "description": "High negative outcome rates indicate drift or false-positive recommendation behavior that should keep learning signals out of live autonomy."
+    },
+    {
+      "key": "recommendation-failure-cost-rate",
+      "title": "Recommendation failure cost stays bounded",
+      "metric": "product.learning.recommendation.failure_cost_rate",
+      "aggregation": "p95",
+      "operator": "<=",
+      "threshold": 0.15,
+      "minimumSamples": 3,
+      "severity": "warning",
+      "rolloutGate": false,
+      "description": "Failure-cost spikes mean the wrong learning signal is expensive enough to require rollback or promotion disablement."
+    },
+    {
+      "key": "recommendation-feedback-override-spike",
+      "title": "Rejected or overridden recommendations do not spike",
+      "metric": "product.learning.recommendation.feedback.total",
+      "aggregation": "sum",
+      "operator": "<=",
+      "threshold": 5,
+      "filters": {
+        "operatorOutcome": ["rejected", "overridden"]
+      },
+      "minimumSamples": 0,
+      "severity": "warning",
+      "rolloutGate": false,
+      "description": "A spike in rejected or overridden recommendations is an operator-visible signal that recommendation quality has decayed and promotion should be reviewed."
     }
   ]
 }

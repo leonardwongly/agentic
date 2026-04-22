@@ -94,9 +94,12 @@ create table if not exists tasks (
   depends_on jsonb not null default '[]'::jsonb,
   tool_capabilities jsonb not null default '[]'::jsonb,
   artifact_ids jsonb not null default '[]'::jsonb,
+  team_responsibility jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
+
+alter table tasks add column if not exists team_responsibility jsonb;
 
 create table if not exists memory_records (
   id text primary key,
@@ -139,6 +142,7 @@ create table if not exists approval_requests (
   decision_scope text,
   decision_rationale text,
   history jsonb not null default '[]'::jsonb,
+  team_responsibility jsonb,
   created_at timestamptz not null,
   expiry_at timestamptz not null,
   responded_at timestamptz
@@ -149,6 +153,7 @@ alter table approval_requests add column if not exists preview jsonb not null de
 alter table approval_requests add column if not exists decision_scope text;
 alter table approval_requests add column if not exists decision_rationale text;
 alter table approval_requests add column if not exists history jsonb not null default '[]'::jsonb;
+alter table approval_requests add column if not exists team_responsibility jsonb;
 
 create table if not exists commitments (
   id text primary key,
@@ -328,6 +333,7 @@ create table if not exists autopilot_events (
   status text not null,
   details jsonb not null default '{}'::jsonb,
   actor_context jsonb,
+  team_responsibility jsonb,
   created_at timestamptz not null,
   processed_at timestamptz,
   result_goal_id text,
@@ -422,6 +428,7 @@ create table if not exists watchers (
   status text not null,
   expiry_at timestamptz,
   actor_context jsonb,
+  team_responsibility jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -430,7 +437,9 @@ alter table goal_templates add column if not exists actor_context jsonb;
 alter table workflow_templates add column if not exists actor_context jsonb;
 alter table autopilot_settings add column if not exists actor_context jsonb;
 alter table autopilot_events add column if not exists actor_context jsonb;
+alter table autopilot_events add column if not exists team_responsibility jsonb;
 alter table watchers add column if not exists actor_context jsonb;
+alter table watchers add column if not exists team_responsibility jsonb;
 alter table workspace_selections add column if not exists actor_context jsonb;
 alter table memory_records add column if not exists actor_context jsonb;
 alter table commitments add column if not exists actor_context jsonb;

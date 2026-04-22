@@ -122,6 +122,7 @@ export function inferCapabilitiesFromRequest(request: string): Capability[] {
 }
 
 export * from "./local-notes";
+export * from "./action-execution";
 
 // ---------------------------------------------------------------------------
 // Capability enforcement at integration call sites
@@ -214,6 +215,7 @@ export * from "./gmail";
 export * from "./google-calendar";
 export * from "./google-managed-readiness";
 export * from "./google-oauth";
+export * from "@agentic/observability";
 export * from "./provider-credential-secrets";
 export * from "./readiness";
 export * from "./connector-errors";

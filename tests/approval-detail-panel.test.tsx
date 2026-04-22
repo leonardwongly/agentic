@@ -77,8 +77,21 @@ describe("ApprovalDetailPanel", () => {
           updatedAt: "2024-01-01T00:00:00.000Z"
         }
       ],
+      artifacts: [
+        {
+          id: "artifact-1",
+          goalId: "goal-1",
+          taskId: "task-1",
+          artifactType: "summary",
+          title: "Reviewed draft",
+          content: "Reply draft content",
+          metadata: {
+            executionMode: "governed_specialist"
+          },
+          createdAt: "2024-01-01T00:01:00.000Z"
+        }
+      ],
       approvals: [approval],
-      artifacts: [],
       watchers: [],
       actionLogs: [],
       workflow: {
@@ -106,11 +119,21 @@ describe("ApprovalDetailPanel", () => {
     expect(markup).toContain("Approve only if the tone and facts match the current thread.");
     expect(markup).toContain("Goal confidence");
     expect(markup).toContain("86%");
+    expect(markup).toContain("Implementation tier");
+    expect(markup).toContain("Production");
+    expect(markup).toContain("Execution mode");
+    expect(markup).toContain("Governed specialist");
     expect(markup).toContain("Required permissions");
     expect(markup).toContain("Affected people");
     expect(markup).toContain("Affected systems");
     expect(markup).toContain("Rollback");
     expect(markup).toContain("Manual");
     expect(markup).toContain("Risk posture");
+    expect(markup).toContain("Responsibility");
+    expect(markup).toContain("Goal owner");
+    expect(markup).toContain("communications execution lane (communications)");
+    expect(markup).toContain("Approval reviewer");
+    expect(markup).toContain("review pending");
+    expect(markup).toContain("delegation change");
   });
 });

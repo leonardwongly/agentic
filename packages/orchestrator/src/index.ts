@@ -2,11 +2,15 @@ import {
   APPROVAL_EXPIRY_MS,
   ActionLogSchema,
   ActionIntentSchema,
+  createSystemResponsibilityAssignee,
+  createUserResponsibilityAssignee,
   type ActorContext,
   type ApprovalDecisionRecord,
   type ApprovalDecisionScope,
   type ApprovalPreview,
   ApprovalRequestSchema,
+  deriveApprovalResponsibility,
+  deriveTaskResponsibility,
   GoalBundleSchema,
   GoalSchema,
   TaskSchema,
@@ -20,20 +24,22 @@ import {
   type ApprovalDecision,
   type ApprovalRequest,
   type Artifact,
+  type Capability,
   type Goal,
   type GoalBundle,
   type IntegrationAccount,
   type MemoryRecord,
+  type RiskClass,
   type Task,
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { runAgent } from "@agentic/agents";
 import { createTask, createWorkflowState, recomputeWorkflowStatuses, transitionTaskState } from "@agentic/execution";
-import { inferCapabilitiesFromRequest } from "@agentic/integrations";
-import { rankRelevantMemories } from "@agentic/memory";
+import { inferCapabilitiesFromRequest, planActionExecution } from "@agentic/integrations";
+import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
 import { createActionLog } from "@agentic/observability";
-import { evaluateTaskPolicy } from "@agentic/policy";
+import { buildPolicyDecisionTrace, riskFromCapabilities, simulateTaskPolicy, type PolicyReplayValidation } from "@agentic/policy";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
@@ -297,14 +303,24 @@ function normalizeRequest(request: string): string {
 
 function explanationForGoal(params: {
   scenario: ScenarioKey;
-  memories: MemoryRecord[];
+  resolvedMemories: MemoryRecord[];
+  conflictCount: number;
+  reviewRequiredCount: number;
   integrations: IntegrationAccount[];
 }): string {
   const catalog = scenarioCatalog[params.scenario];
   const readyIntegrations = params.integrations.filter((integration) => integration.status !== "disabled").length;
-  const confirmedMemories = params.memories.filter((memory) => memory.memoryType === "confirmed").length;
+  const confirmedMemories = params.resolvedMemories.filter((memory) => memory.memoryType === "confirmed").length;
+  const reviewSuffix =
+    params.reviewRequiredCount > 0
+      ? ` ${params.reviewRequiredCount} context signal${params.reviewRequiredCount === 1 ? "" : "s"} need review before wider automation.`
+      : "";
+  const conflictSuffix =
+    params.conflictCount > 0
+      ? ` ${params.conflictCount} conflicting context signal${params.conflictCount === 1 ? "" : "s"} were kept visible instead of silently discarded.`
+      : "";
 
-  return `${catalog.description} The orchestrator resolved ${confirmedMemories} confirmed relevant memories and ${readyIntegrations} enabled adapters before planning the workflow.`;
+  return `${catalog.description} The orchestrator resolved ${confirmedMemories} confirmed relevant memories and ${readyIntegrations} enabled adapters before planning the workflow.${reviewSuffix}${conflictSuffix}`;
 }
 
 function inferApprovalActionType(task: Task): ApprovalPreview["actionType"] {
@@ -335,29 +351,6 @@ function inferApprovalActionType(task: Task): ApprovalPreview["actionType"] {
   return "artifact-only";
 }
 
-function inferApprovalImpact(task: Task, actionType: ApprovalPreview["actionType"]): ApprovalPreview["impact"] {
-  const affectedSystems = new Set<string>();
-
-  if (task.assignedAgent === "communications" || task.toolCapabilities.includes("send")) {
-    affectedSystems.add("email");
-  }
-
-  if (task.assignedAgent === "calendar" || task.toolCapabilities.includes("schedule")) {
-    affectedSystems.add("calendar");
-  }
-
-  if (task.toolCapabilities.includes("create") || task.toolCapabilities.includes("update")) {
-    affectedSystems.add("workspace");
-  }
-
-  return {
-    affectedPeople: actionType === "send" ? ["external recipients"] : [],
-    affectedSystems: [...affectedSystems],
-    permissions: task.toolCapabilities,
-    rollback: actionType === "delete" ? "not_supported" : actionType === "draft" || actionType === "artifact-only" ? "supported" : "manual"
-  };
-}
-
 function inferActionIntentFromArtifacts(task: Task, artifacts: Artifact[]): ActionIntent {
   for (const artifact of artifacts) {
     const candidate = artifact.metadata.actionIntent ?? artifact.metadata.executionIntent;
@@ -385,21 +378,6 @@ function inferActionIntentFromArtifacts(task: Task, artifacts: Artifact[]): Acti
   });
 }
 
-function actionTypeForApproval(task: Task, actionIntent: ActionIntent): ApprovalPreview["actionType"] {
-  switch (actionIntent.type) {
-    case "send_message":
-      return "send";
-    case "schedule_event":
-      return "schedule";
-    case "create_note":
-      return "create";
-    case "manual_review":
-      return actionIntent.actionType;
-    default:
-      return inferApprovalActionType(task);
-  }
-}
-
 function buildApprovalPreview(task: Task, actionIntent: ActionIntent | null): ApprovalPreview {
   const resolvedActionIntent =
     actionIntent ??
@@ -410,80 +388,10 @@ function buildApprovalPreview(task: Task, actionIntent: ActionIntent | null): Ap
       reason: "No typed execution payload is available yet for this approval.",
       artifactIds: []
     });
-  const actionType = actionTypeForApproval(task, resolvedActionIntent);
-  const target =
-    resolvedActionIntent.type === "send_message"
-      ? resolvedActionIntent.to
-      : resolvedActionIntent.type === "schedule_event"
-        ? "Calendar commitment"
-        : resolvedActionIntent.type === "create_note"
-          ? resolvedActionIntent.title
-          : actionType === "send"
-            ? "External communication"
-            : actionType === "schedule"
-              ? "Calendar commitment"
-              : actionType === "create"
-                ? "New workspace artifact"
-                : actionType === "update"
-                  ? "Existing workspace state"
-                  : actionType === "delete"
-                    ? "Existing record"
-                    : actionType === "draft"
-                      ? "Draft artifact"
-                      : task.title;
-  const summary =
-    resolvedActionIntent.type === "send_message"
-      ? `Draft ${resolvedActionIntent.mode === "send" ? "and send" : "an"} email to ${resolvedActionIntent.to}: ${resolvedActionIntent.subject}`
-      : resolvedActionIntent.type === "schedule_event"
-        ? `Schedule "${resolvedActionIntent.summary}" from ${resolvedActionIntent.start} to ${resolvedActionIntent.end}`
-        : resolvedActionIntent.type === "create_note"
-          ? `Create note "${resolvedActionIntent.title}"`
-          : resolvedActionIntent.summary;
-  const changes =
-    resolvedActionIntent.type === "send_message"
-      ? [
-          {
-            label: "Recipient",
-            before: "Pending user review",
-            after: resolvedActionIntent.to
-          },
-          {
-            label: "Subject",
-            before: "Pending user review",
-            after: resolvedActionIntent.subject
-          }
-        ]
-      : resolvedActionIntent.type === "schedule_event"
-        ? [
-            {
-              label: "Scheduled window",
-              before: "Pending user review",
-              after: `${resolvedActionIntent.start} -> ${resolvedActionIntent.end}`
-            }
-          ]
-        : resolvedActionIntent.type === "create_note"
-          ? [
-              {
-                label: "Note title",
-                before: "Pending user review",
-                after: resolvedActionIntent.title
-              }
-            ]
-          : [
-              {
-                label: "Requested action",
-                before: "Pending user review",
-                after: resolvedActionIntent.summary
-              }
-            ];
-
-  return {
-    actionType,
-    summary,
-    target,
-    changes,
-    impact: inferApprovalImpact(task, actionType)
-  };
+  return planActionExecution({
+    task,
+    actionIntent: resolvedActionIntent
+  }).preview;
 }
 
 export async function processUserRequest(params: {
@@ -494,6 +402,12 @@ export async function processUserRequest(params: {
   integrations: IntegrationAccount[];
   agentDefinition?: AgentDefinition;
   resolveAgentMetrics?: (agentIdOrName: string) => Promise<AgentMetrics | null>;
+  resolvePolicyReplayValidation?: (params: {
+    agent: Task["assignedAgent"];
+    capabilities: Capability[];
+    riskClass: RiskClass;
+    title: string;
+  }) => Promise<PolicyReplayValidation | null>;
   governance?: WorkspaceGovernance | null;
   goalId?: string;
   workflowId?: string;
@@ -508,9 +422,13 @@ export async function processUserRequest(params: {
     throw new Error("The request exceeds the 2000 character safety limit.");
   }
 
-  const relevantMemories = rankRelevantMemories(request, params.memories, 5, {
+  const contextPack = buildWorkflowContextPack({
+    kind: "goal_planning",
+    query: request,
+    records: params.memories,
     agent: "orchestrator"
   });
+  const relevantMemories = contextPack.selectedMemories;
   const scenario = await detectScenario(request);
   const catalog = scenarioCatalog[scenario];
   const goalId = params.goalId ?? crypto.randomUUID();
@@ -542,7 +460,9 @@ export async function processUserRequest(params: {
     confidence: Math.min(0.92, 0.72 + confidenceBias),
     explanation: explanationForGoal({
       scenario,
-      memories: relevantMemories,
+      resolvedMemories: relevantMemories,
+      conflictCount: contextPack.conflicts.length,
+      reviewRequiredCount: contextPack.reviewRequiredMemoryIds.length,
       integrations: params.integrations
     }),
     createdAt,
@@ -571,6 +491,7 @@ export async function processUserRequest(params: {
       memoryCount: params.memories.length,
       resolvedMemoryCount: relevantMemories.length,
       resolvedMemoryIds: relevantMemories.map((memory) => memory.id),
+      contextPack: summarizeWorkflowContextPack(contextPack),
       integrationCount: params.integrations.length,
       requestCapabilities
     }
@@ -583,15 +504,24 @@ export async function processUserRequest(params: {
         ...requestCapabilities.filter((capability) => plannedTask.capabilities.includes(capability))
       ])
     );
+    const policyRiskClass = riskFromCapabilities(capabilities);
     const scorecard = await params.resolveAgentMetrics?.(plannedTask.assignedAgent);
-    const decision = evaluateTaskPolicy({
+    const learningValidation = await params.resolvePolicyReplayValidation?.({
+      agent: plannedTask.assignedAgent,
+      capabilities,
+      riskClass: policyRiskClass,
+      title: plannedTask.title
+    });
+    const policyResult = simulateTaskPolicy({
       capabilities,
       confidence: plannedTask.confidence,
       title: plannedTask.title,
       memories: params.memories,
       scorecard,
-      governance: params.governance
+      governance: params.governance,
+      learningValidation
     });
+    const decision = policyResult.decision;
     const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
     const task = createTask({
       goalId,
@@ -602,10 +532,17 @@ export async function processUserRequest(params: {
       riskClass: decision.riskClass,
       requiresApproval: decision.requiresApproval,
       toolCapabilities: capabilities,
-      state
+      state,
+      responsibility: deriveTaskResponsibility({
+        assignedAgent: plannedTask.assignedAgent,
+        requiresApproval: decision.requiresApproval,
+        ownerUserId: params.userId,
+        workspaceId
+      })
     });
     const agentResult = await runAgent(task, catalog.title, {
-      agentDefinition: params.agentDefinition
+      agentDefinition: params.agentDefinition,
+      requestContext: request
     });
     const nextTask = TaskSchema.parse({
       ...task,
@@ -635,7 +572,10 @@ export async function processUserRequest(params: {
       actor: "policy",
       kind: "policy.evaluated",
       message: `Evaluated policy for "${nextTask.title}".`,
-      details: decision
+      details: {
+        ...decision,
+        policyTrace: buildPolicyDecisionTrace(policyResult)
+      }
     });
     appendLog({
       goalId,
@@ -647,6 +587,7 @@ export async function processUserRequest(params: {
       details: {
         confidence: agentResult.confidence,
         executionMode: agentResult.executionMode,
+        implementationTier: agentResult.implementationTier,
         nextSteps: agentResult.nextSteps
       }
     });
@@ -664,6 +605,11 @@ export async function processUserRequest(params: {
         requestedAction: nextTask.summary,
         actionIntent,
         preview: buildApprovalPreview(nextTask, actionIntent),
+        responsibility: deriveApprovalResponsibility({
+          ownerUserId: params.userId,
+          workspaceId,
+          delegateAgent: nextTask.assignedAgent
+        }),
         createdAt: approvalCreatedAt,
         expiryAt: new Date(Date.now() + APPROVAL_EXPIRY_MS).toISOString(),
         respondedAt: null
@@ -768,6 +714,19 @@ export function respondToApproval(params: {
           decisionScope: normalizedScope,
           decisionRationale: normalizedRationale,
           history: [...candidate.history, nextHistoryRecord],
+          responsibility: {
+            ...candidate.responsibility,
+            handoffStatus: params.decision === "approved" ? "delegated" : "returned_to_owner",
+            handoffSummary:
+              params.decision === "approved"
+                ? "The reviewer approved execution and returned the task to the active delegate."
+                : "The reviewer rejected execution and returned control to the owner for rework or escalation.",
+            lastChangedAt: respondedAt,
+            lastChangedBy:
+              params.actor.executor.kind === "human" && params.actor.executor.userId
+                ? createUserResponsibilityAssignee(params.actor.executor.userId, params.actor.executor.label)
+                : createSystemResponsibilityAssignee(params.actor.executor.label, params.actor.executor.label)
+          },
           respondedAt
         })
       : candidate
@@ -779,6 +738,20 @@ export function respondToApproval(params: {
     }
 
     const nextTask = params.decision === "approved" ? transitionTaskState(task, "queued") : transitionTaskState(task, "blocked");
+    const lastChangedBy =
+      params.actor.executor.kind === "human" && params.actor.executor.userId
+        ? createUserResponsibilityAssignee(params.actor.executor.userId, params.actor.executor.label)
+        : createSystemResponsibilityAssignee(params.actor.executor.label, params.actor.executor.label);
+    const nextResponsibility = {
+      ...nextTask.responsibility,
+      handoffStatus: params.decision === "approved" ? "delegated" : "returned_to_owner",
+      handoffSummary:
+        params.decision === "approved"
+          ? `The reviewer released "${task.title}" back to the execution delegate.`
+          : `The reviewer blocked "${task.title}" and returned control to the owner.`,
+      lastChangedAt: respondedAt,
+      lastChangedBy
+    };
     taskTransitionLog = ActionLogSchema.parse(
       createActionLog({
         goalId: bundle.goal.id,
@@ -798,7 +771,10 @@ export function respondToApproval(params: {
         prevLog: bundle.actionLogs.at(-1) ?? null
       })
     );
-    return nextTask;
+    return TaskSchema.parse({
+      ...nextTask,
+      responsibility: nextResponsibility
+    });
   });
   const statuses = recomputeWorkflowStatuses(tasks, approvals, bundle.watchers);
   const transitionLog = taskTransitionLog;

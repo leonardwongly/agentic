@@ -38,6 +38,7 @@ export async function POST(request: Request) {
       const repository = await getSeededRepository();
       const dashboard = await repository.getDashboardData(principal.userId);
       const summary = summarizeCoreLoopTelemetry(dashboard);
+      const shellEffectiveness = dashboard.operations?.shellEffectiveness ?? null;
 
       if (body.event === "dashboard_view") {
         recordCounter("product.core_loop.dashboard_view.total", 1, {
@@ -67,6 +68,13 @@ export async function POST(request: Request) {
           });
         }
 
+        if (shellEffectiveness) {
+          recordCounter("product.operator_shell.dashboard_view.total", 1, {
+            event: body.event,
+            status: shellEffectiveness.status
+          });
+        }
+
         logInfo("product.core_loop.dashboard_view", {
           event: body.event,
           workspaceState: summary.workspaceState,
@@ -79,7 +87,15 @@ export async function POST(request: Request) {
           activeGoals: summary.counts.activeGoals,
           completedGoals: summary.counts.completedGoals,
           recentActivity: summary.counts.recentActivity,
-          memories: summary.counts.memories
+          memories: summary.counts.memories,
+          shellStatus: shellEffectiveness?.status ?? null,
+          shellApprovalSampleCount: shellEffectiveness?.approvalSampleCount ?? 0,
+          shellMedianApprovalDecisionSeconds: shellEffectiveness?.medianApprovalDecisionSeconds ?? null,
+          shellRecoveryStartCount: shellEffectiveness?.recoveryStartCount ?? 0,
+          shellRecoveryResolvedCount: shellEffectiveness?.recoveryResolvedCount ?? 0,
+          shellMedianRecoveryStartSeconds: shellEffectiveness?.medianRecoveryStartSeconds ?? null,
+          shellPendingApprovalCount: shellEffectiveness?.pendingApprovalCount ?? 0,
+          shellRuntimeIssueCount: shellEffectiveness?.openRuntimeIssueCount ?? 0
         });
       } else if (body.event === "command_center_role_change") {
         recordCounter("product.command_center.role_change.total", 1, {
@@ -100,7 +116,6 @@ export async function POST(request: Request) {
         });
       } else {
         const isRecoveryAction = body.source === "priority" || body.source === "next_best_action";
-
         recordCounter("product.command_center.action.total", 1, {
           role: body.role,
           source: body.source,

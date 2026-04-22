@@ -1,14 +1,13 @@
 import { NextResponse } from "next/server";
 import { createHumanActorContext } from "@agentic/contracts";
-import { captureExecutionOutcomeSignals, executeApprovedTasks, captureMemoriesFromBundle, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
 import {
-  verifySlackSignature,
-  updateMessage,
-  createLocalNote
+  verifySlackSignature
 } from "@agentic/integrations";
 import { ApprovalMutationError } from "@agentic/repository";
-import { resolveGoogleWorkspaceAdapters } from "../../../../lib/google-provider-adapters";
-import { persistCapturedMemories } from "../../../../lib/persist-captured-memories";
+import {
+  enqueueApprovalFollowUpJob,
+  enqueueApprovalNotificationJob
+} from "@agentic/worker-runtime";
 import { resolveSlackActorUserId, verifySlackApprovalToken } from "../../../../lib/slack-approvals";
 import { getSeededRepository } from "../../../../lib/server";
 
@@ -104,7 +103,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Approval workspace mismatch." }, { status: 403 });
     }
 
-    let updatedBundle = await (async () => {
+    const updatedBundle = await (async () => {
       try {
         return await repository.respondToApproval({
           approvalId,
@@ -131,116 +130,40 @@ export async function POST(request: Request) {
       return updatedBundle;
     }
 
-    // Execute approved tasks via integration adapters
-    let executionResults: ExecutionResult[] = [];
-    if (decision === "approved") {
-      const approval = updatedBundle.approvals.find((a) => a.id === approvalId);
-      if (approval) {
-        try {
-          const googleAdapters = await resolveGoogleWorkspaceAdapters({
-            repository,
-            userId: actorUserId,
-            workspaceId: updatedBundle.goal.workspaceId
-          });
-          const adapters = {
-            gmail: googleAdapters?.gmail,
-            calendar: googleAdapters?.calendar,
-            notes: { createLocalNote }
-          };
-          const governance = updatedBundle.goal.workspaceId
-            ? await repository.getWorkspaceGovernance(updatedBundle.goal.workspaceId, actorUserId)
-            : null;
-          const { results, logs } = await executeApprovedTasks({
-            bundle: updatedBundle,
-            approvedTaskIds: [approval.taskId],
-            adapters,
-            governance
-          });
-          executionResults = results;
-          updatedBundle = reconcileExecutionResults({
-            bundle: updatedBundle,
-            results,
-            logs
-          });
-          console.log(
-            `[slack-webhook][execution] Executed ${results.length} task(s):`,
-            results.map((r) => `${r.action}: ${r.success ? "OK" : "FAILED"}`).join(", ")
-          );
-        } catch (execError) {
-          console.error("[slack-webhook][execution] Failed to execute approved task:", execError);
-        }
-      }
+    const approval = updatedBundle.approvals.find((candidate) => candidate.id === approvalId);
+
+    if (!approval) {
+      throw new Error(`Approval ${approvalId} is missing after Slack response mutation.`);
     }
 
-    await repository.saveGoalBundle(updatedBundle);
+    await enqueueApprovalFollowUpJob({
+      repository,
+      userId: actorUserId,
+      approvalId: approval.id,
+      goalId: updatedBundle.goal.id,
+      taskId: approval.taskId,
+      decision,
+      workspaceId: updatedBundle.goal.workspaceId,
+      actorContext
+    });
 
-    if (executionResults.length > 0) {
-      try {
-        await persistCapturedMemories({
-          repository,
-          captured: captureExecutionOutcomeSignals(updatedBundle, actorUserId, executionResults, actorContext),
-          goalId: updatedBundle.goal.id,
-          label: "slack-execution-capture",
-          actorContext
-        });
-      } catch (captureError) {
-        console.error("[slack-webhook][execution-capture] Failed to persist execution outcome signals:", captureError);
-      }
-    }
-
-    // Capture memories when goal completes
-    if (updatedBundle.goal.status === "completed") {
-      try {
-        await persistCapturedMemories({
-          repository,
-          captured: captureMemoriesFromBundle(updatedBundle, actorUserId, actorContext),
-          goalId: updatedBundle.goal.id,
-          label: "slack-webhook][auto-capture",
-          actorContext
-        });
-      } catch (captureError) {
-        console.error("[slack-webhook][auto-capture] Failed to persist captured memories:", captureError);
-      }
-    }
-
-    // Update the Slack message to reflect the decision
     const channel = payload.channel?.id;
     const messageTs = payload.message?.ts;
 
     if (channel && messageTs) {
-      const statusEmoji = decision === "approved" ? "\u2713" : "\u2717";
-      const statusLabel = decision === "approved" ? "Approved" : "Rejected";
-      const taskTitle =
-        updatedBundle.tasks.find((t) => t.id === updatedBundle.approvals.find((a) => a.id === approvalId)?.taskId)
-          ?.title ?? "Unknown task";
-
-      try {
-        await updateMessage({
-          channel,
-          ts: messageTs,
-          text: `${statusEmoji} ${statusLabel}: ${taskTitle}`,
-          blocks: [
-            {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: `${statusEmoji} *${statusLabel}:* ${taskTitle}`
-              }
-            },
-            {
-              type: "context",
-              elements: [
-                {
-                  type: "mrkdwn",
-                  text: `Decision recorded via Slack at <!date^${Math.floor(Date.now() / 1000)}^{date_short_pretty} {time}|${new Date().toISOString()}>`
-                }
-              ]
-            }
-          ]
-        });
-      } catch (updateError) {
-        console.error("[slack-webhook] Failed to update Slack message:", updateError);
-      }
+      await enqueueApprovalNotificationJob({
+        repository,
+        userId: actorUserId,
+        approvalId: approval.id,
+        goalId: updatedBundle.goal.id,
+        taskId: approval.taskId,
+        decision,
+        channel: "slack_receipt",
+        slackChannelId: channel,
+        slackMessageTs: messageTs,
+        workspaceId: updatedBundle.goal.workspaceId,
+        actorContext
+      });
     }
 
     // Return 200 to Slack so it stops retrying

@@ -27,11 +27,13 @@ describe("runAgent", () => {
     const result = runAgent(buildTask("communications"), "Triage the current inbox.");
 
     expect(result.executionMode).toBe("governed_specialist");
+    expect(result.implementationTier).toBe("production");
     expect(result.explanation).toMatch(/selected governed specialist wedge/i);
     expect(result.confidence).toBe(0.73);
     expect(result.artifacts[0]?.metadata).toMatchObject({
       agent: "communications",
       executionMode: "governed_specialist",
+      implementationTier: "production",
       requiresManualReview: false
     });
     expect(result.artifacts[0]?.content).toMatch(/No typed outbound message intent was captured/i);
@@ -47,6 +49,7 @@ describe("runAgent", () => {
     const artifact = result.artifacts[0];
 
     expect(result.executionMode).toBe("governed_specialist");
+    expect(result.implementationTier).toBe("production");
     expect(artifact?.content).toMatch(/typed outbound message intent was captured/i);
     expect(artifact?.metadata).toMatchObject({
       agent: "communications",
@@ -77,6 +80,7 @@ describe("runAgent", () => {
     const artifact = result.artifacts[0];
 
     expect(result.executionMode).toBe("governed_specialist");
+    expect(result.implementationTier).toBe("production");
     expect(artifact?.content).toMatch(/typed scheduling intent was captured/i);
     expect(artifact?.metadata).toMatchObject({
       agent: "calendar",
@@ -99,6 +103,31 @@ describe("runAgent", () => {
     });
   });
 
+  it("emits typed note intents for workflow scaffolds that already own create capability", () => {
+    const result = runAgent(buildTask("workflow", ["create", "monitor"]), "Convert follow-ups into a bounded workflow.");
+    const artifact = result.artifacts[0];
+
+    expect(result.executionMode).toBe("deterministic_scaffold");
+    expect(result.implementationTier).toBe("experimental");
+    expect(artifact?.metadata).toMatchObject({
+      agent: "workflow",
+      executionMode: "deterministic_scaffold",
+      implementationTier: "experimental",
+      requiresManualReview: false,
+      actionIntent: {
+        type: "create_note",
+        title: "Task for workflow"
+      },
+      executionIntent: {
+        type: "create_note",
+        title: "Task for workflow"
+      }
+    });
+    expect(artifact?.metadata.actionIntent).toMatchObject({
+      content: artifact?.content
+    });
+  });
+
   it("marks custom agents as prompt-backed scaffolds instead of simulated execution", () => {
     const result = runAgent(buildTask("workflow"), "Draft a delivery plan.", {
       agentDefinition: AgentDefinitionSchema.parse({
@@ -116,11 +145,13 @@ describe("runAgent", () => {
     });
 
     expect(result.executionMode).toBe("custom_prompt_scaffold");
+    expect(result.implementationTier).toBe("experimental");
     expect(result.confidence).toBe(0.58);
     expect(result.explanation).toMatch(/execution remains scaffolded/i);
     expect(result.artifacts[0]?.metadata).toMatchObject({
       agent: "workflow",
       executionMode: "custom_prompt_scaffold",
+      implementationTier: "experimental",
       requiresManualReview: false,
       agentDefinitionId: "agent-custom-1"
     });
@@ -131,12 +162,14 @@ describe("runAgent", () => {
     const result = runAgent(buildTask("travel"), "Prepare next week's itinerary.");
 
     expect(result.executionMode).toBe("manual_review_required");
+    expect(result.implementationTier).toBe("experimental");
     expect(result.confidence).toBe(0.28);
     expect(result.summary).toMatch(/manual-review scaffold/i);
     expect(result.explanation).toMatch(/does not yet have a production specialist runner/i);
     expect(result.artifacts[0]?.metadata).toMatchObject({
       agent: "travel",
       executionMode: "manual_review_required",
+      implementationTier: "experimental",
       requiresManualReview: true
     });
     expect(result.artifacts[0]?.content).toMatch(/planning material only/i);

@@ -8,10 +8,16 @@ import {
 } from "@agentic/contracts";
 import type { AgenticRepository } from "@agentic/repository";
 
-const LEGACY_AUTOPILOT_EVENT_KINDS = new Set<AutopilotEvent["kind"]>([
+const NON_FABRIC_AUTOPILOT_EVENT_KINDS = new Set<AutopilotEvent["kind"]>([
   "watcher_triggered",
   "template_due",
-  "briefing_due"
+  "briefing_due",
+  "communication_received",
+  "deadline_drift_detected",
+  "approval_sla_breached",
+  "workflow_stalled",
+  "connector_failed",
+  "dormant_workflow_review_due"
 ]);
 
 type FabricExecutionContext =
@@ -78,7 +84,7 @@ async function resolveDashboardWorkspaceContext(repository: AgenticRepository, u
 }
 
 export function isEventFabricAutopilotKind(kind: AutopilotEvent["kind"]) {
-  return !LEGACY_AUTOPILOT_EVENT_KINDS.has(kind);
+  return !NON_FABRIC_AUTOPILOT_EVENT_KINDS.has(kind);
 }
 
 export function getAutopilotEventFabricEnvelope(event: AutopilotEvent) {

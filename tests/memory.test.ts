@@ -1,4 +1,10 @@
-import { createMemoryRecord, getMemoryFreshness, rankRelevantMemories } from "@agentic/memory";
+import {
+  buildWorkflowContextPack,
+  createMemoryRecord,
+  detectMemoryConflicts,
+  getMemoryFreshness,
+  rankRelevantMemories
+} from "@agentic/memory";
 
 describe("memory ranking", () => {
   const fixedNow = Date.parse("2026-04-01T00:00:00.000Z");
@@ -167,5 +173,91 @@ describe("memory ranking", () => {
     );
 
     expect(ranked[0]?.memoryType).toBe("confirmed");
+  });
+
+  it("detects contradictory claims within the same category when subjects diverge", () => {
+    const conflicts = detectMemoryConflicts(
+      [
+        createMemoryRecord({
+          userId: "user-primary",
+          category: "travel",
+          memoryType: "confirmed",
+          content: "Seat preference is aisle.",
+          confidence: 0.95,
+          source: "test",
+          updatedAt: "2026-04-01T00:00:00.000Z"
+        }),
+        createMemoryRecord({
+          userId: "user-primary",
+          category: "travel",
+          memoryType: "observed",
+          content: "Seat preference is window.",
+          confidence: 0.82,
+          source: "test",
+          updatedAt: "2026-03-31T00:00:00.000Z"
+        }),
+        createMemoryRecord({
+          userId: "user-primary",
+          category: "travel",
+          memoryType: "confirmed",
+          content: "Passport scans are stored in notes.",
+          confidence: 0.99,
+          source: "test"
+        })
+      ],
+      {
+        now: fixedNow
+      }
+    );
+
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatchObject({
+      category: "travel",
+      subject: "seat preference"
+    });
+    expect(conflicts[0]?.conflictingMemoryIds).toHaveLength(1);
+  });
+
+  it("builds workflow context packs that retain conflicting evidence for review instead of silently dropping it", () => {
+    const pack = buildWorkflowContextPack({
+      kind: "goal_planning",
+      query: "book travel with the right seat preference",
+      records: [
+        createMemoryRecord({
+          userId: "user-primary",
+          category: "travel",
+          memoryType: "confirmed",
+          content: "Seat preference is aisle.",
+          confidence: 0.95,
+          source: "test",
+          updatedAt: "2026-04-01T00:00:00.000Z"
+        }),
+        createMemoryRecord({
+          userId: "user-primary",
+          category: "travel",
+          memoryType: "observed",
+          content: "Seat preference is window.",
+          confidence: 0.82,
+          source: "test",
+          updatedAt: "2026-03-31T00:00:00.000Z"
+        }),
+        createMemoryRecord({
+          userId: "user-primary",
+          category: "travel",
+          memoryType: "observed",
+          content: "Hotel check-in usually happens on Sunday evening.",
+          confidence: 0.78,
+          source: "test"
+        })
+      ],
+      now: fixedNow
+    });
+
+    expect(pack.selectedMemories).toHaveLength(3);
+    expect(pack.conflicts).toHaveLength(1);
+    expect(pack.conflictingMemoryIds).toHaveLength(2);
+    expect(pack.reviewRequiredMemoryIds).toEqual(expect.arrayContaining(pack.conflictingMemoryIds));
+    expect(pack.evidenceSummary.conflictCount).toBe(1);
+    expect(pack.evidenceSummary.selectedCount).toBe(3);
   });
 });
