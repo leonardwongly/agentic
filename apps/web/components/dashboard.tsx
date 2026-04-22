@@ -23,8 +23,14 @@ import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/i
 import { getMemoryFreshness } from "@agentic/memory";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
+import { DashboardCommandCenter } from "./dashboard-command-center";
 import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
 import { CoreLoopViewTracker } from "./core-loop-view-tracker";
+import {
+  buildDashboardCommandCenterModel,
+  getPreferredCommandCenterRole,
+  type CommandCenterRole
+} from "../lib/command-center";
 import { isAdvancedDashboardSection } from "../lib/dashboard-surface";
 import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-loop-telemetry";
 import { summarizeFeatureCapabilities } from "../lib/feature-capabilities";
@@ -387,6 +393,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [slideOutPanel, setSlideOutPanel] = useState<{ type: string; data: unknown } | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
+  const [commandCenterRole, setCommandCenterRole] = useState<CommandCenterRole>("command");
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(undefined);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const [commitmentBucket, setCommitmentBucket] = useState<CommitmentInboxBucket>(initialCommitmentInbox.bucket);
@@ -566,6 +573,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   );
 
   const operatorProductTemplateLookup = templates.length > 0 ? templates : operatorProductTemplates;
+  const commandCenterModel = useMemo(
+    () =>
+      buildDashboardCommandCenterModel({
+        data,
+        selectedOperatorProduct
+      }),
+    [data, selectedOperatorProduct]
+  );
 
   const selectedNotePreview = useMemo(
     () => notes.find((note) => note.slug === selectedNoteSlug) ?? null,
@@ -702,6 +717,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   useEffect(() => {
     void loadOperatorProducts();
   }, []);
+
+  useEffect(() => {
+    setCommandCenterRole(getPreferredCommandCenterRole(selectedOperatorProduct));
+  }, [selectedOperatorProduct]);
 
   const setSelectedNoteTitleDraft = (value: string) => {
     selectedNoteTitleRef.current = value;
@@ -2155,6 +2174,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           <StatsBar {...statsBar.props} />
           <ThemeToggle />
         </div>
+
+        <DashboardCommandCenter
+          model={commandCenterModel}
+          role={commandCenterRole}
+          onRoleChange={setCommandCenterRole}
+          openTarget={navigateToSection}
+        />
 
         <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openTarget={deepLink.openTarget} />
 
