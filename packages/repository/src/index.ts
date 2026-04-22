@@ -369,7 +369,7 @@ export class JobMutationError extends Error {
 
 export class ApprovalMutationError extends Error {
   constructor(
-    public readonly code: "not_found" | "already_handled" | "expired",
+    public readonly code: "not_found" | "already_handled" | "expired" | "forbidden",
     message: string
   ) {
     super(message);
@@ -378,6 +378,8 @@ export class ApprovalMutationError extends Error {
 }
 
 export { CommitmentInboxQueryError, CollectionPageQueryError };
+
+const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
 export type AgenticRepository = {
   backend: "file" | "postgres";
@@ -1528,6 +1530,27 @@ function assertWorkspaceOwner(store: RuntimeStore, workspaceId: string, userId: 
   return member;
 }
 
+function assertSharedApprovalResponder(
+  store: RuntimeStore,
+  goal: GoalBundle["goal"],
+  userId: string,
+  approvalId: string
+): void {
+  if (!goal.workspaceId) {
+    return;
+  }
+
+  const member = getWorkspaceMemberFromStore(store, goal.workspaceId, userId);
+
+  if (!member) {
+    throw new ApprovalMutationError("not_found", `Approval ${approvalId} was not found.`);
+  }
+
+  if (member.role !== "owner") {
+    throw new ApprovalMutationError("forbidden", SHARED_APPROVAL_OWNER_MESSAGE);
+  }
+}
+
 function goalByIdFromStore(store: RuntimeStore, goalId: string): GoalBundle["goal"] | null {
   return store.goals.find((candidate) => candidate.id === goalId) ?? null;
 }
@@ -2647,6 +2670,8 @@ class FileRepository implements AgenticRepository {
       if (!originalApproval) {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
+
+      assertSharedApprovalResponder(store, bundle.goal, userId, params.approvalId);
 
       const updatedBundle = applyApprovalResponse({
         bundle,
@@ -5270,6 +5295,24 @@ class PostgresRepository implements AgenticRepository {
     return member;
   }
 
+  private assertSharedApprovalResponderWithRow(params: {
+    approvalId: string;
+    workspaceId: string | null;
+    workspaceRole: string | null;
+  }): void {
+    if (!params.workspaceId) {
+      return;
+    }
+
+    if (!params.workspaceRole) {
+      throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+    }
+
+    if (params.workspaceRole !== "owner") {
+      throw new ApprovalMutationError("forbidden", SHARED_APPROVAL_OWNER_MESSAGE);
+    }
+  }
+
   private async listWorkspacesForUserWithClient(
     client: Pick<PoolClient, "query">,
     userId: string
@@ -6701,7 +6744,7 @@ class PostgresRepository implements AgenticRepository {
     return this.withTransaction(async (client) => {
       const approvalResult = await client.query(
         `
-          select a.id, a.goal_id, a.decision, a.expiry_at
+          select a.id, a.goal_id, a.decision, a.expiry_at, g.workspace_id, wm.role as workspace_role
           from approval_requests a
           join goals g on g.id = a.goal_id
           left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $2
@@ -6740,6 +6783,12 @@ class PostgresRepository implements AgenticRepository {
       if (!originalApproval) {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
+
+      this.assertSharedApprovalResponderWithRow({
+        approvalId: params.approvalId,
+        workspaceId: approvalRow.workspace_id ?? null,
+        workspaceRole: approvalRow.workspace_role ?? null
+      });
 
       const updatedBundle = applyApprovalResponse({
         bundle,

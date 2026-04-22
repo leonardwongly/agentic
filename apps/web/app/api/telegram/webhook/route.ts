@@ -18,6 +18,7 @@ import {
 import { getSeededRepository } from "../../../../lib/server";
 
 const TelegramIdentifierSchema = z.union([z.string().trim().min(1), z.number().int()]).transform((value) => String(value).trim());
+const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
 const TelegramCallbackQuerySchema = z
   .object({
@@ -140,6 +141,11 @@ export async function POST(request: Request) {
           if (error.code === "not_found") {
             await acknowledgeTelegramCallback(callbackQuery.id, error.message, true);
             return NextResponse.json({ ok: true, skipped: true, reason: "approval_not_found" });
+          }
+
+          if (error.code === "forbidden") {
+            await acknowledgeTelegramCallback(callbackQuery.id, SHARED_APPROVAL_OWNER_MESSAGE, true);
+            return NextResponse.json({ ok: true, skipped: true, reason: "forbidden" });
           }
 
           await acknowledgeTelegramCallback(callbackQuery.id, "This approval was already handled.");

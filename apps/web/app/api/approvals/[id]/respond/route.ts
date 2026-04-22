@@ -41,6 +41,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
             throw new ApiRouteError(404, error.message);
           }
 
+          if (error.code === "forbidden") {
+            throw new ApiRouteError(403, error.message);
+          }
+
           throw new ApiRouteError(409, error.message);
         }
 

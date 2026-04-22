@@ -63,6 +63,7 @@ Every typed action must satisfy all of the following rules before adapter execut
 2. The approval must be visible to the authenticated user.
    - [`respondToApproval(...)`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/repository/src/index.ts) scopes approvals through goal visibility for the acting user.
    - Hidden or foreign approvals fail as `not_found`, which the route maps to HTTP `404`.
+   - Shared workspace approvals remain owner-controlled even when editors or viewers can inspect the queue. Non-owner responses fail as `forbidden`, which the route maps to HTTP `403`.
 
 3. Only an approved approval may authorize typed execution.
    - [`findApprovedApproval(...)`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/orchestrator/src/execution-dispatch.ts) ignores pending and rejected approvals.
@@ -91,12 +92,13 @@ Use this decision path whenever a typed action is about to execute:
 
 1. Confirm the approval response request is authenticated and schema-valid.
 2. Confirm the approval is visible to the acting user.
-3. Confirm the persisted approval is `approved`.
-4. Confirm the approval carries a typed `actionIntent`.
-5. Derive the required capabilities for that action family.
-6. Confirm the task capability grant covers the required capabilities.
-7. Confirm the assigned agent allowlist also permits that grant.
-8. Only then invoke the typed adapter.
+3. If the goal is workspace-scoped, confirm the acting user is the workspace owner before mutating the approval.
+4. Confirm the persisted approval is `approved`.
+5. Confirm the approval carries a typed `actionIntent`.
+6. Derive the required capabilities for that action family.
+7. Confirm the task capability grant covers the required capabilities.
+8. Confirm the assigned agent allowlist also permits that grant.
+9. Only then invoke the typed adapter.
 
 If any step fails:
 
@@ -109,6 +111,7 @@ If any step fails:
 The boundary is intentionally conservative:
 
 - out-of-scope approvals fail as `404` rather than disclosing existence
+- visible shared-team approvals still fail closed as `403` when a non-owner attempts to clear them
 - duplicate approval responses fail as `409`
 - missing approved typed approvals do not fall through into inferred adapter calls
 - partially specified communications or calendar requests do not get upgraded into guessed typed payloads
@@ -154,9 +157,11 @@ The current regression coverage for this boundary lives in:
   - durable approval evidence capture
   - fallback approval previews for `manual_review`
   - cross-user denial when responding to another user's approval
+  - owner-only responses for shared workspace approvals while editors and viewers stay read-only
 - [`tests/route-user-scope.test.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/tests/route-user-scope.test.ts)
   - system-user attribution for approval responses
   - `404` mapping for out-of-scope approvals
+  - `403` mapping for visible but owner-restricted shared approvals
   - `409` mapping for already-handled approvals
 - [`tests/nl-intent-route.test.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/tests/nl-intent-route.test.ts)
   - approval listing and action surfaces remain user-scoped
