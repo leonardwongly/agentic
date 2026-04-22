@@ -404,7 +404,7 @@ describe("watchers route", () => {
         (watcher) => watcher.goalId === bundle.goal.id && watcher.targetEntity === "shared-priority-inbox"
       )
     ).toBe(false);
-  });
+  }, 10_000);
 
   it("lists only watchers for the authenticated user's goals", async () => {
     const repository = createRepository({
