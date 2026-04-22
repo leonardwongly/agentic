@@ -24,6 +24,29 @@ describe("DashboardOperatingSectionsCard", () => {
               "Editors should keep the shared queue moving in Operations and escalate overdue policy decisions back to the owner boundary.",
             visibilityLabel: "Execution-first queue visibility",
             queueMetrics: ["2 collaborators", "1 pending approval", "1 urgent queue item"],
+            ownershipAssignments: [
+              {
+                key: "shared_queue",
+                label: "Shared queue",
+                ownerRole: "editor",
+                status: "attention",
+                summary: "1 urgent queue item should be worked in queue order by the editor."
+              },
+              {
+                key: "approval_boundary",
+                label: "Approval boundary",
+                ownerRole: "owner",
+                status: "critical",
+                summary: "1 approval already exceeded the owner response window."
+              },
+              {
+                key: "execution_recovery",
+                label: "Execution recovery",
+                ownerRole: "editor",
+                status: "critical",
+                summary: "Recovery stays with the editor until retrying jobs are stale and need operator recovery before new queue work can be trusted."
+              }
+            ],
             actionBoundaries: [
               "Editors can triage queue work, recover execution, and prepare approvals, but governance changes stay with the owner."
             ],
@@ -84,6 +107,9 @@ describe("DashboardOperatingSectionsCard", () => {
     expect(markup).toContain("Editor execution workflow");
     expect(markup).toContain("Execution-first queue visibility");
     expect(markup).toContain("Escalate to owner");
+    expect(markup).toContain("Shared queue: editor");
+    expect(markup).toContain("Approval boundary: owner");
+    expect(markup).toContain("Shared queue: 1 urgent queue item should be worked in queue order by the editor.");
     expect(markup).toContain("1 approval needs owner response before shared execution can widen safely.");
     expect(markup).toContain("Next best action: Recover async execution");
     expect(markup).toContain("Open operations");
@@ -113,6 +139,7 @@ describe("DashboardOperatingSectionsCard", () => {
             summary: "No active workspace is selected, so there is no shared queue or role-scoped handoff model to operate yet.",
             visibilityLabel: "Setup-only visibility",
             queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
+            ownershipAssignments: [],
             actionBoundaries: [
               "Select or create a workspace before treating this dashboard like a multi-actor operating surface."
             ],

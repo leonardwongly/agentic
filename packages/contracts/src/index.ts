@@ -849,11 +849,17 @@ export const dashboardNextBestActionKindValues = [
   "repair_connector"
 ] as const;
 export const dashboardTeamWorkflowModeValues = ["setup", "owner_control", "editor_execution", "viewer_review"] as const;
+export const dashboardTeamWorkflowAssignmentKeyValues = [
+  "shared_queue",
+  "approval_boundary",
+  "execution_recovery"
+] as const;
 
 export const DashboardOperatingSectionKeySchema = z.enum(dashboardOperatingSectionKeyValues);
 export const DashboardOperatingSectionStatusSchema = z.enum(dashboardOperatingSectionStatusValues);
 export const DashboardNextBestActionKindSchema = z.enum(dashboardNextBestActionKindValues);
 export const DashboardTeamWorkflowModeSchema = z.enum(dashboardTeamWorkflowModeValues);
+export const DashboardTeamWorkflowAssignmentKeySchema = z.enum(dashboardTeamWorkflowAssignmentKeyValues);
 
 export const DashboardOperatingSectionSchema = z.object({
   key: DashboardOperatingSectionKeySchema,
@@ -890,12 +896,21 @@ export const DashboardPermissionSchema = z.object({
   reason: z.string().min(1)
 });
 
+export const DashboardTeamWorkflowAssignmentSchema = z.object({
+  key: DashboardTeamWorkflowAssignmentKeySchema,
+  label: z.string().min(1),
+  ownerRole: WorkspaceRoleSchema.nullable().default(null),
+  status: DashboardOperatingSectionStatusSchema,
+  summary: z.string().min(1)
+});
+
 export const DashboardTeamWorkflowSchema = z.object({
   mode: DashboardTeamWorkflowModeSchema,
   label: z.string().min(1),
   summary: z.string().min(1),
   visibilityLabel: z.string().min(1),
   queueMetrics: z.array(z.string().min(1)).default([]),
+  ownershipAssignments: z.array(DashboardTeamWorkflowAssignmentSchema).default([]),
   actionBoundaries: z.array(z.string().min(1)).default([]),
   handoffGuidance: z.array(z.string().min(1)).default([]),
   permissions: z.object({
@@ -2508,10 +2523,12 @@ export type DashboardOperatingSectionKey = z.infer<typeof DashboardOperatingSect
 export type DashboardOperatingSectionStatus = z.infer<typeof DashboardOperatingSectionStatusSchema>;
 export type DashboardNextBestActionKind = z.infer<typeof DashboardNextBestActionKindSchema>;
 export type DashboardTeamWorkflowMode = z.infer<typeof DashboardTeamWorkflowModeSchema>;
+export type DashboardTeamWorkflowAssignmentKey = z.infer<typeof DashboardTeamWorkflowAssignmentKeySchema>;
 export type DashboardOperatingSection = z.infer<typeof DashboardOperatingSectionSchema>;
 export type DashboardRoleView = z.infer<typeof DashboardRoleViewSchema>;
 export type DashboardNextBestAction = z.infer<typeof DashboardNextBestActionSchema>;
 export type DashboardPermission = z.infer<typeof DashboardPermissionSchema>;
+export type DashboardTeamWorkflowAssignment = z.infer<typeof DashboardTeamWorkflowAssignmentSchema>;
 export type DashboardTeamWorkflow = z.infer<typeof DashboardTeamWorkflowSchema>;
 export type DashboardOperatingSections = z.infer<typeof DashboardOperatingSectionsSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;

@@ -108,8 +108,22 @@ export function DashboardOperatingSectionsCard({ operatingSections, openTarget }
             </span>
           ))}
         </div>
+        {operatingSections.teamWorkflow.ownershipAssignments.length > 0 ? (
+          <div className="control-plane-stats">
+            {operatingSections.teamWorkflow.ownershipAssignments.map((assignment) => (
+              <span key={assignment.key} className="control-plane-stat">
+                {assignment.label}: {assignment.ownerRole ?? "monitor"}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <ul className="control-plane-highlights">
           <li>{operatingSections.teamWorkflow.slaSummary}</li>
+          {operatingSections.teamWorkflow.ownershipAssignments.map((assignment) => (
+            <li key={assignment.key}>
+              {assignment.label}: {assignment.summary}
+            </li>
+          ))}
           {operatingSections.teamWorkflow.actionBoundaries.map((boundary) => (
             <li key={boundary}>{boundary}</li>
           ))}

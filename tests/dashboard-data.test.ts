@@ -79,6 +79,7 @@ describe("assembleDashboardData instrumentation", () => {
           summary: "No active workspace is selected.",
           visibilityLabel: "Setup-only visibility",
           queueMetrics: [],
+          ownershipAssignments: [],
           actionBoundaries: [],
           handoffGuidance: [],
           permissions: {
@@ -195,6 +196,7 @@ describe("assembleDashboardData instrumentation", () => {
           summary: "No active workspace is selected.",
           visibilityLabel: "Setup-only visibility",
           queueMetrics: [],
+          ownershipAssignments: [],
           actionBoundaries: [],
           handoffGuidance: [],
           permissions: {

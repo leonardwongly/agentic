@@ -190,6 +190,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
           summary: "Owners are the policy authority and should keep delegation and approvals bounded.",
           visibilityLabel: "Full queue, approval, and governance visibility",
           queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
+          ownershipAssignments: [],
           actionBoundaries: ["Owners can manage membership, governance posture, and approval decisions."],
           handoffGuidance: ["Route execution triage to editors and keep final policy decisions with the owner boundary."],
           permissions: {

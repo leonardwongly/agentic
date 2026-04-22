@@ -105,6 +105,7 @@ function buildDashboardData(): DashboardData {
         summary: "Editors can work the shared queue but must escalate owner-only controls.",
         visibilityLabel: "Execution-first queue visibility",
         queueMetrics: ["1 collaborator", "0 pending approvals", "0 urgent queue items"],
+        ownershipAssignments: [],
         actionBoundaries: [
           "Editors can triage queue work and prepare approvals, but governance and membership stay with the owner."
         ],

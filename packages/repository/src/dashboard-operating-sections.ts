@@ -11,6 +11,7 @@ import type {
   DashboardOperatingSection,
   DashboardOperatingSections,
   DashboardRoleView,
+  DashboardTeamWorkflowAssignment,
   DashboardTeamWorkflow,
   EvidenceRecord,
   GoalBundle,
@@ -318,6 +319,7 @@ function buildTeamWorkflow(params: {
       summary: "No active workspace is selected, so there is no shared queue or role-scoped handoff model to operate yet.",
       visibilityLabel: "Setup-only visibility",
       queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
+      ownershipAssignments: [],
       actionBoundaries: [
         "Select or create a workspace before treating this dashboard like a multi-actor operating surface."
       ],
@@ -364,6 +366,54 @@ function buildTeamWorkflow(params: {
     `${pluralize(pendingApprovals.length, "pending approval")}`,
     `${pluralize(urgentQueueItems.length, "urgent queue item")}`
   ];
+  const sharedQueueOwnerRole: WorkspaceRole = collaboratorCount > 0 ? "editor" : "owner";
+  const queueAssignmentStatus: DashboardOperatingSection["status"] =
+    urgentQueueItems.some((item) => item.status === "stale" || item.status === "needs-review")
+      ? "critical"
+      : urgentQueueItems.length > 0 || params.nowQueue.totalCount > 0
+        ? "attention"
+        : "healthy";
+  const ownershipAssignments: DashboardTeamWorkflowAssignment[] = [
+    {
+      key: "shared_queue",
+      label: "Shared queue",
+      ownerRole: sharedQueueOwnerRole,
+      status: queueAssignmentStatus,
+      summary:
+        urgentQueueItems.length > 0
+          ? `${pluralize(urgentQueueItems.length, "urgent queue item")} should be worked in queue order by the ${sharedQueueOwnerRole}.`
+          : params.nowQueue.totalCount > 0
+            ? `${pluralize(params.nowQueue.totalCount, "queue item")} are active, and the ${sharedQueueOwnerRole} should keep the shared queue current.`
+            : `No urgent shared-queue work is currently waiting on the ${sharedQueueOwnerRole}.`
+    },
+    {
+      key: "approval_boundary",
+      label: "Approval boundary",
+      ownerRole: "owner",
+      status: overdueApprovals.length > 0 ? "critical" : pendingApprovals.length > 0 ? "attention" : "healthy",
+      summary:
+        overdueApprovals.length > 0
+          ? `${pluralize(overdueApprovals.length, "approval")} already exceeded the owner response window.`
+          : pendingApprovals.length > 0
+            ? `${pluralize(pendingApprovals.length, "approval")} are waiting on the owner decision boundary.`
+            : "No shared approvals are currently waiting on the owner boundary."
+    },
+    {
+      key: "execution_recovery",
+      label: "Execution recovery",
+      ownerRole: sharedQueueOwnerRole,
+      status:
+        firstAsyncIssue !== null
+          ? params.operations?.asyncExecution?.status === "critical"
+            ? "critical"
+            : "attention"
+          : "healthy",
+      summary:
+        firstAsyncIssue !== null
+          ? `Recovery stays with the ${sharedQueueOwnerRole} until ${firstAsyncIssue.summary.toLowerCase()}.`
+          : `No active execution recovery lane is currently assigned to the ${sharedQueueOwnerRole}.`
+    }
+  ];
   const handoffGuidance = compactHighlights(
     overdueApprovals[0] ? `Oldest overdue approval: ${overdueApprovals[0].title}` : null,
     firstAsyncIssue ? `Execution recovery owner: ${firstAsyncIssue.summary}` : null,
@@ -393,6 +443,7 @@ function buildTeamWorkflow(params: {
           : `Owners are the policy authority for ${params.activeWorkspace.name} and should keep delegation, approvals, and recovery inside bounded operating limits.`,
       visibilityLabel: "Full queue, approval, and governance visibility",
       queueMetrics,
+      ownershipAssignments,
       actionBoundaries: [
         "Owners can manage membership, governance posture, and approval decisions.",
         "Use owner authority to unblock policy gates instead of routing around them."
@@ -428,6 +479,7 @@ function buildTeamWorkflow(params: {
           : `Viewers can review queue evidence in ${params.activeWorkspace.name} and should escalate execution or policy blockers to editors or owners.`,
       visibilityLabel: "Read-only review visibility",
       queueMetrics,
+      ownershipAssignments,
       actionBoundaries: [
         "Viewers can inspect approvals, queue evidence, and execution posture but cannot change policy or membership.",
         "Escalate blocked execution to editors and policy gates to owners."
@@ -460,6 +512,7 @@ function buildTeamWorkflow(params: {
         : `Editors own shared execution flow in ${params.activeWorkspace.name}: keep the queue current, recover failures, and escalate governance gates instead of bypassing them.`,
     visibilityLabel: "Execution-first queue visibility",
     queueMetrics,
+    ownershipAssignments,
     actionBoundaries: [
       "Editors can triage queue work, recover execution, and prepare approvals, but governance changes stay with the owner.",
       "Use the shared queue ordering before widening automation or escalating new work."

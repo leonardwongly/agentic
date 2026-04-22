@@ -2995,6 +2995,25 @@ describe("repository", () => {
     expect(dashboard.operatingSections.teamWorkflow.queueMetrics).toEqual(
       expect.arrayContaining(["0 collaborators", "1 pending approval", "2 urgent queue items"])
     );
+    expect(dashboard.operatingSections.teamWorkflow.ownershipAssignments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "shared_queue",
+          ownerRole: "owner",
+          status: "critical"
+        }),
+        expect.objectContaining({
+          key: "approval_boundary",
+          ownerRole: "owner",
+          status: "critical"
+        }),
+        expect.objectContaining({
+          key: "execution_recovery",
+          ownerRole: "owner",
+          status: "critical"
+        })
+      ])
+    );
     expect(dashboard.operatingSections.teamWorkflow.slaSummary).toContain("exceeded the shared-team response window");
     expect(dashboard.operatingSections.teamWorkflow.handoffGuidance).toEqual(
       expect.arrayContaining([

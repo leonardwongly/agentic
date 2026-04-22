@@ -34,6 +34,7 @@ function buildDashboardData(): DashboardData {
         summary: "No active workspace is selected.",
         visibilityLabel: "Setup-only visibility",
         queueMetrics: [],
+        ownershipAssignments: [],
         actionBoundaries: [],
         handoffGuidance: [],
         permissions: {
