@@ -5,6 +5,7 @@ import type {
   AutopilotEvent,
   AutopilotSettings,
   ApprovalRequest,
+  CommitmentInboxBucket,
   DashboardPermission,
   DashboardNextBestAction,
   Commitment,
@@ -13,7 +14,9 @@ import type {
   DashboardRoleView,
   DashboardTeamWorkflowAssignment,
   DashboardTeamWorkflowAuditCoverage,
+  DashboardTeamWorkflowControl,
   DashboardTeamWorkflow,
+  DashboardTeamWorkflowQueue,
   EvidenceRecord,
   GoalBundle,
   IntegrationAccount,
@@ -78,6 +81,45 @@ function parseTimestampMs(value: string | null | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatAgeLabel(timestampMs: number | null, nowMs: number): string | null {
+  if (timestampMs === null) {
+    return null;
+  }
+
+  const ageMs = Math.max(0, nowMs - timestampMs);
+  const minutes = Math.floor(ageMs / (60 * 1000));
+
+  if (minutes < 1) {
+    return "just now";
+  }
+
+  if (minutes < 60) {
+    return `${minutes}m old`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+
+  if (hours < 48) {
+    return `${hours}h old`;
+  }
+
+  return `${Math.floor(hours / 24)}d old`;
+}
+
+function oldestTimestampMs(values: Array<number | null>): number | null {
+  return values.reduce<number | null>((oldest, candidate) => {
+    if (candidate === null) {
+      return oldest;
+    }
+
+    if (oldest === null || candidate < oldest) {
+      return candidate;
+    }
+
+    return oldest;
+  }, null);
+}
+
 function toAttentionStatus(status: DashboardDiagnostics["status"]): DashboardOperatingSection["status"] {
   if (status === "critical") {
     return "critical";
@@ -102,6 +144,55 @@ function maxSectionStatus(
   };
 
   return weight[left] >= weight[right] ? left : right;
+}
+
+function buildTeamWorkflowQueue(params: {
+  key: DashboardTeamWorkflowQueue["key"];
+  label: string;
+  ownerRole: WorkspaceRole | null;
+  status: DashboardOperatingSection["status"];
+  count: number;
+  summary: string;
+  oldestTimestampMs: number | null;
+  targetSection: string;
+  targetItemId?: string;
+  targetFilter?: CommitmentInboxBucket | null;
+  nowMs: number;
+}): DashboardTeamWorkflowQueue {
+  return {
+    key: params.key,
+    label: params.label,
+    ownerRole: params.ownerRole,
+    status: params.status,
+    count: params.count,
+    summary: params.summary,
+    oldestAgeLabel: formatAgeLabel(params.oldestTimestampMs, params.nowMs),
+    targetSection: params.targetSection,
+    targetItemId: params.targetItemId,
+    targetFilter: params.targetFilter ?? null
+  };
+}
+
+function buildTeamWorkflowControl(params: {
+  key: DashboardTeamWorkflowControl["key"];
+  label: string;
+  summary: string;
+  status: DashboardOperatingSection["status"];
+  targetSection: string;
+  targetItemId?: string;
+  targetFilter?: CommitmentInboxBucket | null;
+  permission: DashboardPermission;
+}): DashboardTeamWorkflowControl {
+  return {
+    key: params.key,
+    label: params.label,
+    summary: params.summary,
+    status: params.status,
+    targetSection: params.targetSection,
+    targetItemId: params.targetItemId,
+    targetFilter: params.targetFilter ?? null,
+    permission: params.permission
+  };
 }
 
 function resolveOperatorRole(params: Pick<BuildDashboardOperatingSectionsParams, "userId" | "activeWorkspace" | "workspaceMembers">): WorkspaceRole | null {
@@ -313,6 +404,7 @@ function buildTeamWorkflow(params: {
   workspaceGovernance: WorkspaceGovernance | null;
   privacyOperations: PrivacyOperation[];
   approvals: ApprovalRequest[];
+  commitments: Commitment[];
   nowQueue: NowQueue;
   operations?: DashboardOperationsTower;
   generatedAt: string;
@@ -325,6 +417,8 @@ function buildTeamWorkflow(params: {
       visibilityLabel: "Setup-only visibility",
       queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
       ownershipAssignments: [],
+      queues: [],
+      controls: [],
       auditCoverage: {
         required: false,
         status: "attention",
@@ -355,6 +449,9 @@ function buildTeamWorkflow(params: {
     (member) => member.workspaceId === params.activeWorkspace?.id
   ).length;
   const collaboratorCount = Math.max(0, workspaceMemberCount - 1);
+  const openCommitments = params.commitments.filter(
+    (commitment) => commitment.status !== "completed" && commitment.status !== "dismissed"
+  );
   const pendingApprovals = params.approvals.filter((approval) => approval.decision === "pending");
   const overdueApprovals = pendingApprovals.filter((approval) => {
     const expiryAtMs = parseTimestampMs(approval.expiryAt);
@@ -369,6 +466,9 @@ function buildTeamWorkflow(params: {
   const urgentQueueItems = params.nowQueue.items.filter(
     (item) => item.urgency === "immediate" || item.status === "needs-review" || item.status === "stale"
   );
+  const urgentCommitments = openCommitments.filter((commitment) => urgentQueueItems.some((item) => item.commitmentId === commitment.id));
+  const blockedCommitments = openCommitments.filter((commitment) => commitment.status === "blocked");
+  const waitingCommitments = openCommitments.filter((commitment) => commitment.status === "scheduled");
   const firstAsyncIssue = params.operations?.asyncExecution?.items[0] ?? null;
   const firstConnectorIssue = params.operations?.connectorHealth?.items[0] ?? null;
   const latestAuditExport = [...params.privacyOperations]
@@ -492,6 +592,249 @@ function buildTeamWorkflow(params: {
     exportAudit: buildDashboardPermission(true, "Workspace members can export audit evidence for review and compliance."),
     managePrivacyOperations: buildDashboardPermission(false, ownerOnlyReason)
   };
+  const nonOverduePendingApprovals = pendingApprovals.filter((approval) => !overdueApprovals.includes(approval));
+  const delegatedQueueCount = params.role === "owner" ? (sharedQueueOwnerRole === "editor" ? urgentCommitments.length : 0) : pendingApprovals.length;
+  const mineQueueCount =
+    params.role === "owner"
+      ? pendingApprovals.length + (sharedQueueOwnerRole === "owner" ? urgentCommitments.length : 0)
+      : params.role === "editor"
+        ? urgentCommitments.length + (firstAsyncIssue ? 1 : 0)
+        : 0;
+  const escalatedQueueStatus: DashboardOperatingSection["status"] =
+    overdueApprovals.length > 0
+      ? "critical"
+      : firstConnectorIssue
+        ? firstConnectorIssue.severity === "critical"
+          ? "critical"
+          : "attention"
+        : "healthy";
+  const mineQueueStatus: DashboardOperatingSection["status"] =
+    params.role === "owner"
+      ? overdueApprovals.length > 0
+        ? "critical"
+        : pendingApprovals.length > 0 || urgentCommitments.length > 0
+          ? "attention"
+          : "healthy"
+      : params.role === "editor"
+        ? firstAsyncIssue
+          ? params.operations?.asyncExecution?.status === "critical"
+            ? "critical"
+            : "attention"
+          : urgentCommitments.some((commitment) => commitment.status === "stale" || commitment.status === "needs-review")
+            ? "critical"
+            : urgentCommitments.length > 0
+              ? "attention"
+              : "healthy"
+        : "healthy";
+  const delegatedQueueStatus: DashboardOperatingSection["status"] =
+    params.role === "owner"
+      ? urgentCommitments.some((commitment) => commitment.status === "stale" || commitment.status === "needs-review")
+        ? "critical"
+        : delegatedQueueCount > 0
+          ? "attention"
+          : "healthy"
+      : overdueApprovals.length > 0
+        ? "critical"
+        : delegatedQueueCount > 0
+          ? "attention"
+          : "healthy";
+  const queues: DashboardTeamWorkflowQueue[] = [
+    buildTeamWorkflowQueue({
+      key: "mine",
+      label: "Mine",
+      ownerRole: params.role,
+      status: mineQueueStatus,
+      count: mineQueueCount,
+      summary:
+        params.role === "owner"
+          ? mineQueueCount > 0
+            ? sharedQueueOwnerRole === "owner"
+              ? `${pluralize(pendingApprovals.length, "approval")} and ${pluralize(urgentCommitments.length, "urgent queue item")} are still sitting in the owner lane because no editor handoff is available.`
+              : `${pluralize(pendingApprovals.length, "approval")} are sitting with the owner decision boundary right now.`
+            : "The owner lane is clear right now."
+          : params.role === "editor"
+            ? mineQueueCount > 0
+              ? firstAsyncIssue
+                ? `${pluralize(urgentCommitments.length, "urgent queue item")} and one execution recovery issue are in the editor lane.`
+                : `${pluralize(urgentCommitments.length, "urgent queue item")} are currently assigned to the editor lane.`
+              : "The editor execution lane is currently clear."
+            : "Viewers do not own an execution lane; use this view to inspect and escalate only.",
+      oldestTimestampMs: oldestTimestampMs([
+        ...pendingApprovals.map((approval) => parseTimestampMs(approval.createdAt)),
+        ...urgentCommitments.map((commitment) => parseTimestampMs(commitment.updatedAt))
+      ]),
+      targetSection:
+        params.role === "owner" && pendingApprovals.length > 0
+          ? "approvals"
+          : params.role === "editor" && firstAsyncIssue
+            ? "operations"
+            : "commitments",
+      targetItemId:
+        params.role === "owner" && pendingApprovals.length > 0
+          ? pendingApprovals[0]?.id
+          : params.role === "editor" && firstAsyncIssue
+            ? firstAsyncIssue.id
+            : urgentCommitments[0]?.id,
+      targetFilter: params.role === "owner" && pendingApprovals.length > 0 ? null : "urgent",
+      nowMs
+    }),
+    buildTeamWorkflowQueue({
+      key: "delegated",
+      label: "Delegated",
+      ownerRole: params.role === "owner" ? sharedQueueOwnerRole : "owner",
+      status: delegatedQueueStatus,
+      count: delegatedQueueCount,
+      summary:
+        params.role === "owner"
+          ? delegatedQueueCount > 0
+            ? `${pluralize(delegatedQueueCount, "urgent queue item")} are delegated to the editor queue for execution-first handling.`
+            : "There is no active editor delegation right now."
+          : params.role === "editor"
+            ? delegatedQueueCount > 0
+              ? `${pluralize(delegatedQueueCount, "approval")} are delegated back to the owner boundary for policy decisions.`
+              : "There are no delegated approval decisions waiting on the owner."
+            : delegatedQueueCount > 0
+              ? `${pluralize(urgentCommitments.length, "queue item")} stay with editors while ${pluralize(pendingApprovals.length, "approval")} stay with owners.`
+              : "No delegated team work is active right now.",
+      oldestTimestampMs:
+        params.role === "owner"
+          ? oldestTimestampMs(urgentCommitments.map((commitment) => parseTimestampMs(commitment.updatedAt)))
+          : oldestTimestampMs(pendingApprovals.map((approval) => parseTimestampMs(approval.createdAt))),
+      targetSection: params.role === "owner" ? "commitments" : "approvals",
+      targetItemId: params.role === "owner" ? urgentCommitments[0]?.id : pendingApprovals[0]?.id,
+      targetFilter: params.role === "owner" ? "urgent" : null,
+      nowMs
+    }),
+    buildTeamWorkflowQueue({
+      key: "escalated",
+      label: "Escalated",
+      ownerRole: "owner",
+      status: escalatedQueueStatus,
+      count: overdueApprovals.length + (firstConnectorIssue ? 1 : 0),
+      summary:
+        overdueApprovals.length > 0
+          ? `${pluralize(overdueApprovals.length, "approval")} breached SLA and should be escalated to the owner boundary immediately.`
+          : firstConnectorIssue
+            ? `Connector escalation is open: ${firstConnectorIssue.summary}`
+            : "No escalations are currently open.",
+      oldestTimestampMs: oldestTimestampMs([
+        ...overdueApprovals.map((approval) => parseTimestampMs(approval.createdAt)),
+        firstConnectorIssue ? nowMs : null
+      ]),
+      targetSection: overdueApprovals.length > 0 ? "approvals" : firstConnectorIssue ? "operations" : "approvals",
+      targetItemId: overdueApprovals[0]?.id ?? firstConnectorIssue?.id,
+      nowMs
+    }),
+    buildTeamWorkflowQueue({
+      key: "blocked",
+      label: "Blocked",
+      ownerRole: sharedQueueOwnerRole,
+      status: firstAsyncIssue || blockedCommitments.length > 0 ? "critical" : "healthy",
+      count: blockedCommitments.length + (firstAsyncIssue ? 1 : 0),
+      summary:
+        firstAsyncIssue
+          ? `${firstAsyncIssue.summary} ${blockedCommitments.length > 0 ? `There are also ${pluralize(blockedCommitments.length, "blocked commitment")} waiting behind recovery.` : ""}`.trim()
+          : blockedCommitments.length > 0
+            ? `${pluralize(blockedCommitments.length, "commitment")} are blocked and need explicit operator recovery or unblocking.`
+            : "No blocked work is currently open.",
+      oldestTimestampMs: oldestTimestampMs([
+        firstAsyncIssue ? nowMs : null,
+        ...blockedCommitments.map((commitment) => parseTimestampMs(commitment.updatedAt))
+      ]),
+      targetSection: firstAsyncIssue ? "operations" : "commitments",
+      targetItemId: firstAsyncIssue?.id ?? blockedCommitments[0]?.id,
+      targetFilter: firstAsyncIssue ? null : "waiting_on_others",
+      nowMs
+    }),
+    buildTeamWorkflowQueue({
+      key: "waiting",
+      label: "Waiting",
+      ownerRole: params.role === "owner" ? "owner" : sharedQueueOwnerRole,
+      status: nonOverduePendingApprovals.length > 0 || waitingCommitments.length > 0 ? "attention" : "healthy",
+      count: nonOverduePendingApprovals.length + waitingCommitments.length,
+      summary:
+        nonOverduePendingApprovals.length > 0
+          ? `${pluralize(nonOverduePendingApprovals.length, "approval")} are still inside SLA but waiting for the next bounded decision.`
+          : waitingCommitments.length > 0
+            ? `${pluralize(waitingCommitments.length, "commitment")} are waiting on dependencies or scheduled follow-through.`
+            : "No queued work is waiting on a later handoff right now.",
+      oldestTimestampMs: oldestTimestampMs([
+        ...nonOverduePendingApprovals.map((approval) => parseTimestampMs(approval.createdAt)),
+        ...waitingCommitments.map((commitment) => parseTimestampMs(commitment.updatedAt))
+      ]),
+      targetSection: nonOverduePendingApprovals.length > 0 ? "approvals" : "commitments",
+      targetItemId: nonOverduePendingApprovals[0]?.id ?? waitingCommitments[0]?.id,
+      targetFilter: nonOverduePendingApprovals.length > 0 ? null : "waiting_on_others",
+      nowMs
+    })
+  ];
+  const controls: DashboardTeamWorkflowControl[] = [
+    buildTeamWorkflowControl({
+      key: "open_mine",
+      label: params.role === "owner" ? "Open owner lane" : params.role === "editor" ? "Open editor lane" : "Open shared queue",
+      summary:
+        params.role === "owner"
+          ? "Review the owner-held queue first so approvals do not quietly accumulate past SLA."
+          : params.role === "editor"
+            ? "Work the execution lane in queue order before widening the surface."
+            : "Inspect the shared queue and escalate the highest-signal blocker.",
+      status: mineQueueStatus,
+      targetSection: queues[0].targetSection,
+      targetItemId: queues[0].targetItemId,
+      targetFilter: queues[0].targetFilter,
+      permission: buildDashboardPermission(true, "Workspace members can inspect the active queue lane.")
+    }),
+    buildTeamWorkflowControl({
+      key: "rebalance_queue",
+      label: params.role === "owner" ? "Rebalance queue ownership" : "Review ownership boundaries",
+      summary:
+        params.role === "owner"
+          ? "Use membership and role boundaries to rebalance shared-queue ownership before ambiguity compounds."
+          : "Only owners can reassign queue ownership; use this surface to confirm who should hold the lane.",
+      status: collaboratorCount === 0 ? "attention" : "healthy",
+      targetSection: "workspaces",
+      permission:
+        params.role === "owner"
+          ? ownerPermissions.manageMembers
+          : collaboratorPermissions.manageMembers
+    }),
+    buildTeamWorkflowControl({
+      key: "escalate_overdue",
+      label: overdueApprovals.length > 0 ? "Escalate overdue approvals" : "Review escalation path",
+      summary:
+        overdueApprovals.length > 0
+          ? "Move overdue policy decisions back to the owner boundary before execution widens."
+          : "Confirm which role should receive the next escalation when policy or connector risk breaches SLA.",
+      status: escalatedQueueStatus,
+      targetSection: overdueApprovals.length > 0 ? "approvals" : firstConnectorIssue ? "operations" : "approvals",
+      targetItemId: overdueApprovals[0]?.id ?? firstConnectorIssue?.id,
+      permission: buildDashboardPermission(
+        params.role !== null,
+        "Only workspace members can review and escalate shared approvals."
+      )
+    }),
+    buildTeamWorkflowControl({
+      key: "review_blockers",
+      label: "Review blockers",
+      summary: "Inspect execution recovery and blocked commitments together so the queue does not split across hidden workarounds.",
+      status: firstAsyncIssue || blockedCommitments.length > 0 ? "critical" : "healthy",
+      targetSection: firstAsyncIssue ? "operations" : "commitments",
+      targetItemId: firstAsyncIssue?.id ?? blockedCommitments[0]?.id,
+      targetFilter: firstAsyncIssue ? null : "waiting_on_others",
+      permission: buildDashboardPermission(true, "Workspace members can inspect blocked execution and recovery posture.")
+    }),
+    buildTeamWorkflowControl({
+      key: "export_audit",
+      label: "Export audit trail",
+      summary: "Pull audit evidence after handoffs or escalations so the next operator can verify the chain of custody.",
+      status: auditCoverage.status,
+      targetSection: "privacy",
+      permission:
+        params.role === "owner"
+          ? ownerPermissions.exportAudit
+          : collaboratorPermissions.exportAudit
+    })
+  ];
 
   if (params.role === "owner") {
     return {
@@ -504,6 +847,8 @@ function buildTeamWorkflow(params: {
       visibilityLabel: "Full queue, approval, and governance visibility",
       queueMetrics,
       ownershipAssignments,
+      queues,
+      controls,
       auditCoverage,
       actionBoundaries: [
         "Owners can manage membership, governance posture, and approval decisions.",
@@ -541,6 +886,8 @@ function buildTeamWorkflow(params: {
       visibilityLabel: "Read-only review visibility",
       queueMetrics,
       ownershipAssignments,
+      queues,
+      controls,
       auditCoverage,
       actionBoundaries: [
         "Viewers can inspect approvals, queue evidence, and execution posture but cannot change policy or membership.",
@@ -575,6 +922,8 @@ function buildTeamWorkflow(params: {
     visibilityLabel: "Execution-first queue visibility",
     queueMetrics,
     ownershipAssignments,
+    queues,
+    controls,
     auditCoverage,
     actionBoundaries: [
       "Editors can triage queue work, recover execution, and prepare approvals, but governance changes stay with the owner.",
@@ -650,6 +999,7 @@ export function buildDashboardOperatingSections(params: BuildDashboardOperatingS
     workspaceGovernance: params.workspaceGovernance,
     privacyOperations: params.privacyOperations,
     approvals: params.approvals,
+    commitments: params.commitments,
     nowQueue: params.nowQueue,
     operations: params.operations,
     generatedAt: params.diagnostics.generatedAt

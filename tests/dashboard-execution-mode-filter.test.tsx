@@ -35,6 +35,8 @@ function buildDashboardData(): DashboardData {
         visibilityLabel: "Setup-only visibility",
         queueMetrics: [],
         ownershipAssignments: [],
+        queues: [],
+        controls: [],
         auditCoverage: {
           required: false,
           status: "attention",
@@ -44,6 +46,8 @@ function buildDashboardData(): DashboardData {
         },
         actionBoundaries: [],
         handoffGuidance: [],
+        queues: [],
+        controls: [],
         permissions: {
           manageMembers: {
             allowed: false,

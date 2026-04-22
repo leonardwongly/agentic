@@ -108,6 +108,8 @@ function buildDashboardData(): DashboardData {
         visibilityLabel: "Execution-first queue visibility",
         queueMetrics: ["1 collaborator", "0 pending approvals", "0 urgent queue items"],
         ownershipAssignments: [],
+        queues: [],
+        controls: [],
         auditCoverage: {
           required: true,
           status: "attention",
@@ -266,5 +268,138 @@ describe("DashboardOperationsSections", () => {
     expect(extractButtonMarkup(markup, "Save governance")).toContain('disabled=""');
     expect(extractButtonMarkup(markup, "Run retention enforcement")).toContain('disabled=""');
     expect(extractButtonMarkup(markup, "Export audit")).not.toContain('disabled=""');
+  });
+
+  it("keeps share history visible but disables revoke controls for viewers", () => {
+    const data = buildDashboardData();
+    data.workspaceSelection = {
+      userId: "workspace-viewer",
+      workspaceId: "workspace-operations",
+      selectedAt: "2026-04-22T00:00:00.000Z",
+      updatedAt: "2026-04-22T00:00:00.000Z"
+    };
+    data.workspaceMembers = [
+      {
+        id: "member-viewer",
+        workspaceId: "workspace-operations",
+        userId: "workspace-viewer",
+        role: "viewer",
+        joinedAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z"
+      }
+    ];
+    data.goalShares = [
+      {
+        id: "share-1",
+        goalId: "goal-1",
+        userId: "workspace-owner",
+        workspaceId: "workspace-operations",
+        tokenFingerprint: "fingerprint-1",
+        status: "active",
+        actorContext: null,
+        expiresAt: "2026-04-23T00:00:00.000Z",
+        lastViewedAt: null,
+        revokedAt: null,
+        createdAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z"
+      }
+    ];
+    data.goals = [
+      {
+        goal: {
+          id: "goal-1",
+          userId: "workspace-owner",
+          workspaceId: "workspace-operations",
+          workflowId: "workflow-1",
+          title: "Escalate reviewer access",
+          request: "Share the current queue context.",
+          intent: "email_follow_up",
+          status: "running",
+          confidence: 0.85,
+          explanation: "Viewer should inspect but not mutate share links.",
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z"
+        },
+        workflow: {
+          id: "workflow-1",
+          goalId: "goal-1",
+          workspaceId: "workspace-operations",
+          status: "running",
+          currentStep: "draft",
+          checkpoint: null,
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z"
+        },
+        tasks: [],
+        artifacts: [],
+        approvals: [],
+        watchers: [],
+        actionLogs: []
+      }
+    ];
+    data.operatingSections.roleView.role = "viewer";
+    data.operatingSections.roleView.label = "Viewer view";
+    data.operatingSections.teamWorkflow.mode = "viewer_review";
+
+    const markup = renderToStaticMarkup(
+      <DashboardOperationsSections
+        data={data}
+        isPending={false}
+        highlightedItemId={null}
+        workspaceState={{ kind: "idle", message: "" }}
+        governanceState={{ kind: "idle", message: "" }}
+        autopilotState={{ kind: "idle", message: "" }}
+        privacyState={{ kind: "idle", message: "" }}
+        workspaceName=""
+        setWorkspaceName={() => {}}
+        workspaceSlug=""
+        setWorkspaceSlug={() => {}}
+        workspaceDescription=""
+        setWorkspaceDescription={() => {}}
+        workspaceMemberUserId=""
+        setWorkspaceMemberUserId={() => {}}
+        workspaceMemberRole="viewer"
+        setWorkspaceMemberRole={() => {}}
+        governanceDraft={{
+          approvalMode: "risk_based",
+          requireAuditExports: true,
+          maxAutoRunRiskClass: "R2",
+          externalSendRequiresApproval: true,
+          calendarWriteRequiresApproval: true,
+          shadowReplayPolicy: {
+            enabled: true,
+            promotionMode: "validated_autonomy",
+            rollbackOutcome: "allowed_with_confirmation",
+            minimumMatchedEpisodes: 5,
+            minimumPrecision: 0.8,
+            maximumNegativeOutcomeRate: 0.15,
+            maximumFailureCostRate: 0.2
+          },
+          retentionDays: 365
+        }}
+        setGovernanceDraft={() => {}}
+        autopilotDraft={{
+          userId: "workspace-viewer",
+          mode: "notify_only",
+          debounceMinutes: 15,
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z"
+        }}
+        setAutopilotDraft={() => {}}
+        getItemAnchorId={(itemId) => itemId}
+        openDiagnosticTarget={() => {}}
+        createWorkspace={async () => {}}
+        selectWorkspace={async () => {}}
+        addWorkspaceMember={async () => {}}
+        saveWorkspaceGovernance={async () => {}}
+        exportWorkspaceAudit={async () => {}}
+        saveAutopilotSettings={async () => {}}
+        runPrivacyOperation={async () => {}}
+        revokeGoalShare={async () => {}}
+      />
+    );
+
+    expect(markup).toContain("Only workspace owners and editors can manage public goal share links.");
+    expect(extractButtonMarkup(markup, "Revoke")).toContain('disabled=""');
   });
 });

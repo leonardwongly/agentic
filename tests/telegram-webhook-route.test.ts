@@ -439,6 +439,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
           visibilityLabel: "Full queue, approval, and governance visibility",
           queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
           ownershipAssignments: [],
+          queues: [],
+          controls: [],
           auditCoverage: {
             required: false,
             status: "healthy",
@@ -1140,6 +1142,104 @@ describe("telegram webhook route", () => {
       callbackQueryId: "callback-1",
       text: "This approval was already handled.",
       showAlert: false
+    });
+  });
+
+  it("acknowledges forbidden shared approval actions through Telegram callback notices", async () => {
+    const actions = await createTelegramApprovalActions({
+      approvalId: "approval-forbidden",
+      goalId: "goal-1",
+      workspaceId: "workspace-shared-team",
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    });
+
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        getGoalBundleForUser: async () => ({
+          goal: {
+            id: "goal-1",
+            workflowId: "workflow-1",
+            userId: SYSTEM_USER_ID,
+            title: "Handle shared approval",
+            request: "Review shared team approval.",
+            status: "active",
+            workspaceId: "workspace-shared-team",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z"
+          },
+          workflow: {
+            id: "workflow-1",
+            userId: SYSTEM_USER_ID,
+            status: "running",
+            currentStep: "approval",
+            checkpoint: "approval-safe",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z"
+          },
+          tasks: [
+            {
+              id: "task-1",
+              goalId: "goal-1",
+              title: "Send reply",
+              description: "Send the drafted reply.",
+              state: "pending",
+              riskClass: "R3",
+              needsApproval: true,
+              requiresApproval: true,
+              toolCapabilities: ["send"],
+              dependsOn: [],
+              artifactIds: [],
+              createdAt: "2024-01-01T00:00:00.000Z",
+              updatedAt: "2024-01-01T00:00:00.000Z"
+            }
+          ],
+          approvals: [
+            {
+              id: "approval-forbidden",
+              goalId: "goal-1",
+              taskId: "task-1",
+              title: "Send reply",
+              rationale: "External email send.",
+              riskClass: "R3",
+              decision: "pending",
+              requestedAction: "Send the drafted reply",
+              preview: {},
+              decisionScope: null,
+              decisionRationale: null,
+              history: [],
+              createdAt: "2024-01-01T00:00:00.000Z",
+              expiryAt: "2099-01-01T00:00:00.000Z",
+              respondedAt: null
+            }
+          ],
+          artifacts: [],
+          memories: [],
+          watchers: [],
+          actionLogs: []
+        }),
+        respondToApproval: async () => {
+          throw new ApprovalMutationError("forbidden", "Only the workspace owner can respond to shared approvals.");
+        }
+      })
+    );
+
+    const response = await telegramWebhookRoute(buildTelegramRequest(actions.approveActionId));
+    const payload = (await response.json()) as { ok?: boolean; skipped?: boolean; reason?: string };
+    const repository = Reflect.get(globalThis, "__agenticRepository") as AgenticRepository;
+
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({
+      ok: true,
+      skipped: true,
+      reason: "forbidden"
+    });
+    await expect(repository.listJobs({ userId: "user-telegram" })).resolves.toEqual([]);
+    expect(answerTelegramCallbackQueryMock).toHaveBeenCalledWith({
+      callbackQueryId: "callback-1",
+      text: "Only the workspace owner can respond to shared approvals.",
+      showAlert: true
     });
   });
 });

@@ -9,6 +9,7 @@ import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { verifyGoalShareToken } from "../apps/web/lib/share";
+import { GOAL_SHARE_MUTATION_DENIED_REASON } from "../apps/web/lib/workspace-role-permissions";
 import { DELETE as revokeGoalShareRoute, POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/route";
 import { expectNoStoreHeaders } from "./route-test-helpers";
 
@@ -191,6 +192,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
           visibilityLabel: "Full queue, approval, and governance visibility",
           queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
           ownershipAssignments: [],
+          queues: [],
+          controls: [],
           auditCoverage: {
             required: false,
             status: "healthy",
@@ -307,17 +310,69 @@ describe("goal share route", () => {
   async function createGoalForUser(
     repository: ReturnType<typeof createRepository>,
     userId: string,
-    request: string
+    request: string,
+    workspaceId?: string | null
   ) {
     const bundle = await processUserRequest({
       userId,
       request,
+      workspaceId,
       memories: await repository.listMemory(userId),
       integrations: await repository.listIntegrations(userId)
     });
 
     await repository.saveGoalBundle(bundle);
     return bundle;
+  }
+
+  async function createSharedWorkspace(
+    repository: ReturnType<typeof createRepository>,
+    ownerUserId: string,
+    memberUserId: string
+  ) {
+    const ownerActor = createSystemActorContext(ownerUserId);
+    const workspaceId = "workspace-shared-goal-share";
+
+    await repository.saveWorkspace(
+      {
+        id: workspaceId,
+        ownerUserId,
+        slug: "shared-goal-share",
+        name: "Shared Goal Share Workspace",
+        description: "Shared workspace for share-link permission tests.",
+        isPersonal: false,
+        createdAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z"
+      },
+      ownerActor
+    );
+    await repository.saveWorkspaceMember(
+      {
+        id: "workspace-member-shared-goal-share-owner",
+        workspaceId,
+        userId: ownerUserId,
+        role: "owner",
+        joinedAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z"
+      },
+      ownerActor
+    );
+
+    return {
+      workspaceId,
+      addMember: async (role: "editor" | "viewer") =>
+        repository.saveWorkspaceMember(
+          {
+            id: `workspace-member-shared-goal-share-${memberUserId}-${role}`,
+            workspaceId,
+            userId: memberUserId,
+            role,
+            joinedAt: "2026-04-22T00:00:00.000Z",
+            updatedAt: "2026-04-22T00:00:00.000Z"
+          },
+          ownerActor
+        )
+    };
   }
 
   beforeEach(async () => {
@@ -524,6 +579,117 @@ describe("goal share route", () => {
     expectNoStoreHeaders(response);
   });
 
+  it("allows editors in a shared workspace to create goal share links", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const ownerUserId = "workspace-owner";
+    const editorUserId = "workspace-editor";
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: editorUserId,
+      sessionId: "session-workspace-editor",
+      expiresAt: null
+    });
+
+    try {
+      await repository.seedDefaults(ownerUserId);
+      await repository.seedDefaults(editorUserId);
+      const workspace = await createSharedWorkspace(repository, ownerUserId, editorUserId);
+
+      await workspace.addMember("editor");
+      await repository.saveWorkspaceSelection({
+        userId: editorUserId,
+        workspaceId: workspace.workspaceId,
+        selectedAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z"
+      });
+
+      const bundle = await createGoalForUser(
+        repository,
+        ownerUserId,
+        "Share shared workspace planning with an execution reviewer.",
+        workspace.workspaceId
+      );
+
+      Reflect.set(globalThis, "__agenticRepository", undefined);
+
+      const response = await goalShareRoute(
+        new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+          method: "POST"
+        }),
+        {
+          params: Promise.resolve({ id: bundle.goal.id })
+        }
+      );
+      const payload = (await response.json()) as { shareUrl?: string; error?: string };
+
+      expect(response.status).toBe(200);
+      expect(payload.shareUrl).toContain("/share/");
+      expectNoStoreHeaders(response);
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+  });
+
+  it("returns 403 when a viewer tries to create a shared goal share link", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const ownerUserId = "workspace-owner";
+    const viewerUserId = "workspace-viewer";
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: viewerUserId,
+      sessionId: "session-workspace-viewer",
+      expiresAt: null
+    });
+
+    try {
+      await repository.seedDefaults(ownerUserId);
+      await repository.seedDefaults(viewerUserId);
+      const workspace = await createSharedWorkspace(repository, ownerUserId, viewerUserId);
+
+      await workspace.addMember("viewer");
+      await repository.saveWorkspaceSelection({
+        userId: viewerUserId,
+        workspaceId: workspace.workspaceId,
+        selectedAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z"
+      });
+
+      const bundle = await createGoalForUser(
+        repository,
+        ownerUserId,
+        "Keep the queue visible without granting share-link mutation authority.",
+        workspace.workspaceId
+      );
+
+      Reflect.set(globalThis, "__agenticRepository", undefined);
+
+      const response = await goalShareRoute(
+        new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+          method: "POST"
+        }),
+        {
+          params: Promise.resolve({ id: bundle.goal.id })
+        }
+      );
+      const payload = (await response.json()) as { error?: string };
+      const shares = await repository.listGoalShares({
+        goalId: bundle.goal.id,
+        userId: ownerUserId
+      });
+
+      expect(response.status).toBe(403);
+      expect(payload.error).toBe(GOAL_SHARE_MUTATION_DENIED_REASON);
+      expect(shares).toHaveLength(0);
+      expectNoStoreHeaders(response);
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+  });
+
   it("revokes an existing public share link and records a revoke log", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
@@ -571,5 +737,69 @@ describe("goal share route", () => {
     expect(revokedShare?.revokedAt).not.toBeNull();
     expect(revokedLog?.details.shareId).toBe(sharePayload.shareId);
     expectNoStoreHeaders(revokeResponse);
+  });
+
+  it("returns 403 when a viewer tries to revoke a shared goal share link", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const ownerUserId = SYSTEM_USER_ID;
+    const viewerUserId = "workspace-viewer";
+
+    await repository.seedDefaults(ownerUserId);
+    await repository.seedDefaults(viewerUserId);
+    const workspace = await createSharedWorkspace(repository, ownerUserId, viewerUserId);
+
+    await workspace.addMember("viewer");
+    const bundle = await createGoalForUser(
+      repository,
+      ownerUserId,
+      "Share the execution context, then verify viewers cannot revoke it.",
+      workspace.workspaceId
+    );
+    const shareResponse = await goalShareRoute(
+      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const sharePayload = (await shareResponse.json()) as { shareId: string };
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: viewerUserId,
+      sessionId: "session-workspace-viewer",
+      expiresAt: null
+    });
+
+    try {
+      const revokeResponse = await revokeGoalShareRoute(
+        new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            shareId: sharePayload.shareId
+          })
+        }),
+        {
+          params: Promise.resolve({ id: bundle.goal.id })
+        }
+      );
+      const payload = (await revokeResponse.json()) as { error?: string };
+      const share = await repository.getGoalShare(sharePayload.shareId, ownerUserId);
+
+      expect(revokeResponse.status).toBe(403);
+      expect(payload.error).toBe(GOAL_SHARE_MUTATION_DENIED_REASON);
+      expect(share?.status).toBe("active");
+      expectNoStoreHeaders(revokeResponse);
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
   });
 });

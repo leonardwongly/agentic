@@ -47,6 +47,59 @@ describe("DashboardOperatingSectionsCard", () => {
                 summary: "Recovery stays with the editor until retrying jobs are stale and need operator recovery before new queue work can be trusted."
               }
             ],
+            queues: [
+              {
+                key: "mine",
+                label: "Mine",
+                ownerRole: "editor",
+                status: "critical",
+                count: 2,
+                summary: "1 urgent queue item and one execution recovery issue are in the editor lane.",
+                oldestAgeLabel: "7h old",
+                targetSection: "commitments",
+                targetItemId: "commitment-1",
+                targetFilter: "urgent"
+              },
+              {
+                key: "delegated",
+                label: "Delegated",
+                ownerRole: "owner",
+                status: "critical",
+                count: 1,
+                summary: "1 approval is delegated back to the owner boundary for policy decisions.",
+                oldestAgeLabel: "7h old",
+                targetSection: "approvals",
+                targetItemId: "approval-1",
+                targetFilter: null
+              }
+            ],
+            controls: [
+              {
+                key: "open_mine",
+                label: "Open editor lane",
+                summary: "Work the execution lane in queue order before widening the surface.",
+                status: "critical",
+                targetSection: "commitments",
+                targetItemId: "commitment-1",
+                targetFilter: "urgent",
+                permission: {
+                  allowed: true,
+                  reason: "Workspace members can inspect the active queue lane."
+                }
+              },
+              {
+                key: "rebalance_queue",
+                label: "Review ownership boundaries",
+                summary: "Only owners can reassign queue ownership; use this surface to confirm who should hold the lane.",
+                status: "attention",
+                targetSection: "workspaces",
+                targetFilter: null,
+                permission: {
+                  allowed: false,
+                  reason: "Only the workspace owner can change membership, governance posture, or privacy lifecycle state."
+                }
+              }
+            ],
             auditCoverage: {
               required: true,
               status: "attention",
@@ -103,7 +156,7 @@ describe("DashboardOperatingSectionsCard", () => {
             }
           ]
         }}
-        openTarget={() => {}}
+        openView={() => {}}
       />
     );
 
@@ -118,6 +171,13 @@ describe("DashboardOperatingSectionsCard", () => {
     expect(markup).toContain("Audit exports are required for this workspace, but no completed export is recorded yet.");
     expect(markup).toContain("Shared queue: editor");
     expect(markup).toContain("Approval boundary: owner");
+    expect(markup).toContain("Mine");
+    expect(markup).toContain("2 items");
+    expect(markup).toContain("7h old");
+    expect(markup).toContain("Open editor lane");
+    expect(markup).toContain("Action available");
+    expect(markup).toContain("Review ownership boundaries");
+    expect(markup).toContain("Restricted");
     expect(markup).toContain("Shared queue: 1 urgent queue item should be worked in queue order by the editor.");
     expect(markup).toContain("1 approval needs owner response before shared execution can widen safely.");
     expect(markup).toContain("Next best action: Recover async execution");
@@ -149,6 +209,8 @@ describe("DashboardOperatingSectionsCard", () => {
             visibilityLabel: "Setup-only visibility",
             queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
             ownershipAssignments: [],
+            queues: [],
+            controls: [],
             auditCoverage: {
               required: false,
               status: "attention",
@@ -195,7 +257,7 @@ describe("DashboardOperatingSectionsCard", () => {
           },
           sections: []
         }}
-        openTarget={() => {}}
+        openView={() => {}}
       />
     );
 

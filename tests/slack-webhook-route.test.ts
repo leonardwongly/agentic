@@ -442,6 +442,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
           visibilityLabel: "Full queue, approval, and governance visibility",
           queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
           ownershipAssignments: [],
+          queues: [],
+          controls: [],
           auditCoverage: {
             required: false,
             status: "healthy",
@@ -1181,6 +1183,109 @@ describe("slack webhook route", () => {
       skipped: true,
       reason: "already_handled"
     });
+    expect(updateMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges forbidden shared approval actions without triggering Slack retries", async () => {
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        getGoalBundleForUser: async () => ({
+          goal: {
+            id: "goal-1",
+            workflowId: "workflow-1",
+            userId: SYSTEM_USER_ID,
+            title: "Handle shared approval",
+            request: "Review shared team approval.",
+            status: "active",
+            workspaceId: "workspace-shared-team",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z"
+          },
+          workflow: {
+            id: "workflow-1",
+            userId: SYSTEM_USER_ID,
+            status: "running",
+            currentStep: "approval",
+            checkpoint: "approval-safe",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z"
+          },
+          tasks: [
+            {
+              id: "task-1",
+              goalId: "goal-1",
+              title: "Send reply",
+              description: "Send the drafted reply.",
+              state: "pending",
+              requiresApproval: true,
+              createdAt: "2024-01-01T00:00:00.000Z",
+              updatedAt: "2024-01-01T00:00:00.000Z"
+            }
+          ],
+          approvals: [
+            {
+              id: "approval-forbidden",
+              goalId: "goal-1",
+              taskId: "task-1",
+              title: "Send reply",
+              rationale: "External email send.",
+              riskClass: "R3",
+              decision: "pending",
+              requestedAction: "Send the drafted reply",
+              preview: {
+                actionType: "send",
+                target: "customer@example.com",
+                summary: "Send the drafted reply to the customer.",
+                changes: [],
+                impact: {
+                  affectedPeople: ["customer@example.com"],
+                  affectedSystems: ["email"],
+                  permissions: ["send"],
+                  rollback: "manual"
+                }
+              },
+              decisionScope: null,
+              decisionRationale: null,
+              history: [],
+              createdAt: "2024-01-01T00:00:00.000Z",
+              expiryAt: "2099-01-01T00:00:00.000Z",
+              respondedAt: null
+            }
+          ],
+          artifacts: [],
+          memories: [],
+          watchers: [],
+          actionLogs: []
+        }),
+        respondToApproval: async () => {
+          throw new ApprovalMutationError("forbidden", "Only the workspace owner can respond to shared approvals.");
+        }
+      })
+    );
+
+    const response = await slackWebhookRoute(
+      buildSlackRequest(
+        "approval_approve",
+        buildSlackApprovalToken({
+          approvalId: "approval-forbidden",
+          goalId: "goal-1",
+          workspaceId: "workspace-shared-team",
+          expiresAt: "2099-01-01T00:00:00.000Z"
+        })
+      )
+    );
+    const payload = (await response.json()) as { ok?: boolean; skipped?: boolean; reason?: string };
+    const repository = Reflect.get(globalThis, "__agenticRepository") as AgenticRepository;
+
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({
+      ok: true,
+      skipped: true,
+      reason: "forbidden"
+    });
+    await expect(repository.listJobs({ userId: "user-slack" })).resolves.toEqual([]);
     expect(updateMessageMock).not.toHaveBeenCalled();
   });
 });

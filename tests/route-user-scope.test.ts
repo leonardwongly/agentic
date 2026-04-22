@@ -166,6 +166,8 @@ function buildDashboardData(): DashboardData {
         visibilityLabel: "Full queue, approval, and governance visibility",
         queueMetrics: ["0 collaborators", "0 pending approvals", "0 urgent queue items"],
         ownershipAssignments: [],
+        queues: [],
+        controls: [],
         auditCoverage: {
           required: false,
           status: "healthy",
@@ -916,6 +918,36 @@ describe("route user scoping", () => {
 
     expect(response.status).toBe(404);
     expect(payload.error).toContain("was not found");
+    expect(queuedJobs).toEqual([]);
+  });
+
+  it("returns 403 and does not enqueue work when a non-owner responds to a shared approval", async () => {
+    Reflect.set(
+      globalThis,
+      "__agenticRepository",
+      createFakeRepository({
+        respondToApproval: async () => {
+          throw new ApprovalMutationError("forbidden", "Only the workspace owner can respond to shared approvals.");
+        }
+      })
+    );
+
+    const response = await approvalResponseRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/approvals/approval-shared/respond", {
+        decision: "approved",
+        scope: "once",
+        rationale: "Editors should not be allowed to clear shared-team approvals."
+      }),
+      {
+        params: Promise.resolve({ id: "approval-shared" })
+      }
+    );
+    const payload = (await response.json()) as { error?: string };
+    const repository = Reflect.get(globalThis, "__agenticRepository") as AgenticRepository;
+    const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+
+    expect(response.status).toBe(403);
+    expect(payload.error).toBe("Only the workspace owner can respond to shared approvals.");
     expect(queuedJobs).toEqual([]);
   });
 

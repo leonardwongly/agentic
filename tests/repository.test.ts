@@ -15,6 +15,7 @@ import {
   WorkspaceSchema,
   WorkspaceSelectionSchema,
   briefingTypeValues,
+  createHumanActorContext,
   createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
@@ -287,6 +288,16 @@ describe("repository", () => {
         id: "scheduling-execution-v1"
       }
     });
+    expect(reloaded?.goal.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(reloaded?.goal.responsibility.reviewer?.label).toBe("Goal reviewer");
+    expect(reloaded?.tasks[0]?.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(reloaded?.tasks[0]?.responsibility.delegate?.kind).toBe("system_actor");
+    expect(reloaded?.tasks[0]?.responsibility.delegate?.label).toContain("execution lane");
+
+    if (reloaded?.approvals.length) {
+      expect(reloaded.approvals[0].responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+      expect(reloaded.approvals[0].responsibility.reviewer?.label).toBe("Approval reviewer");
+    }
   }, 15_000);
 
   it("rejects duplicate approval responses once the first decision is committed", async () => {
@@ -373,6 +384,139 @@ describe("repository", () => {
       respondedAt: null
     });
     expect(visibleApproval?.history).toEqual([]);
+  });
+
+  it("requires the workspace owner to respond to shared approvals and preserves audit evidence", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const editorUserId = "user-editor";
+    const viewerUserId = "user-viewer";
+    const timestamp = nowIso();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(editorUserId);
+    await repository.seedDefaults(viewerUserId);
+
+    const sharedWorkspace = WorkspaceSchema.parse({
+      id: "workspace-owner-boundary",
+      ownerUserId: SYSTEM_USER_ID,
+      slug: "owner-boundary",
+      name: "Owner Boundary",
+      description: "Shared approvals stay with the workspace owner.",
+      isPersonal: false,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+
+    await repository.saveWorkspace(sharedWorkspace, systemActor);
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-owner-boundary-owner",
+        workspaceId: sharedWorkspace.id,
+        userId: SYSTEM_USER_ID,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-owner-boundary-editor",
+        workspaceId: sharedWorkspace.id,
+        userId: editorUserId,
+        role: "editor",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-owner-boundary-viewer",
+        workspaceId: sharedWorkspace.id,
+        userId: viewerUserId,
+        role: "viewer",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Review my inbox and send one external reply.",
+      sharedWorkspace.id
+    );
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+    await expect(repository.getGoalBundleForUser(bundle.goal.id, editorUserId)).resolves.not.toBeNull();
+    await expect(repository.getGoalBundleForUser(bundle.goal.id, viewerUserId)).resolves.not.toBeNull();
+
+    await expect(
+      repository.respondToApproval({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: createHumanActorContext(editorUserId),
+        scope: "once",
+        rationale: "Editors should not be able to clear shared-team approvals."
+      })
+    ).rejects.toThrow("Only the workspace owner can respond to shared approvals.");
+    await expect(
+      repository.respondToApproval({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: createHumanActorContext(viewerUserId),
+        scope: "once",
+        rationale: "Viewers should remain read-only on shared-team approvals."
+      })
+    ).rejects.toThrow("Only the workspace owner can respond to shared approvals.");
+
+    const pendingBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const pendingApproval = pendingBundle?.approvals.find((candidate) => candidate.id === approval!.id);
+
+    expect(pendingApproval).toMatchObject({
+      id: approval!.id,
+      decision: "pending",
+      respondedAt: null
+    });
+    expect(pendingApproval?.history).toEqual([]);
+    await expect(
+      repository.listEvidenceRecords({
+        userId: SYSTEM_USER_ID,
+        approvalId: approval!.id
+      })
+    ).resolves.toEqual([]);
+
+    const approvedBundle = await repository.respondToApproval({
+      approvalId: approval!.id,
+      decision: "approved",
+      actor: systemActor,
+      scope: "similar_24h",
+      rationale: "Owner approved the shared-team send after reviewing the delegated draft."
+    });
+    const approvedApproval = approvedBundle.approvals.find((candidate) => candidate.id === approval!.id);
+    const ownerEvidence = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+
+    expect(approvedApproval).toMatchObject({
+      decision: "approved",
+      decisionScope: "similar_24h",
+      decisionRationale: "Owner approved the shared-team send after reviewing the delegated draft."
+    });
+    expect(ownerEvidence).toHaveLength(1);
+    expect(ownerEvidence[0]).toMatchObject({
+      approvalId: approval!.id,
+      decision: "approved",
+      actorContext: systemActor
+    });
   });
 
   it("surfaces dead-lettered approval follow-up jobs as replayable async execution issues", async () => {
@@ -3011,6 +3155,77 @@ describe("repository", () => {
           key: "execution_recovery",
           ownerRole: "owner",
           status: "critical"
+        })
+      ])
+    );
+    expect(dashboard.operatingSections.teamWorkflow.queues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "mine",
+          label: "Mine",
+          ownerRole: "owner",
+          status: "critical",
+          count: 3,
+          targetSection: "approvals",
+          targetItemId: "approval-expired"
+        }),
+        expect.objectContaining({
+          key: "delegated",
+          label: "Delegated",
+          ownerRole: "owner",
+          status: "critical",
+          count: 0
+        }),
+        expect.objectContaining({
+          key: "escalated",
+          label: "Escalated",
+          ownerRole: "owner",
+          status: "critical",
+          count: 2
+        }),
+        expect.objectContaining({
+          key: "blocked",
+          label: "Blocked",
+          ownerRole: "owner",
+          status: "critical",
+          count: 1,
+          targetSection: "operations"
+        }),
+        expect.objectContaining({
+          key: "waiting",
+          label: "Waiting",
+          ownerRole: "owner",
+          status: "healthy",
+          count: 0
+        })
+      ])
+    );
+    expect(dashboard.operatingSections.teamWorkflow.controls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "open_mine",
+          label: "Open owner lane",
+          status: "critical",
+          targetSection: "approvals",
+          permission: expect.objectContaining({
+            allowed: true
+          })
+        }),
+        expect.objectContaining({
+          key: "rebalance_queue",
+          label: "Rebalance queue ownership",
+          status: "attention",
+          targetSection: "workspaces",
+          permission: expect.objectContaining({
+            allowed: true
+          })
+        }),
+        expect.objectContaining({
+          key: "escalate_overdue",
+          label: "Escalate overdue approvals",
+          status: "critical",
+          targetSection: "approvals",
+          targetItemId: "approval-expired"
         })
       ])
     );

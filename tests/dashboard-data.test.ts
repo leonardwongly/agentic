@@ -80,6 +80,8 @@ describe("assembleDashboardData instrumentation", () => {
           visibilityLabel: "Setup-only visibility",
           queueMetrics: [],
           ownershipAssignments: [],
+          queues: [],
+          controls: [],
           auditCoverage: {
             required: false,
             status: "attention",
@@ -204,6 +206,8 @@ describe("assembleDashboardData instrumentation", () => {
           visibilityLabel: "Setup-only visibility",
           queueMetrics: [],
           ownershipAssignments: [],
+          queues: [],
+          controls: [],
           auditCoverage: {
             required: false,
             status: "attention",

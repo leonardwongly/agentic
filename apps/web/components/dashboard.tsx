@@ -2,6 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  commitmentInboxBucketValues,
   privacyOperationKindValues,
   workspaceRoleValues,
   DEFAULT_COMMITMENT_INBOX_LIMIT,
@@ -35,6 +36,7 @@ import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-
 import { resolveFeatureCapabilities, summarizeFeatureCapabilities } from "../lib/feature-capabilities";
 import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
 import { getGoalShareSuccessMessage } from "../lib/share-client";
+import { GOAL_SHARE_MUTATION_DENIED_REASON, canManageGoalSharesForRole } from "../lib/workspace-role-permissions";
 import {
   buildGoalRecommendationQuery,
   buildRecommendationFeedbackPayload,
@@ -447,6 +449,10 @@ function buildClientIdempotencyKey(): string {
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function isCommitmentInboxBucket(value: string | undefined): value is CommitmentInboxBucket {
+  return value !== undefined && commitmentInboxBucketValues.includes(value as CommitmentInboxBucket);
+}
+
 const commitmentInboxSections: Array<{
   bucket: CommitmentInboxBucket;
   label: string;
@@ -763,6 +769,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       ),
     [data.goalShares, data.goals]
   );
+  const canManageGoalShares = Boolean(data.activeWorkspace) && canManageGoalSharesForRole(data.operatingSections.roleView.role);
+  const goalSharePermissionReason = data.activeWorkspace
+    ? GOAL_SHARE_MUTATION_DENIED_REASON
+    : "Select a workspace before managing public goal share links.";
 
   const reliabilityHealth = useMemo(() => {
     const status: "healthy" | "degraded" | "failing" =
@@ -822,6 +832,15 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     scrollToSectionTarget(section, itemId);
   }, [deepLink, scrollToSectionTarget, showAdvancedOperations]);
 
+  const openView = useCallback((section: string, itemId?: string, filter?: CommitmentInboxBucket | null) => {
+    if (section === "commitments" && filter) {
+      setCommitmentBucket(filter);
+      deepLink.setFilter(filter);
+    }
+
+    navigateToSection(section, itemId);
+  }, [deepLink, navigateToSection]);
+
   const openDiagnosticTarget = useCallback((target: DashboardDiagnosticTarget) => {
     navigateToSection(target.section, target.itemId);
   }, [navigateToSection]);
@@ -859,6 +878,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
     return () => window.clearTimeout(timer);
   }, [data, deepLink.state.item, deepLink.state.section, scrollToSectionTarget, showAdvancedOperations]);
+
+  useEffect(() => {
+    if (!isCommitmentInboxBucket(deepLink.state.filter) || deepLink.state.filter === commitmentBucket) {
+      return;
+    }
+
+    setCommitmentBucket(deepLink.state.filter);
+  }, [commitmentBucket, deepLink.state.filter]);
 
   useEffect(() => {
     setBriefingPreferencesDraft(data.briefingPreferences);
@@ -2448,7 +2475,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           <ThemeToggle />
         </div>
 
-        <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openTarget={deepLink.openTarget} />
+        <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openView={openView} />
 
         {/* Recent Actions */}
         {recentActions.recentActions.length > 0 && (
@@ -2924,7 +2951,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                   key={section.bucket}
                   type="button"
                   className={`filter-chip ${commitmentBucket === section.bucket ? "active" : ""}`}
-                  onClick={() => setCommitmentBucket(section.bucket)}
+                  onClick={() => {
+                    setCommitmentBucket(section.bucket);
+                    deepLink.setFilter(section.bucket);
+                  }}
                 >
                   {section.label} ({commitmentInbox.counts[section.bucket]})
                 </button>
@@ -3252,7 +3282,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                   <div className="goal-item-actions">
                     <StatusBadge status={bundle.goal.status} />
                     <CopyableText value={bundle.goal.id} />
-                    <button type="button" className="secondary-button" onClick={() => shareGoal(bundle.goal.id, bundle.goal.title)} disabled={isPending}>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => shareGoal(bundle.goal.id, bundle.goal.title)}
+                      disabled={isPending || !canManageGoalShares}
+                      title={!canManageGoalShares ? goalSharePermissionReason : undefined}
+                    >
                       Copy share link
                     </button>
                     {bundle.goal.status === "completed" ? (

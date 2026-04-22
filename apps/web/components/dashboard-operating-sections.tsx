@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  CommitmentInboxBucket,
   DashboardOperatingSection,
   DashboardOperatingSectionKey,
   DashboardOperatingSections
@@ -9,7 +10,7 @@ import { StatusBadge } from "./ui";
 
 type DashboardOperatingSectionsCardProps = {
   operatingSections: DashboardOperatingSections;
-  openTarget: (section: string, itemId?: string) => void;
+  openView: (section: string, itemId?: string, filter?: CommitmentInboxBucket | null) => void;
 };
 
 function sectionBadgeStatus(status: DashboardOperatingSection["status"]): string {
@@ -53,7 +54,7 @@ function humanizeSectionKey(key: DashboardOperatingSectionKey): string {
   }
 }
 
-export function DashboardOperatingSectionsCard({ operatingSections, openTarget }: DashboardOperatingSectionsCardProps) {
+export function DashboardOperatingSectionsCard({ operatingSections, openView }: DashboardOperatingSectionsCardProps) {
   return (
     <article className="card control-plane-card">
       <div className="card-header">
@@ -125,6 +126,59 @@ export function DashboardOperatingSectionsCard({ operatingSections, openTarget }
             ))}
           </div>
         ) : null}
+        {operatingSections.teamWorkflow.queues.length > 0 ? (
+          <div className="control-plane-detail-grid">
+            {operatingSections.teamWorkflow.queues.map((queue) => (
+              <button
+                key={queue.key}
+                type="button"
+                className="control-plane-detail-card"
+                onClick={() => openView(queue.targetSection, queue.targetItemId, queue.targetFilter)}
+              >
+                <div className="control-plane-section-header">
+                  <div>
+                    <strong>{queue.label}</strong>
+                    <p>{queue.summary}</p>
+                  </div>
+                  <StatusBadge status={sectionBadgeStatus(queue.status)}>{sectionStatusLabel(queue.status)}</StatusBadge>
+                </div>
+                <div className="control-plane-stats">
+                  <span className="control-plane-stat">{pluralizeQueueItem(queue.count)}</span>
+                  {queue.ownerRole ? <span className="control-plane-stat">{queue.ownerRole} lane</span> : null}
+                  {queue.oldestAgeLabel ? <span className="control-plane-stat">{queue.oldestAgeLabel}</span> : null}
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {operatingSections.teamWorkflow.controls.length > 0 ? (
+          <div className="control-plane-detail-grid">
+            {operatingSections.teamWorkflow.controls.map((control) => (
+              <button
+                key={control.key}
+                type="button"
+                className="control-plane-detail-card"
+                onClick={() => openView(control.targetSection, control.targetItemId, control.targetFilter)}
+                disabled={!control.permission.allowed}
+              >
+                <div className="control-plane-section-header">
+                  <div>
+                    <strong>{control.label}</strong>
+                    <p>{control.summary}</p>
+                  </div>
+                  <StatusBadge status={sectionBadgeStatus(control.status)}>
+                    {control.permission.allowed ? sectionStatusLabel(control.status) : "Restricted"}
+                  </StatusBadge>
+                </div>
+                <div className="control-plane-stats">
+                  <span className="control-plane-stat">
+                    {control.permission.allowed ? "Action available" : control.permission.reason}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : null}
         <ul className="control-plane-highlights">
           <li>{operatingSections.teamWorkflow.slaSummary}</li>
           <li>{operatingSections.teamWorkflow.auditCoverage.summary}</li>
@@ -144,9 +198,7 @@ export function DashboardOperatingSectionsCard({ operatingSections, openTarget }
       <button
         type="button"
         className="control-plane-section"
-        onClick={() =>
-          openTarget(operatingSections.nextBestAction.targetSection, operatingSections.nextBestAction.targetItemId)
-        }
+        onClick={() => openView(operatingSections.nextBestAction.targetSection, operatingSections.nextBestAction.targetItemId)}
       >
         <div className="control-plane-section-header">
           <div>
@@ -175,7 +227,7 @@ export function DashboardOperatingSectionsCard({ operatingSections, openTarget }
             key={section.key}
             type="button"
             className="control-plane-section"
-            onClick={() => openTarget(section.targetSection, section.targetItemId)}
+            onClick={() => openView(section.targetSection, section.targetItemId)}
           >
             <div className="control-plane-section-header">
               <div>
@@ -203,4 +255,8 @@ export function DashboardOperatingSectionsCard({ operatingSections, openTarget }
       </div>
     </article>
   );
+}
+
+function pluralizeQueueItem(count: number): string {
+  return `${count} item${count === 1 ? "" : "s"}`;
 }

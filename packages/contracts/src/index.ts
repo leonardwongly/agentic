@@ -64,9 +64,28 @@ export const commitmentSuggestedActionKindValues = [
 export const briefingTypeValues = ["startup", "midday", "pre_meeting", "end_of_day", "next_day"] as const;
 export const briefingFocusValues = ["balanced", "urgent", "deep"] as const;
 export const autopilotModeValues = ["notify_only", "draft_goal", "auto_run"] as const;
-export const autopilotEventKindValues = ["watcher_triggered", "template_due", "briefing_due"] as const;
+export const autopilotEventKindValues = [
+  "watcher_triggered",
+  "template_due",
+  "briefing_due",
+  "communication_received",
+  "deadline_drift_detected",
+  "workflow_stalled",
+  "approval_sla_breached",
+  "connector_failed",
+  "dormant_workflow_review_due"
+] as const;
 export const autopilotEventStatusValues = ["pending", "simulated", "notified", "executed", "debounced", "ignored", "failed"] as const;
-export const autopilotEventFamilyValues = ["watcher", "template", "briefing"] as const;
+export const autopilotEventFamilyValues = [
+  "watcher",
+  "template",
+  "briefing",
+  "communication",
+  "deadline",
+  "approval",
+  "connector",
+  "workflow"
+] as const;
 export const autopilotEventPriorityValues = ["low", "medium", "high", "critical"] as const;
 export const autopilotEventBudgetScopeValues = ["user", "source"] as const;
 export const autopilotEventSuppressionOutcomeValues = ["allowed", "duplicate", "debounced", "budget_exhausted"] as const;
@@ -90,6 +109,20 @@ export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
 export const workspaceApprovalModeValues = ["always_review", "risk_based"] as const;
 export const actorKindValues = ["human", "system"] as const;
+export const workflowResponsibilityAssigneeKindValues = ["user", "workspace_role", "system_actor"] as const;
+export const workflowResponsibilityStatusValues = [
+  "owner_control",
+  "delegated",
+  "review_pending",
+  "escalated",
+  "returned_to_owner"
+] as const;
+export const workflowResponsibilityAuditEventValues = [
+  "delegation_change",
+  "handoff_acceptance",
+  "review_assignment",
+  "escalation_trigger"
+] as const;
 export const providerValues = ["google"] as const;
 export const providerCredentialStatusValues = [
   "connected",
@@ -149,6 +182,9 @@ export const EvidenceRecordSourceKindSchema = z.enum(evidenceRecordSourceKindVal
 export const WorkspaceRoleSchema = z.enum(workspaceRoleValues);
 export const WorkspaceApprovalModeSchema = z.enum(workspaceApprovalModeValues);
 export const ActorKindSchema = z.enum(actorKindValues);
+export const WorkflowResponsibilityAssigneeKindSchema = z.enum(workflowResponsibilityAssigneeKindValues);
+export const WorkflowResponsibilityStatusSchema = z.enum(workflowResponsibilityStatusValues);
+export const WorkflowResponsibilityAuditEventSchema = z.enum(workflowResponsibilityAuditEventValues);
 export const ProviderSchema = z.enum(providerValues);
 export const ProviderCredentialStatusSchema = z.enum(providerCredentialStatusValues);
 export const ProviderCredentialSecretKindSchema = z.enum(providerCredentialSecretKindValues);
@@ -392,6 +428,281 @@ export function deriveGoalContract(intent: string) {
   };
 }
 
+const defaultWorkflowResponsibilityAudit: {
+  requiredEvents: Array<(typeof workflowResponsibilityAuditEventValues)[number]>;
+  requireActorContext: boolean;
+  requireReasonForDelegation: boolean;
+  requireReasonForEscalation: boolean;
+  requireReviewerIdentity: boolean;
+} = {
+  requiredEvents: ["delegation_change", "handoff_acceptance", "review_assignment", "escalation_trigger"],
+  requireActorContext: true,
+  requireReasonForDelegation: true,
+  requireReasonForEscalation: true,
+  requireReviewerIdentity: true
+};
+
+export const WorkflowResponsibilityAssigneeSchema = z
+  .object({
+    kind: WorkflowResponsibilityAssigneeKindSchema,
+    userId: z.string().min(1).nullable().default(null),
+    workspaceRole: WorkspaceRoleSchema.nullable().default(null),
+    systemActor: z.string().min(1).max(100).nullable().default(null),
+    label: z.string().min(1).max(120)
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.kind === "user" && !value.userId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "User responsibility assignments require a userId.",
+        path: ["userId"]
+      });
+    }
+
+    if (value.kind === "workspace_role" && !value.workspaceRole) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Workspace-role responsibility assignments require a workspaceRole.",
+        path: ["workspaceRole"]
+      });
+    }
+
+    if (value.kind === "system_actor" && !value.systemActor) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "System responsibility assignments require a systemActor.",
+        path: ["systemActor"]
+      });
+    }
+  });
+
+export const WorkflowResponsibilityAuditSchema = z
+  .object({
+    requiredEvents: z.array(WorkflowResponsibilityAuditEventSchema).min(1).default(defaultWorkflowResponsibilityAudit.requiredEvents),
+    requireActorContext: z.boolean().default(defaultWorkflowResponsibilityAudit.requireActorContext),
+    requireReasonForDelegation: z.boolean().default(defaultWorkflowResponsibilityAudit.requireReasonForDelegation),
+    requireReasonForEscalation: z.boolean().default(defaultWorkflowResponsibilityAudit.requireReasonForEscalation),
+    requireReviewerIdentity: z.boolean().default(defaultWorkflowResponsibilityAudit.requireReviewerIdentity)
+  })
+  .strict();
+
+export const WorkflowResponsibilitySchema = z
+  .object({
+    owner: WorkflowResponsibilityAssigneeSchema,
+    delegate: WorkflowResponsibilityAssigneeSchema.nullable().default(null),
+    reviewer: WorkflowResponsibilityAssigneeSchema.nullable().default(null),
+    escalationOwner: WorkflowResponsibilityAssigneeSchema.nullable().default(null),
+    handoffStatus: WorkflowResponsibilityStatusSchema.default("owner_control"),
+    handoffSummary: z.string().min(1).max(500).nullable().default(null),
+    delegationReason: z.string().min(1).max(500).nullable().default(null),
+    escalationReason: z.string().min(1).max(500).nullable().default(null),
+    audit: WorkflowResponsibilityAuditSchema.default(defaultWorkflowResponsibilityAudit),
+    lastChangedAt: z.string().datetime().nullable().default(null),
+    lastChangedBy: WorkflowResponsibilityAssigneeSchema.nullable().default(null)
+  })
+  .strict();
+
+export function createUserResponsibilityAssignee(userId: string, label: string) {
+  return WorkflowResponsibilityAssigneeSchema.parse({
+    kind: "user",
+    userId,
+    workspaceRole: null,
+    systemActor: null,
+    label
+  });
+}
+
+export function createWorkspaceRoleResponsibilityAssignee(workspaceRole: WorkspaceRole, label: string) {
+  return WorkflowResponsibilityAssigneeSchema.parse({
+    kind: "workspace_role",
+    userId: null,
+    workspaceRole,
+    systemActor: null,
+    label
+  });
+}
+
+export function createSystemResponsibilityAssignee(systemActor: string, label: string) {
+  return WorkflowResponsibilityAssigneeSchema.parse({
+    kind: "system_actor",
+    userId: null,
+    workspaceRole: null,
+    systemActor,
+    label
+  });
+}
+
+function defaultEscalationOwner(params: { ownerUserId?: string | null; workspaceId?: string | null; label: string }) {
+  if (params.workspaceId) {
+    return createWorkspaceRoleResponsibilityAssignee("owner", params.label);
+  }
+
+  if (params.ownerUserId) {
+    return createUserResponsibilityAssignee(params.ownerUserId, params.label);
+  }
+
+  return createWorkspaceRoleResponsibilityAssignee("owner", params.label);
+}
+
+export function deriveGoalResponsibility(params: { userId: string; workspaceId?: string | null }) {
+  return WorkflowResponsibilitySchema.parse({
+    owner: createUserResponsibilityAssignee(params.userId, "Goal owner"),
+    delegate: null,
+    reviewer: defaultEscalationOwner({
+      ownerUserId: params.userId,
+      workspaceId: params.workspaceId ?? null,
+      label: "Goal reviewer"
+    }),
+    escalationOwner: defaultEscalationOwner({
+      ownerUserId: params.userId,
+      workspaceId: params.workspaceId ?? null,
+      label: "Escalation owner"
+    }),
+    handoffStatus: "owner_control",
+    handoffSummary:
+      params.workspaceId
+        ? "The workspace owner retains goal accountability. Task-level execution and approval objects carry the active handoffs."
+        : "The requesting user retains direct control until a task, approval, or escalation changes hands.",
+    delegationReason: null,
+    escalationReason: null,
+    audit: defaultWorkflowResponsibilityAudit,
+    lastChangedAt: null,
+    lastChangedBy: createUserResponsibilityAssignee(params.userId, "Goal owner")
+  });
+}
+
+export function deriveTaskResponsibility(params: {
+  assignedAgent: AgentName;
+  requiresApproval: boolean;
+  ownerUserId?: string | null;
+  workspaceId?: string | null;
+}) {
+  const owner = params.ownerUserId
+    ? createUserResponsibilityAssignee(params.ownerUserId, "Goal owner")
+    : createWorkspaceRoleResponsibilityAssignee("owner", "Goal owner");
+
+  const reviewer = params.requiresApproval
+    ? defaultEscalationOwner({
+        ownerUserId: params.ownerUserId ?? null,
+        workspaceId: params.workspaceId ?? null,
+        label: "Human reviewer"
+      })
+    : null;
+
+  return WorkflowResponsibilitySchema.parse({
+    owner,
+    delegate: createSystemResponsibilityAssignee(params.assignedAgent, `${params.assignedAgent} execution lane`),
+    reviewer,
+    escalationOwner: defaultEscalationOwner({
+      ownerUserId: params.ownerUserId ?? null,
+      workspaceId: params.workspaceId ?? null,
+      label: "Escalation owner"
+    }),
+    handoffStatus: params.requiresApproval ? "review_pending" : "delegated",
+    handoffSummary: params.requiresApproval
+      ? `Execution is staged behind reviewer approval before the ${params.assignedAgent} lane can proceed.`
+      : `The ${params.assignedAgent} lane is the active execution delegate for this task.`,
+    delegationReason: `Assigned to the ${params.assignedAgent} execution lane.`,
+    escalationReason: null,
+    audit: defaultWorkflowResponsibilityAudit,
+    lastChangedAt: null,
+    lastChangedBy: owner
+  });
+}
+
+export function deriveApprovalResponsibility(params: {
+  ownerUserId?: string | null;
+  workspaceId?: string | null;
+  delegateAgent?: AgentName | null;
+}) {
+  const owner = params.ownerUserId
+    ? createUserResponsibilityAssignee(params.ownerUserId, "Goal owner")
+    : createWorkspaceRoleResponsibilityAssignee("owner", "Goal owner");
+  const reviewer = defaultEscalationOwner({
+    ownerUserId: params.ownerUserId ?? null,
+    workspaceId: params.workspaceId ?? null,
+    label: "Approval reviewer"
+  });
+
+  return WorkflowResponsibilitySchema.parse({
+    owner,
+    delegate: params.delegateAgent
+      ? createSystemResponsibilityAssignee(params.delegateAgent, `${params.delegateAgent} execution lane`)
+      : null,
+    reviewer,
+    escalationOwner: defaultEscalationOwner({
+      ownerUserId: params.ownerUserId ?? null,
+      workspaceId: params.workspaceId ?? null,
+      label: "Escalation owner"
+    }),
+    handoffStatus: "review_pending",
+    handoffSummary: "Human review is required before the requested action can proceed.",
+    delegationReason: params.delegateAgent ? `Prepared by the ${params.delegateAgent} lane and staged for review.` : null,
+    escalationReason: null,
+    audit: defaultWorkflowResponsibilityAudit,
+    lastChangedAt: null,
+    lastChangedBy: owner
+  });
+}
+
+export function deriveWatcherResponsibility(params: {
+  ownerUserId?: string | null;
+  workspaceId?: string | null;
+  createdByUserId?: string | null;
+  targetEntity: string;
+}) {
+  const owner = params.ownerUserId
+    ? createUserResponsibilityAssignee(params.ownerUserId, "Goal owner")
+    : createWorkspaceRoleResponsibilityAssignee("owner", "Goal owner");
+  const delegate = params.workspaceId
+    ? createWorkspaceRoleResponsibilityAssignee("editor", "Workspace editor")
+    : params.createdByUserId
+      ? createUserResponsibilityAssignee(params.createdByUserId, "Watcher operator")
+      : null;
+  const reviewer = defaultEscalationOwner({
+    ownerUserId: params.ownerUserId ?? params.createdByUserId ?? null,
+    workspaceId: params.workspaceId ?? null,
+    label: "Escalation owner"
+  });
+
+  return WorkflowResponsibilitySchema.parse({
+    owner,
+    delegate,
+    reviewer,
+    escalationOwner: reviewer,
+    handoffStatus: delegate ? "delegated" : "owner_control",
+    handoffSummary: delegate
+      ? `Workspace editors can maintain the ${params.targetEntity} watcher while owner approval and escalation stay explicit.`
+      : `The owner directly manages the ${params.targetEntity} watcher.`,
+    delegationReason: delegate ? `Delegated watcher maintenance for ${params.targetEntity}.` : null,
+    escalationReason: null,
+    audit: defaultWorkflowResponsibilityAudit,
+    lastChangedAt: null,
+    lastChangedBy: owner
+  });
+}
+
+export function deriveAutopilotEventResponsibility(params: { userId: string; mode: AutopilotMode }) {
+  const owner = createUserResponsibilityAssignee(params.userId, "Autopilot owner");
+  return WorkflowResponsibilitySchema.parse({
+    owner,
+    delegate: createSystemResponsibilityAssignee("autopilot", "Autopilot processor"),
+    reviewer: params.mode === "notify_only" ? createUserResponsibilityAssignee(params.userId, "Human reviewer") : null,
+    escalationOwner: createUserResponsibilityAssignee(params.userId, "Escalation owner"),
+    handoffStatus: params.mode === "notify_only" ? "review_pending" : "delegated",
+    handoffSummary:
+      params.mode === "notify_only"
+        ? "Autopilot will surface this event for human review before any further action is taken."
+        : "Autopilot is the active delegate for this event until it completes or escalates.",
+    delegationReason: "Queued for autopilot processing.",
+    escalationReason: null,
+    audit: defaultWorkflowResponsibilityAudit,
+    lastChangedAt: null,
+    lastChangedBy: owner
+  });
+}
+
 const GoalInputSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
@@ -405,6 +716,7 @@ const GoalInputSchema = z.object({
   explanation: z.string().min(1),
   wedge: GoalWedgeSchema.optional(),
   completionContract: GoalCompletionContractSchema.optional(),
+  responsibility: WorkflowResponsibilitySchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -415,11 +727,12 @@ export const GoalSchema = GoalInputSchema.transform((goal) => {
   return {
     ...goal,
     wedge: goal.wedge ?? derived.wedge,
-    completionContract: goal.completionContract ?? derived.completionContract
+    completionContract: goal.completionContract ?? derived.completionContract,
+    responsibility: goal.responsibility ?? deriveGoalResponsibility({ userId: goal.userId, workspaceId: goal.workspaceId })
   };
 });
 
-export const TaskSchema = z.object({
+const TaskInputSchema = z.object({
   id: z.string().min(1),
   goalId: z.string().min(1),
   workflowId: z.string().min(1),
@@ -432,9 +745,20 @@ export const TaskSchema = z.object({
   dependsOn: z.array(z.string()).default([]),
   toolCapabilities: z.array(CapabilitySchema).default([]),
   artifactIds: z.array(z.string()).default([]),
+  responsibility: WorkflowResponsibilitySchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
+
+export const TaskSchema = TaskInputSchema.transform((task) => ({
+  ...task,
+  responsibility:
+    task.responsibility ??
+    deriveTaskResponsibility({
+      assignedAgent: task.assignedAgent,
+      requiresApproval: task.requiresApproval
+    })
+}));
 
 export const MemoryRecordSchema = z.object({
   id: z.string().min(1),
@@ -725,7 +1049,7 @@ export const ApprovalExplanationSchema = z.object({
   })
 });
 
-export const ApprovalRequestSchema = z.object({
+const ApprovalRequestInputSchema = z.object({
   id: z.string().min(1),
   goalId: z.string().min(1),
   taskId: z.string().min(1),
@@ -751,10 +1075,16 @@ export const ApprovalRequestSchema = z.object({
   decisionRationale: z.string().max(1000).nullable().default(null),
   history: z.array(ApprovalDecisionRecordSchema).default([]),
   explanation: ApprovalExplanationSchema.nullable().default(null),
+  responsibility: WorkflowResponsibilitySchema.optional(),
   createdAt: z.string().datetime(),
   expiryAt: z.string().datetime(),
   respondedAt: z.string().datetime().nullable().default(null)
 });
+
+export const ApprovalRequestSchema = ApprovalRequestInputSchema.transform((approval) => ({
+  ...approval,
+  responsibility: approval.responsibility ?? deriveApprovalResponsibility({})
+}));
 
 export const CommitmentEvidenceSchema = z.object({
   section: z.enum(["goals", "approvals"]),
@@ -862,12 +1192,22 @@ export const dashboardTeamWorkflowAssignmentKeyValues = [
   "approval_boundary",
   "execution_recovery"
 ] as const;
+export const dashboardTeamWorkflowQueueKeyValues = ["mine", "delegated", "escalated", "blocked", "waiting"] as const;
+export const dashboardTeamWorkflowControlKeyValues = [
+  "open_mine",
+  "rebalance_queue",
+  "escalate_overdue",
+  "review_blockers",
+  "export_audit"
+] as const;
 
 export const DashboardOperatingSectionKeySchema = z.enum(dashboardOperatingSectionKeyValues);
 export const DashboardOperatingSectionStatusSchema = z.enum(dashboardOperatingSectionStatusValues);
 export const DashboardNextBestActionKindSchema = z.enum(dashboardNextBestActionKindValues);
 export const DashboardTeamWorkflowModeSchema = z.enum(dashboardTeamWorkflowModeValues);
 export const DashboardTeamWorkflowAssignmentKeySchema = z.enum(dashboardTeamWorkflowAssignmentKeyValues);
+export const DashboardTeamWorkflowQueueKeySchema = z.enum(dashboardTeamWorkflowQueueKeyValues);
+export const DashboardTeamWorkflowControlKeySchema = z.enum(dashboardTeamWorkflowControlKeyValues);
 
 export const DashboardOperatingSectionSchema = z.object({
   key: DashboardOperatingSectionKeySchema,
@@ -912,6 +1252,30 @@ export const DashboardTeamWorkflowAssignmentSchema = z.object({
   summary: z.string().min(1)
 });
 
+export const DashboardTeamWorkflowQueueSchema = z.object({
+  key: DashboardTeamWorkflowQueueKeySchema,
+  label: z.string().min(1),
+  ownerRole: WorkspaceRoleSchema.nullable().default(null),
+  status: DashboardOperatingSectionStatusSchema,
+  count: z.number().int().min(0),
+  summary: z.string().min(1),
+  oldestAgeLabel: z.string().min(1).nullable().default(null),
+  targetSection: z.string().min(1),
+  targetItemId: z.string().min(1).optional(),
+  targetFilter: CommitmentInboxBucketSchema.nullable().default(null)
+});
+
+export const DashboardTeamWorkflowControlSchema = z.object({
+  key: DashboardTeamWorkflowControlKeySchema,
+  label: z.string().min(1),
+  summary: z.string().min(1),
+  status: DashboardOperatingSectionStatusSchema,
+  targetSection: z.string().min(1),
+  targetItemId: z.string().min(1).optional(),
+  targetFilter: CommitmentInboxBucketSchema.nullable().default(null),
+  permission: DashboardPermissionSchema
+});
+
 export const DashboardTeamWorkflowAuditCoverageSchema = z.object({
   required: z.boolean(),
   status: DashboardOperatingSectionStatusSchema,
@@ -927,6 +1291,8 @@ export const DashboardTeamWorkflowSchema = z.object({
   visibilityLabel: z.string().min(1),
   queueMetrics: z.array(z.string().min(1)).default([]),
   ownershipAssignments: z.array(DashboardTeamWorkflowAssignmentSchema).default([]),
+  queues: z.array(DashboardTeamWorkflowQueueSchema).default([]),
+  controls: z.array(DashboardTeamWorkflowControlSchema).default([]),
   auditCoverage: DashboardTeamWorkflowAuditCoverageSchema,
   actionBoundaries: z.array(z.string().min(1)).default([]),
   handoffGuidance: z.array(z.string().min(1)).default([]),
@@ -1149,7 +1515,7 @@ export const AutopilotEventDetailsSchema = z
     suppression: null
   });
 
-export const AutopilotEventSchema = z.object({
+const AutopilotEventInputSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
   kind: AutopilotEventKindSchema,
@@ -1160,11 +1526,17 @@ export const AutopilotEventSchema = z.object({
   status: AutopilotEventStatusSchema,
   details: AutopilotEventDetailsSchema,
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+  responsibility: WorkflowResponsibilitySchema.optional(),
   createdAt: z.string().datetime(),
   processedAt: z.string().datetime().nullable().default(null),
   resultGoalId: z.string().min(1).nullable().default(null),
   error: z.string().max(1000).nullable().default(null)
 });
+
+export const AutopilotEventSchema = AutopilotEventInputSchema.transform((event) => ({
+  ...event,
+  responsibility: event.responsibility ?? deriveAutopilotEventResponsibility({ userId: event.userId, mode: event.mode })
+}));
 
 export const GoalCreateJobPayloadSchema = z
   .object({
@@ -1840,9 +2212,18 @@ export const WatcherSchema = z.object({
   status: z.enum(["active", "paused", "expired"]).default("active"),
   expiryAt: z.string().datetime().nullable().default(null),
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+  responsibility: WorkflowResponsibilitySchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
-});
+}).transform((watcher) => ({
+  ...watcher,
+  responsibility:
+    watcher.responsibility ??
+    deriveWatcherResponsibility({
+      createdByUserId: watcher.actorContext?.subjectUserId ?? null,
+      targetEntity: watcher.targetEntity
+    })
+}));
 
 export const ActionLogSchema = z.object({
   id: z.string().min(1),
@@ -2495,6 +2876,9 @@ export type JobStatus = z.infer<typeof JobStatusSchema>;
 export type EvidenceRecordSourceKind = z.infer<typeof EvidenceRecordSourceKindSchema>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRoleSchema>;
 export type WorkspaceApprovalMode = z.infer<typeof WorkspaceApprovalModeSchema>;
+export type WorkflowResponsibilityAssigneeKind = z.infer<typeof WorkflowResponsibilityAssigneeKindSchema>;
+export type WorkflowResponsibilityStatus = z.infer<typeof WorkflowResponsibilityStatusSchema>;
+export type WorkflowResponsibilityAuditEvent = z.infer<typeof WorkflowResponsibilityAuditEventSchema>;
 export type AgentName = z.infer<typeof AgentNameSchema>;
 export type ToolInvocation = z.infer<typeof ToolInvocationSchema>;
 export type Artifact = z.infer<typeof ArtifactSchema>;
@@ -2502,6 +2886,9 @@ export type AgentResult = z.infer<typeof AgentResultSchema>;
 export type WorkflowState = z.infer<typeof WorkflowStateSchema>;
 export type Goal = z.infer<typeof GoalSchema>;
 export type Task = z.infer<typeof TaskSchema>;
+export type WorkflowResponsibilityAssignee = z.infer<typeof WorkflowResponsibilityAssigneeSchema>;
+export type WorkflowResponsibilityAudit = z.infer<typeof WorkflowResponsibilityAuditSchema>;
+export type WorkflowResponsibility = z.infer<typeof WorkflowResponsibilitySchema>;
 export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
 export type PolicyDecision = z.infer<typeof PolicyDecisionSchema>;
 export type GovernanceConformanceCheck = z.infer<typeof GovernanceConformanceCheckSchema>;
@@ -2545,11 +2932,15 @@ export type DashboardOperatingSectionStatus = z.infer<typeof DashboardOperatingS
 export type DashboardNextBestActionKind = z.infer<typeof DashboardNextBestActionKindSchema>;
 export type DashboardTeamWorkflowMode = z.infer<typeof DashboardTeamWorkflowModeSchema>;
 export type DashboardTeamWorkflowAssignmentKey = z.infer<typeof DashboardTeamWorkflowAssignmentKeySchema>;
+export type DashboardTeamWorkflowQueueKey = z.infer<typeof DashboardTeamWorkflowQueueKeySchema>;
+export type DashboardTeamWorkflowControlKey = z.infer<typeof DashboardTeamWorkflowControlKeySchema>;
 export type DashboardOperatingSection = z.infer<typeof DashboardOperatingSectionSchema>;
 export type DashboardRoleView = z.infer<typeof DashboardRoleViewSchema>;
 export type DashboardNextBestAction = z.infer<typeof DashboardNextBestActionSchema>;
 export type DashboardPermission = z.infer<typeof DashboardPermissionSchema>;
 export type DashboardTeamWorkflowAssignment = z.infer<typeof DashboardTeamWorkflowAssignmentSchema>;
+export type DashboardTeamWorkflowQueue = z.infer<typeof DashboardTeamWorkflowQueueSchema>;
+export type DashboardTeamWorkflowControl = z.infer<typeof DashboardTeamWorkflowControlSchema>;
 export type DashboardTeamWorkflowAuditCoverage = z.infer<typeof DashboardTeamWorkflowAuditCoverageSchema>;
 export type DashboardTeamWorkflow = z.infer<typeof DashboardTeamWorkflowSchema>;
 export type DashboardOperatingSections = z.infer<typeof DashboardOperatingSectionsSchema>;

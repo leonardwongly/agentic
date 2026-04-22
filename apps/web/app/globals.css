@@ -283,6 +283,38 @@ select {
   color: var(--muted);
 }
 
+.control-plane-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.control-plane-detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.95rem;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, var(--brand) 22%);
+  background: color-mix(in srgb, rgba(255, 255, 255, 0.92) 88%, var(--brand) 12%);
+  text-align: left;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.control-plane-detail-card:hover,
+.control-plane-detail-card:focus-visible {
+  border-color: color-mix(in srgb, var(--brand) 42%, var(--line) 58%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.control-plane-detail-card:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .reliability-card-header {
   align-items: center;
 }
