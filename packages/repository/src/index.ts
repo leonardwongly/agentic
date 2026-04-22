@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 import { z } from "zod";
-import type { GovernanceConformanceReport } from "@agentic/policy";
 import {
   ActionLogSchema,
   ActionIntentSchema,
@@ -12,6 +11,7 @@ import {
   AgentMetricsSchema,
   ActorContextSchema,
   AutopilotEventSchema,
+  DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   AutopilotSettingsSchema,
   type ApprovalDecision,
   type ApprovalDecisionScope,
@@ -118,6 +118,12 @@ import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord, getMemoryFreshness } from "@agentic/memory";
 import { respondToApproval as applyApprovalResponse } from "@agentic/orchestrator";
 import { deriveAgentMetricsFromGoals } from "./agent-metrics";
+import {
+  buildPendingAutopilotEvent,
+  buildSuppressedAutopilotEvent,
+  countsTowardAutopilotBudget,
+  evaluateAutopilotClaimControls
+} from "./autopilot-event-claim-helpers";
 import { defaultAgents, defaultOperatorProducts } from "./built-in-catalog";
 import {
   buildCollectionPage,
@@ -141,6 +147,25 @@ import {
   type DashboardOperationsTower
 } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
+import {
+  ApprovalMutationError,
+  JobMutationError,
+  type AgenticRepository,
+  type AutopilotEventClaim,
+  type CollectionPageParams,
+  type DashboardControlPlane,
+  type DashboardControlPlaneSection,
+  type DashboardData,
+  type DashboardDiagnostics,
+  type GoalPageParams,
+  type GoalShareListFilters,
+  type PrivacyOperationListFilters,
+  type WatcherListFilters,
+  type WatcherPageParams,
+  type WorkspaceAuditExport,
+  type WorkspaceDeleteParams,
+  type WorkspaceRetentionParams
+} from "./repository-types";
 
 const UserRecordSchema = z.object({
   id: z.string().min(1),
@@ -195,320 +220,26 @@ const RuntimeStoreSchema = z.object({
 });
 
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
-
-export type DashboardData = {
-  workspaces: Workspace[];
-  activeWorkspace: Workspace | null;
-  workspaceSelection: WorkspaceSelection | null;
-  workspaceMembers: WorkspaceMember[];
-  workspaceGovernance: WorkspaceGovernance | null;
-  governanceConformance?: GovernanceConformanceReport | null;
-  goalShares: GoalShareRecord[];
-  privacyOperations: PrivacyOperation[];
-  controlPlane: DashboardControlPlane;
-  operatingSections: DashboardOperatingSections;
-  nowQueue: NowQueue;
-  goals: GoalBundle[];
-  approvals: ApprovalRequest[];
-  commitments: Commitment[];
-  briefingPreferences: BriefingPreferences;
-  briefingHistory: BriefingHistoryItem[];
-  autopilotSettings: AutopilotSettings;
-  autopilotEvents: AutopilotEvent[];
-  memories: MemoryRecord[];
-  watchers: Watcher[];
-  integrations: IntegrationAccount[];
-  latestArtifacts: Artifact[];
-  actionLogs: ActionLog[];
-  diagnostics: DashboardDiagnostics;
-  operations?: DashboardOperationsTower;
-};
-
-export type DashboardDiagnosticKind =
-  | "expired_approvals"
-  | "stale_memories"
-  | "stuck_workflows"
-  | "orphan_watchers"
-  | "async_execution_issues"
-  | "connector_degradation";
-
-export type DashboardDiagnosticSeverity = "warning" | "critical";
-
-export type DashboardDiagnosticSection =
-  | "goals"
-  | "approvals"
-  | "memory"
-  | "watchers"
-  | "operations";
-
-export type DashboardControlPlaneKey = "workspace" | "commitments" | "automation" | "execution" | "trust";
-
-export type DashboardControlPlaneStatus = "healthy" | "attention" | "critical" | "idle";
-
-export type DashboardControlPlaneSection = {
-  key: DashboardControlPlaneKey;
-  title: string;
-  description: string;
-  status: DashboardControlPlaneStatus;
-  targetSection: string;
-  targetItemId?: string;
-  stats: string[];
-  highlights: string[];
-};
-
-export type DashboardControlPlane = {
-  generatedAt: string;
-  sections: DashboardControlPlaneSection[];
-};
-
-export type DashboardDiagnosticTarget = {
-  section: DashboardDiagnosticSection;
-  itemId?: string;
-  label: string;
-  action?: "review_memory" | "pause_watcher";
-  actionLabel?: string;
-};
-
-export type WorkspaceAuditExport = {
-  workspaceId: string;
-  fileName: string;
-  contentType: string;
-  content: string;
-  generatedAt: string;
-};
-
-export type DashboardDiagnostic = {
-  kind: DashboardDiagnosticKind;
-  title: string;
-  count: number;
-  severity: DashboardDiagnosticSeverity;
-  reasons: string[];
-  targets: DashboardDiagnosticTarget[];
-};
-
-export type DashboardDiagnostics = {
-  status: "healthy" | "warning" | "critical";
-  totalCount: number;
-  generatedAt: string;
-  items: DashboardDiagnostic[];
-};
-
-export type WatcherListFilters = {
-  userId?: string;
-  goalId?: string;
-};
-
-export type GoalShareListFilters = {
-  userId?: string;
-  goalId?: string;
-  workspaceId?: string | null;
-  statuses?: GoalShareStatus[];
-};
-
-export type PrivacyOperationListFilters = {
-  userId?: string;
-  workspaceId?: string;
-  kinds?: PrivacyOperationKind[];
-  statuses?: PrivacyOperationStatus[];
-};
-
-export type CollectionPageParams = {
-  userId?: string;
-  limit?: number;
-  cursor?: string | null;
-};
-
-export type GoalPageParams = CollectionPageParams & {
-  workspaceId?: string | null;
-};
-
-export type WatcherPageParams = CollectionPageParams & {
-  goalId?: string;
-};
-
-export type WorkspaceRetentionParams = {
-  workspaceId: string;
-  userId: string;
-  retentionDays: number;
-  now?: string;
-};
-
-export type WorkspaceDeleteParams = {
-  workspaceId: string;
-  userId: string;
-  operationId: string;
-  now?: string;
-};
-
-export type AutopilotEventClaim =
-  | {
-      outcome: "claimed";
-      event: AutopilotEvent;
-    }
-  | {
-      outcome: "duplicate" | "debounced";
-      event: AutopilotEvent;
-    };
-
-export class JobMutationError extends Error {
-  constructor(
-    public readonly code: "not_found" | "not_running" | "not_owner",
-    message: string
-  ) {
-    super(message);
-    this.name = "JobMutationError";
-  }
-}
-
-export class ApprovalMutationError extends Error {
-  constructor(
-    public readonly code: "not_found" | "already_handled" | "expired",
-    message: string
-  ) {
-    super(message);
-    this.name = "ApprovalMutationError";
-  }
-}
-
 export { CommitmentInboxQueryError, CollectionPageQueryError };
-
-export type AgenticRepository = {
-  backend: "file" | "postgres";
-  seedDefaults(userId?: string): Promise<void>;
-  listWorkspaces(userId?: string): Promise<Workspace[]>;
-  saveWorkspace(workspace: Workspace, actor: ActorContext): Promise<Workspace>;
-  listWorkspaceMembers(workspaceId: string, userId?: string): Promise<WorkspaceMember[]>;
-  saveWorkspaceMember(member: WorkspaceMember, actor: ActorContext): Promise<WorkspaceMember>;
-  getWorkspaceSelection(userId?: string): Promise<WorkspaceSelection | null>;
-  saveWorkspaceSelection(selection: WorkspaceSelection): Promise<WorkspaceSelection>;
-  getWorkspaceGovernance(workspaceId: string, userId?: string): Promise<WorkspaceGovernance | null>;
-  saveWorkspaceGovernance(governance: WorkspaceGovernance, actor: ActorContext): Promise<WorkspaceGovernance>;
-  listGoalShares(filters?: GoalShareListFilters): Promise<GoalShareRecord[]>;
-  getGoalShare(shareId: string, userId?: string): Promise<GoalShareRecord | null>;
-  getGoalShareByTokenFingerprint(tokenFingerprint: string): Promise<GoalShareRecord | null>;
-  saveGoalShare(share: GoalShareRecord): Promise<GoalShareRecord>;
-  listPrivacyOperations(filters?: PrivacyOperationListFilters): Promise<PrivacyOperation[]>;
-  getPrivacyOperation(operationId: string, userId?: string): Promise<PrivacyOperation | null>;
-  savePrivacyOperation(operation: PrivacyOperation): Promise<PrivacyOperation>;
-  enforceWorkspaceRetention(params: WorkspaceRetentionParams): Promise<Record<string, unknown>>;
-  deleteWorkspaceData(params: WorkspaceDeleteParams): Promise<Record<string, unknown>>;
-  exportWorkspaceAudit(workspaceId: string, userId?: string): Promise<WorkspaceAuditExport>;
-  saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle>;
-  respondToApproval(params: {
-    approvalId: string;
-    decision: Exclude<ApprovalDecision, "pending">;
-    actor: ActorContext;
-    scope?: ApprovalDecisionScope;
-    rationale?: string | null;
-  }): Promise<GoalBundle>;
-  getGoalBundle(goalId: string): Promise<GoalBundle | null>;
-  getGoalBundleForUser(goalId: string, userId?: string): Promise<GoalBundle | null>;
-  listGoals(userId?: string): Promise<GoalBundle[]>;
-  listGoalsPage(params?: GoalPageParams): Promise<GoalBundlePage>;
-  listApprovals(userId?: string): Promise<ApprovalRequest[]>;
-  listEvidenceRecords(params?: {
-    userId?: string;
-    goalId?: string;
-    approvalId?: string;
-  }): Promise<EvidenceRecord[]>;
-  listCommitments(userId?: string): Promise<Commitment[]>;
-  listCommitmentInbox(params?: {
-    userId?: string;
-    bucket?: CommitmentInboxBucket;
-    limit?: number;
-    cursor?: string | null;
-  }): Promise<CommitmentInboxPage>;
-  getCommitment(commitmentId: string, userId?: string): Promise<Commitment | null>;
-  saveCommitment(commitment: Commitment): Promise<Commitment>;
-  deleteCommitment(commitmentId: string, userId?: string): Promise<void>;
-  getBriefingPreferences(userId?: string): Promise<BriefingPreferences>;
-  saveBriefingPreferences(preferences: BriefingPreferences): Promise<BriefingPreferences>;
-  getAutopilotSettings(userId?: string): Promise<AutopilotSettings>;
-  saveAutopilotSettings(settings: AutopilotSettings): Promise<AutopilotSettings>;
-  listAutopilotEvents(userId?: string): Promise<AutopilotEvent[]>;
-  listAutopilotEventsPage(params?: CollectionPageParams): Promise<AutopilotEventPage>;
-  claimAutopilotEvent(params: {
-    userId?: string;
-    kind: AutopilotEventKind;
-    sourceId: string;
-    idempotencyKey?: string | null;
-    mode: AutopilotMode;
-    summary: string;
-    details?: Record<string, unknown>;
-    actorContext?: ActorContext | null;
-    debounceMinutes: number;
-  }): Promise<AutopilotEventClaim>;
-  saveAutopilotEvent(event: AutopilotEvent): Promise<AutopilotEvent>;
-  listJobs(params?: {
-    userId?: string;
-    kinds?: JobKind[];
-    statuses?: JobStatus[];
-  }): Promise<JobRecord[]>;
-  getJob(jobId: string, userId?: string): Promise<JobRecord | null>;
-  enqueueJob(job: JobRecord): Promise<JobRecord>;
-  claimNextJob(params: {
-    userId?: string;
-    kinds?: JobKind[];
-    runnerId: string;
-    leaseMs: number;
-    now?: string;
-  }): Promise<JobRecord | null>;
-  completeJob(params: {
-    jobId: string;
-    runnerId: string;
-    completedAt?: string;
-  }): Promise<JobRecord>;
-  retryJob(params: {
-    jobId: string;
-    runnerId: string;
-    availableAt: string;
-    error: string;
-  }): Promise<JobRecord>;
-  deadLetterJob(params: {
-    jobId: string;
-    runnerId: string;
-    deadLetteredAt?: string;
-    error: string;
-  }): Promise<JobRecord>;
-  listMemory(userId?: string): Promise<MemoryRecord[]>;
-  listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage>;
-  saveMemory(record: MemoryRecord): Promise<MemoryRecord>;
-  saveEvidenceRecord(record: EvidenceRecord): Promise<EvidenceRecord>;
-  listWatchers(filters?: WatcherListFilters): Promise<Watcher[]>;
-  listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage>;
-  saveWatcher(watcher: Watcher): Promise<Watcher>;
-  listIntegrations(userId?: string): Promise<IntegrationAccount[]>;
-  listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage>;
-  upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount>;
-  listProviderCredentials(userId?: string): Promise<ProviderCredential[]>;
-  getProviderCredential(credentialId: string, userId?: string): Promise<ProviderCredential | null>;
-  saveProviderCredential(credential: ProviderCredential): Promise<ProviderCredential>;
-  getProviderCredentialSecret(
-    credentialId: string,
-    kind: ProviderCredentialSecretKind,
-    userId?: string
-  ): Promise<ProviderCredentialSecretRecord | null>;
-  saveProviderCredentialSecret(record: ProviderCredentialSecretRecord): Promise<ProviderCredentialSecretRecord>;
-  listTemplates(userId?: string): Promise<GoalTemplate[]>;
-  saveTemplate(template: GoalTemplate): Promise<GoalTemplate>;
-  deleteTemplate(templateId: string): Promise<void>;
-  listWorkflowTemplates(userId?: string): Promise<WorkflowCanvasTemplate[]>;
-  getWorkflowTemplate(templateId: string, userId?: string): Promise<WorkflowCanvasTemplate | null>;
-  saveWorkflowTemplate(template: WorkflowCanvasTemplate): Promise<WorkflowCanvasTemplate>;
-  deleteWorkflowTemplate(templateId: string, userId?: string): Promise<void>;
-  getDashboardData(userId?: string): Promise<DashboardData>;
-  // Agent Management
-  listAgents(userId?: string): Promise<AgentDefinition[]>;
-  getAgent(agentId: string, userId?: string): Promise<AgentDefinition | null>;
-  saveAgent(agent: AgentDefinition): Promise<AgentDefinition>;
-  deleteAgent(agentId: string, userId?: string): Promise<void>;
-  getAgentMetrics(agentId: string, period?: "day" | "week" | "month" | "all", userId?: string): Promise<AgentMetrics | null>;
-  saveAgentMetrics(metrics: AgentMetrics): Promise<AgentMetrics>;
-  listOperatorProducts(userId?: string): Promise<OperatorProduct[]>;
-  getOperatorProductSelection(userId?: string): Promise<OperatorProductSelection | null>;
-  saveOperatorProduct(product: OperatorProduct): Promise<OperatorProduct>;
-  saveOperatorProductSelection(selection: OperatorProductSelection): Promise<OperatorProductSelection>;
-};
+export type {
+  AgenticRepository,
+  AutopilotEventClaim,
+  CollectionPageParams,
+  DashboardControlPlane,
+  DashboardControlPlaneSection,
+  DashboardData,
+  DashboardDiagnosticTarget,
+  DashboardDiagnostics,
+  GoalPageParams,
+  GoalShareListFilters,
+  PrivacyOperationListFilters,
+  WatcherListFilters,
+  WatcherPageParams,
+  WorkspaceAuditExport,
+  WorkspaceDeleteParams,
+  WorkspaceRetentionParams
+} from "./repository-types";
+export { ApprovalMutationError, JobMutationError } from "./repository-types";
 
 const STALLED_WORKFLOW_MS = 30 * 60 * 1000;
 const APPROVAL_WAIT_SLA_MS = 6 * 60 * 60 * 1000;
@@ -1256,6 +987,7 @@ function defaultAutopilotSettings(userId: string): AutopilotSettings {
     userId,
     mode: "notify_only",
     debounceMinutes: 15,
+    reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
     actorContext: null,
     createdAt: timestamp,
     updatedAt: timestamp
@@ -1725,34 +1457,6 @@ function isJobScopedToWorkspace(
     default:
       return false;
   }
-}
-
-function buildPendingAutopilotEvent(params: {
-  userId: string;
-  kind: AutopilotEventKind;
-  sourceId: string;
-  idempotencyKey?: string | null;
-  mode: AutopilotMode;
-  summary: string;
-  details?: Record<string, unknown>;
-  actorContext?: ActorContext | null;
-}): AutopilotEvent {
-  return AutopilotEventSchema.parse({
-    id: crypto.randomUUID(),
-    userId: params.userId,
-    kind: params.kind,
-    sourceId: params.sourceId,
-    idempotencyKey: params.idempotencyKey ?? null,
-    mode: params.mode,
-    summary: params.summary,
-    status: "pending",
-    details: params.details ?? {},
-    actorContext: params.actorContext ?? null,
-    createdAt: nowIso(),
-    processedAt: null,
-    resultGoalId: null,
-    error: null
-  });
 }
 
 function sortJobsForClaim(items: JobRecord[]): JobRecord[] {
@@ -2781,6 +2485,7 @@ class FileRepository implements AgenticRepository {
     details?: Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
+    reliabilityControls: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim> {
     return this.withMutationLock(async () => {
       const userId = params.userId ?? SYSTEM_USER_ID;
@@ -2800,9 +2505,19 @@ class FileRepository implements AgenticRepository {
         }
       }
 
+      const windowCutoff = Date.now() - Math.max(params.debounceMinutes, params.reliabilityControls.budgetWindowMinutes) * 60 * 1000;
+      const recentEvents = sortByCreatedDesc(
+        store.autopilotEvents.filter(
+          (event) => event.userId === userId && Date.parse(event.createdAt) >= windowCutoff
+        )
+      );
       const debounceCutoff = Date.now() - params.debounceMinutes * 60 * 1000;
-      const recent = store.autopilotEvents.find((event) => {
+      const recent = recentEvents.find((event) => {
         if (event.userId !== userId || event.kind !== params.kind || event.sourceId !== params.sourceId) {
+          return false;
+        }
+
+        if (!countsTowardAutopilotBudget(event.status) && event.status !== "debounced") {
           return false;
         }
 
@@ -2832,6 +2547,43 @@ class FileRepository implements AgenticRepository {
         return {
           outcome: "debounced",
           event: AutopilotEventSchema.parse(clone(debouncedEvent))
+        };
+      }
+
+      const controlDecision = evaluateAutopilotClaimControls({
+        recentEvents: recentEvents.filter(
+          (event) =>
+            Date.parse(event.createdAt) >= Date.now() - params.reliabilityControls.budgetWindowMinutes * 60 * 1000
+        ),
+        reliabilityControls: params.reliabilityControls
+      });
+
+      if (controlDecision.outcome === "suppress") {
+        const suppressedEvent = buildSuppressedAutopilotEvent({
+          userId,
+          kind: params.kind,
+          sourceId: params.sourceId,
+          idempotencyKey: trimmedKey,
+          mode: params.mode,
+          summary: params.summary,
+          actorContext: params.actorContext,
+          details: params.details,
+          suppression: {
+            reason: controlDecision.reason,
+            budgetWindowMinutes: params.reliabilityControls.budgetWindowMinutes,
+            recentBudgetedEventCount: controlDecision.recentBudgetedEventCount,
+            maxEventsPerWindow: params.reliabilityControls.maxEventsPerWindow,
+            pendingEventCount: controlDecision.pendingEventCount,
+            maxPendingEvents: params.reliabilityControls.maxPendingEvents,
+            consecutiveFailureCount: controlDecision.consecutiveFailureCount,
+            maxConsecutiveFailures: params.reliabilityControls.maxConsecutiveFailures
+          }
+        });
+        store.autopilotEvents = upsertById(store.autopilotEvents, suppressedEvent);
+        await this.writeStore(store);
+        return {
+          outcome: "suppressed",
+          event: AutopilotEventSchema.parse(clone(suppressedEvent))
         };
       }
 
@@ -6946,6 +6698,7 @@ class PostgresRepository implements AgenticRepository {
     details?: Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
+    reliabilityControls: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim> {
     const userId = params.userId ?? SYSTEM_USER_ID;
     const trimmedKey = params.idempotencyKey?.trim() || null;
@@ -6974,23 +6727,34 @@ class PostgresRepository implements AgenticRepository {
         }
       }
 
-      const debounceCutoff = new Date(Date.now() - params.debounceMinutes * 60 * 1000).toISOString();
-      const recentResult = await client.query(
+      const windowCutoff = new Date(
+        Date.now() - Math.max(params.debounceMinutes, params.reliabilityControls.budgetWindowMinutes) * 60 * 1000
+      ).toISOString();
+      const recentEventsResult = await client.query(
         `
           select *
           from autopilot_events
           where user_id = $1
-            and kind = $2
-            and source_id = $3
-            and created_at >= $4
+            and created_at >= $2
           order by created_at desc
-          limit 1
         `,
-        [userId, params.kind, params.sourceId, debounceCutoff]
+        [userId, windowCutoff]
       );
+      const recentEvents = recentEventsResult.rows.map((row) => this.mapAutopilotEventRow(row));
+      const debounceCutoff = new Date(Date.now() - params.debounceMinutes * 60 * 1000).toISOString();
+      const recent = recentEvents.find((event) => {
+        if (event.kind !== params.kind || event.sourceId !== params.sourceId) {
+          return false;
+        }
 
-      if (recentResult.rows.length > 0) {
-        const recent = this.mapAutopilotEventRow(recentResult.rows[0]);
+        if (!countsTowardAutopilotBudget(event.status) && event.status !== "debounced") {
+          return false;
+        }
+
+        return event.createdAt >= debounceCutoff;
+      });
+
+      if (recent) {
         const debouncedEvent = AutopilotEventSchema.parse({
           ...buildPendingAutopilotEvent({
             userId,
@@ -7013,6 +6777,43 @@ class PostgresRepository implements AgenticRepository {
         return {
           outcome: "debounced",
           event: AutopilotEventSchema.parse(clone(debouncedEvent))
+        };
+      }
+
+      const controlDecision = evaluateAutopilotClaimControls({
+        recentEvents: recentEvents.filter(
+          (event) =>
+            event.createdAt >= new Date(Date.now() - params.reliabilityControls.budgetWindowMinutes * 60 * 1000).toISOString()
+        ),
+        reliabilityControls: params.reliabilityControls
+      });
+
+      if (controlDecision.outcome === "suppress") {
+        const suppressedEvent = buildSuppressedAutopilotEvent({
+          userId,
+          kind: params.kind,
+          sourceId: params.sourceId,
+          idempotencyKey: trimmedKey,
+          mode: params.mode,
+          summary: params.summary,
+          actorContext: params.actorContext,
+          details: params.details,
+          suppression: {
+            reason: controlDecision.reason,
+            budgetWindowMinutes: params.reliabilityControls.budgetWindowMinutes,
+            recentBudgetedEventCount: controlDecision.recentBudgetedEventCount,
+            maxEventsPerWindow: params.reliabilityControls.maxEventsPerWindow,
+            pendingEventCount: controlDecision.pendingEventCount,
+            maxPendingEvents: params.reliabilityControls.maxPendingEvents,
+            consecutiveFailureCount: controlDecision.consecutiveFailureCount,
+            maxConsecutiveFailures: params.reliabilityControls.maxConsecutiveFailures
+          }
+        });
+
+        await this.saveAutopilotEventWithClient(client, suppressedEvent);
+        return {
+          outcome: "suppressed",
+          event: AutopilotEventSchema.parse(clone(suppressedEvent))
         };
       }
 

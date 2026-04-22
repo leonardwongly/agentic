@@ -24,6 +24,13 @@ export const taskStateValues = [
   "completed"
 ] as const;
 export const goalStatusValues = ["planned", "running", "waiting", "completed"] as const;
+export const goalWedgeKeyValues = [
+  "communications_execution",
+  "scheduling_execution",
+  "travel_readiness",
+  "general_coordination"
+] as const;
+export const goalWedgeSelectionValues = ["selected_production", "supporting"] as const;
 export const memoryTypeValues = ["observed", "inferred", "confirmed"] as const;
 export const approvalDecisionValues = ["pending", "approved", "rejected"] as const;
 export const approvalActionTypeValues = ["send", "schedule", "create", "update", "delete", "draft", "artifact-only"] as const;
@@ -32,6 +39,7 @@ export const artifactTypeValues = ["summary", "brief", "checklist", "draft", "ex
 export const agentExecutionModeValues = [
   "deterministic_scaffold",
   "custom_prompt_scaffold",
+  "governed_specialist",
   "manual_review_required"
 ] as const;
 export const commitmentStatusValues = [
@@ -54,7 +62,32 @@ export const commitmentSuggestedActionKindValues = [
 export const briefingTypeValues = ["startup", "midday", "pre_meeting", "end_of_day", "next_day"] as const;
 export const briefingFocusValues = ["balanced", "urgent", "deep"] as const;
 export const autopilotModeValues = ["notify_only", "draft_goal", "auto_run"] as const;
-export const autopilotEventKindValues = ["watcher_triggered", "template_due", "briefing_due"] as const;
+export const autopilotEventKindValues = [
+  "watcher_triggered",
+  "template_due",
+  "briefing_due",
+  "inbound_communication_received",
+  "deadline_drift_detected",
+  "approval_attention_required",
+  "execution_failure_detected",
+  "workflow_stalled",
+  "dormant_workflow_review_due"
+] as const;
+export const autopilotEventSeverityValues = ["low", "medium", "high", "critical"] as const;
+export const autopilotEventPolicyValues = [
+  "notify_operator",
+  "draft_goal",
+  "queue_operator_review",
+  "queue_approval_review",
+  "escalate_immediately"
+] as const;
+export const autopilotEventOperatorRouteValues = [
+  "operations",
+  "communications",
+  "approvals",
+  "workflow",
+  "platform"
+] as const;
 export const autopilotEventStatusValues = ["pending", "simulated", "notified", "executed", "debounced", "ignored", "failed"] as const;
 export const goalShareStatusValues = ["active", "revoked"] as const;
 export const privacyOperationKindValues = ["retention_enforcement", "workspace_export", "workspace_delete"] as const;
@@ -91,6 +124,8 @@ export const CapabilitySchema = z.enum(capabilityValues);
 export const RiskClassSchema = z.enum(riskClassValues);
 export const TaskStateSchema = z.enum(taskStateValues);
 export const GoalStatusSchema = z.enum(goalStatusValues);
+export const GoalWedgeKeySchema = z.enum(goalWedgeKeyValues);
+export const GoalWedgeSelectionSchema = z.enum(goalWedgeSelectionValues);
 export const MemoryTypeSchema = z.enum(memoryTypeValues);
 export const ApprovalDecisionSchema = z.enum(approvalDecisionValues);
 export const ApprovalActionTypeSchema = z.enum(approvalActionTypeValues);
@@ -105,6 +140,9 @@ export const BriefingTypeSchema = z.enum(briefingTypeValues);
 export const BriefingFocusSchema = z.enum(briefingFocusValues);
 export const AutopilotModeSchema = z.enum(autopilotModeValues);
 export const AutopilotEventKindSchema = z.enum(autopilotEventKindValues);
+export const AutopilotEventSeveritySchema = z.enum(autopilotEventSeverityValues);
+export const AutopilotEventPolicySchema = z.enum(autopilotEventPolicyValues);
+export const AutopilotEventOperatorRouteSchema = z.enum(autopilotEventOperatorRouteValues);
 export const AutopilotEventStatusSchema = z.enum(autopilotEventStatusValues);
 export const GoalShareStatusSchema = z.enum(goalShareStatusValues);
 export const PrivacyOperationKindSchema = z.enum(privacyOperationKindValues);
@@ -173,7 +211,161 @@ export const WorkflowStateSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
-export const GoalSchema = z.object({
+export const GoalWedgeSchema = z.object({
+  key: GoalWedgeKeySchema,
+  label: z.string().min(1),
+  selection: GoalWedgeSelectionSchema,
+  rationale: z.string().min(1)
+});
+
+export const GoalCompletionContractSchema = z.object({
+  id: z.string().min(1),
+  summary: z.string().min(1),
+  successCriteria: z.array(z.string().min(1)).min(1),
+  evidenceSignals: z.array(z.string().min(1)).min(1),
+  approvalExpectations: z.array(z.string().min(1)).default([]),
+  doneWhen: z.string().min(1)
+});
+
+const goalContractProfiles = {
+  communications_execution: {
+    wedge: {
+      key: "communications_execution",
+      label: "Communications execution",
+      selection: "selected_production",
+      rationale: "Inbox triage and follow-up are one of the two explicitly selected Phase 3 production wedges."
+    },
+    completionContract: {
+      id: "communications-execution-v1",
+      summary: "Produce a prioritized inbox follow-up bundle with outbound side effects held behind approval.",
+      successCriteria: [
+        "Urgent and high-signal inbound threads are reviewed and ranked.",
+        "Actionable reply drafts or escalation notes are prepared for the surfaced threads.",
+        "Follow-up commitments are captured before any external send is executed."
+      ],
+      evidenceSignals: [
+        "Priority message review artifact exists.",
+        "Draft or escalation artifact exists for the reply step.",
+        "Any external send remains approval-gated until a human decision is recorded."
+      ],
+      approvalExpectations: [
+        "External message sends require an explicit approval record before execution."
+      ],
+      doneWhen: "The inbox triage workflow has surfaced the urgent threads, prepared the follow-up artifacts, and left external delivery behind the approval boundary."
+    }
+  },
+  scheduling_execution: {
+    wedge: {
+      key: "scheduling_execution",
+      label: "Scheduling execution",
+      selection: "selected_production",
+      rationale: "Weekly planning and calendar shaping are the second explicitly selected Phase 3 production wedge."
+    },
+    completionContract: {
+      id: "scheduling-execution-v1",
+      summary: "Turn calendar commitments into a reviewable weekly operating plan without silently mutating the calendar.",
+      successCriteria: [
+        "Current commitments and deadlines are consolidated into one planning view.",
+        "A weekly operating plan is drafted with focus blocks, risk notes, and tradeoffs.",
+        "Proposed scheduling changes remain reviewable instead of auto-committed."
+      ],
+      evidenceSignals: [
+        "Calendar and commitment artifacts are captured for the planning bundle.",
+        "A weekly planning draft artifact exists.",
+        "Calendar write actions stay behind review or approval when required."
+      ],
+      approvalExpectations: [
+        "Calendar changes that exceed the workspace auto-run policy require explicit review."
+      ],
+      doneWhen: "The system has produced a coherent weekly plan with visible risks and any write-side calendar changes remain explicitly reviewable."
+    }
+  },
+  travel_readiness: {
+    wedge: {
+      key: "travel_readiness",
+      label: "Travel readiness",
+      selection: "supporting",
+      rationale: "Travel preparation remains a supporting workflow, not one of the selected production wedges."
+    },
+    completionContract: {
+      id: "travel-readiness-v1",
+      summary: "Assemble a travel brief, checklist, and monitoring plan for upcoming itinerary work.",
+      successCriteria: [
+        "A trip brief captures itinerary assumptions and likely risks.",
+        "A readiness checklist captures the open dependencies.",
+        "Any scheduling changes remain reviewable before execution."
+      ],
+      evidenceSignals: [
+        "Travel briefing artifact exists.",
+        "Checklist artifact exists.",
+        "Watcher coverage is attached for the travel workflow."
+      ],
+      approvalExpectations: [
+        "Schedule-changing travel actions stay reviewable when they affect external commitments."
+      ],
+      doneWhen: "The trip has a usable brief, a checklist of missing dependencies, and monitoring for approaching deadlines or missing bookings."
+    }
+  },
+  general_coordination: {
+    wedge: {
+      key: "general_coordination",
+      label: "General coordination",
+      selection: "supporting",
+      rationale: "Broad coordination remains a fallback path outside the selected production wedges."
+    },
+    completionContract: {
+      id: "general-coordination-v1",
+      summary: "Turn an underspecified user request into a bounded, policy-aware workflow plan.",
+      successCriteria: [
+        "The request is decomposed into explicit tasks and constraints.",
+        "Supporting context is resolved before any side effect is attempted.",
+        "The next step is drafted safely when the request does not yet qualify for typed execution."
+      ],
+      evidenceSignals: [
+        "Interpretation task exists.",
+        "Supporting context resolution is logged.",
+        "The next-step draft is visible in the resulting artifacts or tasks."
+      ],
+      approvalExpectations: [
+        "Outward side effects are deferred until the request qualifies for the typed-action boundary."
+      ],
+      doneWhen: "The user has a safe, bounded workflow with clear next steps and no hidden side effects."
+    }
+  }
+} as const satisfies Record<
+  z.infer<typeof GoalWedgeKeySchema>,
+  {
+    wedge: z.input<typeof GoalWedgeSchema>;
+    completionContract: z.input<typeof GoalCompletionContractSchema>;
+  }
+>;
+
+function profileForGoalIntent(intent: string) {
+  if (intent === "communications-triage") {
+    return goalContractProfiles.communications_execution;
+  }
+
+  if (intent === "weekly-planning") {
+    return goalContractProfiles.scheduling_execution;
+  }
+
+  if (intent === "travel-readiness") {
+    return goalContractProfiles.travel_readiness;
+  }
+
+  return goalContractProfiles.general_coordination;
+}
+
+export function deriveGoalContract(intent: string) {
+  const profile = profileForGoalIntent(intent);
+
+  return {
+    wedge: GoalWedgeSchema.parse(profile.wedge),
+    completionContract: GoalCompletionContractSchema.parse(profile.completionContract)
+  };
+}
+
+const GoalInputSchema = z.object({
   id: z.string().min(1),
   userId: z.string().min(1),
   workspaceId: z.string().min(1).nullable().default(null),
@@ -184,8 +376,20 @@ export const GoalSchema = z.object({
   status: GoalStatusSchema,
   confidence: z.number().min(0).max(1),
   explanation: z.string().min(1),
+  wedge: GoalWedgeSchema.optional(),
+  completionContract: GoalCompletionContractSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
+});
+
+export const GoalSchema = GoalInputSchema.transform((goal) => {
+  const derived = deriveGoalContract(goal.intent);
+
+  return {
+    ...goal,
+    wedge: goal.wedge ?? derived.wedge,
+    completionContract: goal.completionContract ?? derived.completionContract
+  };
 });
 
 export const TaskSchema = z.object({
@@ -617,14 +821,63 @@ export const BriefingHistoryItemSchema = z.object({
   artifactTitle: z.string().min(1).nullable().default(null)
 });
 
+export const DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS = {
+  budgetWindowMinutes: 60,
+  maxEventsPerWindow: 12,
+  maxPendingEvents: 3,
+  maxConsecutiveFailures: 2
+} as const;
+
+export const AutopilotReliabilityControlsSchema = z
+  .object({
+    budgetWindowMinutes: z.number().int().min(1).max(24 * 60),
+    maxEventsPerWindow: z.number().int().min(1).max(500),
+    maxPendingEvents: z.number().int().min(1).max(100),
+    maxConsecutiveFailures: z.number().int().min(1).max(20)
+  })
+  .strict();
+
 export const AutopilotSettingsSchema = z.object({
   userId: z.string().min(1),
   mode: AutopilotModeSchema,
   debounceMinutes: z.number().int().min(1).max(24 * 60),
+  reliabilityControls: AutopilotReliabilityControlsSchema.default(DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS),
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
+
+export const AutopilotEventFabricReferenceSchema = z
+  .object({
+    goalId: z.string().min(1).nullable().default(null),
+    workflowId: z.string().min(1).nullable().default(null),
+    approvalId: z.string().min(1).nullable().default(null),
+    watcherId: z.string().min(1).nullable().default(null),
+    templateId: z.string().min(1).nullable().default(null),
+    briefingType: BriefingTypeSchema.nullable().default(null)
+  })
+  .strict();
+
+export const AutopilotEventFabricEnvelopeSchema = z
+  .object({
+    version: z.literal(1),
+    family: z.string().min(1).max(80),
+    severity: AutopilotEventSeveritySchema,
+    operatorRoute: AutopilotEventOperatorRouteSchema,
+    policy: AutopilotEventPolicySchema,
+    references: AutopilotEventFabricReferenceSchema.default({
+      goalId: null,
+      workflowId: null,
+      approvalId: null,
+      watcherId: null,
+      templateId: null,
+      briefingType: null
+    }),
+    signals: z.array(z.string().min(1).max(200)).max(10).default([]),
+    trigger: z.record(z.string(), z.unknown()).default({}),
+    summary: z.string().min(1).max(500)
+  })
+  .strict();
 
 export const AutopilotEventSchema = z.object({
   id: z.string().min(1),
@@ -642,6 +895,71 @@ export const AutopilotEventSchema = z.object({
   resultGoalId: z.string().min(1).nullable().default(null),
   error: z.string().max(1000).nullable().default(null)
 });
+
+export const AUTOPILOT_EVENT_TAXONOMY = {
+  watcher_triggered: {
+    family: "watcher_signal",
+    defaultSeverity: "medium",
+    operatorRoute: "workflow",
+    policy: "draft_goal"
+  },
+  template_due: {
+    family: "scheduled_template",
+    defaultSeverity: "low",
+    operatorRoute: "workflow",
+    policy: "draft_goal"
+  },
+  briefing_due: {
+    family: "scheduled_briefing",
+    defaultSeverity: "low",
+    operatorRoute: "operations",
+    policy: "notify_operator"
+  },
+  inbound_communication_received: {
+    family: "inbound_communication",
+    defaultSeverity: "high",
+    operatorRoute: "communications",
+    policy: "draft_goal"
+  },
+  deadline_drift_detected: {
+    family: "deadline_drift",
+    defaultSeverity: "high",
+    operatorRoute: "operations",
+    policy: "queue_operator_review"
+  },
+  approval_attention_required: {
+    family: "approval_attention",
+    defaultSeverity: "high",
+    operatorRoute: "approvals",
+    policy: "queue_approval_review"
+  },
+  execution_failure_detected: {
+    family: "execution_failure",
+    defaultSeverity: "critical",
+    operatorRoute: "platform",
+    policy: "escalate_immediately"
+  },
+  workflow_stalled: {
+    family: "workflow_stall",
+    defaultSeverity: "medium",
+    operatorRoute: "workflow",
+    policy: "queue_operator_review"
+  },
+  dormant_workflow_review_due: {
+    family: "dormant_workflow_review",
+    defaultSeverity: "medium",
+    operatorRoute: "workflow",
+    policy: "queue_operator_review"
+  }
+} as const satisfies Record<
+  (typeof autopilotEventKindValues)[number],
+  {
+    family: string;
+    defaultSeverity: (typeof autopilotEventSeverityValues)[number];
+    operatorRoute: (typeof autopilotEventOperatorRouteValues)[number];
+    policy: (typeof autopilotEventPolicyValues)[number];
+  }
+>;
 
 export const GoalCreateJobPayloadSchema = z
   .object({
@@ -1526,6 +1844,9 @@ export type BriefingType = z.infer<typeof BriefingTypeSchema>;
 export type BriefingFocus = z.infer<typeof BriefingFocusSchema>;
 export type AutopilotMode = z.infer<typeof AutopilotModeSchema>;
 export type AutopilotEventKind = z.infer<typeof AutopilotEventKindSchema>;
+export type AutopilotEventSeverity = z.infer<typeof AutopilotEventSeveritySchema>;
+export type AutopilotEventPolicy = z.infer<typeof AutopilotEventPolicySchema>;
+export type AutopilotEventOperatorRoute = z.infer<typeof AutopilotEventOperatorRouteSchema>;
 export type AutopilotEventStatus = z.infer<typeof AutopilotEventStatusSchema>;
 export type JobKind = z.infer<typeof JobKindSchema>;
 export type JobStatus = z.infer<typeof JobStatusSchema>;
@@ -1586,6 +1907,8 @@ export type BriefingPreferences = z.infer<typeof BriefingPreferencesSchema>;
 export type BriefingHistoryItem = z.infer<typeof BriefingHistoryItemSchema>;
 export type AutopilotSettings = z.infer<typeof AutopilotSettingsSchema>;
 export type AutopilotEvent = z.infer<typeof AutopilotEventSchema>;
+export type AutopilotEventFabricReference = z.infer<typeof AutopilotEventFabricReferenceSchema>;
+export type AutopilotEventFabricEnvelope = z.infer<typeof AutopilotEventFabricEnvelopeSchema>;
 export type GoalCreateJobPayload = z.infer<typeof GoalCreateJobPayloadSchema>;
 export type GoalRefineJobPayload = z.infer<typeof GoalRefineJobPayloadSchema>;
 export type BriefingCreateJobPayload = z.infer<typeof BriefingCreateJobPayloadSchema>;

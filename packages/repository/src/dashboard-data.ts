@@ -24,7 +24,7 @@ import type {
   WorkspaceSelection
 } from "@agentic/contracts";
 import { assessWorkspaceGovernanceConformance } from "@agentic/policy";
-import type { DashboardControlPlane, DashboardData, DashboardDiagnostics } from "./index";
+import type { DashboardControlPlane, DashboardData, DashboardDiagnostics } from "./repository-types";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
 type AssembleDashboardDataParams = {

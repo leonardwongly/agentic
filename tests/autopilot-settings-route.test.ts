@@ -1,6 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS } from "@agentic/contracts";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { GET as autopilotSettingsGetRoute, POST as autopilotSettingsPostRoute } from "../apps/web/app/api/autopilot/settings/route";
 
@@ -36,13 +37,15 @@ describe("autopilot settings route", () => {
       settings: {
         mode: string;
         debounceMinutes: number;
+        reliabilityControls: typeof DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS;
       };
     };
 
     expect(response.status).toBe(200);
     expect(payload.settings).toMatchObject({
       mode: "notify_only",
-      debounceMinutes: 15
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
     });
   });
 
@@ -56,7 +59,13 @@ describe("autopilot settings route", () => {
         },
         body: JSON.stringify({
           mode: "notify_only",
-          debounceMinutes: 45
+          debounceMinutes: 45,
+          reliabilityControls: {
+            budgetWindowMinutes: 30,
+            maxEventsPerWindow: 6,
+            maxPendingEvents: 2,
+            maxConsecutiveFailures: 3
+          }
         })
       })
     );
@@ -64,11 +73,23 @@ describe("autopilot settings route", () => {
       settings: {
         mode: string;
         debounceMinutes: number;
+        reliabilityControls: {
+          budgetWindowMinutes: number;
+          maxEventsPerWindow: number;
+          maxPendingEvents: number;
+          maxConsecutiveFailures: number;
+        };
       };
       dashboard: {
         autopilotSettings: {
           mode: string;
           debounceMinutes: number;
+          reliabilityControls: {
+            budgetWindowMinutes: number;
+            maxEventsPerWindow: number;
+            maxPendingEvents: number;
+            maxConsecutiveFailures: number;
+          };
         };
       };
     };
@@ -76,11 +97,23 @@ describe("autopilot settings route", () => {
     expect(response.status).toBe(200);
     expect(payload.settings).toMatchObject({
       mode: "notify_only",
-      debounceMinutes: 45
+      debounceMinutes: 45,
+      reliabilityControls: {
+        budgetWindowMinutes: 30,
+        maxEventsPerWindow: 6,
+        maxPendingEvents: 2,
+        maxConsecutiveFailures: 3
+      }
     });
     expect(payload.dashboard.autopilotSettings).toMatchObject({
       mode: "notify_only",
-      debounceMinutes: 45
+      debounceMinutes: 45,
+      reliabilityControls: {
+        budgetWindowMinutes: 30,
+        maxEventsPerWindow: 6,
+        maxPendingEvents: 2,
+        maxConsecutiveFailures: 3
+      }
     });
   });
 
