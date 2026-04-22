@@ -18,7 +18,7 @@ import type {
   WorkspaceGovernance,
   WorkspaceMember
 } from "@agentic/contracts";
-import type { DashboardDiagnostics } from "./index";
+import type { DashboardDiagnostics } from "./repository-types";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
 type BuildDashboardOperatingSectionsParams = {

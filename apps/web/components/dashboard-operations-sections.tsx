@@ -13,12 +13,41 @@ import {
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
-import { RelativeTime, StatusBadge } from "./ui";
+import { Badge, RelativeTime, StatusBadge } from "./ui";
 
 type RequestState = {
   kind: "idle" | "success" | "error";
   message: string;
 };
+
+type PrivacyControlSummary = {
+  registryVersion: number;
+  reviewedAt: string;
+  owners: string[];
+  totalDatasets: number;
+  classifications: Array<{
+    id: string;
+    label: string;
+    summary: string;
+    datasetCount: number;
+  }>;
+  lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
+  datasets: Array<{
+    id: string;
+    title: string;
+    classificationId: string;
+    classificationLabel: string;
+    retentionLabel: string;
+    tokenizationStrategy: "opaque_identifier" | "redacted_reference" | "not_applicable";
+    productSurfaceCount: number;
+    minimizationRuleCount: number;
+    maskingRuleCount: number;
+    lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
+  }>;
+};
+
+type GovernanceConformanceSummary = NonNullable<DashboardData["governanceConformance"]>;
+type GovernanceConformanceCheck = GovernanceConformanceSummary["checks"][number];
 
 type WorkspaceGovernanceDraft = Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt">;
 
@@ -30,6 +59,8 @@ type DashboardOperationsSectionsProps = {
   governanceState: RequestState;
   autopilotState: RequestState;
   privacyState: RequestState;
+  privacyInventoryState: RequestState;
+  privacyControls: PrivacyControlSummary | null;
   workspaceName: string;
   setWorkspaceName: Dispatch<SetStateAction<string>>;
   workspaceSlug: string;
@@ -81,6 +112,82 @@ const privacyOperationStatusLabels: Record<PrivacyOperation["status"], string> =
   failed: "failed"
 };
 
+const privacyTokenizationLabels: Record<PrivacyControlSummary["datasets"][number]["tokenizationStrategy"], string> = {
+  opaque_identifier: "Opaque IDs",
+  redacted_reference: "Redacted refs",
+  not_applicable: "Not applicable"
+};
+
+const governanceConformanceLabels: Record<GovernanceConformanceSummary["status"], string> = {
+  conformant: "Conformant",
+  needs_attention: "Needs attention",
+  non_conformant: "Blocking exceptions"
+};
+
+const governanceCheckGuidance: Record<
+  string,
+  {
+    control: string;
+    remediation: string;
+  }
+> = {
+  "audit-exports": {
+    control: "Require audit exports",
+    remediation: "Enable the audit export requirement so investigators and reviewers can retrieve evidence on demand."
+  },
+  "external-send-approval": {
+    control: "External sends always require approval",
+    remediation: "Turn approval back on before allowing outbound communication to leave the workspace."
+  },
+  "calendar-write-approval": {
+    control: "Calendar writes always require approval",
+    remediation: "Re-enable review unless you have a documented exception for autonomous scheduling."
+  },
+  "risk-ceiling": {
+    control: "Max auto-run risk class",
+    remediation: "Keep the ceiling at R2 or lower unless you can justify autonomous external commitments."
+  },
+  "always-review-ceiling": {
+    control: "Approval mode and max auto-run risk class",
+    remediation: "If the workspace stays in always-review mode, reduce the stored ceiling to R1 so operators do not inherit a misleading policy."
+  },
+  "retention-window": {
+    control: "Retention days",
+    remediation: "Keep retention inside the 30 to 730 day operating range unless a documented legal or privacy exception applies."
+  }
+};
+
+function getGovernanceConformanceVariant(status: GovernanceConformanceSummary["status"]): "success" | "warning" | "error" {
+  switch (status) {
+    case "conformant":
+      return "success";
+    case "needs_attention":
+      return "warning";
+    default:
+      return "error";
+  }
+}
+
+function getGovernanceCheckVariant(status: GovernanceConformanceCheck["status"]): "success" | "warning" | "error" {
+  switch (status) {
+    case "pass":
+      return "success";
+    case "warn":
+      return "warning";
+    default:
+      return "error";
+  }
+}
+
+function getGovernanceCheckGuidance(check: GovernanceConformanceCheck) {
+  return (
+    governanceCheckGuidance[check.id] ?? {
+      control: "Governance policy",
+      remediation: "Review this setting and bring it back into the workspace default conformance range."
+    }
+  );
+}
+
 function formatPrivacyOperationTimestamp(operation: PrivacyOperation): string {
   return operation.completedAt ?? operation.startedAt ?? operation.updatedAt;
 }
@@ -106,6 +213,8 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
     governanceState,
     autopilotState,
     privacyState,
+    privacyInventoryState,
+    privacyControls,
     workspaceName,
     setWorkspaceName,
     workspaceSlug,
@@ -132,6 +241,9 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
     revokeGoalShare
   } = props;
   const goalTitleById = new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.title]));
+  const governanceConformance = data.governanceConformance ?? null;
+  const blockingGovernanceChecks = governanceConformance?.checks.filter((check) => check.status === "fail") ?? [];
+  const warningGovernanceChecks = governanceConformance?.checks.filter((check) => check.status === "warn") ?? [];
 
   return (
     <>
@@ -260,6 +372,69 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ? `Editing governance for ${data.activeWorkspace.name}.`
               : "Select a workspace before editing governance.")}
         </p>
+        {governanceConformance ? (
+          <div className="list-stack compact">
+            <div className="list-item vertical">
+              <div className="operator-product-row-heading">
+                <div>
+                  <strong>Conformance status</strong>
+                  <p>{governanceConformance.summary}</p>
+                </div>
+                <div className="goal-item-actions">
+                  <Badge variant={getGovernanceConformanceVariant(governanceConformance.status)}>
+                    {governanceConformanceLabels[governanceConformance.status]}
+                  </Badge>
+                  <span className="pill">{blockingGovernanceChecks.length} blocking</span>
+                  <span className="pill">{warningGovernanceChecks.length} warnings</span>
+                </div>
+              </div>
+            </div>
+            {blockingGovernanceChecks.length > 0 ? (
+              <div className="list-stack compact">
+                {blockingGovernanceChecks.map((check) => {
+                  const guidance = getGovernanceCheckGuidance(check);
+
+                  return (
+                    <div className="list-item vertical" key={check.id}>
+                      <div className="operator-product-row-heading">
+                        <div>
+                          <strong>{check.summary}</strong>
+                          <p>{check.detail}</p>
+                        </div>
+                        <Badge variant={getGovernanceCheckVariant(check.status)}>Action required</Badge>
+                      </div>
+                      <p>
+                        <strong>{guidance.control}:</strong> {guidance.remediation}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            {warningGovernanceChecks.length > 0 ? (
+              <div className="list-stack compact">
+                {warningGovernanceChecks.map((check) => {
+                  const guidance = getGovernanceCheckGuidance(check);
+
+                  return (
+                    <div className="list-item vertical" key={check.id}>
+                      <div className="operator-product-row-heading">
+                        <div>
+                          <strong>{check.summary}</strong>
+                          <p>{check.detail}</p>
+                        </div>
+                        <Badge variant={getGovernanceCheckVariant(check.status)}>Needs review</Badge>
+                      </div>
+                      <p>
+                        <strong>{guidance.control}:</strong> {guidance.remediation}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="list-stack compact">
           <label className="field">
             <span>Approval mode</span>
@@ -373,6 +548,72 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ? `Privacy controls are scoped to ${data.activeWorkspace.name}.`
               : "Select a workspace before running privacy operations.")}
         </p>
+        <div className="card-header">
+          <h3>Data handling inventory</h3>
+          <span>{privacyControls ? `${privacyControls.totalDatasets} datasets` : "Unavailable"}</span>
+        </div>
+        <p className={`status-chip ${privacyInventoryState.kind}`}>
+          {privacyInventoryState.message ||
+            (privacyControls
+              ? `Registry owners: ${privacyControls.owners.join(", ")}.`
+              : "Privacy inventory has not loaded yet.")}
+        </p>
+        {privacyControls ? (
+          <div className="list-stack compact">
+            <div className="list-item vertical">
+              <div>
+                <strong>Coverage summary</strong>
+                <p>
+                  {privacyControls.classifications.length} classifications across {privacyControls.totalDatasets} datasets. Lifecycle operations:
+                  {" "}
+                  {privacyControls.lifecycleOperations.map((kind) => privacyOperationLabels[kind]).join(", ")}.
+                </p>
+              </div>
+              <div className="goal-item-actions">
+                <span className="pill">registry v{privacyControls.registryVersion}</span>
+              </div>
+            </div>
+            {privacyControls.classifications.map((classification) => (
+              <div className="list-item vertical" key={classification.id}>
+                <div>
+                  <strong>{classification.label}</strong>
+                  <p>{classification.summary}</p>
+                </div>
+                <div className="goal-item-actions">
+                  <span className="pill">{classification.datasetCount} datasets</span>
+                </div>
+              </div>
+            ))}
+            {privacyControls.datasets.map((dataset) => (
+              <div className="list-item vertical" key={dataset.id}>
+                <div>
+                  <strong>{dataset.title}</strong>
+                  <p>
+                    {dataset.classificationLabel} · {dataset.retentionLabel}
+                  </p>
+                </div>
+                <div className="goal-item-actions">
+                  <span className="pill">{privacyTokenizationLabels[dataset.tokenizationStrategy]}</span>
+                  <span className="pill">{dataset.productSurfaceCount} surfaces</span>
+                  <span className="pill">{dataset.minimizationRuleCount} minimization</span>
+                  <span className="pill">{dataset.maskingRuleCount} masking</span>
+                </div>
+                <p>
+                  Lifecycle hooks: {dataset.lifecycleOperations.map((kind) => privacyOperationLabels[kind]).join(", ")}.
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="list-stack compact">
+            <div className="list-item vertical">
+              <div>
+                <strong>Inventory unavailable</strong>
+                <p>Load the workspace privacy controls to inspect classifications, minimization, masking, and tokenization coverage.</p>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="list-stack compact">
           {privacyOperationKindValues.map((kind) => (
             <div className="list-item vertical" key={kind}>

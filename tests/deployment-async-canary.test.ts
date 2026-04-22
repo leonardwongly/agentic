@@ -130,4 +130,132 @@ describe("deployment async canary", () => {
       })
     ).rejects.toThrow("Deployment async canary timed out after 2 poll attempt(s).");
   });
+
+  it("rejects invalid configuration before making network calls", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await expect(
+      runDeploymentAsyncCanary({
+        baseUrl: "   ",
+        accessKey: "test-access-key",
+        fetchImpl
+      })
+    ).rejects.toThrow("AGENTIC_SMOKE_BASE_URL must be configured.");
+    await expect(
+      runDeploymentAsyncCanary({
+        baseUrl: "https://agentic.example.com",
+        accessKey: "   ",
+        fetchImpl
+      })
+    ).rejects.toThrow("AGENTIC_SMOKE_ACCESS_KEY must be configured.");
+    await expect(
+      runDeploymentAsyncCanary({
+        baseUrl: "https://agentic.example.com",
+        accessKey: "test-access-key",
+        timeoutMs: 0,
+        fetchImpl
+      })
+    ).rejects.toThrow("timeoutMs must be a positive number.");
+    await expect(
+      runDeploymentAsyncCanary({
+        baseUrl: "https://agentic.example.com",
+        accessKey: "test-access-key",
+        requestText: "x".repeat(2_001),
+        fetchImpl
+      })
+    ).rejects.toThrow("Deployment async canary request must be 2,000 characters or fewer.");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails when the enqueue response is malformed", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("not-json", {
+          status: 202,
+          headers: {
+            "content-type": "application/json"
+          }
+        })
+      );
+
+    await expect(
+      runDeploymentAsyncCanary({
+        baseUrl: "https://agentic.example.com",
+        accessKey: "test-access-key",
+        fetchImpl
+      })
+    ).rejects.toThrow("Deployment async canary received an invalid JSON response:");
+  });
+
+  it("fails when the enqueue response omits the status URL", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(202, {
+          job: { id: "job-4", status: "queued" }
+        })
+      );
+
+    await expect(
+      runDeploymentAsyncCanary({
+        baseUrl: "https://agentic.example.com",
+        accessKey: "test-access-key",
+        fetchImpl
+      })
+    ).rejects.toThrow("Goal enqueue response did not include a status URL.");
+  });
+
+  it("fails when the polled job response returns an unexpected status", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(202, {
+          job: { id: "job-5", status: "queued" },
+          statusUrl: "/api/goals/jobs/job-5"
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(500, {
+          job: { id: "job-5", status: "running" },
+          result: null,
+          error: "worker degraded"
+        })
+      );
+
+    await expect(
+      runDeploymentAsyncCanary({
+        baseUrl: "https://agentic.example.com",
+        accessKey: "test-access-key",
+        fetchImpl,
+        wait: async () => undefined
+      })
+    ).rejects.toThrow(
+      "Deployment async canary observed an unexpected job response: status=500, jobStatus=running."
+    );
+  });
+
+  it("fails when a completed canary omits the result payload", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(202, {
+          job: { id: "job-6", status: "queued" },
+          statusUrl: "/api/goals/jobs/job-6"
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          job: { id: "job-6", status: "completed" },
+          result: null,
+          error: null
+        })
+      );
+
+    await expect(
+      runDeploymentAsyncCanary({
+        baseUrl: "https://agentic.example.com",
+        accessKey: "test-access-key",
+        fetchImpl,
+        wait: async () => undefined
+      })
+    ).rejects.toThrow("Completed goal canary did not include a result payload.");
+  });
 });

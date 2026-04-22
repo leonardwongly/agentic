@@ -235,6 +235,58 @@
       ]
     },
     {
+      "id": "DATA-02",
+      "family": "Data Governance",
+      "title": "Privacy inventory, minimization, masking, and tokenization policy stay explicit and reviewable",
+      "objective": "Keep personal-data handling rules versioned, operator-visible, and test-backed so privacy lifecycle decisions do not drift silently.",
+      "owner": "platform-security",
+      "trustBoundaries": [
+        "Policy registry to operator dashboard",
+        "Privacy design intent to enforcement and evidence surfaces"
+      ],
+      "productSurfaces": [
+        "Privacy governance summary",
+        "Operator dashboard privacy card",
+        "Compliance evidence registry"
+      ],
+      "codePaths": [
+        "config/privacy/data-controls.json",
+        "packages/policy/src/privacy-controls.ts",
+        "apps/web/app/api/governance/privacy/route.ts",
+        "apps/web/components/dashboard-operations-sections.tsx"
+      ],
+      "runbooks": [
+        "docs/security/privacy-controls.md",
+        "docs/security/compliance-evidence.md"
+      ],
+      "automatedChecks": [
+        {
+          "id": "CHECK-PRIVACY-CONTROLS",
+          "title": "Privacy control registry stays validated and exposed through the governance privacy route",
+          "command": "npm test -- privacy-controls.test.ts governance-privacy-route.test.ts",
+          "sourcePaths": [
+            "tests/privacy-controls.test.ts",
+            "tests/governance-privacy-route.test.ts"
+          ]
+        }
+      ],
+      "evidenceArtifacts": [
+        {
+          "path": "artifacts/compliance/control-matrix.json",
+          "description": "Generated control matrix proving the privacy inventory is part of the reviewed evidence set.",
+          "required": true
+        }
+      ],
+      "risks": [
+        "Implicit privacy handling that diverges from operator-visible policy",
+        "Missing minimization or masking coverage for new data surfaces"
+      ],
+      "metrics": [
+        "Datasets covered by the privacy registry",
+        "Privacy inventory route validation pass rate"
+      ]
+    },
+    {
       "id": "DEPLOY-01",
       "family": "Release Safety",
       "title": "Deployments are gated by readiness, smoke tests, and rollout telemetry",

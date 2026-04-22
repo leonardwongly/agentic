@@ -23,15 +23,37 @@ import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/i
 import { getMemoryFreshness } from "@agentic/memory";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
+import { DashboardCommandCenter } from "./dashboard-command-center";
 import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
 import { CoreLoopViewTracker } from "./core-loop-view-tracker";
+import {
+  buildDashboardCommandCenterModel,
+  getPreferredCommandCenterRole,
+  type CommandCenterRole
+} from "../lib/command-center";
 import { isAdvancedDashboardSection } from "../lib/dashboard-surface";
 import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-loop-telemetry";
-import { summarizeFeatureCapabilities } from "../lib/feature-capabilities";
+import { deriveFeatureCapabilityReadiness, summarizeFeatureCapabilities } from "../lib/feature-capabilities";
 import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
 import { getGoalShareSuccessMessage } from "../lib/share-client";
 import { AgentsPanel } from "./agents";
 import { CommandPalette } from "./command-palette";
+import {
+  buildClientIdempotencyKey,
+  type BriefingCreateApiResponse,
+  type BriefingJobStatusApiResponse,
+  type DocsRenderApiResponse,
+  type DocsRenderJobStatusApiResponse,
+  type GoalJobStatusApiResponse,
+  type GoalQueuedApiResponse,
+  loadDashboardSnapshot as fetchDashboardSnapshot,
+  loadTemplatesSnapshot as fetchTemplatesSnapshot,
+  type NLIntentApiResponse,
+  pollJobStatusUntilSettled,
+  type TemplateRunApiResponse,
+  type TemplateRunJobStatusApiResponse,
+  readJson
+} from "./dashboard-async";
 import { DashboardOperatingSectionsCard } from "./dashboard-operating-sections";
 import { DashboardOperationsSections } from "./dashboard-operations-sections";
 import {
@@ -118,129 +140,41 @@ type RequestState = {
   message: string;
 };
 
-type NLIntentQueuedJob = {
-  id: string;
-  kind: "goal_create" | "briefing_create";
-  status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-  goalId: string;
-  briefingType?: BriefingType;
-  attemptCount: number;
-  maxAttempts: number;
-  createdAt: string;
-  updatedAt: string;
+type PrivacyControlSummary = {
+  registryVersion: number;
+  reviewedAt: string;
+  owners: string[];
+  totalDatasets: number;
+  classifications: Array<{
+    id: string;
+    label: string;
+    summary: string;
+    datasetCount: number;
+  }>;
+  lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
+  datasets: Array<{
+    id: string;
+    title: string;
+    classificationId: string;
+    classificationLabel: string;
+    retentionLabel: string;
+    tokenizationStrategy: "opaque_identifier" | "redacted_reference" | "not_applicable";
+    productSurfaceCount: number;
+    minimizationRuleCount: number;
+    maskingRuleCount: number;
+    lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
+  }>;
 };
 
-type NLIntentApiResponse = {
-  message: string;
-  data?: unknown;
-  dashboard?: DashboardData;
-  job?: NLIntentQueuedJob;
-  statusUrl?: string;
+type PrivacyControlsApiResponse = {
+  controls: PrivacyControlSummary;
 };
-
 type OperatorProductPayload = {
   products: OperatorProduct[];
   selection: OperatorProductSelection | null;
   agents: AgentDefinition[];
   templates: GoalTemplate[];
 };
-
-type GoalQueuedApiResponse = {
-  job: {
-    id: string;
-    kind: "goal_create" | "goal_refine";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    goalId: string;
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type GoalQueuedJob = GoalQueuedApiResponse["job"];
-
-type GoalJobStatusApiResponse = {
-  job: GoalQueuedJob;
-  result: {
-    goalId: string;
-    goalStatus: "planned" | "running" | "waiting" | "completed";
-    taskCount: number;
-    completedTaskCount: number;
-    pendingApprovalCount: number;
-    artifactCount: number;
-    watcherCount: number;
-    requiresReview: boolean;
-  } | null;
-  error: string | null;
-};
-
-type BriefingCreateApiResponse = {
-  job: {
-    id: string;
-    kind: "briefing_create";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    goalId: string;
-    briefingType: BriefingType;
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type BriefingJobStatusApiResponse = {
-  job: BriefingCreateApiResponse["job"];
-  result: GoalJobStatusApiResponse["result"];
-  error: string | null;
-};
-
-type TemplateRunApiResponse = {
-  job: {
-    id: string;
-    kind: "template_run";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    templateId: string;
-    goalId: string;
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type TemplateRunJobStatusApiResponse = {
-  job: TemplateRunApiResponse["job"];
-  result: GoalJobStatusApiResponse["result"];
-  error: string | null;
-};
-
-type DocsRenderApiResponse = {
-  job: {
-    id: string;
-    kind: "docs_render";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type DocsRenderJobStatusApiResponse = {
-  job: DocsRenderApiResponse["job"];
-  result: {
-    message: string;
-  } | null;
-  error: string | null;
-};
-
-const GOAL_JOB_POLL_INTERVAL_MS = 500;
-const GOAL_JOB_POLL_TIMEOUT_MS = 60_000;
 
 function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt"> {
   return {
@@ -278,27 +212,6 @@ function getDashboardItemAnchorId(itemId: string): string {
 
 function formatCommitmentUrgencyLabel(value: string): string {
   return value.replace(/_/gu, " ");
-}
-
-async function readJson<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as T & { error?: string };
-
-  if (!response.ok) {
-    const message = typeof payload === "object" && payload && "error" in payload ? String(payload.error) : "Request failed.";
-    throw new Error(message);
-  }
-
-  return payload;
-}
-
-async function waitForDelay(ms: number): Promise<void> {
-  await new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function buildClientIdempotencyKey(): string {
-  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 const commitmentInboxSections: Array<{
@@ -341,6 +254,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [briefingState, setBriefingState] = useState<RequestState>({ kind: "idle", message: "" });
   const [autopilotState, setAutopilotState] = useState<RequestState>({ kind: "idle", message: "" });
   const [privacyState, setPrivacyState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [privacyInventoryState, setPrivacyInventoryState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [privacyControls, setPrivacyControls] = useState<PrivacyControlSummary | null>(null);
   const [lastShareUrl, setLastShareUrl] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [templates, setTemplates] = useState<GoalTemplate[]>([]);
@@ -355,6 +270,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [slideOutPanel, setSlideOutPanel] = useState<{ type: string; data: unknown } | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
+  const [commandCenterRole, setCommandCenterRole] = useState<CommandCenterRole>("command");
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(undefined);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const [commitmentBucket, setCommitmentBucket] = useState<CommitmentInboxBucket>(initialCommitmentInbox.bucket);
@@ -513,7 +429,18 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     () => data.integrations.filter((integration) => integration.status === "ready").length,
     [data.integrations]
   );
-  const featureCapabilitySummary = useMemo(() => summarizeFeatureCapabilities(), []);
+  const featureCapabilitySummary = useMemo(
+    () =>
+      summarizeFeatureCapabilities(
+        deriveFeatureCapabilityReadiness({
+          autopilotSettings: data.autopilotSettings,
+          autopilotEvents: data.autopilotEvents,
+          watchers: data.watchers,
+          diagnostics: data.diagnostics
+        })
+      ),
+    [data.autopilotEvents, data.autopilotSettings, data.diagnostics, data.watchers]
+  );
   const coreLoopSummary = useMemo(() => summarizeCoreLoopTelemetry(data), [data]);
   const coreLoopHealthCopy = useMemo(() => describeCoreLoopHealth(coreLoopSummary), [coreLoopSummary]);
   const integrationSurfaces = useMemo(
@@ -534,6 +461,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   );
 
   const operatorProductTemplateLookup = templates.length > 0 ? templates : operatorProductTemplates;
+  const commandCenterModel = useMemo(
+    () =>
+      buildDashboardCommandCenterModel({
+        data,
+        selectedOperatorProduct
+      }),
+    [data, selectedOperatorProduct]
+  );
 
   const selectedNotePreview = useMemo(
     () => notes.find((note) => note.slug === selectedNoteSlug) ?? null,
@@ -671,6 +606,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     void loadOperatorProducts();
   }, []);
 
+  useEffect(() => {
+    setCommandCenterRole(getPreferredCommandCenterRole(selectedOperatorProduct));
+  }, [selectedOperatorProduct]);
+
   const setSelectedNoteTitleDraft = (value: string) => {
     selectedNoteTitleRef.current = value;
     setSelectedNoteTitle(value);
@@ -729,99 +668,57 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   }, [statsBar]);
 
   const loadDashboardSnapshot = useCallback(async () => {
-    return readJson<{ dashboard: DashboardData }>(
-      await fetch("/api/goals", {
-        cache: "no-store"
-      })
-    );
+    return fetchDashboardSnapshot();
   }, []);
+
+  const loadPrivacyControls = useCallback(async () => {
+    try {
+      const payload = await readJson<PrivacyControlsApiResponse>(
+        await fetch("/api/governance/privacy", {
+          cache: "no-store"
+        })
+      );
+
+      startTransition(() => {
+        setPrivacyControls(payload.controls);
+        setPrivacyInventoryState({
+          kind: "success",
+          message: `Registry v${payload.controls.registryVersion} reviewed ${payload.controls.reviewedAt}.`
+        });
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to load privacy controls.";
+
+      setPrivacyControls(null);
+      setPrivacyInventoryState({
+        kind: "error",
+        message: errorMessage
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPrivacyControls();
+  }, [loadPrivacyControls]);
 
   const loadTemplatesSnapshot = useCallback(async () => {
-    return readJson<{ templates: GoalTemplate[] }>(
-      await fetch("/api/templates", {
-        cache: "no-store"
-      })
-    );
+    return fetchTemplatesSnapshot();
   }, []);
 
-  const pollGoalJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<GoalJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
+  const pollGoalJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<GoalJobStatusApiResponse>(statusUrl);
   }, []);
 
-  const pollBriefingJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<BriefingJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
+  const pollBriefingJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<BriefingJobStatusApiResponse>(statusUrl);
   }, []);
 
-  const pollTemplateRunJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<TemplateRunJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
+  const pollTemplateRunJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<TemplateRunJobStatusApiResponse>(statusUrl);
   }, []);
 
-  const pollDocsRenderJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<DocsRenderJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
+  const pollDocsRenderJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<DocsRenderJobStatusApiResponse>(statusUrl);
   }, []);
 
   const submitGoalRequest = useCallback(async (nextRequest: string, agentId?: string) => {
@@ -2094,6 +1991,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           <ThemeToggle />
         </div>
 
+        <DashboardCommandCenter
+          model={commandCenterModel}
+          role={commandCenterRole}
+          onRoleChange={setCommandCenterRole}
+          openTarget={navigateToSection}
+        />
+
         <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openTarget={deepLink.openTarget} />
 
         {/* Recent Actions */}
@@ -2350,6 +2254,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               governanceState={governanceState}
               autopilotState={autopilotState}
               privacyState={privacyState}
+              privacyInventoryState={privacyInventoryState}
+              privacyControls={privacyControls}
               workspaceName={workspaceName}
               setWorkspaceName={setWorkspaceName}
               workspaceSlug={workspaceSlug}
