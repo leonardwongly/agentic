@@ -517,6 +517,59 @@ export function GoalDetailPanel({ bundle, onClose, onRefine, onShare, onSaveAsTe
         </div>
       </div>
 
+      {goal.wedge && goal.completionContract ? (
+        <div className="detail-section">
+          <h4>Goal Contract</h4>
+          <div className="detail-list">
+            <div className="detail-list-item">
+              <div className="detail-list-header">
+                <strong>{goal.wedge.label}</strong>
+                <div className="detail-list-badges">
+                  <span className="pill">{goal.wedge.selection.replaceAll("_", " ")}</span>
+                  <span className="pill">{goal.completionContract.id}</span>
+                </div>
+              </div>
+              <p className="detail-list-summary">{goal.wedge.rationale}</p>
+              <div className="detail-list-meta">
+                <span>
+                  Summary: <strong>{goal.completionContract.summary}</strong>
+                </span>
+              </div>
+              <div className="detail-field">
+                <label>Done when</label>
+                <div className="detail-value">{goal.completionContract.doneWhen}</div>
+              </div>
+              <div className="detail-field">
+                <label>Success criteria</label>
+                <ul className="detail-bullet-list">
+                  {goal.completionContract.successCriteria.map((criterion) => (
+                    <li key={criterion}>{criterion}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="detail-field">
+                <label>Evidence signals</label>
+                <ul className="detail-bullet-list">
+                  {goal.completionContract.evidenceSignals.map((signal) => (
+                    <li key={signal}>{signal}</li>
+                  ))}
+                </ul>
+              </div>
+              {goal.completionContract.approvalExpectations.length > 0 ? (
+                <div className="detail-field">
+                  <label>Approval expectations</label>
+                  <ul className="detail-bullet-list">
+                    {goal.completionContract.approvalExpectations.map((expectation) => (
+                      <li key={expectation}>{expectation}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {contextPack ? (
         <div className="detail-section">
           <h4>Context Review</h4>

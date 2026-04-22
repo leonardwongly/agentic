@@ -2,8 +2,10 @@ import {
   AgentDefinitionSchema,
   OperatorProductSchema,
   nowIso,
+  type Capability,
   type AgentDefinition,
-  type OperatorProduct
+  type OperatorProduct,
+  type RiskClass
 } from "@agentic/contracts";
 
 type BuiltInAgentTemplate = {
@@ -12,6 +14,8 @@ type BuiltInAgentTemplate = {
   description: string;
   systemPrompt: string;
   artifactType: "summary" | "brief" | "checklist" | "draft" | "explanation";
+  allowedCapabilities: Capability[];
+  maxRiskClass: RiskClass;
   category:
     | "productivity"
     | "communication"
@@ -49,6 +53,8 @@ export function defaultAgents(userId: string): AgentDefinition[] {
       systemPrompt:
         "You are a communications triage specialist. You analyze inbound messages, identify urgency and sender context, draft replies, and prepare escalation notes. Be concise and actionable. Output sender-aware guidance with clear priority rankings.",
       artifactType: "summary",
+      allowedCapabilities: ["read", "search", "draft", "send"],
+      maxRiskClass: "R3",
       category: "communication"
     },
     {
@@ -58,6 +64,8 @@ export function defaultAgents(userId: string): AgentDefinition[] {
       systemPrompt:
         "You are a calendar and scheduling analyst. You review existing commitments, detect conflicts, identify overload windows, and recommend reschedule candidates. Output a structured brief with time-block analysis.",
       artifactType: "brief",
+      allowedCapabilities: ["read", "search", "schedule", "update"],
+      maxRiskClass: "R3",
       category: "scheduling"
     },
     {
@@ -67,6 +75,8 @@ export function defaultAgents(userId: string): AgentDefinition[] {
       systemPrompt:
         "You are a workflow planner. You decompose requests into concrete, ordered action items with checkpoints and reminders. Output a structured checklist with dependencies and resumable checkpoints.",
       artifactType: "checklist",
+      allowedCapabilities: ["read", "search"],
+      maxRiskClass: "R2",
       category: "productivity"
     },
     {
@@ -76,6 +86,8 @@ export function defaultAgents(userId: string): AgentDefinition[] {
       systemPrompt:
         "You are a research analyst. You gather evidence, compare options, surface risks and assumptions, and separate confirmed facts from inferences. Output a structured brief with sourced findings.",
       artifactType: "brief",
+      allowedCapabilities: ["read", "search"],
+      maxRiskClass: "R2",
       category: "research"
     },
     {
@@ -85,6 +97,8 @@ export function defaultAgents(userId: string): AgentDefinition[] {
       systemPrompt:
         "You are a knowledge retrieval specialist. You surface relevant preferences, standing instructions, and contextual background. Prioritize confirmed information over inferred. Output a structured explanation.",
       artifactType: "explanation",
+      allowedCapabilities: ["read", "search"],
+      maxRiskClass: "R2",
       category: "research"
     },
     {
@@ -94,6 +108,8 @@ export function defaultAgents(userId: string): AgentDefinition[] {
       systemPrompt:
         "You are a travel preparation specialist. You assemble itineraries, checklists, booking confirmations, and travel risk assessments. Output a comprehensive travel brief.",
       artifactType: "brief",
+      allowedCapabilities: ["read", "search"],
+      maxRiskClass: "R2",
       category: "administrative"
     },
     {
@@ -103,6 +119,8 @@ export function defaultAgents(userId: string): AgentDefinition[] {
       systemPrompt:
         "You are a personal administration specialist. You handle routine personal tasks, document organization, and life logistics. Output an actionable summary.",
       artifactType: "summary",
+      allowedCapabilities: ["read", "search"],
+      maxRiskClass: "R2",
       category: "administrative"
     },
     {
@@ -112,6 +130,8 @@ export function defaultAgents(userId: string): AgentDefinition[] {
       systemPrompt:
         "You are a finance operations specialist. You track expenses, prepare budget summaries, and flag financial action items. Output a structured financial brief.",
       artifactType: "brief",
+      allowedCapabilities: ["read", "search"],
+      maxRiskClass: "R2",
       category: "finance"
     },
     {
@@ -121,6 +141,8 @@ export function defaultAgents(userId: string): AgentDefinition[] {
       systemPrompt:
         "You are a meta-orchestrator. You coordinate between specialized agents, resolve conflicts, and ensure workflow coherence. Output a coordination summary.",
       artifactType: "summary",
+      allowedCapabilities: ["read", "search"],
+      maxRiskClass: "R2",
       category: "productivity"
     }
   ];
@@ -147,9 +169,9 @@ export function defaultAgents(userId: string): AgentDefinition[] {
         responseStyle: "balanced",
         formality: "professional"
       },
-      allowedCapabilities: ["read", "search"],
+      allowedCapabilities: agent.allowedCapabilities,
       blockedCapabilities: [],
-      maxRiskClass: "R2",
+      maxRiskClass: agent.maxRiskClass,
       integrationPermissions: [],
       memoryPermissions: [],
       isBuiltIn: true,
