@@ -2272,12 +2272,53 @@ describe("repository", () => {
     const collaboratorDashboard = await repository.getDashboardData(collaboratorUserId);
     const collaboratorSharedGoal = await repository.getGoalBundleForUser(sharedBundle.goal.id, collaboratorUserId);
     const collaboratorPrivateGoal = await repository.getGoalBundleForUser(privateBundle.goal.id, collaboratorUserId);
+    const sharedJob = await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "goal_refine",
+        actorContext: systemActor,
+        payload: {
+          type: "goal_refine",
+          goalId: sharedBundle.goal.id,
+          workflowId: sharedBundle.workflow.id,
+          refinement: "Add the shared operator recovery path.",
+          workspaceId: sharedWorkspace.id,
+          metadata: {}
+        }
+      })
+    );
+    const privateJob = await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "goal_refine",
+        actorContext: systemActor,
+        payload: {
+          type: "goal_refine",
+          goalId: privateBundle.goal.id,
+          workflowId: privateBundle.workflow.id,
+          refinement: "Keep this personal workflow private.",
+          workspaceId: privateBundle.goal.workspaceId,
+          metadata: {}
+        }
+      })
+    );
+    const collaboratorVisibleJobs = await repository.listJobs({ userId: collaboratorUserId });
 
     expect(collaboratorDashboard.activeWorkspace?.id).toBe(sharedWorkspace.id);
     expect(collaboratorDashboard.goals.map((bundle) => bundle.goal.id)).toContain(sharedBundle.goal.id);
     expect(collaboratorDashboard.goals.map((bundle) => bundle.goal.id)).not.toContain(privateBundle.goal.id);
     expect(collaboratorSharedGoal?.goal.workspaceId).toBe(sharedWorkspace.id);
     expect(collaboratorPrivateGoal).toBeNull();
+    expect(collaboratorVisibleJobs.map((job) => job.id)).toContain(sharedJob.id);
+    expect(collaboratorVisibleJobs.map((job) => job.id)).not.toContain(privateJob.id);
+    await expect(repository.getJob(sharedJob.id, collaboratorUserId)).resolves.toMatchObject({
+      id: sharedJob.id,
+      payload: {
+        type: "goal_refine",
+        goalId: sharedBundle.goal.id
+      }
+    });
+    await expect(repository.getJob(privateJob.id, collaboratorUserId)).resolves.toBeNull();
 
     await repository.saveWorkspaceSelection(
       WorkspaceSelectionSchema.parse({

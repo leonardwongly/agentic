@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DashboardData } from "@agentic/repository";
 import { DashboardOperationsTowerCard } from "../apps/web/components/dashboard-operations-tower-card";
+import { SHARED_JOB_REPLAY_DENIED_REASON } from "../apps/web/lib/workspace-role-permissions";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -138,6 +139,8 @@ describe("DashboardOperationsTowerCard", () => {
         highlightedItemId={null}
         getItemAnchorId={(itemId) => itemId}
         navigateToSection={() => undefined}
+        canReplayDeadLetterJobs
+        replayPermissionReason=""
       />
     );
 
@@ -156,5 +159,98 @@ describe("DashboardOperationsTowerCard", () => {
     expect(html).toContain("disabled shadow replay");
     expect(html).toContain("Open queue recovery");
     expect(html).toContain("Open autopilot controls");
+  });
+
+  it("disables replay remediation when the workspace role can only inspect shared runtime issues", () => {
+    const operations = {
+      generatedAt: "2026-04-21T00:00:00.000Z",
+      autonomyPosture: {
+        status: "attention",
+        level: "operator_review",
+        label: "Operator review",
+        summary: "A shared dead-letter queue item remains visible, but replay is restricted.",
+        reasons: [],
+        stats: ["Mode notify only"],
+        overridePaths: []
+      },
+      shellEffectiveness: {
+        status: "attention",
+        summary: "A dead-lettered job still needs recovery.",
+        measurementWindowDays: 30,
+        windowStartedAt: "2026-03-22T00:00:00.000Z",
+        approvalSampleCount: 1,
+        medianApprovalDecisionSeconds: 900,
+        recoveryStartCount: 0,
+        recoveryResolvedCount: 0,
+        medianRecoveryStartSeconds: null,
+        pendingApprovalCount: 0,
+        openRuntimeIssueCount: 1,
+        metrics: ["1 runtime issue"],
+        highlights: ["Viewers can inspect the dead letter, but replay remains disabled."]
+      },
+      asyncExecution: {
+        status: "attention",
+        queuedJobs: 0,
+        retryingJobs: 0,
+        runningJobs: 0,
+        deadLetterJobs: 1,
+        expiredLeaseCount: 0,
+        stalePendingCount: 0,
+        issueCount: 1,
+        oldestPendingJobAgeSeconds: null,
+        maxPendingJobAgeSeconds: 900,
+        items: [
+          {
+            id: "operations-job-job-1",
+            jobId: "job-1",
+            label: "Approval notification dead letter",
+            summary: "The shared runtime issue is visible to viewers, but replay is still restricted.",
+            severity: "attention",
+            status: "dead_letter",
+            updatedAt: "2026-04-21T00:00:00.000Z",
+            target: {
+              section: "operations",
+              itemId: "operations-job-job-1",
+              label: "Inspect dead letter"
+            },
+            remediation: {
+              kind: "replay_job",
+              label: "Replay job",
+              permission: "editor",
+              note: "Replay remains restricted to recovery-capable workspace roles."
+            }
+          }
+        ]
+      },
+      connectorHealth: {
+        status: "healthy",
+        totalCount: 0,
+        connectedCount: 0,
+        degradedCount: 0,
+        reconnectRequiredCount: 0,
+        refreshFailedCount: 0,
+        revokedCount: 0,
+        expiredCount: 0,
+        validationStaleCount: 0,
+        issueCount: 0,
+        items: []
+      }
+    } satisfies NonNullable<DashboardData["operations"]>;
+
+    const html = renderToStaticMarkup(
+      <DashboardOperationsTowerCard
+        operations={operations}
+        expanded
+        highlightedItemId={null}
+        getItemAnchorId={(itemId) => itemId}
+        navigateToSection={() => undefined}
+        canReplayDeadLetterJobs={false}
+        replayPermissionReason={SHARED_JOB_REPLAY_DENIED_REASON}
+      />
+    );
+
+    expect(html).toContain("Replay remains restricted to recovery-capable workspace roles.");
+    expect(html).toContain(SHARED_JOB_REPLAY_DENIED_REASON);
+    expect(html).toContain('disabled=""');
   });
 });

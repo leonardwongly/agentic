@@ -3,6 +3,12 @@ import { CommitmentInboxPageSchema, briefingTypeValues } from "@agentic/contract
 import type { DashboardData } from "@agentic/repository";
 import { Dashboard } from "../apps/web/components/dashboard";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    refresh: vi.fn()
+  })
+}));
+
 function buildDashboardData(role: "editor" | "viewer"): DashboardData {
   return {
     workspaces: [
@@ -227,6 +233,81 @@ function buildDashboardData(role: "editor" | "viewer"): DashboardData {
       status: "healthy",
       totalCount: 0,
       items: []
+    },
+    operations: {
+      generatedAt: "2026-04-22T00:00:00.000Z",
+      autonomyPosture: {
+        status: "attention",
+        level: "approval_gated",
+        label: "Approval gated",
+        summary: "Recovery remains operator-visible.",
+        reasons: [],
+        stats: [],
+        overridePaths: []
+      },
+      shellEffectiveness: {
+        status: "attention",
+        summary: "Shared queue recovery is visible.",
+        measurementWindowDays: 30,
+        windowStartedAt: "2026-03-23T00:00:00.000Z",
+        approvalSampleCount: 0,
+        medianApprovalDecisionSeconds: null,
+        recoveryStartCount: 0,
+        recoveryResolvedCount: 0,
+        medianRecoveryStartSeconds: null,
+        pendingApprovalCount: 0,
+        openRuntimeIssueCount: 1,
+        metrics: [],
+        highlights: []
+      },
+      asyncExecution: {
+        status: "critical",
+        queuedJobs: 0,
+        retryingJobs: 0,
+        runningJobs: 0,
+        deadLetterJobs: 1,
+        expiredLeaseCount: 0,
+        stalePendingCount: 0,
+        issueCount: 1,
+        oldestPendingJobAgeSeconds: null,
+        maxPendingJobAgeSeconds: 900,
+        items: [
+          {
+            id: "operations-job-job-1",
+            jobId: "job-1",
+            label: "Shared queue replay",
+            summary: "Dead-lettered after 1/3 attempts.",
+            severity: "critical",
+            status: "dead_letter",
+            updatedAt: "2026-04-22T00:00:00.000Z",
+            target: {
+              section: "goals",
+              itemId: "goal-shared-watcher",
+              label: "Open shared goal"
+            },
+            remediation: {
+              kind: "replay_job",
+              label: "Replay job",
+              note: "Recover the shared workflow queue item from the control tower.",
+              permission: "owner",
+              statusUrl: "/api/jobs/job-1"
+            }
+          }
+        ]
+      },
+      connectorHealth: {
+        status: "idle",
+        totalCount: 0,
+        connectedCount: 0,
+        degradedCount: 0,
+        reconnectRequiredCount: 0,
+        refreshFailedCount: 0,
+        revokedCount: 0,
+        expiredCount: 0,
+        validationStaleCount: 0,
+        issueCount: 0,
+        items: []
+      }
     }
   } as DashboardData;
 }
@@ -262,18 +343,35 @@ function extractButtonMarkup(markup: string, label: string): string {
   return match[0];
 }
 
+function extractInputMarkup(markup: string, placeholder: string): string {
+  const escapedPlaceholder = placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = markup.match(new RegExp(`<input[^>]*placeholder="${escapedPlaceholder}"[^>]*>`));
+
+  if (!match) {
+    throw new Error(`Input with placeholder "${placeholder}" was not rendered.`);
+  }
+
+  return match[0];
+}
+
 describe("Dashboard watcher permissions", () => {
-  it("keeps watcher controls visible but disabled for shared-workspace viewers", () => {
+  it("keeps shared workflow controls visible but disabled for shared-workspace viewers", () => {
     const markup = renderToStaticMarkup(
       <Dashboard initialData={buildDashboardData("viewer")} initialNotes={[]} initialCommitmentInbox={buildCommitmentInbox()} />
     );
 
     expect(markup).toContain("shared-escalation-queue");
     expect(markup).toContain("Viewers can inspect shared workflow watchers, but only workspace owners and editors can create or change them.");
+    expect(markup).toContain("Viewers can inspect shared goals, but only workspace owners and editors can refine them.");
+    expect(markup).toContain(
+      "Viewers can inspect shared runtime issues, but only workspace owners and editors can replay dead-letter jobs."
+    );
     expect(extractButtonMarkup(markup, "Pause")).toContain("disabled");
+    expect(extractInputMarkup(markup, "Refine this goal...")).toContain("disabled");
+    expect(extractButtonMarkup(markup, "Replay job")).toContain("disabled");
   });
 
-  it("leaves watcher controls enabled for shared-workspace editors", () => {
+  it("leaves shared workflow controls enabled for shared-workspace editors", () => {
     const markup = renderToStaticMarkup(
       <Dashboard initialData={buildDashboardData("editor")} initialNotes={[]} initialCommitmentInbox={buildCommitmentInbox()} />
     );
@@ -282,6 +380,12 @@ describe("Dashboard watcher permissions", () => {
     expect(markup).not.toContain(
       "Viewers can inspect shared workflow watchers, but only workspace owners and editors can create or change them."
     );
+    expect(markup).not.toContain("Viewers can inspect shared goals, but only workspace owners and editors can refine them.");
+    expect(markup).not.toContain(
+      "Viewers can inspect shared runtime issues, but only workspace owners and editors can replay dead-letter jobs."
+    );
     expect(extractButtonMarkup(markup, "Pause")).not.toContain("disabled");
+    expect(extractInputMarkup(markup, "Refine this goal...")).not.toContain("disabled");
+    expect(extractButtonMarkup(markup, "Replay job")).not.toContain("disabled");
   });
 });

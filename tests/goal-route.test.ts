@@ -21,6 +21,7 @@ import {
   setAuthSessionStateStoreForTesting,
   type AuthSessionStateStore
 } from "../apps/web/lib/auth-session-store";
+import { SHARED_GOAL_REFINEMENT_DENIED_REASON } from "../apps/web/lib/workspace-role-permissions";
 import { GET as goalRoute } from "../apps/web/app/api/goals/[id]/route";
 import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
 import { POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
@@ -504,8 +505,76 @@ describe("goal route", () => {
       const payload = (await response.json()) as { error?: string };
 
       expect(response.status).toBe(403);
-      expect(payload.error).toBe("Viewers can inspect shared goals, but only workspace owners and editors can refine them.");
+      expect(payload.error).toBe(SHARED_GOAL_REFINEMENT_DENIED_REASON);
       await expect(repository.listJobs({ userId: viewerUserId })).resolves.toHaveLength(0);
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+  });
+
+  it("queues refinement when an editor refines a shared workspace goal", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const editorUserId = "user-editor";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(editorUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, editorUserId);
+    await workspace.addMember("editor");
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Keep the shared launch workflow aligned with current operator guidance.",
+      workspace.workspaceId
+    );
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: editorUserId,
+      sessionId: "session-editor",
+      expiresAt: null
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    try {
+      const response = await goalRefineRoute(
+        new Request(`http://localhost/api/goals/${bundle.goal.id}/refine`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            message: "Add the operator recovery path and escalation checklist."
+          })
+        }),
+        {
+          params: Promise.resolve({ id: bundle.goal.id })
+        }
+      );
+      const payload = (await response.json()) as {
+        job: { id: string; goalId: string; kind: string; status: string };
+        statusUrl: string;
+      };
+      const sharedJobs = await repository.listJobs({ userId: editorUserId });
+
+      expect(response.status).toBe(202);
+      expect(payload.job).toMatchObject({
+        goalId: bundle.goal.id,
+        kind: "goal_refine",
+        status: "queued"
+      });
+      expect(payload.statusUrl).toBe(`/api/goals/jobs/${payload.job.id}`);
+      expect(sharedJobs.some((job) => job.id === payload.job.id)).toBe(true);
+      expect(await repository.getJob(payload.job.id, editorUserId)).toMatchObject({
+        actorContext: createHumanActorContext(editorUserId, "session-editor"),
+        payload: {
+          type: "goal_refine",
+          goalId: bundle.goal.id,
+          workspaceId: workspace.workspaceId
+        }
+      });
     } finally {
       requireApiSessionSpy.mockRestore();
     }
