@@ -1,7 +1,9 @@
 import {
+  ActionIntentSchema,
   AgentResultSchema,
   ArtifactSchema,
   nowIso,
+  type ActionIntent,
   type AgentDefinition,
   type AgentExecutionMode,
   type AgentName,
@@ -16,12 +18,15 @@ export type RunAgentOptions = {
   agentDefinition?: AgentDefinition;
 };
 
+const SELECTED_WEDGE_EXECUTION_MODE: AgentExecutionMode = "governed_specialist";
+
 function buildArtifact(
   task: Task,
   title: string,
   content: string,
   artifactType: ArtifactType,
   executionMode: AgentExecutionMode,
+  actionIntent?: ActionIntent | null,
   agentId?: string
 ) {
   return ArtifactSchema.parse({
@@ -35,6 +40,7 @@ function buildArtifact(
       agent: task.assignedAgent,
       executionMode,
       requiresManualReview: executionMode === "manual_review_required",
+      ...(actionIntent ? { actionIntent, executionIntent: actionIntent } : {}),
       ...(agentId && { agentDefinitionId: agentId })
     },
     createdAt: nowIso()
@@ -49,10 +55,133 @@ type AgentContent = {
   explanation: string;
   nextSteps: string[];
   confidence: number;
+  actionIntent?: ActionIntent | null;
 };
 
 function summarizePrompt(systemPrompt: string): string {
   return systemPrompt.replace(/\s+/gu, " ").trim().slice(0, 200);
+}
+
+function buildLabeledFieldPattern(labels: readonly string[]): RegExp {
+  const escapedLabels = labels
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+    .sort((left, right) => right.length - left.length);
+
+  return new RegExp(`\\b(${escapedLabels.join("|")})\\s*:`, "giu");
+}
+
+function normalizeLabeledFieldValue(value: string): string {
+  const trimmed = value.trim();
+
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+
+  return trimmed;
+}
+
+function readLabeledFields(input: string, labels: readonly string[]): Map<string, string> {
+  const fields = new Map<string, string>();
+  const pattern = buildLabeledFieldPattern(labels);
+  const matches = Array.from(input.matchAll(pattern));
+
+  for (const [index, match] of matches.entries()) {
+    const label = match[1]?.toLowerCase();
+    const valueStart = (match.index ?? 0) + match[0].length;
+    const valueEnd = matches[index + 1]?.index ?? input.length;
+    const normalizedValue = normalizeLabeledFieldValue(input.slice(valueStart, valueEnd));
+
+    if (label && normalizedValue) {
+      fields.set(label, normalizedValue);
+    }
+  }
+
+  return fields;
+}
+
+function maybeBuildCommunicationsActionIntent(task: Task, scenario: string): ActionIntent | null {
+  if (!task.toolCapabilities.includes("draft") && !task.toolCapabilities.includes("send")) {
+    return null;
+  }
+
+  const fields = readLabeledFields(scenario, ["To", "Subject", "Body", "Mode", "Thread-ID", "Thread ID"]);
+  const to = fields.get("to");
+  const subject = fields.get("subject");
+  const body = fields.get("body");
+
+  if (!to || !subject || !body) {
+    return null;
+  }
+
+  const requestedMode = fields.get("mode")?.toLowerCase();
+  const mode =
+    requestedMode === "send"
+      ? "send"
+      : requestedMode === "draft"
+        ? "draft"
+        : task.toolCapabilities.includes("draft")
+          ? "draft"
+          : task.toolCapabilities.includes("send")
+            ? "send"
+            : null;
+
+  if (!mode) {
+    return null;
+  }
+
+  if (mode === "send" && !task.toolCapabilities.includes("send")) {
+    return null;
+  }
+
+  if (mode === "draft" && !task.toolCapabilities.includes("draft") && !task.toolCapabilities.includes("send")) {
+    return null;
+  }
+
+  const parsed = ActionIntentSchema.safeParse({
+    type: "send_message",
+    to,
+    subject,
+    body,
+    mode,
+    threadId: fields.get("thread-id") ?? fields.get("thread id") ?? null
+  });
+
+  return parsed.success ? parsed.data : null;
+}
+
+function maybeBuildCalendarActionIntent(task: Task, scenario: string): ActionIntent | null {
+  if (!task.toolCapabilities.includes("schedule")) {
+    return null;
+  }
+
+  const fields = readLabeledFields(scenario, ["Event", "Start", "End", "Attendees", "Description"]);
+  const summary = fields.get("event");
+  const start = fields.get("start");
+  const end = fields.get("end");
+
+  if (!summary || !start || !end) {
+    return null;
+  }
+
+  const attendees =
+    fields
+      .get("attendees")
+      ?.split(",")
+      .map((attendee) => attendee.trim())
+      .filter(Boolean) ?? [];
+  const parsed = ActionIntentSchema.safeParse({
+    type: "schedule_event",
+    summary,
+    start,
+    end,
+    attendees,
+    description: fields.get("description") ?? null
+  });
+
+  return parsed.success ? parsed.data : null;
 }
 
 // Generate content for dynamic agent definitions
@@ -86,40 +215,58 @@ function contentForDynamicAgent(
 // Generate content for built-in agents (fallback)
 function contentForBuiltInAgent(task: Task, scenario: string): AgentContent {
   switch (task.assignedAgent) {
-    case "communications":
+    case "communications": {
+      const actionIntent = maybeBuildCommunicationsActionIntent(task, scenario);
       return {
-        summary: "Prepared a deterministic communications playbook artifact.",
+        summary: "Prepared a governed communications execution artifact.",
         artifactType: "summary",
         content:
-          `Scenario: ${scenario}\n\nFocus areas:\n` +
-          "- Prioritize urgent threads and VIP senders.\n" +
-          "- Extract promised follow-ups and pending external dependencies.\n" +
-          "- Hold outbound sending behind approval when the policy outcome requires it.",
-        executionMode: "deterministic_scaffold",
-        explanation: `communications produced a deterministic playbook artifact for "${task.title}" rather than simulating external execution.`,
+          `Scenario: ${scenario}\n\nCommunications execution:\n` +
+          "- Review the highest-signal threads and rank them for follow-up.\n" +
+          "- Prepare a reply-ready artifact with explicit outbound guardrails.\n" +
+          "- Capture unresolved dependencies before external delivery.\n" +
+          `${
+            actionIntent
+              ? "- A typed outbound message intent was captured from explicit request cues and remains approval-gated."
+              : "- No typed outbound message intent was captured, so execution remains artifact-first until explicit send details are provided."
+          }`,
+        executionMode: SELECTED_WEDGE_EXECUTION_MODE,
+        explanation:
+          `communications ran through the selected governed specialist wedge for "${task.title}", keeping any external side effect behind approval.`,
         nextSteps: [
           "Persist the artifact on the goal timeline.",
           "Respect approval gates before any external side effect."
         ],
-        confidence: task.riskClass === "R1" ? 0.82 : 0.73
+        confidence: task.riskClass === "R1" ? 0.82 : 0.73,
+        actionIntent
       };
-    case "calendar":
+    }
+    case "calendar": {
+      const actionIntent = maybeBuildCalendarActionIntent(task, scenario);
       return {
-        summary: "Prepared a deterministic calendar review artifact.",
+        summary: "Prepared a governed scheduling execution artifact.",
         artifactType: "brief",
         content:
-          `Scenario: ${scenario}\n\nCalendar findings:\n` +
-          "- Map existing commitments against the requested goal.\n" +
-          "- Flag overload windows and reschedule candidates.\n" +
-          "- Preserve external commitments until the user approves changes.",
-        executionMode: "deterministic_scaffold",
-        explanation: `calendar produced a deterministic planning artifact for "${task.title}" rather than changing schedule state directly.`,
+          `Scenario: ${scenario}\n\nScheduling execution:\n` +
+          "- Consolidate the current commitments, deadlines, and overload windows.\n" +
+          "- Produce a reviewable weekly operating plan with bounded tradeoffs.\n" +
+          "- Keep any calendar mutation behind approval or review.\n" +
+          `${
+            actionIntent
+              ? "- A typed scheduling intent was captured from explicit request cues and remains governance-bound until approved."
+              : "- No typed scheduling intent was captured, so execution remains planning-first until explicit event details are provided."
+          }`,
+        executionMode: SELECTED_WEDGE_EXECUTION_MODE,
+        explanation:
+          `calendar ran through the selected governed specialist wedge for "${task.title}", keeping schedule changes inside the review boundary.`,
         nextSteps: [
           "Persist the artifact on the goal timeline.",
           "Respect approval gates before any calendar side effect."
         ],
-        confidence: task.riskClass === "R1" ? 0.82 : 0.73
+        confidence: task.riskClass === "R1" ? 0.82 : 0.73,
+        actionIntent
       };
+    }
     case "workflow":
       return {
         summary: "Prepared a deterministic workflow scaffold.",
@@ -201,7 +348,15 @@ export function runAgent(task: Task, scenario: string, options?: RunAgentOptions
     : contentForBuiltInAgent(task, scenario);
 
   const agentId = options?.agentDefinition?.id;
-  const artifact = buildArtifact(task, `${task.title} output`, result.content, result.artifactType, result.executionMode, agentId);
+  const artifact = buildArtifact(
+    task,
+    `${task.title} output`,
+    result.content,
+    result.artifactType,
+    result.executionMode,
+    result.actionIntent,
+    agentId
+  );
 
   return AgentResultSchema.parse({
     agent: task.assignedAgent satisfies AgentName,
