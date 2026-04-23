@@ -73,6 +73,47 @@ Agentic supports two useful local setups:
 - a minimal local run with the file-backed runtime store
 - a Postgres-backed local run that more closely matches production behavior
 
+### First-Run Checklist
+
+Use this checklist when setting up a fresh checkout:
+
+1. Confirm Node.js is `20+`:
+
+```bash
+node --version
+```
+
+2. Install workspace dependencies:
+
+```bash
+npm install
+```
+
+3. Choose a persistence mode:
+
+- file-backed development: leave `DATABASE_URL` unset
+- Postgres parity: set `DATABASE_URL`, run migrations, and use `db:status`
+
+4. Set a dashboard/API access key before sharing the environment:
+
+```bash
+export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+```
+
+5. Start the web app and, for queued work, the worker:
+
+```bash
+npm run dev
+npm run worker:start
+```
+
+6. Validate the setup:
+
+```bash
+npm test
+npm run test:security:regression
+```
+
 ### Path 1: Minimal local run
 
 This is the fastest way to boot the app locally. It uses the file-backed runtime store at `.agentic/runtime-store.json`.
@@ -115,6 +156,8 @@ Run the worker for:
 - privacy retention, export, and deletion jobs
 
 Without the worker, those job APIs will enqueue work but it will remain pending.
+
+The file-backed repository is development-only. Production refuses to start without `DATABASE_URL`, and production-like local validation should use the Postgres path below.
 
 ### Path 2: Postgres-backed local parity
 
@@ -367,6 +410,27 @@ npm run docs:build
 ```
 
 `npm run docs:build` requires `pandoc`. PDF smoke rendering inside validation uses LibreOffice when available and skips that portion gracefully when it is not.
+
+## Command Reference
+
+These commands are the current repo-level entry points:
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Next.js web app in development mode. |
+| `npm run worker:start` | Start the worker package against the configured repository backend. |
+| `npm run build` | Build the web app and run the worker TypeScript check. |
+| `npm test` | Run the full Vitest suite. |
+| `npm run test:security:regression` | Run the categorized security regression suite. |
+| `npm run test:architecture:fitness` | Check architecture and parallel-worktree ownership constraints. |
+| `npm run test:performance:fitness` | Run performance fitness checks and the performance test file. |
+| `npm run db:status -- --require-ready` | Verify database reachability and migration readiness. |
+| `npm run db:migrate` | Apply checked-in database migrations. |
+| `npm run docs:build` | Render and validate the generated `build/agentic.docx` artifact. |
+| `npm run security:audit-runtime` | Enforce runtime dependency vulnerability policy. |
+| `npm run security:sbom` | Generate the software bill of materials. |
+
+Dependency Review in GitHub Actions requires repository support for GitHub's dependency graph / Advanced Security. The runtime dependency gate remains `npm run security:audit-runtime`, which is the repo-owned check to run locally and in CI.
 
 ## Production Bootstrap
 
