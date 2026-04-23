@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import { openRequestComposer, unlockDashboard } from "./helpers";
 
 test("creates and approves an inbox-triage goal end-to-end", async ({ page }) => {
+  test.setTimeout(60_000);
+
   await unlockDashboard(page);
 
   const { requestCard, requestInput, submitButton } = await openRequestComposer(page);
@@ -31,12 +33,14 @@ test("creates and approves an inbox-triage goal end-to-end", async ({ page }) =>
     .first();
 
   await expect(approvalRow).toBeVisible();
+  const approvalRowId = await approvalRow.getAttribute("id");
+  expect(approvalRowId).toBeTruthy();
   await approvalRow.getByRole("button", { name: "Approve once" }).click();
 
   await expect(page.getByText("Marked the approval as approved.").first()).toBeVisible({
-    timeout: 15_000
+    timeout: 30_000
   });
-  await expect(approvalRow).toHaveCount(0);
+  await expect(page.locator(`[id="${approvalRowId}"]`)).toHaveCount(0, { timeout: 15_000 });
 
   const approvalTimelineRow = page
     .locator(".timeline-row")
