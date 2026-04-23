@@ -77,13 +77,27 @@ function requireDatabaseUrl(): string {
   return url;
 }
 
+function resolveSharedAuthPoolMax(): number {
+  const configured = process.env.AGENTIC_SHARED_AUTH_POOL_MAX?.trim();
+
+  if (configured) {
+    const parsed = Number.parseInt(configured, 10);
+
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return process.env.NODE_ENV === "test" ? 2 : 10;
+}
+
 function getSharedAuthStatePool(): Pool {
   globalThis.__agenticSharedAuthStatePool ??= new Pool({
     connectionString: requireDatabaseUrl(),
     application_name: "agentic-auth-state",
     connectionTimeoutMillis: 2_000,
     idleTimeoutMillis: 30_000,
-    max: 10,
+    max: resolveSharedAuthPoolMax(),
     query_timeout: 5_000,
     statement_timeout: 5_000
   });

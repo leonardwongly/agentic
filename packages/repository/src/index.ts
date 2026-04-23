@@ -242,6 +242,14 @@ export type {
 } from "./repository-types";
 export { ApprovalMutationError, JobMutationError } from "./repository-types";
 
+function resolvePostgresPoolMax(value: string | undefined): number {
+  const parsed = value ? Number.parseInt(value, 10) : NaN;
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return process.env.NODE_ENV === "test" ? 2 : 10;
+}
+
 const STALLED_WORKFLOW_MS = 30 * 60 * 1000;
 const APPROVAL_WAIT_SLA_MS = 6 * 60 * 60 * 1000;
 const DASHBOARD_GOAL_LIMIT = 40;
@@ -3298,7 +3306,10 @@ class PostgresRepository implements AgenticRepository {
   private readonly ready = Promise.resolve();
 
   constructor(url: string) {
-    this.pool = new Pool({ connectionString: url });
+    this.pool = new Pool({
+      connectionString: url,
+      max: resolvePostgresPoolMax(process.env.AGENTIC_POSTGRES_POOL_MAX)
+    });
   }
 
   private async withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
