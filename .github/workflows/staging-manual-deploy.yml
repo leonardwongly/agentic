@@ -55,6 +55,7 @@ jobs:
       AGENTIC_TELEMETRY_EXPORT_TOKEN: ${{ secrets.STAGING_TELEMETRY_EXPORT_TOKEN }}
       NODE_ENV: production
       NODE_OPTIONS: --max-old-space-size=4096
+      NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@v6
 
@@ -68,6 +69,9 @@ jobs:
       - name: Resolve staging execution mode
         id: inspect
         run: npx tsx scripts/staging-execution-plan.ts
+
+      - name: Validate compliance registry references
+        run: npm run compliance:validate-registry
 
       - name: Initialize staging runtime environment
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
