@@ -1,6 +1,9 @@
 name: Staging Deploy
 
+run-name: Staging deploy from ${{ github.ref_name }}
+
 on:
+  push:
   workflow_dispatch:
 
 permissions:
@@ -14,7 +17,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  manual-trigger-guard:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Staging deploy is manual-only. No deployment executed for event '${{ github.event_name }}'."
+
   stage:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
