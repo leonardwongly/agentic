@@ -8,16 +8,6 @@ import {
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { getMemoryFreshness } from "@agentic/memory";
-export {
-  buildPrivacyControlSummary,
-  loadPrivacyControlRegistry,
-  parsePrivacyControlRegistry,
-  type PrivacyClassification,
-  type PrivacyControlRegistry,
-  type PrivacyControlSummary,
-  type PrivacyDataset,
-  type PrivacyTokenizationStrategy
-} from "./privacy-controls";
 
 const riskClassOrder: Record<RiskClass, number> = {
   R1: 1,
