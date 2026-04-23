@@ -31,9 +31,9 @@ jobs:
       AGENTIC_TELEMETRY_EXPORT_TOKEN: ${{ secrets.STAGING_TELEMETRY_EXPORT_TOKEN }}
       NODE_ENV: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -101,7 +101,7 @@ jobs:
 
       - name: Upload telemetry rollout evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agentic-staging-telemetry
           path: ${{ env.AGENTIC_TELEMETRY_RETENTION_DIR }}
@@ -109,7 +109,7 @@ jobs:
 
       - name: Upload staging supply-chain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agentic-staging-supply-chain
           path: |
