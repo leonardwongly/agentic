@@ -1,16 +1,15 @@
 import { expect, test } from "@playwright/test";
-import { openRequestComposer, unlockDashboard } from "./helpers";
+import { openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
 
 test("creates and approves an inbox-triage goal end-to-end", async ({ page }) => {
   await unlockDashboard(page);
 
   const { requestCard, requestInput } = await openRequestComposer(page);
-  await requestInput.fill(
+  await submitRequest(
+    requestCard,
+    requestInput,
     "Triage my inbox and prepare replies for important clients."
   );
-  await requestCard.locator(".hero-button-row").getByRole("button", { name: "Submit request" }).click();
-
-  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible();
   await expect(
     page
       .locator(".request-card .list-item")

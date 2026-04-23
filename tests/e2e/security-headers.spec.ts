@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { openRequestComposer, unlockDashboard } from "./helpers";
+import { expectShareLinkReady, openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
 
 const useProductionServer = process.env.PLAYWRIGHT_USE_PROD_SERVER === "true" && Boolean(process.env.DATABASE_URL?.trim());
 
@@ -51,11 +51,12 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
     expect(cacheControl).toMatch(/no-store|no-cache/u);
   }
 
-  const { requestInput } = await openRequestComposer(page);
-  await requestInput.fill(
+  const { requestCard, requestInput } = await openRequestComposer(page);
+  await submitRequest(
+    requestCard,
+    requestInput,
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Submit request" }).click();
 
   const createdGoal = page
     .locator(".request-card .list-item")
@@ -65,12 +66,7 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
     .first();
 
   await createdGoal.getByRole("button", { name: "Copy share link" }).click();
-
-  await expect(
-    page.locator(".share-status-row .status-chip").filter({
-      hasText: /(Copied|Created) a public share link for "Inbox triage and follow-up prep"\./
-    })
-  ).toBeVisible();
+  await expectShareLinkReady(page, "Inbox triage and follow-up prep");
 
   const shareLink = page.getByRole("link", { name: "Open public share page" });
   await expect(shareLink).toBeVisible();

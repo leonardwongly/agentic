@@ -23,8 +23,43 @@ jobs:
     steps:
       - run: echo "Staging deploy is manual-only. No deployment executed for event '${{ github.event_name }}'."
 
-  stage:
+  staging-config:
     if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.inspect.outputs.ready }}
+      missing: ${{ steps.inspect.outputs.missing }}
+    env:
+      DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      AGENTIC_ACCESS_KEY: ${{ secrets.STAGING_AGENTIC_ACCESS_KEY }}
+      AGENTIC_SMOKE_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      AGENTIC_SMOKE_ACCESS_KEY: ${{ secrets.STAGING_SMOKE_ACCESS_KEY }}
+      AGENTIC_STAGING_DEPLOY_BIN: ${{ vars.STAGING_DEPLOY_BIN }}
+    steps:
+      - id: inspect
+        shell: bash
+        run: |
+          missing=()
+          test -n "$DATABASE_URL" || missing+=("STAGING_DATABASE_URL")
+          test -n "$AGENTIC_ACCESS_KEY" || missing+=("STAGING_AGENTIC_ACCESS_KEY")
+          test -n "$AGENTIC_SMOKE_BASE_URL" || missing+=("STAGING_BASE_URL")
+          test -n "$AGENTIC_SMOKE_ACCESS_KEY" || missing+=("STAGING_SMOKE_ACCESS_KEY")
+          test -n "$AGENTIC_STAGING_DEPLOY_BIN" || missing+=("STAGING_DEPLOY_BIN")
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            printf 'missing=%s\n' "$(IFS=,; echo "${missing[*]}")" >> "$GITHUB_OUTPUT"
+            echo "Missing staging configuration: ${missing[*]}"
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "missing=" >> "$GITHUB_OUTPUT"
+          echo "Staging configuration is present."
+
+  stage:
+    needs: staging-config
+    if: github.event_name == 'workflow_dispatch' && needs.staging-config.outputs.ready == 'true'
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
@@ -50,14 +85,6 @@ jobs:
 
       - name: Initialize staging runtime environment
         run: echo "AGENTIC_TELEMETRY_RETENTION_DIR=${RUNNER_TEMP}/agentic-telemetry" >> "$GITHUB_ENV"
-
-      - name: Validate required staging configuration
-        run: |
-          test -n "$DATABASE_URL" || { echo "Missing STAGING_DATABASE_URL"; exit 1; }
-          test -n "$AGENTIC_ACCESS_KEY" || { echo "Missing STAGING_AGENTIC_ACCESS_KEY"; exit 1; }
-          test -n "$AGENTIC_SMOKE_BASE_URL" || { echo "Missing STAGING_BASE_URL"; exit 1; }
-          test -n "$AGENTIC_SMOKE_ACCESS_KEY" || { echo "Missing STAGING_SMOKE_ACCESS_KEY"; exit 1; }
-          test -n "$AGENTIC_STAGING_DEPLOY_BIN" || { echo "Missing STAGING_DEPLOY_BIN"; exit 1; }
 
       - run: npm ci
 
@@ -141,3 +168,10 @@ jobs:
           subject-path: |
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
+
+  stage-skipped:
+    needs: staging-config
+    if: github.event_name == 'workflow_dispatch' && needs.staging-config.outputs.ready != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Skipping staging deploy because required repository configuration is missing: ${{ needs.staging-config.outputs.missing }}"

@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
-import { openRequestComposer, unlockDashboard } from "./helpers";
+import { expectShareLinkReady, openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
 
 function createSignedShareToken(goalId: string, expiresAt: string): string {
   const payload = Buffer.from(
@@ -33,11 +33,12 @@ function isPublicShareViewRequest(url: string, method: string): boolean {
 test("creates a public goal share link and opens the shared page", async ({ page }) => {
   await unlockDashboard(page);
 
-  const { requestInput } = await openRequestComposer(page);
-  await requestInput.fill(
+  const { requestCard, requestInput } = await openRequestComposer(page);
+  await submitRequest(
+    requestCard,
+    requestInput,
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Submit request" }).click();
 
   const createdGoal = page
     .locator(".request-card .list-item")
@@ -50,12 +51,7 @@ test("creates a public goal share link and opens the shared page", async ({ page
   await expect(createdGoal).toBeVisible();
   await expect(copyShareLinkButton).toBeEnabled();
   await copyShareLinkButton.click();
-
-  await expect(
-    page.locator(".share-status-row .status-chip").filter({
-      hasText: /(Copied|Created) a public share link for "Inbox triage and follow-up prep"\./
-    })
-  ).toBeVisible();
+  await expectShareLinkReady(page, "Inbox triage and follow-up prep");
   await page.getByRole("link", { name: "Open public share page" }).click();
 
   await expect(page.getByText("Shared from Agentic")).toBeVisible();
@@ -67,11 +63,12 @@ test("creates a public goal share link and opens the shared page", async ({ page
 test("keeps the share flow successful when clipboard access is blocked", async ({ page }) => {
   await unlockDashboard(page);
 
-  const { requestInput } = await openRequestComposer(page);
-  await requestInput.fill(
+  const { requestCard, requestInput } = await openRequestComposer(page);
+  await submitRequest(
+    requestCard,
+    requestInput,
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Submit request" }).click();
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -94,12 +91,7 @@ test("keeps the share flow successful when clipboard access is blocked", async (
   await expect(createdGoal).toBeVisible();
   await expect(copyShareLinkButton).toBeEnabled();
   await copyShareLinkButton.click();
-
-  await expect(
-    page.locator(".share-status-row .status-chip").filter({
-      hasText: 'Created a public share link for "Inbox triage and follow-up prep".'
-    })
-  ).toBeVisible();
+  await expectShareLinkReady(page, "Inbox triage and follow-up prep");
   await expect(page.getByRole("link", { name: "Open public share page" })).toBeVisible();
 });
 
@@ -109,11 +101,12 @@ test("renders a valid public share page in a fresh unauthenticated context and d
 }) => {
   await unlockDashboard(page);
 
-  const { requestInput } = await openRequestComposer(page);
-  await requestInput.fill(
+  const { requestCard, requestInput } = await openRequestComposer(page);
+  await submitRequest(
+    requestCard,
+    requestInput,
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Submit request" }).click();
 
   const createdGoal = page
     .locator(".request-card .list-item")
