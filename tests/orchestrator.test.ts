@@ -209,6 +209,27 @@ describe("orchestrator", () => {
     expect(bundle.goal.completionContract.doneWhen).toContain("weekly plan");
   });
 
+  it("uses deterministic scenario detection in test mode even when model credentials are present", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+
+    process.env.NODE_ENV = "test";
+    process.env.OPENAI_API_KEY = "test-key";
+
+    try {
+      const bundle = await processUserRequest({
+        ...buildContext(),
+        request: "Plan my week around focus time, deadlines, and meetings."
+      });
+
+      expect(bundle.goal.intent).toBe("weekly-planning");
+      expect(bundle.goal.title).toBe("Weekly planning and calendar shaping");
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.OPENAI_API_KEY = originalOpenAiApiKey;
+    }
+  });
+
   it("promotes explicit calendar cues into typed scheduling approvals for weekly planning", async () => {
     const bundle = await processUserRequest({
       ...buildContext(),

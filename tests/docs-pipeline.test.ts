@@ -1,7 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { paths, renderDocx, validateDocx } from "../scripts/lib/docx-pipeline.mjs";
 
+const pandocCheck = spawnSync("pandoc", ["--version"], { stdio: "ignore" });
+const docsIt = pandocCheck.status === 0 ? it : it.skip;
+
 describe("docx pipeline", () => {
-  it("renders and validates the canonical specification", async () => {
+  docsIt("renders and validates the canonical specification", async () => {
     await renderDocx();
     const result = await validateDocx(paths.outputDocx);
 

@@ -2,7 +2,6 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
-import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +13,7 @@ import {
   setAuthSessionStateStoreForTesting,
   type AuthSessionStateStore
 } from "../apps/web/lib/auth-session-store";
-import { expectNoStoreHeaders } from "./route-test-helpers";
+import { createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
 
 const { runDocsBuildMock } = vi.hoisted(() => ({
   runDocsBuildMock: vi.fn(async () => ({
@@ -58,9 +57,7 @@ describe("docs render route", () => {
       maxDelayMs?: number;
     };
   }) {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const selfImprovementRepository = createSelfImprovementRepository({
       baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-docs-route-memory-"))
     });
@@ -169,9 +166,7 @@ describe("docs render route", () => {
       job: { id: string };
       statusUrl: string;
     };
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
 

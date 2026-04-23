@@ -1,0 +1,189 @@
+name: Staging Deploy
+
+run-name: Staging deploy from ${{ github.ref_name }}
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  attestations: write
+  id-token: write
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  manual-trigger-guard:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Staging deploy is manual-only. No deployment executed for event '${{ github.event_name }}'."
+
+  stage:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agentic"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      AGENTIC_ACCESS_KEY: ${{ secrets.STAGING_AGENTIC_ACCESS_KEY }}
+      AGENTIC_REQUIRE_SHARED_AUTH_STATE: "true"
+      AGENTIC_SMOKE_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      AGENTIC_SMOKE_ACCESS_KEY: ${{ secrets.STAGING_SMOKE_ACCESS_KEY }}
+      AGENTIC_STAGING_DEPLOY_BIN: ${{ vars.STAGING_DEPLOY_BIN }}
+      AGENTIC_STAGING_DEPLOY_ARGS_JSON: ${{ secrets.STAGING_DEPLOY_ARGS_JSON }}
+      AGENTIC_STAGING_DEPLOY_TIMEOUT_MS: ${{ vars.STAGING_DEPLOY_TIMEOUT_MS }}
+      AGENTIC_STAGING_IMAGE_TAG: agentic-staging:${{ github.sha }}
+      AGENTIC_TELEMETRY_EXPORT_URL: ${{ secrets.STAGING_TELEMETRY_EXPORT_URL }}
+      AGENTIC_TELEMETRY_EXPORT_TOKEN: ${{ secrets.STAGING_TELEMETRY_EXPORT_TOKEN }}
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci --include=dev
+
+      - name: Resolve staging execution mode
+        id: inspect
+        run: npx tsx scripts/staging-execution-plan.ts
+
+      - name: Initialize staging runtime environment
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: echo "AGENTIC_TELEMETRY_RETENTION_DIR=${RUNNER_TEMP}/agentic-telemetry" >> "$GITHUB_ENV"
+
+      - name: Create security artifact directories
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: mkdir -p artifacts/security artifacts/build
+
+      - name: Audit production dependencies
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: npm run security:audit-runtime -- --report artifacts/security/runtime-audit-report.json
+
+      - name: Build deployable artifacts
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: npm run build
+
+      - name: Generate runtime SBOM
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: npm run security:sbom -- --output artifacts/security/agentic-sbom.spdx.json
+
+      - name: Prepare runner-local staging database
+        if: steps.inspect.outputs.mode == 'self-test'
+        run: |
+          npm run db:migrate
+          npm run db:status -- --require-ready
+
+      - name: Validate staging database readiness
+        if: steps.inspect.outputs.mode == 'external'
+        run: npm run db:status -- --require-ready
+
+      - name: Validate feature capability contracts
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: npm run test:smoke:capabilities
+
+      - name: Validate async execution smoke path
+        if: steps.inspect.outputs.mode == 'external'
+        run: npm run test:smoke:observability
+
+      - name: Validate telemetry exporter and retention wiring
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: npm run test:smoke:observability-export
+
+      - name: Validate rollout gate manifests against retained telemetry
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: npm run telemetry:rollout-gate -- --dir "$AGENTIC_TELEMETRY_RETENTION_DIR"
+
+      - name: Build staging image
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: docker build --build-arg NODE_OPTIONS="$NODE_OPTIONS" -t "$AGENTIC_STAGING_IMAGE_TAG" .
+
+      - name: Package staging build artifacts
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: |
+          tar -czf artifacts/build/agentic-runtime-bundle.tgz \
+            apps/web/.next \
+            apps/web/package.json \
+            apps/worker/package.json \
+            package.json \
+            package-lock.json \
+            packages \
+            scripts
+          docker save "$AGENTIC_STAGING_IMAGE_TAG" -o artifacts/build/agentic-image.tar
+
+      - name: Run provider staging deploy
+        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        run: npm run deploy:staging:provider
+
+      - name: Smoke-check deployed staging environment
+        if: steps.inspect.outputs.mode == 'external'
+        run: npm run test:smoke:deployment
+
+      - name: Validate deployed async execution canary
+        if: steps.inspect.outputs.mode == 'external'
+        run: npm run test:smoke:deployment-async
+
+      - name: Upload telemetry rollout evidence
+        if: always() && (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test')
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentic-staging-telemetry
+          path: ${{ env.AGENTIC_TELEMETRY_RETENTION_DIR }}
+          if-no-files-found: warn
+
+      - name: Upload staging supply-chain evidence
+        if: always() && (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test')
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentic-staging-supply-chain
+          path: |
+            artifacts/security
+            artifacts/build
+          if-no-files-found: warn
+
+      - name: Attest staging security evidence
+        if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: artifacts/security/agentic-sbom.spdx.json
+
+      - name: Attest staging deployable build artifacts
+        if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artifacts/build/agentic-runtime-bundle.tgz
+            artifacts/build/agentic-image.tar
+
+      - name: Note staging attestation capability skip
+        if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && github.event.repository.private && github.event.repository.owner.type != 'Organization' && vars.ENABLE_ATTESTATIONS != 'true'
+        run: |
+          echo "Skipping staging provenance attestation in this repository context."
+          echo "GitHub only supports attestations for public repos and supported organization-backed private repos by default."
+
+      - name: Note runner-local staging self-test fallback
+        if: steps.inspect.outputs.mode == 'self-test'
+        run: |
+          echo "External staging configuration is incomplete: ${{ steps.inspect.outputs.missing_external }}"
+          echo "Validated the staging workflow by running the runner-local self-test fallback instead."

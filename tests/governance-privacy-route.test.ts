@@ -2,7 +2,6 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
-import { createRepository } from "@agentic/repository";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -11,7 +10,7 @@ import {
   setAuthSessionStateStoreForTesting,
   type AuthSessionStateStore
 } from "../apps/web/lib/auth-session-store";
-import { expectNoStoreHeaders } from "./route-test-helpers";
+import { createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
 
 const { enqueuePrivacyOperationJobMock } = vi.hoisted(() => ({
   enqueuePrivacyOperationJobMock: vi.fn(async () => ({
@@ -67,9 +66,7 @@ describe("governance privacy route", () => {
   });
 
   it("queues a new retention-enforcement operation with owner-scoped governance defaults", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const actor = createSystemActorContext(SYSTEM_USER_ID);
 
     await repository.seedDefaults();
@@ -130,9 +127,7 @@ describe("governance privacy route", () => {
   });
 
   it("returns the privacy control summary for the active owner workspace", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults();
 
@@ -173,9 +168,7 @@ describe("governance privacy route", () => {
   });
 
   it("reuses an existing queued privacy operation instead of enqueueing another job", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults();
     const dashboard = await repository.getDashboardData();
@@ -222,9 +215,7 @@ describe("governance privacy route", () => {
   });
 
   it("rejects privacy operations when the active workspace belongs to another owner", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const ownerActor = createSystemActorContext("workspace-owner");
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
       authMethod: "session",
@@ -300,9 +291,7 @@ describe("governance privacy route", () => {
   });
 
   it("rate limits privacy operation queueing with a route-scoped abuse key", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const seenKeys: string[] = [];
     const store: AuthSessionStateStore = {
       scope: "shared",

@@ -1,4 +1,4 @@
-import type { AutopilotEvent, AutopilotSettings, Watcher } from "@agentic/contracts";
+import { DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS, type AutopilotEvent, type AutopilotSettings, type Watcher } from "@agentic/contracts";
 
 export type FeatureCapabilitySurface = "core" | "advanced";
 export type FeatureCapabilityReadiness = "prototype" | "preview" | "operational" | "production";
@@ -295,6 +295,14 @@ function humanizeReadiness(value: FeatureCapabilityReadiness): string {
 
 type FeatureCapabilitySummaryOverrides = Partial<Record<string, FeatureCapabilityReadiness>>;
 
+function isFeatureCapabilitySummaryOverrides(
+  input:
+    | FeatureCapabilitySummaryOverrides
+    | readonly Pick<FeatureCapabilityDefinition, "surface" | "readiness" | "contracts">[]
+): input is FeatureCapabilitySummaryOverrides {
+  return !Array.isArray(input);
+}
+
 type FeatureCapabilityRuntimeReadinessParams = {
   autopilotSettings: Pick<AutopilotSettings, "reliabilityControls">;
   autopilotEvents: Pick<AutopilotEvent, "createdAt" | "status">[];
@@ -446,7 +454,8 @@ function buildSurfaceSummaryFromOverrides(
 export function deriveFeatureCapabilityReadiness(
   params: FeatureCapabilityRuntimeReadinessParams
 ): FeatureCapabilitySummaryOverrides {
-  const cutoff = Date.now() - params.autopilotSettings.reliabilityControls.budgetWindowMinutes * 60 * 1000;
+  const reliabilityControls = params.autopilotSettings.reliabilityControls ?? DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS;
+  const cutoff = Date.now() - reliabilityControls.budgetWindowMinutes * 60 * 1000;
   const recentEvents = params.autopilotEvents.filter((event) => Date.parse(event.createdAt) >= cutoff);
   const recentBudgetedEvents = recentEvents.filter(
     (event) => event.status === "pending" || event.status === "notified" || event.status === "executed" || event.status === "failed"
@@ -461,13 +470,13 @@ export function deriveFeatureCapabilityReadiness(
   const watchersOperational =
     hasActiveWatchers &&
     !hasWatcherDiagnostics &&
-    failureEvents.length < params.autopilotSettings.reliabilityControls.maxConsecutiveFailures;
+    failureEvents.length < reliabilityControls.maxConsecutiveFailures;
   const autopilotOperational =
     !hasWatcherDiagnostics &&
     !hasAutopilotDiagnostics &&
-    pendingEvents.length < params.autopilotSettings.reliabilityControls.maxPendingEvents &&
-    recentBudgetedEvents.length < params.autopilotSettings.reliabilityControls.maxEventsPerWindow &&
-    failureEvents.length < params.autopilotSettings.reliabilityControls.maxConsecutiveFailures;
+    pendingEvents.length < reliabilityControls.maxPendingEvents &&
+    recentBudgetedEvents.length < reliabilityControls.maxEventsPerWindow &&
+    failureEvents.length < reliabilityControls.maxConsecutiveFailures;
 
   return {
     watchers: watchersOperational ? "operational" : "preview",
@@ -480,7 +489,7 @@ export function summarizeFeatureCapabilities(
     | FeatureCapabilitySummaryOverrides
     | readonly Pick<FeatureCapabilityDefinition, "surface" | "readiness" | "contracts">[] = FEATURE_CAPABILITIES
 ): FeatureCapabilitySummary {
-  if (Array.isArray(input)) {
+  if (!isFeatureCapabilitySummaryOverrides(input)) {
     return {
       totalFeatures: input.length,
       trackedContracts: input.reduce((count, feature) => count + feature.contracts.length, 0),

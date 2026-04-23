@@ -5,11 +5,13 @@ import { getSeededRepository } from "../../../../../lib/server";
 import {
   enqueueApprovalFollowUpJob,
   enqueueApprovalNotificationJob,
-  enqueueAutopilotProcessJob,
-  isApprovalFollowUpJob,
-  isApprovalNotificationJob,
-  isAutopilotProcessJob
+  enqueueAutopilotProcessJob
 } from "@agentic/worker-runtime";
+import {
+  ApprovalFollowUpJobPayloadSchema,
+  ApprovalNotificationJobPayloadSchema,
+  AutopilotProcessJobPayloadSchema
+} from "@agentic/contracts";
 import { createActionLog } from "@agentic/integrations";
 import {
   canOperateSharedWorkflow,
@@ -55,20 +57,21 @@ export async function POST(request: Request, context: RouteContext) {
       throw new ApiRouteError(409, `Job ${id} is not dead-lettered and cannot be replayed.`);
     }
 
-    if (isApprovalFollowUpJob(job)) {
+    if (job.kind === "approval_follow_up" && job.payload.type === "approval_follow_up") {
+      const followUpPayload = ApprovalFollowUpJobPayloadSchema.parse(job.payload);
       const replayedJob = await enqueueApprovalFollowUpJob({
         repository,
         userId: principal.userId,
-        approvalId: job.payload.approvalId,
-        goalId: job.payload.goalId,
-        taskId: job.payload.taskId,
-        decision: job.payload.decision,
-        workspaceId: job.payload.workspaceId,
+        approvalId: followUpPayload.approvalId,
+        goalId: followUpPayload.goalId,
+        taskId: followUpPayload.taskId,
+        decision: followUpPayload.decision,
+        workspaceId: followUpPayload.workspaceId,
         actorContext,
         replayedFromJobId: job.id
       });
 
-      const bundle = await repository.getGoalBundleForUser(job.payload.goalId, principal.userId);
+      const bundle = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
 
       if (bundle) {
         const failedAtMs = Date.parse(job.updatedAt);
@@ -77,7 +80,7 @@ export async function POST(request: Request, context: RouteContext) {
         bundle.actionLogs.push(
           createActionLog({
             goalId: bundle.goal.id,
-            taskId: job.payload.taskId,
+            taskId: followUpPayload.taskId,
             workflowId: bundle.workflow.id,
             actor: actorContext.executor.label,
             kind: "approval_follow_up.replayed",
@@ -85,8 +88,8 @@ export async function POST(request: Request, context: RouteContext) {
             details: {
               replayedFromJobId: job.id,
               replayedJobId: replayedJob.id,
-              approvalId: job.payload.approvalId,
-              decision: job.payload.decision,
+              approvalId: followUpPayload.approvalId,
+              decision: followUpPayload.decision,
               statusUrl: `/api/approvals/jobs/${replayedJob.id}`,
               recoveryLatencyMs:
                 Number.isFinite(failedAtMs) && Number.isFinite(replayedAtMs)
@@ -123,13 +126,14 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    if (isAutopilotProcessJob(job)) {
+    if (job.kind === "autopilot_process" && job.payload.type === "autopilot_process") {
+      const autopilotPayload = AutopilotProcessJobPayloadSchema.parse(job.payload);
       const autopilotEvent = (await repository.listAutopilotEvents(principal.userId)).find(
-        (candidate) => candidate.id === job.payload.autopilotEventId
+        (candidate) => candidate.id === autopilotPayload.autopilotEventId
       );
 
       if (!autopilotEvent) {
-        throw new ApiRouteError(404, `Autopilot event ${job.payload.autopilotEventId} was not found.`);
+        throw new ApiRouteError(404, `Autopilot event ${autopilotPayload.autopilotEventId} was not found.`);
       }
 
       const replayedJob = await enqueueAutopilotProcessJob({
@@ -179,53 +183,54 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    if (isApprovalNotificationJob(job)) {
+    if (job.kind === "approval_notification" && job.payload.type === "approval_notification") {
+      const notificationPayload = ApprovalNotificationJobPayloadSchema.parse(job.payload);
       const replayedJob = await enqueueApprovalNotificationJob(
-        job.payload.channel === "slack"
+        notificationPayload.channel === "slack"
           ? {
               repository,
               userId: principal.userId,
-              approvalId: job.payload.approvalId,
-              goalId: job.payload.goalId,
-              taskId: job.payload.taskId,
-              decision: job.payload.decision,
+              approvalId: notificationPayload.approvalId,
+              goalId: notificationPayload.goalId,
+              taskId: notificationPayload.taskId,
+              decision: notificationPayload.decision,
               channel: "slack",
-              workspaceId: job.payload.workspaceId,
+              workspaceId: notificationPayload.workspaceId,
               actorContext,
               replayedFromJobId: job.id
             }
-          : job.payload.channel === "slack_receipt"
+          : notificationPayload.channel === "slack_receipt"
             ? {
                 repository,
                 userId: principal.userId,
-                approvalId: job.payload.approvalId,
-                goalId: job.payload.goalId,
-                taskId: job.payload.taskId,
-                decision: job.payload.decision,
+                approvalId: notificationPayload.approvalId,
+                goalId: notificationPayload.goalId,
+                taskId: notificationPayload.taskId,
+                decision: notificationPayload.decision,
                 channel: "slack_receipt",
-                slackChannelId: job.payload.slackChannelId,
-                slackMessageTs: job.payload.slackMessageTs,
-                workspaceId: job.payload.workspaceId,
+                slackChannelId: notificationPayload.slackChannelId,
+                slackMessageTs: notificationPayload.slackMessageTs,
+                workspaceId: notificationPayload.workspaceId,
                 actorContext,
                 replayedFromJobId: job.id
               }
             : {
                 repository,
                 userId: principal.userId,
-                approvalId: job.payload.approvalId,
-                goalId: job.payload.goalId,
-                taskId: job.payload.taskId,
-                decision: job.payload.decision,
+                approvalId: notificationPayload.approvalId,
+                goalId: notificationPayload.goalId,
+                taskId: notificationPayload.taskId,
+                decision: notificationPayload.decision,
                 channel: "telegram_receipt",
-                telegramChatId: job.payload.telegramChatId,
-                telegramMessageId: job.payload.telegramMessageId,
-                workspaceId: job.payload.workspaceId,
+                telegramChatId: notificationPayload.telegramChatId,
+                telegramMessageId: notificationPayload.telegramMessageId,
+                workspaceId: notificationPayload.workspaceId,
                 actorContext,
                 replayedFromJobId: job.id
               }
       );
 
-      const bundle = await repository.getGoalBundleForUser(job.payload.goalId, principal.userId);
+      const bundle = await repository.getGoalBundleForUser(notificationPayload.goalId, principal.userId);
 
       if (bundle) {
         const failedAtMs = Date.parse(job.updatedAt);
@@ -234,7 +239,7 @@ export async function POST(request: Request, context: RouteContext) {
         bundle.actionLogs.push(
           createActionLog({
             goalId: bundle.goal.id,
-            taskId: job.payload.taskId,
+            taskId: notificationPayload.taskId,
             workflowId: bundle.workflow.id,
             actor: actorContext.executor.label,
             kind: "approval_notification.replayed",
@@ -242,9 +247,9 @@ export async function POST(request: Request, context: RouteContext) {
             details: {
               replayedFromJobId: job.id,
               replayedJobId: replayedJob.id,
-              approvalId: job.payload.approvalId,
-              decision: job.payload.decision,
-              channel: job.payload.channel,
+              approvalId: notificationPayload.approvalId,
+              decision: notificationPayload.decision,
+              channel: notificationPayload.channel,
               statusUrl: `/api/jobs/${replayedJob.id}`,
               recoveryLatencyMs:
                 Number.isFinite(failedAtMs) && Number.isFinite(replayedAtMs)
@@ -265,11 +270,11 @@ export async function POST(request: Request, context: RouteContext) {
             id: replayedJob.id,
             kind: replayedJob.kind,
             status: replayedJob.status,
-            goalId: replayedJob.payload.goalId,
-            approvalId: replayedJob.payload.approvalId,
-            taskId: replayedJob.payload.taskId,
-            decision: replayedJob.payload.decision,
-            channel: replayedJob.payload.channel,
+            goalId: notificationPayload.goalId,
+            approvalId: notificationPayload.approvalId,
+            taskId: notificationPayload.taskId,
+            decision: notificationPayload.decision,
+            channel: notificationPayload.channel,
             attemptCount: replayedJob.attemptCount,
             maxAttempts: replayedJob.maxAttempts,
             createdAt: replayedJob.createdAt,

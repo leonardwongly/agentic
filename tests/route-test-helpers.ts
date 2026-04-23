@@ -1,6 +1,13 @@
+import { createRepository, type AgenticRepository } from "@agentic/repository";
 import { expect } from "vitest";
 import { AGENTIC_ACCESS_KEY_HEADER, AGENTIC_SESSION_COOKIE, buildSessionToken } from "../apps/web/lib/auth";
 import { AUTHENTICATED_API_CACHE_CONTROL, OPERATIONAL_API_CACHE_CONTROL } from "../apps/web/lib/api-response";
+
+export function createRouteTestRepository(): AgenticRepository {
+  return createRepository({
+    storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+  });
+}
 
 export function buildAuthorizedJsonRequest(url: string, body: unknown): Request {
   return new Request(url, {

@@ -94,6 +94,12 @@ type CompatibilityFabricAutopilotEventKind = Extract<
   "deadline_drift_detected" | "workflow_stalled" | "dormant_workflow_review_due"
 >;
 
+const compatibilityFabricKinds = new Set<CompatibilityFabricAutopilotEventKind>([
+  "deadline_drift_detected",
+  "workflow_stalled",
+  "dormant_workflow_review_due"
+]);
+
 const autopilotFamilyByKind: Record<CompatibilityAutopilotEventKind, AutopilotEventFamily> = {
   watcher_triggered: "watcher",
   template_due: "template",
@@ -429,6 +435,26 @@ function buildPendingEvent(params: {
     resultGoalId: null,
     error: null
   });
+}
+
+function shouldUseStrictEventFabricNormalization(
+  kind: CompatibilityAutopilotEventKind,
+  details: Record<string, unknown> | undefined
+): kind is CompatibilityFabricAutopilotEventKind {
+  if (!compatibilityFabricKinds.has(kind as CompatibilityFabricAutopilotEventKind) || !details) {
+    return false;
+  }
+
+  switch (kind) {
+    case "deadline_drift_detected":
+      return "target" in details || "state" in details || "references" in details;
+    case "workflow_stalled":
+      return "stalledStep" in details || "status" in details || "references" in details;
+    case "dormant_workflow_review_due":
+      return "lastActivityAt" in details || "references" in details;
+    default:
+      return false;
+  }
 }
 
 function measureProcessingLatencyMs(createdAt: string, processedAt: string): number {
@@ -833,20 +859,32 @@ export async function POST(request: Request) {
       const settings = await repository.getAutopilotSettings(principal.userId);
       const body = await parseJsonBody(request, TriggerAutopilotEventSchema);
       const effectiveMode = body.mode ?? settings.mode;
-      const normalized = isCompatibilityAutopilotKind(body.kind)
-        ? await (async () => {
+      const bodyDetails = body.details;
+      const normalizedDetails =
+        typeof bodyDetails === "object" && bodyDetails !== null && !Array.isArray(bodyDetails)
+          ? (bodyDetails as Record<string, unknown>)
+          : undefined;
+      const compatibilityKind = isCompatibilityAutopilotKind(body.kind) ? body.kind : null;
+      const normalized = compatibilityKind
+        ? shouldUseStrictEventFabricNormalization(compatibilityKind, normalizedDetails)
+          ? await normalizeAutopilotEventRequest({
+              repository,
+              userId: principal.userId,
+              body
+            })
+          : await (async () => {
             const resolvedSource = await resolveAutopilotSource({
               repository,
-              kind: body.kind,
+              kind: compatibilityKind,
               sourceId: body.sourceId,
               userId: principal.userId,
-              details: body.details
+              details: normalizedDetails
             });
 
             return {
               summary: body.summary?.trim() || resolvedSource.summary,
               details: buildAutopilotEventDetails({
-                kind: body.kind,
+                kind: compatibilityKind,
                 sourceId: body.sourceId,
                 summary: body.summary?.trim() || resolvedSource.summary,
                 idempotencyKey: body.idempotencyKey ?? null,
@@ -867,6 +905,15 @@ export async function POST(request: Request) {
             userId: principal.userId,
             body
           });
+      const normalizedEvent = body.dryRun
+        ? {
+            ...normalized,
+            details: {
+              ...normalized.details,
+              dryRun: true
+            }
+          }
+        : normalized;
 
       if (effectiveMode === "auto_run" && repository.backend !== "postgres") {
         return authenticatedJson(
@@ -885,8 +932,8 @@ export async function POST(request: Request) {
               kind: body.kind,
               sourceId: body.sourceId,
               mode: effectiveMode,
-              summary: normalized.summary,
-              details: normalized.details as AutopilotEventDetails,
+              summary: normalizedEvent.summary,
+              details: normalizedEvent.details as AutopilotEventDetails,
               idempotencyKey: body.idempotencyKey,
               actorContext
             })
@@ -897,8 +944,8 @@ export async function POST(request: Request) {
                 kind: body.kind,
                 sourceId: body.sourceId,
                 mode: effectiveMode,
-                summary: normalized.summary,
-                details: normalized.details,
+                summary: normalizedEvent.summary,
+                details: AutopilotEventDetailsSchema.parse(normalizedEvent.details),
                 idempotencyKey: body.idempotencyKey,
                 actorContext
               })
@@ -917,8 +964,8 @@ export async function POST(request: Request) {
         sourceId: body.sourceId,
         idempotencyKey: body.idempotencyKey ?? null,
         mode: effectiveMode,
-        summary: normalized.summary,
-        details: normalized.details,
+        summary: normalizedEvent.summary,
+        details: normalizedEvent.details,
         actorContext,
         debounceMinutes: settings.debounceMinutes,
         reliabilityControls: settings.reliabilityControls

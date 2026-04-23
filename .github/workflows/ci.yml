@@ -6,6 +6,11 @@ on:
       - main
   pull_request:
 
+env:
+  # GitHub is deprecating the Node 20 Actions runtime; opt into the Node 24
+  # path now so warning-only transitions do not become surprise CI failures later.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 permissions:
   contents: read
   actions: read
@@ -14,13 +19,16 @@ permissions:
 
 jobs:
   dependency-review:
-    if: github.event_name == 'pull_request'
+    # Dependency review only works on public repositories and supported GHAS-backed
+    # private repos. Skip unsupported private repos by default, with an explicit
+    # opt-in knob for environments that enable the necessary GitHub features.
+    if: github.event_name == 'pull_request' && (!github.event.repository.private || vars.ENABLE_DEPENDENCY_REVIEW == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 2
 
@@ -48,15 +56,21 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/agentic
       AGENTIC_ACCESS_KEY: ci-access-key
       NODE_ENV: test
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
+
+      - name: Install pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
 
       - run: npm ci
 
@@ -83,6 +97,10 @@ jobs:
       - name: Validate architecture fitness
         run: npm run test:architecture:fitness
 
+      - name: Validate parallel worktree ownership
+        if: startsWith(github.head_ref, 'feat/parallel-') || startsWith(github.ref_name, 'feat/parallel-')
+        run: npm run test:parallel-worktree:fitness
+
       - name: Validate performance fitness
         run: npm run test:performance:fitness
 
@@ -102,7 +120,7 @@ jobs:
         run: npm run test:e2e
 
       - name: Build container image
-        run: docker build -t agentic-ci:${{ github.sha }} .
+        run: docker build --build-arg NODE_OPTIONS="$NODE_OPTIONS" -t agentic-ci:${{ github.sha }} .
 
       - name: Package deployable build artifacts
         run: |
@@ -120,7 +138,7 @@ jobs:
         run: npm run security:collect-evidence -- --require-artifacts --output-dir artifacts/compliance
 
       - name: Upload supply-chain evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agentic-supply-chain-evidence
           path: |
@@ -130,15 +148,21 @@ jobs:
           if-no-files-found: error
 
       - name: Attest security evidence
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: artifacts/security/agentic-sbom.spdx.json
 
       - name: Attest deployable build artifacts
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
+
+      - name: Note attestation capability skip
+        if: github.event_name != 'pull_request' && github.event.repository.private && github.event.repository.owner.type != 'Organization' && vars.ENABLE_ATTESTATIONS != 'true'
+        run: |
+          echo "Skipping provenance attestation in this repository context."
+          echo "GitHub only supports attestations for public repos and supported organization-backed private repos by default."

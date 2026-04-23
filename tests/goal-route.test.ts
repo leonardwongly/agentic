@@ -26,6 +26,7 @@ import { GET as goalRoute } from "../apps/web/app/api/goals/[id]/route";
 import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
 import { POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
 import { POST as goalRefineRoute } from "../apps/web/app/api/goals/[id]/refine/route";
+import { createRouteTestRepository } from "./route-test-helpers";
 
 describe("goal route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
@@ -101,9 +102,7 @@ describe("goal route", () => {
   }
 
   async function processQueuedGoalJobs(maxJobs = 1) {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const selfImprovementRepository = createSelfImprovementRepository({
       baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-goal-route-memory-"))
     });
@@ -162,9 +161,7 @@ describe("goal route", () => {
       };
       statusUrl: string;
     };
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     expect(createResponse.status).toBe(202);
     expect(createPayload.job.kind).toBe("goal_create");
@@ -257,9 +254,7 @@ describe("goal route", () => {
       job: { id: string; goalId: string; status: string };
       statusUrl: string;
     };
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(202);
@@ -271,9 +266,7 @@ describe("goal route", () => {
   });
 
   it("deduplicates retried goal refinements when the same idempotency key is reused", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan a reviewer-safe follow-up workflow.");
     const idempotencyKey = "goal-refine-retry-1";
     const buildRequest = () =>
@@ -398,9 +391,7 @@ describe("goal route", () => {
   });
 
   it("returns 404 for a goal owned by another user", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -428,9 +419,7 @@ describe("goal route", () => {
   });
 
   it("returns 404 when attempting to refine another user's goal", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -462,9 +451,7 @@ describe("goal route", () => {
   });
 
   it("returns 403 when a viewer tries to refine a shared workspace goal", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const viewerUserId = "user-viewer";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -513,9 +500,7 @@ describe("goal route", () => {
   });
 
   it("queues refinement when an editor refines a shared workspace goal", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const editorUserId = "user-editor";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -581,9 +566,7 @@ describe("goal route", () => {
   });
 
   it("returns 404 for a goal job owned by another user", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults("user-secondary");
     const job = await repository.enqueueJob(createJobRecord({
@@ -621,9 +604,7 @@ describe("goal route", () => {
   });
 
   it("returns a sanitized dead-letter failure message from the goal job status route", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const queued = await repository.enqueueJob(createJobRecord({
@@ -684,9 +665,7 @@ describe("goal route", () => {
   });
 
   it("returns a sanitized dead-letter failure message for queued goal refinements", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a refined planning bundle.");
@@ -747,9 +726,7 @@ describe("goal route", () => {
   }, 15_000);
 
   it("stamps access-key actor context onto goal refinement logs", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan follow-ups for my open client work.");
@@ -793,9 +770,7 @@ describe("goal route", () => {
   });
 
   it("stamps session actor context onto goal refinement logs", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(secondaryUserId);

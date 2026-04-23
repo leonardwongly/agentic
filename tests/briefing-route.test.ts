@@ -2,7 +2,6 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
-import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { vi } from "vitest";
@@ -15,15 +14,14 @@ import {
 } from "../apps/web/lib/auth-session-store";
 import { GET as briefingJobRoute } from "../apps/web/app/api/briefing/jobs/[id]/route";
 import { POST as briefingRoute } from "../apps/web/app/api/briefing/route";
+import { createRouteTestRepository } from "./route-test-helpers";
 
 describe("briefing route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 
   async function processQueuedBriefingJobs(maxJobs = 1) {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const selfImprovementRepository = createSelfImprovementRepository({
       baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-briefing-route-memory-"))
     });
@@ -61,9 +59,7 @@ describe("briefing route", () => {
   });
 
   it("queues briefing creation, exposes a pollable status route, and completes through the worker runtime", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const current = await repository.getBriefingPreferences(SYSTEM_USER_ID);
@@ -177,9 +173,7 @@ describe("briefing route", () => {
   });
 
   it("defaults empty requests to a startup briefing job", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -205,9 +199,7 @@ describe("briefing route", () => {
   });
 
   it("uses the session principal when resolving queued briefing ownership", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -251,9 +243,7 @@ describe("briefing route", () => {
 
       await processQueuedBriefingJobs();
 
-      const reloadedRepository = createRepository({
-        storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-      });
+      const reloadedRepository = createRouteTestRepository();
       const persistedBundle = await reloadedRepository.getGoalBundleForUser(payload.job.goalId, secondaryUserId);
 
       expect(persistedBundle?.goal.userId).toBe(secondaryUserId);

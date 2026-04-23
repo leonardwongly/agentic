@@ -154,20 +154,18 @@ async function maybeRunCleanup(now = Date.now()): Promise<void> {
   const expiredBefore = new Date(now).toISOString();
 
   try {
-    await getSharedAuthStatePool().query(
-      `
-        delete from auth_session_rate_limits
-        where updated_at < $1;
-
-        delete from auth_revoked_sessions
-        where expires_at <= $2;
-
-        delete from session_unlock_attempts
-        where blocked_until <= $2
-          and last_seen_at < $3;
-      `,
-      [staleRateLimitBefore, expiredBefore, staleUnlockBefore]
-    );
+    await withTransaction(async (client) => {
+      await client.query("delete from auth_session_rate_limits where updated_at < $1", [staleRateLimitBefore]);
+      await client.query("delete from auth_revoked_sessions where expires_at <= $1", [expiredBefore]);
+      await client.query(
+        `
+          delete from session_unlock_attempts
+          where blocked_until <= $1
+            and last_seen_at < $2
+        `,
+        [expiredBefore, staleUnlockBefore]
+      );
+    });
   } catch (error) {
     throw new SharedAuthStateStoreError("Failed to clean up shared auth state.", error);
   }
@@ -317,12 +315,10 @@ class PostgresAuthSessionStateStore implements AuthSessionStateStore {
   async reset(): Promise<void> {
     try {
       await ensureSharedAuthStateTables();
-      await getSharedAuthStatePool().query(
-        `
-          delete from auth_session_rate_limits;
-          delete from auth_revoked_sessions;
-        `
-      );
+      await withTransaction(async (client) => {
+        await client.query("delete from auth_session_rate_limits");
+        await client.query("delete from auth_revoked_sessions");
+      });
     } catch (error) {
       throw new SharedAuthStateStoreError("Failed to reset shared auth session state.", error);
     }

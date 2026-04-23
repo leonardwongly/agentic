@@ -1,14 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { openRequestComposer, unlockDashboard } from "./helpers";
+import { openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
 
 test("command center deep-links operators from exceptions into remediation views", async ({ page }) => {
   await unlockDashboard(page);
 
   const { requestCard, requestInput } = await openRequestComposer(page);
-  await requestInput.fill("Review my inbox and send one external reply.");
-  await requestCard.locator(".hero-button-row").getByRole("button", { name: "Submit request" }).click();
-
-  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible();
+  await submitRequest(requestCard, requestInput, "Review my inbox and send one external reply.");
 
   const commandCenter = page.locator("#section-command-center");
   await expect(commandCenter.getByRole("heading", { name: "Command center" })).toBeVisible();
@@ -33,10 +30,11 @@ test("command center stays keyboard-operable and responsive on mobile", async ({
   await unlockDashboard(page);
 
   const { requestCard, requestInput } = await openRequestComposer(page);
-  await requestInput.fill("Clear approvals, unblock the automation queue, and confirm urgent follow-ups.");
-  await requestCard.locator(".hero-button-row").getByRole("button", { name: "Submit request" }).click();
-
-  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible();
+  await submitRequest(
+    requestCard,
+    requestInput,
+    "Clear approvals, unblock the automation queue, and confirm urgent follow-ups."
+  );
 
   const commandCenter = page.locator("#section-command-center");
   const toplineMetrics = commandCenter.locator(".command-center-topline > *");

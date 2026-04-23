@@ -291,6 +291,11 @@ Scenario key:`;
 }
 
 async function detectScenario(request: string): Promise<ScenarioKey> {
+  // Tests must stay deterministic and offline even when developer shells expose model credentials.
+  if (process.env.NODE_ENV === "test") {
+    return detectScenarioRegex(request);
+  }
+
   if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) {
     return detectScenarioLlm(request);
   }

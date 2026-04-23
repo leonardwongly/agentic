@@ -4,7 +4,7 @@ import path from "node:path";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { processUserRequest } from "@agentic/orchestrator";
-import { createRepository, type AgenticRepository } from "@agentic/repository";
+import type { AgenticRepository } from "@agentic/repository";
 import { executePublicShareViewJob } from "@agentic/worker-runtime";
 import { vi } from "vitest";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -17,6 +17,7 @@ import { POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/rou
 import { POST as publicShareViewRoute } from "../apps/web/app/api/share/view/route";
 import {
   buildInvalidJsonRequest,
+  createRouteTestRepository,
   expectOperationalNoStoreHeaders
 } from "./route-test-helpers";
 
@@ -71,9 +72,7 @@ describe("public share view route", () => {
   });
 
   it("queues share tracking and keeps repeated refreshes idempotent before the worker persists state", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share my planning context with a reviewer.");
@@ -124,9 +123,7 @@ describe("public share view route", () => {
       queued?: boolean;
       jobId?: string;
     };
-    const reloadedRepository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const reloadedRepository = createRouteTestRepository();
     const queuedJobs = await reloadedRepository.listJobs({
       userId: SYSTEM_USER_ID,
       kinds: ["public_share_view"]
@@ -306,9 +303,7 @@ describe("public share view route", () => {
 
     setAuthSessionStateStoreForTesting(store);
 
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a goal with a reviewer.");
@@ -342,9 +337,7 @@ describe("public share view route", () => {
       accepted: boolean;
       tracked: boolean;
     };
-    const reloadedRepository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const reloadedRepository = createRouteTestRepository();
     const queuedJobs = await reloadedRepository.listJobs({
       userId: SYSTEM_USER_ID,
       kinds: ["public_share_view"]

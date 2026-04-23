@@ -23,13 +23,25 @@ import {
   type PolicyReplayValidation,
   type WorkspaceGovernance
 } from "@agentic/contracts";
-import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/integrations/client";
-import { getMemoryFreshness } from "@agentic/memory";
+import type { LocalNoteDocument } from "@agentic/integrations/client";
 import type { PolicyLearningInfluenceComparison, PolicyShadowReplayReadiness } from "@agentic/policy";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
 import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
 import { DashboardCommandCenter } from "./dashboard-command-center";
+import {
+  DashboardGoalsCard,
+  type RecommendationLoadState
+} from "./dashboard-goals-card";
+import { DashboardAdvancedSurface } from "./dashboard-advanced-surface";
+import type {
+  GoalRecommendationsApiResponse,
+  OperatorProductPayload,
+  PrivacyControlsApiResponse,
+  PrivacyControlSummary,
+  RecommendationFeedbackApiResponse,
+  RequestState
+} from "./dashboard-types";
 import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
 import { CoreLoopViewTracker } from "./core-loop-view-tracker";
 import {
@@ -57,11 +69,8 @@ import {
   buildGoalRecommendationQuery,
   buildRecommendationFeedbackPayload,
   buildRecommendationRefinementSource,
-  formatRecommendationOperatorActionLabel,
-  isGoalRecommendationEligible,
   type RecommendationRefinementSource
 } from "../lib/workflow-recommendations";
-import { AgentsPanel } from "./agents";
 import { CommandPalette } from "./command-palette";
 import {
   buildClientIdempotencyKey,
@@ -90,7 +99,6 @@ import {
   bundleMatchesExecutionModeFilter,
   executionModeFilterOptions,
   extractArtifactExecutionMode,
-  formatConfidencePercentage,
   getExecutionModeFilterOption,
   getImplementationTierPresentation,
   getExecutionModePresentation,
@@ -107,20 +115,14 @@ import {
   QuickActionsBar,
   FloatingActionsBar,
   NoApprovalsEmpty,
-  NoGoalsEmpty,
-  NoMemoriesEmpty,
   NoArtifactsEmpty,
-  NoWatchersEmpty,
-  NoTemplatesEmpty,
   // 10x Components Phase 1
   StatsBar,
   useStatsBar,
   CollapsibleSection,
-  GoalPreview,
   ArtifactPreview,
   ApprovalPreview,
   useSmartDefaults,
-  ContextualSuggestion,
   useRecentActions,
   RecentActionsBar,
   useBatchSelection,
@@ -132,7 +134,6 @@ import {
   UnifiedFeed,
   useUnifiedFeed,
   RiskClassHelp,
-  MemoryTypeHelp,
   FeatureHelp,
   useDeepLink,
   ShareLinkButton,
@@ -154,15 +155,12 @@ import {
   ThemeToggle,
   NLFloatingBar,
   useNLExecutor,
-  MemorySearch,
-  useBulkMemorySelection,
-  BulkMemoryActions,
   TimelineFilter,
   useFilteredTimeline,
   HealthIndicator,
   InlineGoalProgress,
   useGoalProgress,
-  AgentOverride,
+  formatConfidencePercentage,
   type ExecutionModeFilterValue
 } from "./ui";
 
@@ -172,99 +170,6 @@ type DashboardProps = {
   initialCommitmentInbox: CommitmentInboxPage;
 };
 
-type RequestState = {
-  kind: "idle" | "success" | "error";
-  message: string;
-};
-
-type PrivacyControlSummary = {
-  registryVersion: number;
-  reviewedAt: string;
-  owners: string[];
-  totalDatasets: number;
-  classifications: Array<{
-    id: string;
-    label: string;
-    summary: string;
-    datasetCount: number;
-  }>;
-  lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
-  datasets: Array<{
-    id: string;
-    title: string;
-    classificationId: string;
-    classificationLabel: string;
-    retentionLabel: string;
-    tokenizationStrategy: "opaque_identifier" | "redacted_reference" | "not_applicable";
-    productSurfaceCount: number;
-    minimizationRuleCount: number;
-    maskingRuleCount: number;
-    lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
-  }>;
-};
-
-type PrivacyControlsApiResponse = {
-  controls: PrivacyControlSummary;
-};
-type OperatorProductPayload = {
-  products: OperatorProduct[];
-  selection: OperatorProductSelection | null;
-  agents: AgentDefinition[];
-  templates: GoalTemplate[];
-};
-
-type GoalRecommendationsApiResponse = {
-  recommendations: WorkflowRecommendation[];
-  summary: {
-    totalEpisodes: number;
-    matchedEpisodes: number;
-    consideredEpisodes: number;
-    suggestedPatterns: number;
-    guardedPatterns: number;
-    sparsePatterns: number;
-    safeSuggestionPrecision: number;
-    currentSafeRecallProxy: number;
-    currentNegativeOutcomeRate: number;
-    currentFailureCostRate: number;
-    driftStatus: "improving" | "stable" | "regressing" | "insufficient_data";
-    returnedCount: number;
-  };
-  analytics: {
-    current: {
-      episodeCount: number;
-      consideredEpisodes: number;
-      suggestedPatterns: number;
-      safeSuggestionPrecision: number;
-      safeRecallProxy: number;
-      negativeOutcomeRate: number;
-      failureCostRate: number;
-    };
-    timeline: Array<{ key: string }>;
-  };
-  policyPromotion: {
-    workspaceId: string;
-    autonomyBudget: AutonomyBudget | null;
-    safeRecallProxy: number;
-    learningValidation: PolicyReplayValidation;
-    shadowReplayReadiness: PolicyShadowReplayReadiness;
-    comparison: PolicyLearningInfluenceComparison;
-  } | null;
-  filters: Record<string, unknown>;
-};
-
-type RecommendationFeedbackApiResponse = {
-  goalId: string;
-  message: string;
-  dashboard: DashboardData;
-};
-
-type RecommendationLoadState = {
-  status: "idle" | "loading" | "ready" | "error";
-  query: string | null;
-  recommendations: WorkflowRecommendation[];
-  policyPromotion: GoalRecommendationsApiResponse["policyPromotion"];
-  error: string | null;
-};
 function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt"> {
   return {
     approvalMode: governance?.approvalMode ?? "risk_based",
@@ -273,13 +178,13 @@ function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): 
     externalSendRequiresApproval: governance?.externalSendRequiresApproval ?? true,
     calendarWriteRequiresApproval: governance?.calendarWriteRequiresApproval ?? true,
     shadowReplayPolicy: {
-      enabled: governance?.shadowReplayPolicy.enabled ?? true,
-      promotionMode: governance?.shadowReplayPolicy.promotionMode ?? "validated_autonomy",
-      rollbackOutcome: governance?.shadowReplayPolicy.rollbackOutcome ?? "allowed_with_confirmation",
-      minimumMatchedEpisodes: governance?.shadowReplayPolicy.minimumMatchedEpisodes ?? 3,
-      minimumPrecision: governance?.shadowReplayPolicy.minimumPrecision ?? 0.8,
-      maximumNegativeOutcomeRate: governance?.shadowReplayPolicy.maximumNegativeOutcomeRate ?? 0.15,
-      maximumFailureCostRate: governance?.shadowReplayPolicy.maximumFailureCostRate ?? 0.2
+      enabled: governance?.shadowReplayPolicy?.enabled ?? true,
+      promotionMode: governance?.shadowReplayPolicy?.promotionMode ?? "validated_autonomy",
+      rollbackOutcome: governance?.shadowReplayPolicy?.rollbackOutcome ?? "allowed_with_confirmation",
+      minimumMatchedEpisodes: governance?.shadowReplayPolicy?.minimumMatchedEpisodes ?? 3,
+      minimumPrecision: governance?.shadowReplayPolicy?.minimumPrecision ?? 0.8,
+      maximumNegativeOutcomeRate: governance?.shadowReplayPolicy?.maximumNegativeOutcomeRate ?? 0.15,
+      maximumFailureCostRate: governance?.shadowReplayPolicy?.maximumFailureCostRate ?? 0.2
     },
     retentionDays: governance?.retentionDays ?? 365
   };
@@ -298,65 +203,6 @@ const briefingFocusLabels: Record<BriefingPreferences["focus"], string> = {
   urgent: "Urgent",
   deep: "Deep work"
 };
-
-function formatLearningPromotionMode(mode: NonNullable<AutonomyBudget>["shadowReplay"]["promotionMode"]): string {
-  switch (mode) {
-    case "validated_autonomy":
-      return "Validated autonomy";
-    case "shadow_only":
-      return "Shadow only";
-    case "disabled":
-      return "Disabled";
-  }
-}
-
-function formatLearningRollbackOutcome(
-  outcome: NonNullable<AutonomyBudget>["shadowReplay"]["rollbackOutcome"]
-): string {
-  switch (outcome) {
-    case "allowed_with_confirmation":
-      return "Approval fallback";
-    case "downgrade_to_draft":
-      return "Draft fallback";
-  }
-}
-
-function formatShadowReplayReadinessLabel(status: PolicyShadowReplayReadiness["status"]): string {
-  switch (status) {
-    case "ready":
-      return "Ready";
-    case "missing":
-      return "Missing validation";
-    case "insufficient":
-      return "Below threshold";
-    case "disabled":
-      return "Disabled";
-    case "shadow_only":
-      return "Shadow only";
-    case "not_required":
-      return "Not required";
-  }
-}
-
-function getShadowReplayReadinessTone(status: PolicyShadowReplayReadiness["status"]): "success" | "error" | "warn" | "idle" {
-  switch (status) {
-    case "ready":
-      return "success";
-    case "missing":
-    case "insufficient":
-      return "warn";
-    case "disabled":
-      return "error";
-    case "shadow_only":
-    case "not_required":
-      return "idle";
-  }
-}
-
-function formatPolicyDecisionSummary(decision: PolicyDecision): string {
-  const approvalLabel = decision.requiresApproval ? "approval required" : "no approval";
-  return `${decision.outcome.replaceAll("_", " ")} · ${decision.riskClass} · ${approvalLabel}`;
-}
 
 type ApprovalResponseOptions = {
   scope?: ApprovalDecisionScope;
@@ -469,7 +315,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   // 10x Dashboard Hooks - Phase 2
   const undo = useUndo();
   const [approvalGroupBy, setApprovalGroupBy] = useState<GroupBy>("none");
-  const memoryBulkSelection = useBulkMemorySelection();
   const timelineFilters = useFilteredTimeline(data.actionLogs);
   const pendingApprovals = useMemo(
     () => data.approvals.filter((approval) => approval.decision === "pending"),
@@ -661,14 +506,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   );
   const coreLoopSummary = useMemo(() => summarizeCoreLoopTelemetry(data), [data]);
   const coreLoopHealthCopy = useMemo(() => describeCoreLoopHealth(coreLoopSummary), [coreLoopSummary]);
-  const integrationSurfaces = useMemo(
-    () =>
-      data.integrations.map((integration) => ({
-        integration,
-        readiness: describeIntegrationReadiness(integration)
-      })),
-    [data.integrations]
-  );
 
   const selectedOperatorProduct = useMemo(
     () =>
@@ -686,11 +523,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         selectedOperatorProduct
       }),
     [data, selectedOperatorProduct]
-  );
-
-  const selectedNotePreview = useMemo(
-    () => notes.find((note) => note.slug === selectedNoteSlug) ?? null,
-    [notes, selectedNoteSlug]
   );
 
   const shareStatsByGoal = useMemo(
@@ -748,16 +580,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         ])
       ),
     [data.goals, resolveSharedWorkflowMutationState]
-  );
-  const watcherMutationStateById = useMemo(
-    () =>
-      new Map(
-        data.watchers.map((watcher) => {
-          const goalBundle = goalBundleById.get(watcher.goalId);
-          return [watcher.id, resolveSharedWorkflowMutationState(goalBundle?.goal.workspaceId ?? null, "manage_watchers")];
-        })
-      ),
-    [data.watchers, goalBundleById, resolveSharedWorkflowMutationState]
   );
   const sharedJobReplayState = useMemo(
     () =>
@@ -3169,267 +2991,39 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           </div>
         </article>
 
-        <article className="card request-card" id="section-goals">
-          <div className="card-header">
-            <h2>Request work</h2>
-            <span>{filteredGoalBundles.length} / {data.goals.length} goals</span>
-          </div>
-            {/* Smart suggestion */}
-            <ContextualSuggestion
-              type="goal"
-              currentValue={request}
-              onApply={(suggestion) => setRequest(suggestion)}
-            />
-            <textarea
-              value={request}
-              onChange={(event) => setRequest(event.target.value)}
-              placeholder="Example: Clear today’s approvals, surface blocked commitments, and draft replies for anything urgent."
-              rows={6}
-            />
-            {/* Agent Override - select specific agent for this goal */}
-            <AgentOverride
-              value={selectedAgentId}
-              onChange={setSelectedAgentId}
-              disabled={isPending}
-            />
-            <div className="hero-button-row">
-              <button type="button" className="primary-button" onClick={createGoal} disabled={isPending}>
-                Submit request
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void generateBriefing("startup")} disabled={isPending}>
-                Startup Briefing
-              </button>
-            </div>
-            <p className={`status-chip ${submitState.kind}`}>
-              {submitState.message || "Requests are validated, policy checked, and converted into bounded execution bundles before anything runs."}
-            </p>
-            {shareState.message ? (
-              <div className="share-status-row">
-                <p className={`status-chip ${shareState.kind}`}>{shareState.message}</p>
-                {lastShareUrl ? (
-                  <>
-                    <CopyButton value={lastShareUrl} label="Copy" />
-                    <a className="inline-link" href={lastShareUrl}>
-                      Open public share page
-                    </a>
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-            {refinementState.message ? (
-              <p className={`status-chip ${refinementState.kind}`}>{refinementState.message}</p>
-            ) : null}
-            {recommendationState.message ? (
-              <p className={`status-chip ${recommendationState.kind}`}>{recommendationState.message}</p>
-            ) : null}
-            <div className="list-stack">
-              {filteredGoalBundles.length === 0 ? (
-                data.goals.length === 0 ? (
-                  <NoGoalsEmpty onCreate={focusRequestComposer} />
-                ) : (
-                  <p className="status-chip idle">No goals match the current execution-mode filter.</p>
-                )
-              ) : null}
-              {filteredGoalBundles.slice(0, 4).map((bundle) => {
-                const refinementLogs = bundle.actionLogs.filter((log) => log.kind === "goal.refined");
-                const isActive = bundle.goal.status !== "completed";
-                const refinementPermission = goalRefinementStateById.get(bundle.goal.id) ?? {
-                  allowed: true,
-                  reason: null
-                };
-                const recommendationStateForGoal = recommendationResultsByGoal[bundle.goal.id];
-                const recommendationEligible = isActive && isGoalRecommendationEligible(bundle);
-                const recommendationPending = recommendationPendingByGoal[bundle.goal.id] ?? false;
-                return (
-                  <div
-                    className={`list-item vertical ${highlightedItemId === bundle.goal.id ? "selection-highlight" : ""}`}
-                    id={getDashboardItemAnchorId(bundle.goal.id)}
-                    key={bundle.goal.id}
-                  >
-                  <div>
-                    <strong>{bundle.goal.title}</strong>
-                    <p>{bundle.goal.explanation}</p>
-                  </div>
-                  <div className="goal-item-actions">
-                    <StatusBadge status={bundle.goal.status} />
-                    <CopyableText value={bundle.goal.id} />
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => shareGoal(bundle.goal.id, bundle.goal.title)}
-                      disabled={isPending || !canManageGoalShares}
-                      title={!canManageGoalShares ? goalSharePermissionReason : undefined}
-                    >
-                      Copy share link
-                    </button>
-                    {bundle.goal.status === "completed" ? (
-                      <button type="button" className="secondary-button" onClick={() => saveAsTemplate(bundle.goal.title, bundle.goal.request)} disabled={isPending}>
-                        Save as template
-                      </button>
-                    ) : null}
-                    <small className="share-metric">
-                      {shareStatsByGoal.get(bundle.goal.id)?.active ?? 0} active · {shareStatsByGoal.get(bundle.goal.id)?.viewed ?? 0} viewed
-                    </small>
-                  </div>
-                  {refinementLogs.length > 0 ? (
-                    <div className="refinement-history">
-                      {refinementLogs.map((log) => (
-                        <small key={log.id} className="refinement-log">{log.message}</small>
-                      ))}
-                    </div>
-                  ) : null}
-                  {isActive ? (
-                    <div className="refinement-row">
-                      <input
-                        value={refinementInputs[bundle.goal.id] ?? ""}
-                        onChange={(event) =>
-                          setRefinementInputs((prev) => ({ ...prev, [bundle.goal.id]: event.target.value }))
-                        }
-                        placeholder="Refine this goal..."
-                        maxLength={2000}
-                        disabled={isPending || !refinementPermission.allowed}
-                        title={!refinementPermission.allowed ? refinementPermission.reason ?? undefined : undefined}
-                      />
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => refineGoal(bundle.goal.id)}
-                        disabled={
-                          isPending ||
-                          !refinementPermission.allowed ||
-                          !(refinementInputs[bundle.goal.id] ?? "").trim()
-                        }
-                        title={!refinementPermission.allowed ? refinementPermission.reason ?? undefined : undefined}
-                      >
-                        Refine
-                      </button>
-                    </div>
-                  ) : null}
-                  {isActive && !refinementPermission.allowed && refinementPermission.reason ? (
-                    <small className="operator-product-subtitle">{refinementPermission.reason}</small>
-                  ) : null}
-                  {recommendationEligible ? (
-                    <div className="refinement-history">
-                      <strong>Recommendation-backed suggestions</strong>
-                      <small className="refinement-log">
-                        Outcome traces stay operator-visible before any wider reuse or auto-application.
-                      </small>
-                      {recommendationStateForGoal?.status === "ready" && recommendationStateForGoal.policyPromotion ? (
-                        <div className="list-item vertical">
-                          <div className="goal-item-actions">
-                            <span className={`status-chip ${getShadowReplayReadinessTone(recommendationStateForGoal.policyPromotion.shadowReplayReadiness.status)}`}>
-                              {formatShadowReplayReadinessLabel(recommendationStateForGoal.policyPromotion.shadowReplayReadiness.status)}
-                            </span>
-                            <span className="status-chip idle">
-                              {formatLearningPromotionMode(
-                                recommendationStateForGoal.policyPromotion.autonomyBudget?.shadowReplay.promotionMode ??
-                                  "validated_autonomy"
-                              )}
-                            </span>
-                            <span className="status-chip idle">
-                              {formatLearningRollbackOutcome(
-                                recommendationStateForGoal.policyPromotion.autonomyBudget?.shadowReplay.rollbackOutcome ??
-                                  "allowed_with_confirmation"
-                              )}
-                            </span>
-                          </div>
-                          <p>{recommendationStateForGoal.policyPromotion.comparison.summary}</p>
-                          <small className="refinement-log">
-                            Replay precision {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.learningValidation.safeSuggestionPrecision)} ·
-                            Recall proxy {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.safeRecallProxy)}
-                          </small>
-                          <small className="refinement-log">
-                            Negative rate {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.learningValidation.negativeOutcomeRate)} ·
-                            Failure cost {formatConfidencePercentage(recommendationStateForGoal.policyPromotion.learningValidation.failureCostRate)} ·
-                            Drift {recommendationStateForGoal.policyPromotion.learningValidation.driftStatus.replaceAll("_", " ")}
-                          </small>
-                          <small className="refinement-log">
-                            Without learning: {formatPolicyDecisionSummary(recommendationStateForGoal.policyPromotion.comparison.baseline)}
-                          </small>
-                          <small className="refinement-log">
-                            With learning: {formatPolicyDecisionSummary(recommendationStateForGoal.policyPromotion.comparison.influenced)}
-                          </small>
-                          <small className="refinement-log">{recommendationStateForGoal.policyPromotion.shadowReplayReadiness.summary}</small>
-                          {recommendationStateForGoal.policyPromotion.shadowReplayReadiness.thresholdSummary.length > 0 ? (
-                            <small className="refinement-log">
-                              Thresholds: {recommendationStateForGoal.policyPromotion.shadowReplayReadiness.thresholdSummary.join(" · ")}
-                            </small>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {recommendationStateForGoal?.status === "error" ? (
-                        <small className="status-chip error">{recommendationStateForGoal.error ?? "Failed to load recommendation history."}</small>
-                      ) : null}
-                      {recommendationStateForGoal?.status === "ready" && recommendationStateForGoal.recommendations.length === 0 ? (
-                        <small className="refinement-log">No recommendation-backed suggestions yet.</small>
-                      ) : null}
-                      {recommendationStateForGoal?.status === "ready" && recommendationStateForGoal.recommendations.length > 0 ? (
-                        <div className="list-stack">
-                          {recommendationStateForGoal.recommendations.map((recommendation) => (
-                            <div key={recommendation.key} className="list-item vertical">
-                              <div className="goal-item-actions">
-                                <span className="status-chip idle">
-                                  {formatRecommendationOperatorActionLabel(recommendation.reuse.operatorAction)}
-                                </span>
-                                <small className="share-metric">
-                                  {recommendation.workflow.agent} · {recommendation.workflow.action}
-                                </small>
-                                <RelativeTime date={recommendation.evidence.lastSeenAt} />
-                              </div>
-                              <p>{recommendation.reuse.rationale}</p>
-                              <small className="refinement-log">
-                                Capabilities: {recommendation.workflow.capabilities.join(", ")} · Evidence {recommendation.evidence.count} · Success{" "}
-                                {formatConfidencePercentage(recommendation.evidence.successRate)} · Score{" "}
-                                {formatConfidencePercentage(recommendation.evidence.score)}
-                              </small>
-                              <div className="goal-item-actions">
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "accepted", bundle.goal.title)}
-                                  disabled={isPending || recommendationPending}
-                                >
-                                  Accept
-                                </button>
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "edited", bundle.goal.title)}
-                                  disabled={isPending || recommendationPending}
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "ignored", bundle.goal.title)}
-                                  disabled={isPending || recommendationPending}
-                                >
-                                  Ignore
-                                </button>
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  onClick={() => void submitRecommendationFeedback(bundle.goal.id, recommendation, "rejected", bundle.goal.title)}
-                                  disabled={isPending || recommendationPending}
-                                >
-                                  Reject
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      {!recommendationStateForGoal || recommendationStateForGoal.status === "idle" || recommendationStateForGoal.status === "loading" ? (
-                        <small className="refinement-log">Loading suggestion history…</small>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </article>
+        <DashboardGoalsCard
+          filteredGoalBundles={filteredGoalBundles}
+          totalGoalCount={data.goals.length}
+          request={request}
+          setRequest={setRequest}
+          selectedAgentId={selectedAgentId}
+          setSelectedAgentId={setSelectedAgentId}
+          createGoal={createGoal}
+          generateStartupBriefing={async () => {
+            await generateBriefing("startup");
+          }}
+          isPending={isPending}
+          submitState={submitState}
+          shareState={shareState}
+          refinementState={refinementState}
+          recommendationState={recommendationState}
+          lastShareUrl={lastShareUrl}
+          focusRequestComposer={focusRequestComposer}
+          canManageGoalShares={canManageGoalShares}
+          goalSharePermissionReason={goalSharePermissionReason}
+          shareGoal={shareGoal}
+          saveAsTemplate={saveAsTemplate}
+          shareStatsByGoal={shareStatsByGoal}
+          highlightedItemId={highlightedItemId}
+          getItemAnchorId={getDashboardItemAnchorId}
+          refinementInputs={refinementInputs}
+          setRefinementInputs={setRefinementInputs}
+          refineGoal={refineGoal}
+          goalRefinementStateById={goalRefinementStateById}
+          recommendationResultsByGoal={recommendationResultsByGoal}
+          recommendationPendingByGoal={recommendationPendingByGoal}
+          submitRecommendationFeedback={submitRecommendationFeedback}
+        />
 
         <article className="card" id="section-approvals">
           <div className="card-header">
@@ -3698,385 +3292,46 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           </div>
         </article>
 
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-memory"
-        >
-          <div className="card-header">
-            <h2>Memory inspector</h2>
-            <span>{data.memories.length} records</span>
-          </div>
-          
-          {/* Memory Search */}
-          <MemorySearch
-            memories={data.memories.map(m => ({
-              id: m.id,
-              content: m.content,
-              category: m.category,
-              memoryType: m.memoryType,
-              confidence: m.confidence,
-              createdAt: m.createdAt
-            }))}
-            categories={[...new Set(data.memories.map(m => m.category))]}
-            memoryTypes={[...new Set(data.memories.map(m => m.memoryType))]}
-            onSelect={(memory) => {
-              // Could open memory details
-            }}
-          />
-          
-          {/* Bulk Memory Actions */}
-          {memoryBulkSelection.selectedIds.size > 0 && (
-            <BulkMemoryActions
-              selectedMemories={data.memories
-                .filter(m => memoryBulkSelection.selectedIds.has(m.id))
-                .map(m => ({
-                  id: m.id,
-                  content: m.content,
-                  category: m.category,
-                  memoryType: m.memoryType,
-                  confidence: m.confidence,
-                  createdAt: m.createdAt
-                }))}
-              categories={[...new Set(data.memories.map(m => m.category))]}
-              memoryTypes={["observed", "inferred", "confirmed"]}
-              onDelete={async (ids) => {
-                toast.info(`Would delete ${ids.length} memories`);
-                memoryBulkSelection.deselectAll();
-              }}
-              onRecategorize={async (ids, newCategory) => {
-                toast.info(`Would recategorize ${ids.length} memories to ${newCategory}`);
-                memoryBulkSelection.deselectAll();
-              }}
-              onChangeType={async (ids, newType) => {
-                toast.info(`Would change ${ids.length} memories to type ${newType}`);
-                memoryBulkSelection.deselectAll();
-              }}
-              onExport={(memories) => {
-                const json = JSON.stringify(memories, null, 2);
-                const blob = new Blob([json], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = "memories-export.json";
-                a.click();
-              }}
-              onClear={memoryBulkSelection.deselectAll}
-            />
-          )}
-          
-          <label className="field">
-            <span>Category</span>
-            <select value={memoryCategory} onChange={(event) => setMemoryCategory(event.target.value)}>
-              <option value="working-style">working-style</option>
-              <option value="preferences">preferences</option>
-              <option value="projects">projects</option>
-              <option value="travel">travel</option>
-            </select>
-          </label>
-          <textarea
-            value={memoryContent}
-            onChange={(event) => setMemoryContent(event.target.value)}
-            placeholder="Add an observed or confirmed memory."
-            rows={4}
-          />
-          <button type="button" onClick={saveMemory} disabled={isPending}>
-            Save memory
-          </button>
-          <div className="list-stack">
-            {data.memories.length === 0 && <NoMemoriesEmpty onAdd={() => document.querySelector<HTMLTextAreaElement>("#section-memory textarea")?.focus()} />}
-            {data.memories.slice(0, 5).map((memory) => {
-              const freshness = getMemoryFreshness(memory);
-
-              return (
-                <div
-                  className={`list-item vertical ${memoryBulkSelection.selectedIds.has(memory.id) ? "selected" : ""} ${highlightedItemId === memory.id ? "selection-highlight" : ""}`}
-                  id={getDashboardItemAnchorId(memory.id)}
-                  key={memory.id}
-                  onClick={() => memoryBulkSelection.toggle(memory.id)}
-                >
-                  <div>
-                    <strong>{memory.category}</strong>
-                    <p>{memory.content}</p>
-                  </div>
-                  <div className="approval-actions">
-                    <MemoryTypeHelp memoryType={memory.memoryType}>
-                      <StatusBadge status={memory.memoryType} />
-                    </MemoryTypeHelp>
-                    <span className="pill">{Math.round(memory.confidence * 100)}%</span>
-                    {freshness !== "fresh" ? <span className="pill">{freshness.replace("_", " ")}</span> : null}
-                    <RelativeTime date={memory.createdAt} />
-                    {freshness !== "fresh" ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void updateMemory(memory.id, "review");
-                        }}
-                        disabled={isPending}
-                      >
-                        Review
-                      </button>
-                    ) : null}
-                    {memory.memoryType !== "confirmed" ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void updateMemory(memory.id, "confirm");
-                        }}
-                        disabled={isPending}
-                      >
-                        Confirm
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-integrations"
-        >
-          <div className="card-header">
-            <h2>Integrations</h2>
-            <span>{data.integrations.length} adapters</span>
-          </div>
-          <div className="list-stack">
-            {integrationSurfaces.map(({ integration, readiness }) => {
-              const isManagedGoogle =
-                integration.metadata.provider === "google" && integration.metadata.managed === true;
-              const providerActionLabel =
-                integration.status === "ready" ? "Reconnect Google" : "Connect Google";
-
-              return (
-                <div className="list-item vertical" key={integration.id}>
-                  <div>
-                    <strong>{integration.name}</strong>
-                    <p>
-                      {integration.system} · {integration.capabilities.join(", ")}
-                    </p>
-                    <p>{readiness.reason}</p>
-                  </div>
-                  <div className="approval-actions">
-                    <StatusBadge status={integration.status} />
-                    <StatusBadge status={readiness.tier}>{readiness.label}</StatusBadge>
-                    {readiness.supportedModes.length > 0 ? <span className="pill">{readiness.supportedModes.join(" · ")}</span> : null}
-                    {isManagedGoogle ? (
-                      <button type="button" className="secondary-button" onClick={connectGoogleProvider} disabled={isPending}>
-                        {providerActionLabel}
-                      </button>
-                    ) : (
-                      <button type="button" className="secondary-button" onClick={() => cycleIntegration(integration.id, integration.status)} disabled={isPending}>
-                        Toggle
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-notes"
-        >
-          <div className="card-header">
-            <h2>Local notes</h2>
-            <span>{notes.length} indexed</span>
-          </div>
-          <div className="note-toolbar">
-            <input
-              value={noteQuery}
-              onChange={(event) => setNoteQuery(event.target.value)}
-              placeholder="Search local notes"
-            />
-            <button type="button" className="secondary-button" onClick={searchNotes} disabled={isPending}>
-              Search
-            </button>
-          </div>
-          <label className="field">
-            <span>Title</span>
-            <input value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} placeholder="Example: Travel packing list" />
-          </label>
-          <textarea
-            value={noteContent}
-            onChange={(event) => setNoteContent(event.target.value)}
-            placeholder="Write a note that should be searchable through the notes adapter."
-            rows={4}
-          />
-          <button type="button" onClick={createLocalNote} disabled={isPending}>
-            Create local note
-          </button>
-          <p className={`status-chip ${noteState.kind}`}>
-            {noteState.message || "Search, open, and edit filesystem-backed notes through the provider-neutral adapter."}
-          </p>
-          <div className="list-stack">
-            {notes.slice(0, 5).map((note) => (
-              <div className="list-item vertical" key={note.id}>
-                <div>
-                  <strong>{note.title}</strong>
-                  <p>{note.content.split("\n").slice(1).join(" ").trim().slice(0, 180) || "No note body."}</p>
-                </div>
-                <div className="note-meta-row">
-                  <RelativeTime date={note.updatedAt} />
-                  <button type="button" className="secondary-button" onClick={() => openLocalNote(note.slug)} disabled={isPending}>
-                    Open
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="note-editor">
-            <div className="card-header">
-              <h3>{selectedNotePreview ? `Edit ${selectedNotePreview.title}` : "Note editor"}</h3>
-              <span>{selectedNotePreview ? selectedNotePreview.slug : "Select a note"}</span>
-            </div>
-            <label className="field">
-              <span>Editor title</span>
-              <input
-                value={selectedNoteTitle}
-                onChange={(event) => setSelectedNoteTitleDraft(event.target.value)}
-                placeholder="Open a note to edit its title"
-                disabled={!selectedNoteSlug || isPending}
-              />
-            </label>
-            <textarea
-              value={selectedNoteContent}
-              onChange={(event) => setSelectedNoteContentDraft(event.target.value)}
-              placeholder="Open a note to edit its body."
-              rows={6}
-              disabled={!selectedNoteSlug || isPending}
-            />
-            <button type="button" onClick={saveSelectedNote} disabled={isPending || !selectedNoteSlug}>
-              Save selected note
-            </button>
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-watchers"
-        >
-          <div className="card-header">
-            <FeatureHelp feature="watchers">
-              <h2>Watchers</h2>
-            </FeatureHelp>
-            <span>{data.watchers.length} active models</span>
-          </div>
-          <div className="list-stack">
-            {data.watchers.length === 0 ? <NoWatchersEmpty /> : null}
-            {data.watchers.map((watcher) => {
-              const watcherMutation = watcherMutationStateById.get(watcher.id) ?? {
-                allowed: true,
-                reason: null
-              };
-
-              return (
-                <div
-                  className={`list-item vertical ${highlightedItemId === watcher.id ? "selection-highlight" : ""}`}
-                  id={getDashboardItemAnchorId(watcher.id)}
-                  key={watcher.id}
-                >
-                  <div>
-                    <strong>{watcher.targetEntity}</strong>
-                    <p>{watcher.condition}</p>
-                  </div>
-                  <div className="approval-actions" style={{ opacity: watcherMutation.allowed ? 1 : 0.65 }}>
-                    <StatusBadge status={watcher.status} />
-                    <span className="pill">{watcher.frequency}</span>
-                    {watcher.status === "active" ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => void updateWatcher(watcher.id, "pause")}
-                        disabled={isPending || !watcherMutation.allowed}
-                      >
-                        Pause
-                      </button>
-                    ) : null}
-                    {watcher.status === "paused" ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => void updateWatcher(watcher.id, "resume")}
-                        disabled={isPending || !watcherMutation.allowed}
-                      >
-                        Resume
-                      </button>
-                    ) : null}
-                  </div>
-                  {!watcherMutation.allowed && watcherMutation.reason ? (
-                    <p className="operator-product-subtitle">{watcherMutation.reason}</p>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-templates"
-        >
-          <div className="card-header">
-            <FeatureHelp feature="templates">
-              <h2>Templates</h2>
-            </FeatureHelp>
-            <span>{templates.length} saved</span>
-          </div>
-          <button type="button" className="secondary-button" onClick={loadTemplates} disabled={isPending}>
-            Load templates
-          </button>
-          <p className={`status-chip ${templateState.kind}`}>
-            {templateState.message || "Save completed goals as reusable templates with optional scheduling."}
-          </p>
-          <div className="list-stack">
-            {templates.length === 0 ? <NoTemplatesEmpty onLoad={loadTemplates} /> : null}
-            {templates.map((template) => (
-              <div className="list-item vertical" key={template.id}>
-                <div>
-                  <strong>{template.name}</strong>
-                  <p>{template.request.slice(0, 160)}{template.request.length > 160 ? "..." : ""}</p>
-                </div>
-                <div className="goal-item-actions">
-                  <StatusBadge status={template.schedule.enabled ? "scheduled" : "manual"} />
-                  {template.schedule.enabled && <span className="pill">{template.schedule.cron}</span>}
-                  <RelativeTime date={template.updatedAt} />
-                  <button type="button" className="primary-button" onClick={() => runTemplate(template.id)} disabled={isPending}>
-                    Run now
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => deleteTemplate(template.id, template.updatedAt)}
-                    disabled={isPending}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-agents"
-        >
-          <div className="card-header">
-            <h2>Agents</h2>
-            <span>Custom agents</span>
-          </div>
-          <div className="agents-section">
-            <AgentsPanel />
-          </div>
-        </article>
+        <DashboardAdvancedSurface
+          showAdvancedOperations={showAdvancedOperations}
+          data={data}
+          notes={notes}
+          templates={templates}
+          templateState={templateState}
+          highlightedItemId={highlightedItemId}
+          getItemAnchorId={getDashboardItemAnchorId}
+          isPending={isPending}
+          memoryCategory={memoryCategory}
+          setMemoryCategory={setMemoryCategory}
+          memoryContent={memoryContent}
+          setMemoryContent={setMemoryContent}
+          saveMemory={saveMemory}
+          updateMemory={updateMemory}
+          connectGoogleProvider={connectGoogleProvider}
+          cycleIntegration={cycleIntegration}
+          noteQuery={noteQuery}
+          setNoteQuery={setNoteQuery}
+          searchNotes={searchNotes}
+          noteTitle={noteTitle}
+          setNoteTitle={setNoteTitle}
+          noteContent={noteContent}
+          setNoteContent={setNoteContent}
+          createLocalNote={createLocalNote}
+          noteState={noteState}
+          openLocalNote={openLocalNote}
+          selectedNoteSlug={selectedNoteSlug}
+          selectedNoteTitle={selectedNoteTitle}
+          setSelectedNoteTitleDraft={setSelectedNoteTitleDraft}
+          selectedNoteContent={selectedNoteContent}
+          setSelectedNoteContentDraft={setSelectedNoteContentDraft}
+          saveSelectedNote={saveSelectedNote}
+          goalBundleById={goalBundleById}
+          resolveSharedWorkflowMutationState={resolveSharedWorkflowMutationState}
+          updateWatcher={updateWatcher}
+          loadTemplates={loadTemplates}
+          runTemplate={runTemplate}
+          deleteTemplate={deleteTemplate}
+        />
       </section>
 
       <FloatingActionsBar position="bottom">

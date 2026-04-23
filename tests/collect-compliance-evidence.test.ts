@@ -1,9 +1,10 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import {
   buildComplianceEvidenceBundle,
+  loadComplianceControlRegistry,
   renderComplianceEvidenceMarkdown,
   renderComplianceReviewerSummary,
   type ComplianceEvidenceBundle,
@@ -252,6 +253,25 @@ describe("compliance evidence collector", () => {
     );
 
     expect(bundle.summary.missingRequiredArtifacts).toBe(0);
+  });
+
+  it("keeps every real control-registry reference aligned with tracked source files", () => {
+    const registry = loadComplianceControlRegistry("config/compliance/controls.json");
+    const references = registry.controls.flatMap((control) => [
+      ...control.codePaths.map((entry) => ({ controlId: control.id, kind: "codePath", path: entry })),
+      ...control.runbooks.map((entry) => ({ controlId: control.id, kind: "runbook", path: entry })),
+      ...control.automatedChecks.flatMap((check) =>
+        check.sourcePaths.map((entry) => ({
+          controlId: control.id,
+          kind: `check:${check.id}`,
+          path: entry
+        }))
+      )
+    ]);
+
+    const missing = references.filter((reference) => !existsSync(path.resolve(reference.path)));
+
+    expect(missing).toEqual([]);
   });
 
   it("renders a human-readable markdown report", () => {

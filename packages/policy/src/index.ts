@@ -2,6 +2,7 @@ import {
   AutonomyBudgetSchema,
   PolicyDecisionSchema,
   PolicyDecisionTraceSchema,
+  defaultWorkspaceShadowReplayPolicy,
   type AgentMetrics,
   type AutonomyBudget,
   type Capability,
@@ -234,7 +235,7 @@ function riskExceedsLimit(riskClass: RiskClass, maxAutoRunRiskClass: RiskClass):
 }
 
 function summarizeShadowReplayThresholds(governance: WorkspaceGovernance): string[] {
-  const policy = governance.shadowReplayPolicy;
+  const policy = governance.shadowReplayPolicy ?? defaultWorkspaceShadowReplayPolicy;
 
   return [
     `${policy.minimumMatchedEpisodes}+ matched episode${policy.minimumMatchedEpisodes === 1 ? "" : "s"}`,
@@ -275,6 +276,8 @@ export function buildAutonomyBudget(governance: WorkspaceGovernance | null | und
     return null;
   }
 
+  const shadowReplayPolicy = governance.shadowReplayPolicy ?? defaultWorkspaceShadowReplayPolicy;
+
   const requiresExplicitApprovalCapabilities: Capability[] = [];
 
   if (governance.externalSendRequiresApproval) {
@@ -289,9 +292,9 @@ export function buildAutonomyBudget(governance: WorkspaceGovernance | null | und
   const shadowReplayRequired = r3AutonomyEligible;
   const thresholdSummary = summarizeShadowReplayThresholds(governance);
   const learningPromotionSummary =
-    governance.shadowReplayPolicy.promotionMode === "validated_autonomy"
+    shadowReplayPolicy.promotionMode === "validated_autonomy"
       ? "Replay-validated learning can widen autonomy once the replay gate clears."
-      : governance.shadowReplayPolicy.promotionMode === "shadow_only"
+      : shadowReplayPolicy.promotionMode === "shadow_only"
         ? "Learning signals remain shadow-only and cannot widen live autonomy yet."
         : "The learning-promotion kill switch is active, so learning signals cannot widen live autonomy.";
 
@@ -303,10 +306,10 @@ export function buildAutonomyBudget(governance: WorkspaceGovernance | null | und
         : `Risk-based governance caps autonomous execution at ${governance.maxAutoRunRiskClass}, with higher-risk work staying on the approval path.`;
 
   const shadowReplaySummary = shadowReplayRequired
-    ? governance.shadowReplayPolicy.enabled
+    ? shadowReplayPolicy.enabled
       ? `${learningPromotionSummary} R3 autonomy depends on replay validation meeting ${thresholdSummary.join(", ")}.`
       : "R3 autonomy is configured, but shadow replay is disabled, so elevated autonomy should remain held back until replay thresholds are restored."
-    : governance.shadowReplayPolicy.enabled
+    : shadowReplayPolicy.enabled
       ? `${learningPromotionSummary} Shadow replay thresholds are staged for future R3 widening: ${thresholdSummary.join(", ")}.`
       : "Shadow replay is inactive because workspace autonomy is currently capped below R3.";
 
@@ -317,10 +320,10 @@ export function buildAutonomyBudget(governance: WorkspaceGovernance | null | und
     r3AutonomyEligible,
     shadowReplay: {
       eligibleForR3: r3AutonomyEligible,
-      enabled: governance.shadowReplayPolicy.enabled,
+      enabled: shadowReplayPolicy.enabled,
       required: shadowReplayRequired,
-      promotionMode: governance.shadowReplayPolicy.promotionMode,
-      rollbackOutcome: governance.shadowReplayPolicy.rollbackOutcome,
+      promotionMode: shadowReplayPolicy.promotionMode,
+      rollbackOutcome: shadowReplayPolicy.rollbackOutcome,
       thresholdSummary,
       summary: shadowReplaySummary
     },
@@ -567,6 +570,8 @@ export function assessWorkspaceGovernanceConformance(
     return null;
   }
 
+  const shadowReplayPolicy = governance.shadowReplayPolicy ?? defaultWorkspaceShadowReplayPolicy;
+
   const checks: GovernanceConformanceCheck[] = [
     governance.requireAuditExports
       ? {
@@ -652,7 +657,7 @@ export function assessWorkspaceGovernanceConformance(
 
   if (governance.maxAutoRunRiskClass === "R3") {
     checks.push(
-      !governance.shadowReplayPolicy.enabled
+      !shadowReplayPolicy.enabled
         ? {
             id: "shadow-replay",
             status: "fail",
@@ -660,14 +665,14 @@ export function assessWorkspaceGovernanceConformance(
             detail:
               "Workspace governance allows widened autonomy but has disabled the replay-shadow gate that should validate learned high-impact execution paths first."
           }
-        : governance.shadowReplayPolicy.promotionMode === "validated_autonomy"
+        : shadowReplayPolicy.promotionMode === "validated_autonomy"
         ? {
             id: "shadow-replay",
             status: "pass",
             summary: "Shadow replay and replay-validated learning protect widened R3 autonomy.",
             detail: `Replay thresholds require ${summarizeShadowReplayThresholds(governance).join(", ")} before elevated autonomy is considered ready.`
           }
-        : governance.shadowReplayPolicy.promotionMode === "shadow_only"
+        : shadowReplayPolicy.promotionMode === "shadow_only"
           ? {
               id: "shadow-replay",
               status: "warn",
@@ -685,7 +690,7 @@ export function assessWorkspaceGovernanceConformance(
     );
   } else {
     checks.push(
-      governance.shadowReplayPolicy.enabled
+      shadowReplayPolicy.enabled
         ? {
             id: "shadow-replay",
             status: "pass",
