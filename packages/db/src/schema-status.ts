@@ -1,5 +1,10 @@
+import crypto from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 
+const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const SCHEMA_MIGRATIONS_TABLE = "agentic_schema_migrations";
 
 type SchemaQueryable = Pick<Pool, "query"> | PoolClient;
@@ -8,13 +13,6 @@ type ExpectedMigration = {
   name: string;
   checksum: string;
 };
-
-const EXPECTED_MIGRATIONS: ExpectedMigration[] = [
-  {
-    name: "0001_init.sql",
-    checksum: "410e664298b6b5a094e1738f06091be65f6c93e085af59d91de092a407abe7a0"
-  }
-];
 
 export type DatabaseSchemaStatus = {
   reachable: boolean;
@@ -46,6 +44,34 @@ function createEmptySchemaStatus(overrides?: Partial<DatabaseSchemaStatus>): Dat
     lastAppliedAt: null,
     ...overrides
   };
+}
+
+function resolveMigrationsDir(migrationsDir?: string): string {
+  return path.resolve(migrationsDir ?? DEFAULT_MIGRATIONS_DIR);
+}
+
+function hashMigration(sql: string): string {
+  return crypto.createHash("sha256").update(sql, "utf8").digest("hex");
+}
+
+async function listExpectedMigrations(options?: { migrationsDir?: string }): Promise<ExpectedMigration[]> {
+  const migrationsDir = resolveMigrationsDir(options?.migrationsDir);
+  const entries = await readdir(migrationsDir, { withFileTypes: true });
+  const migrationNames = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
+
+  return Promise.all(
+    migrationNames.map(async (name) => {
+      const sql = await readFile(path.join(migrationsDir, name), "utf8");
+
+      return {
+        name,
+        checksum: hashMigration(sql)
+      };
+    })
+  );
 }
 
 async function withSchemaQueryable<T>(
@@ -119,7 +145,12 @@ function summarizeDatabaseSchemaStatus(params: {
 export async function getDatabaseSchemaStatus(options?: {
   databaseUrl?: string;
   pool?: Pool;
+  migrationsDir?: string;
 }): Promise<DatabaseSchemaStatus> {
+  const expectedMigrations = await listExpectedMigrations({
+    migrationsDir: options?.migrationsDir
+  });
+
   return withSchemaQueryable(
     {
       databaseUrl: options?.databaseUrl,
@@ -141,7 +172,7 @@ export async function getDatabaseSchemaStatus(options?: {
       const metadataTableExists = Boolean(metadataTableResult.rows[0]?.exists);
 
       if (!metadataTableExists) {
-        const pendingMigrations = EXPECTED_MIGRATIONS.map((migration) => migration.name);
+        const pendingMigrations = expectedMigrations.map((migration) => migration.name);
         const summary = summarizeDatabaseSchemaStatus({
           missingMetadataTable: true,
           pendingMigrations,
@@ -157,11 +188,11 @@ export async function getDatabaseSchemaStatus(options?: {
 
       const appliedRows = await loadAppliedMigrationRows(queryable);
       const appliedByName = new Map(appliedRows.map((row) => [row.name, row]));
-      const expectedMigrationNames = new Set(EXPECTED_MIGRATIONS.map((migration) => migration.name));
+      const expectedMigrationNames = new Set(expectedMigrations.map((migration) => migration.name));
       const pendingMigrations: string[] = [];
       const driftedMigrations: string[] = [];
 
-      for (const migration of EXPECTED_MIGRATIONS) {
+      for (const migration of expectedMigrations) {
         const applied = appliedByName.get(migration.name);
 
         if (!applied) {
