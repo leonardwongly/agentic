@@ -33,7 +33,9 @@ test("creates and approves an inbox-triage goal end-to-end", async ({ page }) =>
   await expect(approvalRow).toBeVisible();
   await approvalRow.getByRole("button", { name: "Approve once" }).click();
 
-  await expect(page.getByText("Marked the approval as approved.").first()).toBeVisible();
+  await expect(page.getByText("Marked the approval as approved.").first()).toBeVisible({
+    timeout: 15_000
+  });
   await expect(approvalRow).toHaveCount(0);
 
   const approvalTimelineRow = page

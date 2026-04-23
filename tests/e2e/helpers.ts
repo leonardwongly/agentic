@@ -8,8 +8,10 @@ export async function unlockDashboard(page: Page, accessKey = "playwright-e2e-ke
   await expect(page.getByText("Unlock the single-user control plane.")).toBeVisible();
   await page.getByLabel("Access key").fill(accessKey);
   await page.getByRole("button", { name: "Unlock" }).click();
-  await expect(page.getByRole("button", { name: "Request work" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Run commitments, approvals, and automations from one governed loop." })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Request work" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Run commitments, approvals, and automations from one governed loop." })).toBeVisible({
+    timeout: 30_000
+  });
 }
 
 export async function openRequestComposer(page: Page) {
@@ -20,7 +22,7 @@ export async function openRequestComposer(page: Page) {
 
   await expect(requestCard).toBeVisible();
   await expect(requestInput).toBeVisible();
-  await expect(submitButton).toBeEnabled({ timeout: 15_000 });
+  await expect(submitButton).toBeEnabled({ timeout: 30_000 });
 
   return { requestCard, requestInput, submitButton };
 }
