@@ -120,7 +120,7 @@ jobs:
         run: npm run test:e2e
 
       - name: Build container image
-        run: docker build -t agentic-ci:${{ github.sha }} .
+        run: docker build --build-arg NODE_OPTIONS="$NODE_OPTIONS" -t agentic-ci:${{ github.sha }} .
 
       - name: Package deployable build artifacts
         run: |

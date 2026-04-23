@@ -21,6 +21,8 @@ COPY packages/worker-runtime/package.json packages/worker-runtime/package.json
 RUN npm ci
 
 FROM deps AS build
+ARG NODE_OPTIONS=--max-old-space-size=4096
+ENV NODE_OPTIONS=${NODE_OPTIONS}
 COPY . .
 RUN npm run build
 

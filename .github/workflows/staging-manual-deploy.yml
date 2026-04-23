@@ -116,7 +116,7 @@ jobs:
 
       - name: Build staging image
         if: steps.inspect.outputs.ready == 'true'
-        run: docker build -t "$AGENTIC_STAGING_IMAGE_TAG" .
+        run: docker build --build-arg NODE_OPTIONS="$NODE_OPTIONS" -t "$AGENTIC_STAGING_IMAGE_TAG" .
 
       - name: Package staging build artifacts
         if: steps.inspect.outputs.ready == 'true'
