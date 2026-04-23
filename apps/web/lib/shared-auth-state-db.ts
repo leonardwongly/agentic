@@ -154,19 +154,16 @@ async function maybeRunCleanup(now = Date.now()): Promise<void> {
   const expiredBefore = new Date(now).toISOString();
 
   try {
-    await getSharedAuthStatePool().query(
+    const pool = getSharedAuthStatePool();
+    await pool.query("delete from auth_session_rate_limits where updated_at < $1", [staleRateLimitBefore]);
+    await pool.query("delete from auth_revoked_sessions where expires_at <= $1", [expiredBefore]);
+    await pool.query(
       `
-        delete from auth_session_rate_limits
-        where updated_at < $1;
-
-        delete from auth_revoked_sessions
-        where expires_at <= $2;
-
         delete from session_unlock_attempts
-        where blocked_until <= $2
-          and last_seen_at < $3;
+        where blocked_until <= $1
+          and last_seen_at < $2
       `,
-      [staleRateLimitBefore, expiredBefore, staleUnlockBefore]
+      [expiredBefore, staleUnlockBefore]
     );
   } catch (error) {
     throw new SharedAuthStateStoreError("Failed to clean up shared auth state.", error);

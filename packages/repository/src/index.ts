@@ -4410,9 +4410,8 @@ class PostgresRepository implements AgenticRepository {
           id, workspace_id, user_id, role, joined_at, updated_at
         )
         values ($1, $2, $3, $4, $5, $6)
-        on conflict (id) do update
-        set workspace_id = excluded.workspace_id,
-            user_id = excluded.user_id,
+        on conflict (workspace_id, user_id) do update
+        set id = excluded.id,
             role = excluded.role,
             joined_at = excluded.joined_at,
             updated_at = excluded.updated_at
@@ -6224,7 +6223,7 @@ class PostgresRepository implements AgenticRepository {
               (g.workspace_id is null and g.user_id = $2)
               or wm.user_id is not null
             )
-          for update
+          for update of a
         `,
         [params.approvalId, userId]
       );
