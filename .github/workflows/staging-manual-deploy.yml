@@ -16,6 +16,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  manual-trigger-guard:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Staging deploy is manual-only. No deployment executed for event '${{ github.event_name }}'."
+
   stage:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
