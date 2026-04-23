@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -17,6 +17,17 @@ function writeFixture(root: string, relativePath: string, contents = "fixture") 
 }
 
 describe("compliance evidence collector", () => {
+  it("keeps the default compliance registry references resolvable", () => {
+    const registry = JSON.parse(readFileSync(path.join(process.cwd(), "config/compliance/controls.json"), "utf8"));
+
+    const bundle = buildComplianceEvidenceBundle(registry, {
+      cwd: process.cwd(),
+      requireArtifacts: false
+    });
+
+    expect(bundle.summary.missingReferences).toBe(0);
+  });
+
   it("builds a bundle with hashed references and required artifact accounting", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "agentic-compliance-"));
 

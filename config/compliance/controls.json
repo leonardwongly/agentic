@@ -301,7 +301,7 @@
         "Production rollout checks"
       ],
       "codePaths": [
-        ".github/workflows/staging-deploy.yml",
+        ".github/workflows/ci.yml",
         "scripts/staging-provider-deploy.ts",
         "scripts/deployment-smoke.ts",
         "scripts/deployment-async-canary.ts",
