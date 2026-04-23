@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { PrivacyOperationKindSchema, PrivacyOperationSchema } from "@agentic/contracts";
-import { buildPrivacyControlSummary } from "@agentic/policy";
+import { buildPrivacyControlSummary } from "@agentic/policy/src/privacy-controls";
 import { enqueuePrivacyOperationJob } from "@agentic/worker-runtime";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../../lib/auth";

@@ -228,6 +228,7 @@ export type {
   DashboardControlPlane,
   DashboardControlPlaneSection,
   DashboardData,
+  DashboardDiagnostic,
   DashboardDiagnosticTarget,
   DashboardDiagnostics,
   GoalPageParams,
