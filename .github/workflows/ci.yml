@@ -14,7 +14,10 @@ permissions:
 
 jobs:
   dependency-review:
-    if: github.event_name == 'pull_request'
+    # Dependency review only works on public repositories and supported GHAS-backed
+    # private repos. Keep runtime dependency auditing as the default required gate
+    # and allow explicitly enabled repositories to opt back into dependency review.
+    if: github.event_name == 'pull_request' && (!github.event.repository.private || vars.ENABLE_DEPENDENCY_REVIEW == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
