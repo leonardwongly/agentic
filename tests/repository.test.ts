@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Client } from "pg";
 import {
   AgentDefinitionSchema,
   AutopilotEventSchema,
@@ -1206,42 +1207,19 @@ describe("repository", () => {
     repository: ReturnType<typeof createRepository>,
     run: () => Promise<T>
   ): Promise<{ result: T; queryCount: number }> {
-    const postgresRepository = repository as ReturnType<typeof createRepository> & {
-      pool: {
-        query: (...args: unknown[]) => Promise<unknown>;
-        connect: () => Promise<{
-          query: (...args: unknown[]) => Promise<unknown>;
-          release: () => void;
-        }>;
-      };
-    };
     let queryCount = 0;
-    const originalPoolQuery = postgresRepository.pool.query.bind(postgresRepository.pool);
-    const originalPoolConnect = postgresRepository.pool.connect.bind(postgresRepository.pool);
-
-    postgresRepository.pool.query = (async (...args: unknown[]) => {
+    const originalClientQuery = Client.prototype.query;
+    const instrumentedQuery: typeof Client.prototype.query = function (...args) {
       queryCount += 1;
-      return originalPoolQuery(...args);
-    }) as typeof postgresRepository.pool.query;
-
-    postgresRepository.pool.connect = (async () => {
-      const client = await originalPoolConnect();
-      const originalClientQuery = client.query.bind(client);
-
-      client.query = (async (...args: unknown[]) => {
-        queryCount += 1;
-        return originalClientQuery(...args);
-      }) as typeof client.query;
-
-      return client;
-    }) as typeof postgresRepository.pool.connect;
+      return originalClientQuery.apply(this, args);
+    };
+    Client.prototype.query = instrumentedQuery;
 
     try {
       const result = await run();
       return { result, queryCount };
     } finally {
-      postgresRepository.pool.query = originalPoolQuery as typeof postgresRepository.pool.query;
-      postgresRepository.pool.connect = originalPoolConnect as typeof postgresRepository.pool.connect;
+      Client.prototype.query = originalClientQuery;
     }
   }
 
@@ -1584,8 +1562,81 @@ describe("repository", () => {
     expect(dashboard.autopilotEvents).toHaveLength(8);
     expect(dashboard.memories).toHaveLength(Math.min(40, initialMemoryCount + 25));
     expect(dashboard.integrations).toHaveLength(Math.min(24, initialIntegrationCount + 25));
-    expect(queryCount).toBeLessThanOrEqual(20);
+    // Workspace governance/member/privacy slices add a small constant number of
+    // queries; the regression guard is that the total stays flat as goal count grows.
+    expect(queryCount).toBeLessThanOrEqual(24);
   }, 60_000);
+
+  postgresIt("upserts workspace members by workspace and user in Postgres when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+    const unique = Date.now();
+    const timestamp = nowIso();
+    const collaboratorUserId = `workspace-collaborator-${unique}`;
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(collaboratorUserId);
+
+    const workspace = await repository.saveWorkspace(
+      WorkspaceSchema.parse({
+        id: `workspace-member-upsert-${unique}`,
+        ownerUserId: SYSTEM_USER_ID,
+        slug: `member-upsert-${unique}`,
+        name: "Workspace Member Upsert",
+        description: "Ensures workspace membership is keyed by workspace and user.",
+        isPersonal: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: `workspace-member-owner-${unique}`,
+        workspaceId: workspace.id,
+        userId: SYSTEM_USER_ID,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: `workspace-member-collaborator-initial-${unique}`,
+        workspaceId: workspace.id,
+        userId: collaboratorUserId,
+        role: "viewer",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      systemActor
+    );
+
+    const updatedMember = await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: `workspace-member-collaborator-updated-${unique}`,
+        workspaceId: workspace.id,
+        userId: collaboratorUserId,
+        role: "editor",
+        joinedAt: timestamp,
+        updatedAt: nowIso()
+      }),
+      systemActor
+    );
+
+    const members = await repository.listWorkspaceMembers(workspace.id, SYSTEM_USER_ID);
+    const collaboratorMembers = members.filter((member) => member.userId === collaboratorUserId);
+
+    expect(collaboratorMembers).toHaveLength(1);
+    expect(collaboratorMembers[0]).toMatchObject({
+      id: updatedMember.id,
+      role: "editor"
+    });
+  });
 
   it("derives agent scorecards from persisted goal execution history", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
