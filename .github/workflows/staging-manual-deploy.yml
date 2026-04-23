@@ -3,6 +3,7 @@ name: Staging Deploy
 run-name: Staging deploy from ${{ github.ref_name }}
 
 on:
+  push:
   workflow_dispatch:
 
 permissions:
