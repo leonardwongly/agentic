@@ -36,7 +36,6 @@ jobs:
       AGENTIC_STAGING_DEPLOY_ARGS_JSON: ${{ secrets.STAGING_DEPLOY_ARGS_JSON }}
       AGENTIC_STAGING_DEPLOY_TIMEOUT_MS: ${{ vars.STAGING_DEPLOY_TIMEOUT_MS }}
       AGENTIC_STAGING_IMAGE_TAG: agentic-staging:${{ github.sha }}
-      AGENTIC_TELEMETRY_RETENTION_DIR: ${{ runner.temp }}/agentic-telemetry
       AGENTIC_TELEMETRY_EXPORT_URL: ${{ secrets.STAGING_TELEMETRY_EXPORT_URL }}
       AGENTIC_TELEMETRY_EXPORT_TOKEN: ${{ secrets.STAGING_TELEMETRY_EXPORT_TOKEN }}
       NODE_ENV: production
@@ -47,6 +46,9 @@ jobs:
         with:
           node-version: 20
           cache: npm
+
+      - name: Initialize staging runtime environment
+        run: echo "AGENTIC_TELEMETRY_RETENTION_DIR=${RUNNER_TEMP}/agentic-telemetry" >> "$GITHUB_ENV"
 
       - name: Validate required staging configuration
         run: |
