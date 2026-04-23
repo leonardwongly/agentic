@@ -2,7 +2,7 @@ import {
   buildPrivacyControlSummary,
   loadPrivacyControlRegistry,
   parsePrivacyControlRegistry
-} from "@agentic/policy";
+} from "@agentic/policy/src/privacy-controls";
 
 describe("privacy control registry", () => {
   it("loads the checked-in registry and summarizes dataset coverage", () => {
