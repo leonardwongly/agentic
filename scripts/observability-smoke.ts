@@ -22,6 +22,7 @@ const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 const originalSlackBotToken = process.env.SLACK_BOT_TOKEN;
 const originalSlackSigningSecret = process.env.SLACK_SIGNING_SECRET;
 const originalTelemetryConsole = process.env.AGENTIC_TELEMETRY_CONSOLE;
+const originalDatabaseUrl = process.env.DATABASE_URL;
 
 async function main() {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-observability-smoke-"));
@@ -32,6 +33,7 @@ async function main() {
   process.env.SLACK_BOT_TOKEN = "xoxb-smoke-token";
   process.env.SLACK_SIGNING_SECRET = "smoke-signing-secret";
   process.env.AGENTIC_TELEMETRY_CONSOLE = "off";
+  delete process.env.DATABASE_URL;
   Reflect.set(globalThis, "__agenticRepository", undefined);
   Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
   resetTelemetrySnapshot();
@@ -132,6 +134,11 @@ try {
   process.env.SLACK_BOT_TOKEN = originalSlackBotToken;
   process.env.SLACK_SIGNING_SECRET = originalSlackSigningSecret;
   process.env.AGENTIC_TELEMETRY_CONSOLE = originalTelemetryConsole;
+  if (originalDatabaseUrl === undefined) {
+    delete process.env.DATABASE_URL;
+  } else {
+    process.env.DATABASE_URL = originalDatabaseUrl;
+  }
   global.fetch = originalFetch;
   Reflect.set(globalThis, "__agenticRepository", undefined);
   Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
