@@ -6393,13 +6393,15 @@ class PostgresRepository implements AgenticRepository {
 
       return GoalBundlePageSchema.parse({
         items,
+        limit,
         nextCursor:
           result.rows.length > limit && lastRow
             ? encodeCollectionCursor({
                 createdAt: new Date(lastRow.created_at).toISOString(),
                 id: String(lastRow.id)
               })
-            : null
+            : null,
+        generatedAt: nowIso()
       });
     } finally {
       client.release();
@@ -6678,13 +6680,15 @@ class PostgresRepository implements AgenticRepository {
 
     return AutopilotEventPageSchema.parse({
       items,
+      limit,
       nextCursor:
         result.rows.length > limit && last
           ? encodeCollectionCursor({
               createdAt: last.createdAt,
               id: last.id
             })
-          : null
+          : null,
+      generatedAt: nowIso()
     });
   }
 
@@ -7130,13 +7134,15 @@ class PostgresRepository implements AgenticRepository {
 
     return MemoryRecordPageSchema.parse({
       items,
+      limit,
       nextCursor:
         result.rows.length > limit && last
           ? encodeCollectionCursor({
               createdAt: last.createdAt,
               id: last.id
             })
-          : null
+          : null,
+      generatedAt: nowIso()
     });
   }
 
@@ -7262,13 +7268,15 @@ class PostgresRepository implements AgenticRepository {
 
     return WatcherPageSchema.parse({
       items,
+      limit,
       nextCursor:
         result.rows.length > limit && last
           ? encodeCollectionCursor({
               createdAt: last.createdAt,
               id: last.id
             })
-          : null
+          : null,
+      generatedAt: nowIso()
     });
   }
 
@@ -7387,13 +7395,15 @@ class PostgresRepository implements AgenticRepository {
 
     return IntegrationAccountPageSchema.parse({
       items,
+      limit,
       nextCursor:
         result.rows.length > limit && last
           ? encodeCollectionCursor({
               createdAt: last.createdAt,
               id: last.id
             })
-          : null
+          : null,
+      generatedAt: nowIso()
     });
   }
 
