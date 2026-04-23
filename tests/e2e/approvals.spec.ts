@@ -20,15 +20,18 @@ test("creates and approves an inbox-triage goal end-to-end", async ({ page }) =>
       .first()
   ).toBeVisible();
 
-  const approvalRow = page.locator("#section-approvals .list-item.vertical").filter({
+  const approvalRows = page.locator("#section-approvals .list-item.vertical").filter({
     hasText: "Prepare sender-aware drafts requires approval"
   });
+  const initialApprovalCount = await approvalRows.count();
+  const approvalRow = approvalRows.first();
 
+  expect(initialApprovalCount).toBeGreaterThan(0);
   await expect(approvalRow).toBeVisible();
   await approvalRow.getByRole("button", { name: "Approve once" }).click();
 
   await expect(page.getByText("Marked the approval as approved.").first()).toBeVisible();
-  await expect(approvalRow).toHaveCount(0);
+  await expect(approvalRows).toHaveCount(initialApprovalCount - 1);
 
   const approvalTimelineRow = page
     .locator(".timeline-row")

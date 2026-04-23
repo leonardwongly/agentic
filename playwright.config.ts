@@ -4,6 +4,14 @@ import { defineConfig, devices } from "@playwright/test";
 const port = 3201;
 const e2eRoot = path.join(process.cwd(), ".agentic", "e2e", process.env.PLAYWRIGHT_E2E_RUN_ID ?? `${Date.now()}`);
 const useProductionServer = process.env.PLAYWRIGHT_USE_PROD_SERVER === "true" && Boolean(process.env.DATABASE_URL?.trim());
+const sharedBackendEnv = process.env.DATABASE_URL?.trim()
+  ? {}
+  : {
+      // Only pin the web app to the file-backed store when the worker is using
+      // the same backend. If DATABASE_URL is configured, letting the web app
+      // see AGENTIC_RUNTIME_STORE_PATH would split the stack across file + Postgres.
+      AGENTIC_RUNTIME_STORE_PATH: path.join(e2eRoot, "runtime-store.json")
+    };
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -32,7 +40,7 @@ export default defineConfig({
     env: {
       AGENTIC_ACCESS_KEY: "playwright-e2e-key",
       AGENTIC_NOTES_PATH: path.join(e2eRoot, "notes"),
-      AGENTIC_RUNTIME_STORE_PATH: path.join(e2eRoot, "runtime-store.json"),
+      ...sharedBackendEnv,
       PLAYWRIGHT_STACK_MODE: useProductionServer ? "production" : "development",
       NODE_ENV: useProductionServer ? "production" : "test"
     }

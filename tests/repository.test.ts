@@ -1233,10 +1233,10 @@ describe("repository", () => {
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, `Prepare a travel plan with approvals ${Date.now()}.`);
 
     const reloaded = await repository.getGoalBundle(bundle.goal.id);
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const goals = await repository.listGoals(SYSTEM_USER_ID);
 
     expect(reloaded?.goal.id).toBe(bundle.goal.id);
-    expect(dashboard.goals.some((goalBundle) => goalBundle.goal.id === bundle.goal.id)).toBe(true);
+    expect(goals.some((goalBundle) => goalBundle.goal.id === bundle.goal.id)).toBe(true);
   });
 
   postgresIt("hydrates Postgres goal pages without per-goal query fanout when DATABASE_URL is configured", async () => {

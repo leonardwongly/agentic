@@ -66,6 +66,11 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Install pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+
       - run: npm ci
 
       - name: Create security artifact directories
