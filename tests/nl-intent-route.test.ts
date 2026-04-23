@@ -15,16 +15,19 @@ import {
 import { GET as briefingJobRoute } from "../apps/web/app/api/briefing/jobs/[id]/route";
 import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
 import { GET as nlIntentCapabilitiesRoute, POST as nlIntentRoute } from "../apps/web/app/api/nl/intent/route";
-import { buildAuthorizedGetRequest, buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-helpers";
+import {
+  buildAuthorizedGetRequest,
+  buildAuthorizedJsonRequest,
+  createRouteTestRepository,
+  expectNoStoreHeaders
+} from "./route-test-helpers";
 
 describe("nl intent route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 
   async function buildRepository() {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     return repository;
@@ -63,9 +66,7 @@ describe("nl intent route", () => {
   }
 
   async function processQueuedNlIntentJobs(maxJobs = 1) {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const selfImprovementRepository = createSelfImprovementRepository({
       baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-nl-intent-route-memory-"))
     });

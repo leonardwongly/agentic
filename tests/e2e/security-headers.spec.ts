@@ -66,7 +66,15 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
 
   await createdGoal.getByRole("button", { name: "Copy share link" }).click();
 
-  const shareUrl = await page.getByRole("link", { name: "Open public share page" }).getAttribute("href");
+  await expect(
+    page.locator(".share-status-row .status-chip").filter({
+      hasText: /(Copied|Created) a public share link for "Inbox triage and follow-up prep"\./
+    })
+  ).toBeVisible();
+
+  const shareLink = page.getByRole("link", { name: "Open public share page" });
+  await expect(shareLink).toBeVisible();
+  const shareUrl = await shareLink.getAttribute("href");
 
   expect(shareUrl).toBeTruthy();
 

@@ -17,7 +17,7 @@ import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { verifyGoalShareToken } from "../apps/web/lib/share";
 import { GOAL_SHARE_MUTATION_DENIED_REASON } from "../apps/web/lib/workspace-role-permissions";
 import { DELETE as revokeGoalShareRoute, POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/route";
-import { expectNoStoreHeaders } from "./route-test-helpers";
+import { createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
 
 function buildAutopilotSettings() {
   return {
@@ -398,9 +398,7 @@ describe("goal share route", () => {
   });
 
   it("creates a signed public share link and records a measurement log", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Triage my inbox and prepare replies for important clients.");
@@ -420,12 +418,8 @@ describe("goal share route", () => {
     );
     const payload = (await response.json()) as { shareUrl: string; expiresAt: string };
     const token = payload.shareUrl.split("/share/")[1];
-    const reloadedBundle = await createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    }).getGoalBundle(bundle.goal.id);
-    const shares = await createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    }).listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+    const reloadedBundle = await createRouteTestRepository().getGoalBundle(bundle.goal.id);
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
     const createdLog = reloadedBundle?.actionLogs.find((log) => log.kind === "share.link_created");
 
     expect(response.status).toBe(200);
@@ -443,9 +437,7 @@ describe("goal share route", () => {
   });
 
   it("stamps session actor context onto share creation logs", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(secondaryUserId);
@@ -469,9 +461,7 @@ describe("goal share route", () => {
         }
       );
       const payload = (await response.json()) as { shareUrl: string };
-      const reloadedBundle = await createRepository({
-        storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-      }).getGoalBundle(bundle.goal.id);
+      const reloadedBundle = await createRouteTestRepository().getGoalBundle(bundle.goal.id);
       const createdLog = reloadedBundle?.actionLogs.find((log) => log.kind === "share.link_created");
 
       expect(response.status).toBe(200);
@@ -519,9 +509,7 @@ describe("goal share route", () => {
   });
 
   it("returns 404 when attempting to share another user's goal", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -587,9 +575,7 @@ describe("goal share route", () => {
   });
 
   it("allows editors in a shared workspace to create goal share links", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const ownerUserId = "workspace-owner";
     const editorUserId = "workspace-editor";
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
@@ -640,9 +626,7 @@ describe("goal share route", () => {
   });
 
   it("returns 403 when a viewer tries to create a shared goal share link", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const ownerUserId = "workspace-owner";
     const viewerUserId = "workspace-viewer";
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
@@ -698,9 +682,7 @@ describe("goal share route", () => {
   });
 
   it("revokes an existing public share link and records a revoke log", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share the current planning context with a reviewer.");
@@ -747,9 +729,7 @@ describe("goal share route", () => {
   });
 
   it("returns 403 when a viewer tries to revoke a shared goal share link", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const ownerUserId = SYSTEM_USER_ID;
     const viewerUserId = "workspace-viewer";
 

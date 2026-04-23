@@ -2,7 +2,6 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { GoalTemplateSchema, SYSTEM_USER_ID, createHumanActorContext, createSystemActorContext, nowIso } from "@agentic/contracts";
-import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +17,7 @@ import {
   type AuthSessionStateStore
 } from "../apps/web/lib/auth-session-store";
 import { resetSessionUnlockRateLimit } from "../apps/web/lib/session-unlock-rate-limit";
-import { expectNoStoreHeaders } from "./route-test-helpers";
+import { createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
 
 function buildAuthorizedGetRequest(url: string): Request {
   return new Request(url, {
@@ -61,9 +60,7 @@ describe("templates routes", () => {
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 
   async function processQueuedTemplateJobs(maxJobs = 1) {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const selfImprovementRepository = createSelfImprovementRepository({
       baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-template-route-memory-"))
     });
@@ -222,9 +219,7 @@ describe("templates routes", () => {
       job: { id: string; templateId: string; goalId: string };
       statusUrl: string;
     };
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(202);
@@ -288,9 +283,7 @@ describe("templates routes", () => {
   });
 
   it("stamps the human actor when a session principal updates a template schedule", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(secondaryUserId);
@@ -356,9 +349,7 @@ describe("templates routes", () => {
   });
 
   it("rejects template schedule updates without an If-Match precondition", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     await repository.saveTemplate(
@@ -400,9 +391,7 @@ describe("templates routes", () => {
   });
 
   it("rejects stale template schedule preconditions", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     await repository.saveTemplate(
@@ -449,9 +438,7 @@ describe("templates routes", () => {
   });
 
   it("requires an If-Match precondition when deleting templates", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     await repository.saveTemplate(

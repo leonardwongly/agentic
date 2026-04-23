@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Client } from "pg";
@@ -3944,6 +3944,59 @@ describe("repository", () => {
     });
 
     await expect(repository.listGoals(SYSTEM_USER_ID)).rejects.toThrow(/Runtime store .* is corrupted/);
+  });
+
+  it("uses unique temp files for concurrent file-backed writes across repository instances", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repositoryA = createRepository({
+      storePath
+    });
+    const repositoryB = createRepository({
+      storePath
+    });
+
+    await repositoryA.seedDefaults(SYSTEM_USER_ID);
+    const existingSelection = await repositoryA.getWorkspaceSelection(SYSTEM_USER_ID);
+
+    expect(existingSelection).not.toBeNull();
+
+    const writes = Array.from({ length: 24 }, (_, index) => {
+      const timestamp = new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString();
+
+      return (index % 2 === 0 ? repositoryA : repositoryB).saveWorkspaceSelection(
+        WorkspaceSelectionSchema.parse({
+          userId: SYSTEM_USER_ID,
+          workspaceId: existingSelection!.workspaceId,
+          actorContext: systemActor,
+          selectedAt: timestamp,
+          updatedAt: timestamp
+        })
+      );
+    });
+
+    await expect(Promise.all(writes)).resolves.toHaveLength(24);
+
+    const reloadedRepository = createRepository({
+      storePath
+    });
+    const reloadedSelection = await reloadedRepository.getWorkspaceSelection(SYSTEM_USER_ID);
+    const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
+      workspaceSelections: Array<{ userId: string; workspaceId: string; selectedAt: string }>;
+    };
+    const leftoverTempFiles = (await readdir(tempDir)).filter((name) => name.startsWith("runtime-store.json.") && name.endsWith(".tmp"));
+
+    expect(reloadedSelection).toMatchObject({
+      userId: SYSTEM_USER_ID,
+      workspaceId: existingSelection!.workspaceId
+    });
+    expect(persisted.workspaceSelections).toContainEqual(
+      expect.objectContaining({
+        userId: SYSTEM_USER_ID,
+        workspaceId: existingSelection!.workspaceId
+      })
+    );
+    expect(leftoverTempFiles).toEqual([]);
   });
 
   it("persists briefing preferences and derives briefing history from briefing goals", async () => {

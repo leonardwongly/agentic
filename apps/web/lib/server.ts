@@ -14,7 +14,11 @@ declare global {
 export function getRepository() {
   if (!global.__agenticRepository) {
     validateAuthRuntimeState();
-    global.__agenticRepository = createRepository();
+    // Respect explicit file-backed test stores so route handlers and test fixtures
+    // share the same backend even when DATABASE_URL is configured for other suites.
+    global.__agenticRepository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
   }
 
   return global.__agenticRepository;

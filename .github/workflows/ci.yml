@@ -91,6 +91,10 @@ jobs:
       - name: Validate architecture fitness
         run: npm run test:architecture:fitness
 
+      - name: Validate parallel worktree ownership
+        if: startsWith(github.head_ref, 'feat/parallel-') || startsWith(github.ref_name, 'feat/parallel-')
+        run: npm run test:parallel-worktree:fitness
+
       - name: Validate performance fitness
         run: npm run test:performance:fitness
 

@@ -864,8 +864,9 @@ export async function POST(request: Request) {
         typeof bodyDetails === "object" && bodyDetails !== null && !Array.isArray(bodyDetails)
           ? (bodyDetails as Record<string, unknown>)
           : undefined;
-      const normalized = isCompatibilityAutopilotKind(body.kind)
-        ? shouldUseStrictEventFabricNormalization(body.kind, normalizedDetails)
+      const compatibilityKind = isCompatibilityAutopilotKind(body.kind) ? body.kind : null;
+      const normalized = compatibilityKind
+        ? shouldUseStrictEventFabricNormalization(compatibilityKind, normalizedDetails)
           ? await normalizeAutopilotEventRequest({
               repository,
               userId: principal.userId,
@@ -874,7 +875,7 @@ export async function POST(request: Request) {
           : await (async () => {
             const resolvedSource = await resolveAutopilotSource({
               repository,
-              kind: body.kind,
+              kind: compatibilityKind,
               sourceId: body.sourceId,
               userId: principal.userId,
               details: normalizedDetails
@@ -883,7 +884,7 @@ export async function POST(request: Request) {
             return {
               summary: body.summary?.trim() || resolvedSource.summary,
               details: buildAutopilotEventDetails({
-                kind: body.kind,
+                kind: compatibilityKind,
                 sourceId: body.sourceId,
                 summary: body.summary?.trim() || resolvedSource.summary,
                 idempotencyKey: body.idempotencyKey ?? null,
@@ -944,7 +945,7 @@ export async function POST(request: Request) {
                 sourceId: body.sourceId,
                 mode: effectiveMode,
                 summary: normalizedEvent.summary,
-                details: normalizedEvent.details,
+                details: AutopilotEventDetailsSchema.parse(normalizedEvent.details),
                 idempotencyKey: body.idempotencyKey,
                 actorContext
               })

@@ -9,8 +9,10 @@ import type {
   GoalRefineJobPayload,
   PrivacyOperationJobPayload,
   PublicShareViewJobPayload,
+  RecommendationRefinementSource,
   TemplateRunJobPayload
 } from "@agentic/contracts";
+import { RecommendationRefinementSourceSchema } from "@agentic/contracts";
 
 export function buildGoalCreatePayload(params: {
   request: string;
@@ -33,6 +35,7 @@ export function buildGoalRefinePayload(params: {
   workflowId: string;
   refinement: string;
   workspaceId: string | null;
+  sourceRecommendation?: RecommendationRefinementSource | null;
 }): GoalRefineJobPayload {
   return {
     type: "goal_refine",
@@ -40,12 +43,17 @@ export function buildGoalRefinePayload(params: {
     workflowId: params.workflowId,
     refinement: params.refinement,
     workspaceId: params.workspaceId,
-    metadata: {}
+    metadata: params.sourceRecommendation
+      ? {
+          sourceRecommendation: RecommendationRefinementSourceSchema.parse(params.sourceRecommendation)
+        }
+      : {}
   };
 }
 
 export function buildAutopilotProcessPayload(params: {
   autopilotEvent: AutopilotEvent;
+  replayedFromJobId?: string | null;
 }): AutopilotProcessJobPayload {
   return {
     type: "autopilot_process",
@@ -53,7 +61,11 @@ export function buildAutopilotProcessPayload(params: {
     kind: params.autopilotEvent.kind,
     sourceId: params.autopilotEvent.sourceId,
     mode: params.autopilotEvent.mode,
-    metadata: {}
+    metadata: params.replayedFromJobId
+      ? {
+          replayedFromJobId: params.replayedFromJobId
+        }
+      : {}
   };
 }
 
@@ -104,8 +116,24 @@ export function buildAutopilotWorkflowId(eventId: string): string {
   return `autopilot-workflow-${eventId}`;
 }
 
-export function buildAutopilotProcessJobIdempotencyKey(eventId: string): string {
-  return `autopilot-process:${eventId}`;
+export function buildAutopilotProcessJobIdempotencyKey(eventId: string): string;
+export function buildAutopilotProcessJobIdempotencyKey(params: {
+  eventId: string;
+  replayedFromJobId?: string | null;
+}): string;
+export function buildAutopilotProcessJobIdempotencyKey(
+  paramsOrEventId: string | { eventId: string; replayedFromJobId?: string | null }
+): string {
+  const params =
+    typeof paramsOrEventId === "string"
+      ? {
+          eventId: paramsOrEventId,
+          replayedFromJobId: null
+        }
+      : paramsOrEventId;
+
+  const baseKey = `autopilot-process:${params.eventId}`;
+  return params.replayedFromJobId ? `${baseKey}:replay:${params.replayedFromJobId}` : baseKey;
 }
 
 export function buildPrivacyOperationPayload(params: {

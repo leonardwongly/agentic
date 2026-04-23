@@ -1,9 +1,11 @@
 import {
-  buildGoalJobResultSummary,
-  isApprovalFollowUpJob,
-  isApprovalNotificationJob,
-  isAutopilotProcessJob
+  buildGoalJobResultSummary
 } from "@agentic/worker-runtime";
+import {
+  ApprovalFollowUpJobPayloadSchema,
+  ApprovalNotificationJobPayloadSchema,
+  AutopilotProcessJobPayloadSchema
+} from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
@@ -54,16 +56,17 @@ export async function GET(request: Request, context: RouteContext) {
     const repository = await getSeededRepository();
     const job = await repository.getJob(id, principal.userId);
 
-    if (isApprovalFollowUpJob(job)) {
+    if (job?.kind === "approval_follow_up" && job.payload.type === "approval_follow_up") {
+      const followUpPayload = ApprovalFollowUpJobPayloadSchema.parse(job.payload);
       const responseBody = {
         job: {
           id: job.id,
           kind: job.kind,
           status: job.status,
-          goalId: job.payload.goalId,
-          approvalId: job.payload.approvalId,
-          taskId: job.payload.taskId,
-          decision: job.payload.decision,
+          goalId: followUpPayload.goalId,
+          approvalId: followUpPayload.approvalId,
+          taskId: followUpPayload.taskId,
+          decision: followUpPayload.decision,
           attemptCount: job.attemptCount,
           maxAttempts: job.maxAttempts,
           journal: buildJobJournal(job),
@@ -73,10 +76,10 @@ export async function GET(request: Request, context: RouteContext) {
       };
 
       if (job.status === "completed") {
-        const bundle = await repository.getGoalBundleForUser(job.payload.goalId, principal.userId);
+        const bundle = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
 
         if (!bundle) {
-          throw new Error(`Approval goal ${job.payload.goalId} is missing after job completion.`);
+          throw new Error(`Approval goal ${followUpPayload.goalId} is missing after job completion.`);
         }
 
         return authenticatedJson({
@@ -104,13 +107,14 @@ export async function GET(request: Request, context: RouteContext) {
       );
     }
 
-    if (isAutopilotProcessJob(job)) {
+    if (job?.kind === "autopilot_process" && job.payload.type === "autopilot_process") {
+      const autopilotPayload = AutopilotProcessJobPayloadSchema.parse(job.payload);
       const event = (await repository.listAutopilotEvents(principal.userId)).find(
-        (candidate) => candidate.id === job.payload.autopilotEventId
+        (candidate) => candidate.id === autopilotPayload.autopilotEventId
       );
 
       if (!event) {
-        throw new ApiRouteError(404, `Autopilot event ${job.payload.autopilotEventId} was not found.`);
+        throw new ApiRouteError(404, `Autopilot event ${autopilotPayload.autopilotEventId} was not found.`);
       }
 
       const responseBody = {
@@ -118,10 +122,10 @@ export async function GET(request: Request, context: RouteContext) {
           id: job.id,
           kind: job.kind,
           status: job.status,
-          autopilotEventId: job.payload.autopilotEventId,
-          eventKind: job.payload.kind,
-          sourceId: job.payload.sourceId,
-          mode: job.payload.mode,
+          autopilotEventId: autopilotPayload.autopilotEventId,
+          eventKind: autopilotPayload.kind,
+          sourceId: autopilotPayload.sourceId,
+          mode: autopilotPayload.mode,
           attemptCount: job.attemptCount,
           maxAttempts: job.maxAttempts,
           journal: buildJobJournal(job),
@@ -172,11 +176,12 @@ export async function GET(request: Request, context: RouteContext) {
       );
     }
 
-    if (isApprovalNotificationJob(job)) {
-      const bundle = await repository.getGoalBundleForUser(job.payload.goalId, principal.userId);
+    if (job?.kind === "approval_notification" && job.payload.type === "approval_notification") {
+      const notificationPayload = ApprovalNotificationJobPayloadSchema.parse(job.payload);
+      const bundle = await repository.getGoalBundleForUser(notificationPayload.goalId, principal.userId);
 
       if (!bundle) {
-        throw new Error(`Approval notification goal ${job.payload.goalId} is missing.`);
+        throw new Error(`Approval notification goal ${notificationPayload.goalId} is missing.`);
       }
 
       const responseBody = {
@@ -184,11 +189,11 @@ export async function GET(request: Request, context: RouteContext) {
           id: job.id,
           kind: job.kind,
           status: job.status,
-          goalId: job.payload.goalId,
-          approvalId: job.payload.approvalId,
-          taskId: job.payload.taskId,
-          decision: job.payload.decision,
-          channel: job.payload.channel,
+          goalId: notificationPayload.goalId,
+          approvalId: notificationPayload.approvalId,
+          taskId: notificationPayload.taskId,
+          decision: notificationPayload.decision,
+          channel: notificationPayload.channel,
           attemptCount: job.attemptCount,
           maxAttempts: job.maxAttempts,
           journal: buildJobJournal(job),

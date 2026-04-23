@@ -64,8 +64,8 @@ type DashboardOperationsSectionsProps = {
   governanceState: RequestState;
   autopilotState: RequestState;
   privacyState: RequestState;
-  privacyInventoryState: RequestState;
-  privacyControls: PrivacyControlSummary | null;
+  privacyInventoryState?: RequestState;
+  privacyControls?: PrivacyControlSummary | null;
   workspaceName: string;
   setWorkspaceName: Dispatch<SetStateAction<string>>;
   workspaceSlug: string;
@@ -252,8 +252,8 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
     governanceState,
     autopilotState,
     privacyState,
-    privacyInventoryState,
-    privacyControls,
+    privacyInventoryState = { kind: "idle", message: "" },
+    privacyControls = null,
     workspaceName,
     setWorkspaceName,
     workspaceSlug,

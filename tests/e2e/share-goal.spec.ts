@@ -26,6 +26,10 @@ async function sumVisibleViewedCounts(page: Page): Promise<number> {
   }, 0);
 }
 
+function isPublicShareViewRequest(url: string, method: string): boolean {
+  return method === "POST" && url.includes("/api/share/view");
+}
+
 test("creates a public goal share link and opens the shared page", async ({ page }) => {
   await unlockDashboard(page);
 
@@ -41,9 +45,11 @@ test("creates a public goal share link and opens the shared page", async ({ page
       hasText: "Inbox triage and follow-up prep"
     })
     .first();
+  const copyShareLinkButton = createdGoal.getByRole("button", { name: "Copy share link" });
 
   await expect(createdGoal).toBeVisible();
-  await createdGoal.getByRole("button", { name: "Copy share link" }).click();
+  await expect(copyShareLinkButton).toBeEnabled();
+  await copyShareLinkButton.click();
 
   await expect(
     page.locator(".share-status-row .status-chip").filter({
@@ -83,8 +89,11 @@ test("keeps the share flow successful when clipboard access is blocked", async (
       hasText: "Inbox triage and follow-up prep"
     })
     .first();
+  const copyShareLinkButton = createdGoal.getByRole("button", { name: "Copy share link" });
 
-  await createdGoal.getByRole("button", { name: "Copy share link" }).click();
+  await expect(createdGoal).toBeVisible();
+  await expect(copyShareLinkButton).toBeEnabled();
+  await copyShareLinkButton.click();
 
   await expect(
     page.locator(".share-status-row .status-chip").filter({
@@ -112,8 +121,11 @@ test("renders a valid public share page in a fresh unauthenticated context and d
       hasText: "Inbox triage and follow-up prep"
     })
     .first();
+  const copyShareLinkButton = createdGoal.getByRole("button", { name: "Copy share link" });
 
-  await createdGoal.getByRole("button", { name: "Copy share link" }).click();
+  await expect(createdGoal).toBeVisible();
+  await expect(copyShareLinkButton).toBeEnabled();
+  await copyShareLinkButton.click();
 
   const shareLink = page.getByRole("link", { name: "Open public share page" });
   const shareUrl = await shareLink.getAttribute("href");
@@ -123,22 +135,37 @@ test("renders a valid public share page in a fresh unauthenticated context and d
   const publicContext = await browser.newContext();
   const publicPage = await publicContext.newPage();
   const viewedCountBeforePublicView = await sumVisibleViewedCounts(page);
+  const firstViewTracked = publicPage.waitForResponse((response) =>
+    isPublicShareViewRequest(response.url(), response.request().method())
+  );
 
   await publicPage.goto(shareUrl!);
   await expect(publicPage.getByText("Shared from Agentic")).toBeVisible();
   await expect(publicPage.getByRole("heading", { name: "Inbox triage and follow-up prep" })).toBeVisible();
   await expect(publicPage.getByText("Read-only shared goal")).toBeVisible();
+  expect((await firstViewTracked).status()).toBe(202);
 
   const publicHtml = await publicPage.content();
   expect(publicHtml).not.toContain("Approvals inbox");
   expect(publicHtml).not.toContain("Integration controls");
   expect(publicHtml).not.toContain("Recent activity");
 
+  const refreshTracked = publicPage.waitForResponse((response) =>
+    isPublicShareViewRequest(response.url(), response.request().method())
+  );
   await publicPage.reload();
+  expect((await refreshTracked).status()).toBe(202);
   await publicContext.close();
-  await page.reload();
 
-  await expect.poll(() => sumVisibleViewedCounts(page)).toBe(viewedCountBeforePublicView + 1);
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        return sumVisibleViewedCounts(page);
+      },
+      { timeout: 10_000 }
+    )
+    .toBe(viewedCountBeforePublicView + 1);
 });
 
 test("shows the invalid-share page for tampered or missing shared goals", async ({ page }) => {

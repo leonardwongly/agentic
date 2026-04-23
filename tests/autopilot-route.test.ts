@@ -25,6 +25,7 @@ import {
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { POST as autopilotEventsRoute } from "../apps/web/app/api/autopilot/events/route";
+import { createRouteTestRepository } from "./route-test-helpers";
 
 describe("autopilot events route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
@@ -60,9 +61,7 @@ describe("autopilot events route", () => {
   }
 
   async function createGoalForUser(request: string, userId = SYSTEM_USER_ID, workspaceId?: string | null) {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(userId);
 
@@ -129,7 +128,7 @@ describe("autopilot events route", () => {
     };
   }
 
-  async function runAutopilotWorker(repository = createRepository({ storePath: process.env.AGENTIC_RUNTIME_STORE_PATH })) {
+  async function runAutopilotWorker(repository = createRouteTestRepository()) {
     const selfImprovementRepository = createSelfImprovementRepository({
       baseDir: path.join(path.dirname(process.env.AGENTIC_RUNTIME_STORE_PATH!), "self-improvement")
     });
@@ -218,9 +217,7 @@ describe("autopilot events route", () => {
   });
 
   it("simulates connector-failure events without persisting execution state", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -786,9 +783,7 @@ describe("autopilot events route", () => {
   });
 
   it("uses the session principal when resolving watcher-triggered autopilot sources", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -848,9 +843,7 @@ describe("autopilot events route", () => {
   });
 
   it("returns 403 when a viewer triggers a shared workspace watcher event", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const viewerUserId = "user-viewer";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -920,9 +913,7 @@ describe("autopilot events route", () => {
   });
 
   it("allows editors to trigger shared workspace watcher events", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const editorUserId = "user-editor";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -1269,9 +1260,7 @@ describe("autopilot events route", () => {
   });
 
   it("stamps the human actor when a session principal executes a template-triggered event", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(secondaryUserId);
@@ -1368,9 +1357,7 @@ describe("autopilot events route", () => {
   });
 
   it("executes scheduled templates and advances their schedule window", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     await repository.saveTemplate(
@@ -1435,9 +1422,7 @@ describe("autopilot events route", () => {
   });
 
   it("executes scheduled briefings and records the resulting goal", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -1479,9 +1464,7 @@ describe("autopilot events route", () => {
   });
 
   it("executes approval-sla-breached events and records the resulting goal", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);

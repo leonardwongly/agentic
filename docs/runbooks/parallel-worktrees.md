@@ -85,7 +85,7 @@ CI enforcement rule:
 - shared protected files are spine-only on stream branches
 - stream-protected files are only allowed from their owning stream branch
 - the integrated base branch is allowed to carry protected-file changes after merge
-- if a protected file is edited from an unowned branch, `npm run test:architecture:fitness` fails
+- if a protected file is edited from an unowned branch, `npm run test:parallel-worktree:fitness` fails
 
 Expected stream ownership:
 
@@ -183,6 +183,7 @@ npm run worktree:cleanup
 ```bash
 npm run test:security:regression
 npm run test:architecture:fitness
+npm run test:parallel-worktree:fitness
 npm run test:performance:fitness
 npm test
 npm run build
