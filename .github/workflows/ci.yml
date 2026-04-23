@@ -77,6 +77,11 @@ jobs:
       - name: Run security regression suite
         run: npm run test:security:regression
 
+      - name: Install document pipeline dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+
       - name: Run unit and integration tests
         env:
           DATABASE_URL: ""
