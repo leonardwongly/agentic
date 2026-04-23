@@ -21,45 +21,11 @@ jobs:
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Staging deploy is manual-only. No deployment executed for event '${{ github.event_name }}'."
-
-  staging_config:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    outputs:
-      ready: ${{ steps.inspect.outputs.ready }}
-      missing: ${{ steps.inspect.outputs.missing }}
-    env:
-      DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-      AGENTIC_ACCESS_KEY: ${{ secrets.STAGING_AGENTIC_ACCESS_KEY }}
-      AGENTIC_SMOKE_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
-      AGENTIC_SMOKE_ACCESS_KEY: ${{ secrets.STAGING_SMOKE_ACCESS_KEY }}
-      AGENTIC_STAGING_DEPLOY_BIN: ${{ vars.STAGING_DEPLOY_BIN }}
-    steps:
-      - id: inspect
-        shell: bash
-        run: |
-          missing=()
-          test -n "$DATABASE_URL" || missing+=("STAGING_DATABASE_URL")
-          test -n "$AGENTIC_ACCESS_KEY" || missing+=("STAGING_AGENTIC_ACCESS_KEY")
-          test -n "$AGENTIC_SMOKE_BASE_URL" || missing+=("STAGING_BASE_URL")
-          test -n "$AGENTIC_SMOKE_ACCESS_KEY" || missing+=("STAGING_SMOKE_ACCESS_KEY")
-          test -n "$AGENTIC_STAGING_DEPLOY_BIN" || missing+=("STAGING_DEPLOY_BIN")
-
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            printf 'missing=%s\n' "$(IFS=,; echo "${missing[*]}")" >> "$GITHUB_OUTPUT"
-            echo "Missing staging configuration: ${missing[*]}"
-            exit 0
-          fi
-
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-          echo "missing=" >> "$GITHUB_OUTPUT"
-          echo "Staging configuration is present."
+      - run: |
+          echo "Staging deploy is manual-only. No deployment executed for event '${{ github.event_name }}'."
 
   stage:
-    needs: staging_config
-    if: github.event_name == 'workflow_dispatch' && needs.staging_config.outputs.ready == 'true'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
@@ -83,42 +49,77 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Validate required staging configuration
+        id: inspect
+        shell: bash
+        run: |
+          missing=()
+          test -n "$DATABASE_URL" || missing+=("STAGING_DATABASE_URL")
+          test -n "$AGENTIC_ACCESS_KEY" || missing+=("STAGING_AGENTIC_ACCESS_KEY")
+          test -n "$AGENTIC_SMOKE_BASE_URL" || missing+=("STAGING_BASE_URL")
+          test -n "$AGENTIC_SMOKE_ACCESS_KEY" || missing+=("STAGING_SMOKE_ACCESS_KEY")
+          test -n "$AGENTIC_STAGING_DEPLOY_BIN" || missing+=("STAGING_DEPLOY_BIN")
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            printf 'missing=%s\n' "$(IFS=,; echo "${missing[*]}")" >> "$GITHUB_OUTPUT"
+            echo "Missing staging configuration: ${missing[*]}"
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "missing=" >> "$GITHUB_OUTPUT"
+          echo "Staging configuration is present."
+
       - name: Initialize staging runtime environment
+        if: steps.inspect.outputs.ready == 'true'
         run: echo "AGENTIC_TELEMETRY_RETENTION_DIR=${RUNNER_TEMP}/agentic-telemetry" >> "$GITHUB_ENV"
 
-      - run: npm ci
+      - if: steps.inspect.outputs.ready == 'true'
+        run: npm ci
 
       - name: Create security artifact directories
+        if: steps.inspect.outputs.ready == 'true'
         run: mkdir -p artifacts/security artifacts/build
 
       - name: Audit production dependencies
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run security:audit-runtime -- --report artifacts/security/runtime-audit-report.json
 
       - name: Build deployable artifacts
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run build
 
       - name: Generate runtime SBOM
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run security:sbom -- --output artifacts/security/agentic-sbom.spdx.json
 
       - name: Validate staging database readiness
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run db:status -- --require-ready
 
       - name: Validate feature capability contracts
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run test:smoke:capabilities
 
       - name: Validate async execution smoke path
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run test:smoke:observability
 
       - name: Validate telemetry exporter and retention wiring
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run test:smoke:observability-export
 
       - name: Validate rollout gate manifests against retained telemetry
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run telemetry:rollout-gate -- --dir "$AGENTIC_TELEMETRY_RETENTION_DIR"
 
       - name: Build staging image
+        if: steps.inspect.outputs.ready == 'true'
         run: docker build -t "$AGENTIC_STAGING_IMAGE_TAG" .
 
       - name: Package staging build artifacts
+        if: steps.inspect.outputs.ready == 'true'
         run: |
           tar -czf artifacts/build/agentic-runtime-bundle.tgz \
             apps/web/.next \
@@ -131,16 +132,19 @@ jobs:
           docker save "$AGENTIC_STAGING_IMAGE_TAG" -o artifacts/build/agentic-image.tar
 
       - name: Run provider staging deploy
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run deploy:staging:provider
 
       - name: Smoke-check deployed staging environment
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run test:smoke:deployment
 
       - name: Validate deployed async execution canary
+        if: steps.inspect.outputs.ready == 'true'
         run: npm run test:smoke:deployment-async
 
       - name: Upload telemetry rollout evidence
-        if: always()
+        if: always() && steps.inspect.outputs.ready == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: agentic-staging-telemetry
@@ -148,7 +152,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload staging supply-chain evidence
-        if: always()
+        if: always() && steps.inspect.outputs.ready == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: agentic-staging-supply-chain
@@ -158,20 +162,20 @@ jobs:
           if-no-files-found: error
 
       - name: Attest staging security evidence
+        if: steps.inspect.outputs.ready == 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: artifacts/security/agentic-sbom.spdx.json
 
       - name: Attest staging deployable build artifacts
+        if: steps.inspect.outputs.ready == 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
 
-  stage_skipped:
-    needs: staging_config
-    if: github.event_name == 'workflow_dispatch' && needs.staging_config.outputs.ready != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "Skipping staging deploy because required repository configuration is missing: ${{ needs.staging_config.outputs.missing }}"
+      - name: Skip staging deploy when configuration is absent
+        if: steps.inspect.outputs.ready != 'true'
+        run: |
+          echo "Skipping staging deploy because required repository configuration is missing: ${{ steps.inspect.outputs.missing }}"
