@@ -148,15 +148,21 @@ jobs:
           if-no-files-found: error
 
       - name: Attest security evidence
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: artifacts/security/agentic-sbom.spdx.json
 
       - name: Attest deployable build artifacts
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
+
+      - name: Note attestation capability skip
+        if: github.event_name != 'pull_request' && github.event.repository.private && github.event.repository.owner.type != 'Organization' && vars.ENABLE_ATTESTATIONS != 'true'
+        run: |
+          echo "Skipping provenance attestation in this repository context."
+          echo "GitHub only supports attestations for public repos and supported organization-backed private repos by default."

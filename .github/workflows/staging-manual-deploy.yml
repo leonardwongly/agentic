@@ -163,18 +163,24 @@ jobs:
           if-no-files-found: warn
 
       - name: Attest staging security evidence
-        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: artifacts/security/agentic-sbom.spdx.json
 
       - name: Attest staging deployable build artifacts
-        if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
+        if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
+
+      - name: Note staging attestation capability skip
+        if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && github.event.repository.private && github.event.repository.owner.type != 'Organization' && vars.ENABLE_ATTESTATIONS != 'true'
+        run: |
+          echo "Skipping staging provenance attestation in this repository context."
+          echo "GitHub only supports attestations for public repos and supported organization-backed private repos by default."
 
       - name: Note runner-local staging self-test fallback
         if: steps.inspect.outputs.mode == 'self-test'
