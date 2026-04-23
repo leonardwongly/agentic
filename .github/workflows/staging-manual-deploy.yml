@@ -23,7 +23,7 @@ jobs:
     steps:
       - run: echo "Staging deploy is manual-only. No deployment executed for event '${{ github.event_name }}'."
 
-  staging-config:
+  staging_config:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
@@ -58,8 +58,8 @@ jobs:
           echo "Staging configuration is present."
 
   stage:
-    needs: staging-config
-    if: github.event_name == 'workflow_dispatch' && needs.staging-config.outputs.ready == 'true'
+    needs: staging_config
+    if: github.event_name == 'workflow_dispatch' && needs.staging_config.outputs.ready == 'true'
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
@@ -169,9 +169,9 @@ jobs:
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
 
-  stage-skipped:
-    needs: staging-config
-    if: github.event_name == 'workflow_dispatch' && needs.staging-config.outputs.ready != 'true'
+  stage_skipped:
+    needs: staging_config
+    if: github.event_name == 'workflow_dispatch' && needs.staging_config.outputs.ready != 'true'
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Skipping staging deploy because required repository configuration is missing: ${{ needs.staging-config.outputs.missing }}"
+      - run: echo "Skipping staging deploy because required repository configuration is missing: ${{ needs.staging_config.outputs.missing }}"
