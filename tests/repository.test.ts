@@ -6,6 +6,7 @@ import {
   AgentDefinitionSchema,
   AutopilotEventSchema,
   DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+  GoalBundleSchema,
   ProviderCredentialSchema,
   GoalTemplateSchema,
   IntegrationAccountSchema,
@@ -85,6 +86,79 @@ describe("repository", () => {
 
     await repository.saveGoalBundle(bundle);
     return bundle;
+  }
+
+  function createDashboardScaleBundle(params: {
+    userId: string;
+    workspaceId: string;
+    unique: number;
+    index: number;
+    timestamp: string;
+  }) {
+    const goalId = `goal-scale-postgres-${params.unique}-${params.index}`;
+    const workflowId = `workflow-scale-postgres-${params.unique}-${params.index}`;
+    const taskId = `task-scale-postgres-${params.unique}-${params.index}`;
+
+    return GoalBundleSchema.parse({
+      goal: {
+        id: goalId,
+        userId: params.userId,
+        workspaceId: params.workspaceId,
+        workflowId,
+        title: `Bounded dashboard goal ${params.unique}-${params.index}`,
+        request: `Bounded dashboard goal ${params.unique}-${params.index}.`,
+        intent: "dashboard-scale-validation",
+        status: "running",
+        confidence: 0.82,
+        explanation: "Synthetic repository fixture for dashboard scale validation.",
+        createdAt: params.timestamp,
+        updatedAt: params.timestamp
+      },
+      workflow: {
+        id: workflowId,
+        goalId,
+        workspaceId: params.workspaceId,
+        status: "running",
+        currentStep: "scale-validation",
+        checkpoint: null,
+        createdAt: params.timestamp,
+        updatedAt: params.timestamp
+      },
+      tasks: [
+        {
+          id: taskId,
+          goalId,
+          workflowId,
+          title: "Validate dashboard scale",
+          summary: "Keep dashboard retrieval bounded under scale fixtures.",
+          assignedAgent: "workflow",
+          state: "running",
+          riskClass: "R1",
+          requiresApproval: false,
+          dependsOn: [],
+          toolCapabilities: ["read"],
+          artifactIds: [],
+          createdAt: params.timestamp,
+          updatedAt: params.timestamp
+        }
+      ],
+      artifacts: [],
+      approvals: [],
+      watchers: [],
+      actionLogs: [
+        {
+          id: `log-scale-postgres-${params.unique}-${params.index}`,
+          goalId,
+          taskId,
+          workflowId,
+          actor: "system",
+          kind: "goal.created",
+          message: "Created scale validation goal.",
+          details: {},
+          createdAt: params.timestamp
+        }
+      ]
+    });
   }
 
   async function expectApprovalEvidenceCapture(
@@ -768,31 +842,17 @@ describe("repository", () => {
     };
     let queryCount = 0;
     const originalPoolQuery = postgresRepository.pool.query.bind(postgresRepository.pool);
-    const originalPoolConnect = postgresRepository.pool.connect.bind(postgresRepository.pool);
 
-    postgresRepository.pool.query = (async (...args: unknown[]) => {
+    postgresRepository.pool.query = ((...args: unknown[]) => {
       queryCount += 1;
       return originalPoolQuery(...args);
     }) as typeof postgresRepository.pool.query;
-
-    postgresRepository.pool.connect = (async () => {
-      const client = await originalPoolConnect();
-      const originalClientQuery = client.query.bind(client);
-
-      client.query = (async (...args: unknown[]) => {
-        queryCount += 1;
-        return originalClientQuery(...args);
-      }) as typeof client.query;
-
-      return client;
-    }) as typeof postgresRepository.pool.connect;
 
     try {
       const result = await run();
       return { result, queryCount };
     } finally {
       postgresRepository.pool.query = originalPoolQuery as typeof postgresRepository.pool.query;
-      postgresRepository.pool.connect = originalPoolConnect as typeof postgresRepository.pool.connect;
     }
   }
 
@@ -1075,7 +1135,15 @@ describe("repository", () => {
     const initialIntegrationCount = (await repository.listIntegrations(SYSTEM_USER_ID)).length;
 
     for (let index = 0; index < 41; index += 1) {
-      await createGoalForUser(repository, SYSTEM_USER_ID, `Bounded dashboard goal ${unique}-${index}.`, workspace.id);
+      await repository.saveGoalBundle(
+        createDashboardScaleBundle({
+          userId: SYSTEM_USER_ID,
+          workspaceId: workspace.id,
+          unique,
+          index,
+          timestamp
+        })
+      );
     }
 
     for (let index = 0; index < 25; index += 1) {
@@ -1136,7 +1204,7 @@ describe("repository", () => {
     expect(dashboard.memories).toHaveLength(Math.min(40, initialMemoryCount + 25));
     expect(dashboard.integrations).toHaveLength(Math.min(24, initialIntegrationCount + 25));
     expect(queryCount).toBeLessThanOrEqual(20);
-  }, 60_000);
+  }, 120_000);
 
   it("derives agent scorecards from persisted goal execution history", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));

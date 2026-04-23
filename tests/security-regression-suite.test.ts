@@ -1,4 +1,9 @@
-import { SECURITY_REGRESSION_CATEGORIES } from "../scripts/security-regression-suite";
+import {
+  POSTGRES_SECURITY_REGRESSION_FILES,
+  SECURITY_REGRESSION_CATEGORIES,
+  buildFileBackedSecurityRegressionFiles,
+  uniqueTestFiles
+} from "../scripts/security-regression-suite";
 
 describe("security regression suite inventory", () => {
   it("keeps category ids unique and files de-duplicated within each category", () => {
@@ -34,5 +39,16 @@ describe("security regression suite inventory", () => {
     expect(files.has("tests/autopilot-route.test.ts")).toBe(true);
     expect(files.has("tests/repository.test.ts")).toBe(true);
     expect(files.has("tests/worker-runtime.test.ts")).toBe(true);
+  });
+
+  it("keeps Postgres durability tests out of the file-backed phase", () => {
+    const allFiles = uniqueTestFiles(SECURITY_REGRESSION_CATEGORIES);
+    const fileBackedFiles = buildFileBackedSecurityRegressionFiles(SECURITY_REGRESSION_CATEGORIES);
+
+    expect(allFiles).toContain("tests/repository.test.ts");
+    expect(POSTGRES_SECURITY_REGRESSION_FILES).toEqual(["tests/repository.test.ts"]);
+    expect(fileBackedFiles).not.toContain("tests/repository.test.ts");
+    expect(fileBackedFiles).toContain("tests/worker-runtime.test.ts");
+    expect(fileBackedFiles).toContain("tests/goal-route.test.ts");
   });
 });

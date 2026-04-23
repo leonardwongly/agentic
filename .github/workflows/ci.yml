@@ -78,6 +78,8 @@ jobs:
         run: npm run test:security:regression
 
       - name: Run unit and integration tests
+        env:
+          DATABASE_URL: ""
         run: npm test
 
       - name: Validate feature capability contracts

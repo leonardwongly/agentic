@@ -3376,12 +3376,12 @@ class PostgresRepository implements AgenticRepository {
         insert into evidence_records (
           id, user_id, goal_id, task_id, approval_id, source_kind, source_id, source_summary, risk_class, requested_action,
           request_rationale, requires_approval, decision, decision_scope, decision_rationale, responded_at,
-          resulting_task_state, resulting_goal_status, action_log_ids, artifact_ids, memory_ids, created_at, updated_at
+          resulting_task_state, resulting_goal_status, action_log_ids, artifact_ids, memory_ids, actor_context, created_at, updated_at
         )
         values (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16,
-          $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22, $23
+          $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23, $24
         )
         on conflict (id) do update
         set user_id = excluded.user_id,
@@ -3404,6 +3404,7 @@ class PostgresRepository implements AgenticRepository {
             action_log_ids = excluded.action_log_ids,
             artifact_ids = excluded.artifact_ids,
             memory_ids = excluded.memory_ids,
+            actor_context = excluded.actor_context,
             updated_at = excluded.updated_at
       `,
       [
@@ -3428,6 +3429,7 @@ class PostgresRepository implements AgenticRepository {
         JSON.stringify(evidence.actionLogIds),
         JSON.stringify(evidence.artifactIds),
         JSON.stringify(evidence.memoryIds),
+        JSON.stringify(evidence.actorContext),
         evidence.createdAt,
         evidence.updatedAt
       ]
@@ -4330,6 +4332,7 @@ class PostgresRepository implements AgenticRepository {
       actionLogIds: row.action_log_ids ?? [],
       artifactIds: row.artifact_ids ?? [],
       memoryIds: row.memory_ids ?? [],
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4900,10 +4903,8 @@ class PostgresRepository implements AgenticRepository {
     activeWorkspace: Workspace | null;
     workspaceSelection: WorkspaceSelection | null;
   }> {
-    const [workspaces, selection] = await Promise.all([
-      this.listWorkspacesForUserWithClient(client, userId),
-      this.getWorkspaceSelectionWithClient(client, userId)
-    ]);
+    const workspaces = await this.listWorkspacesForUserWithClient(client, userId);
+    const selection = await this.getWorkspaceSelectionWithClient(client, userId);
     const activeWorkspace =
       workspaces.find((workspace) => workspace.id === selection?.workspaceId) ??
       workspaces.find((workspace) => workspace.isPersonal) ??
@@ -4951,29 +4952,12 @@ class PostgresRepository implements AgenticRepository {
     }
 
     const workflowIds = [...new Set(goals.map((goal) => goal.workflowId))];
-    const [workflowResult, tasksResult, artifactsResult, approvalsResult, watchersResult, logsResult] = await Promise.all([
-      client.query("select * from workflows where id = any($1::text[])", [workflowIds]),
-      client.query(
-        "select * from tasks where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      ),
-      client.query(
-        "select * from artifacts where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      ),
-      client.query(
-        "select * from approval_requests where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      ),
-      client.query(
-        "select * from watchers where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      ),
-      client.query(
-        "select * from action_logs where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      )
-    ]);
+    const workflowResult = await client.query("select * from workflows where id = any($1::text[])", [workflowIds]);
+    const tasksResult = await client.query("select * from tasks where goal_id = any($1::text[]) order by goal_id asc, position asc nulls last, created_at asc, id asc", [uniqueGoalIds]);
+    const artifactsResult = await client.query("select * from artifacts where goal_id = any($1::text[]) order by goal_id asc, position asc nulls last, created_at asc, id asc", [uniqueGoalIds]);
+    const approvalsResult = await client.query("select * from approval_requests where goal_id = any($1::text[]) order by goal_id asc, position asc nulls last, created_at asc, id asc", [uniqueGoalIds]);
+    const watchersResult = await client.query("select * from watchers where goal_id = any($1::text[]) order by goal_id asc, position asc nulls last, created_at asc, id asc", [uniqueGoalIds]);
+    const logsResult = await client.query("select * from action_logs where goal_id = any($1::text[]) order by goal_id asc, position asc nulls last, created_at asc, id asc", [uniqueGoalIds]);
 
     const goalsById = new Map(goals.map((goal) => [goal.id, goal] as const));
     const workflowsById = new Map(
@@ -5193,14 +5177,14 @@ class PostgresRepository implements AgenticRepository {
     await client.query("delete from watchers where goal_id = $1", [validated.goal.id]);
     await client.query("delete from tasks where goal_id = $1", [validated.goal.id]);
 
-    for (const task of validated.tasks) {
+    for (const [index, task] of validated.tasks.entries()) {
       await client.query(
         `
           insert into tasks (
             id, goal_id, workflow_id, title, summary, assigned_agent, state, risk_class, requires_approval,
-            depends_on, tool_capabilities, artifact_ids, created_at, updated_at
+            depends_on, tool_capabilities, artifact_ids, position, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14)
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               workflow_id = excluded.workflow_id,
@@ -5213,6 +5197,7 @@ class PostgresRepository implements AgenticRepository {
               depends_on = excluded.depends_on,
               tool_capabilities = excluded.tool_capabilities,
               artifact_ids = excluded.artifact_ids,
+              position = excluded.position,
               updated_at = excluded.updated_at
         `,
         [
@@ -5228,24 +5213,26 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(task.dependsOn),
           JSON.stringify(task.toolCapabilities),
           JSON.stringify(task.artifactIds),
+          index,
           task.createdAt,
           task.updatedAt
         ]
       );
     }
 
-    for (const artifact of validated.artifacts) {
+    for (const [index, artifact] of validated.artifacts.entries()) {
       await client.query(
         `
-          insert into artifacts (id, goal_id, task_id, artifact_type, title, content, metadata, created_at)
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+          insert into artifacts (id, goal_id, task_id, artifact_type, title, content, metadata, position, created_at)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               task_id = excluded.task_id,
               artifact_type = excluded.artifact_type,
               title = excluded.title,
               content = excluded.content,
-              metadata = excluded.metadata
+              metadata = excluded.metadata,
+              position = excluded.position
         `,
         [
           artifact.id,
@@ -5255,19 +5242,20 @@ class PostgresRepository implements AgenticRepository {
           artifact.title,
           artifact.content,
           JSON.stringify(artifact.metadata),
+          index,
           artifact.createdAt
         ]
       );
     }
 
-    for (const approval of validated.approvals) {
+    for (const [index, approval] of validated.approvals.entries()) {
       await client.query(
         `
           insert into approval_requests (
             id, goal_id, task_id, title, rationale, risk_class, decision, requested_action, action_intent, preview,
-            decision_scope, decision_rationale, history, created_at, expiry_at, responded_at
+            decision_scope, decision_rationale, history, position, created_at, expiry_at, responded_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13::jsonb, $14, $15, $16)
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13::jsonb, $14, $15, $16, $17)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               task_id = excluded.task_id,
@@ -5281,6 +5269,7 @@ class PostgresRepository implements AgenticRepository {
               decision_scope = excluded.decision_scope,
               decision_rationale = excluded.decision_rationale,
               history = excluded.history,
+              position = excluded.position,
               expiry_at = excluded.expiry_at,
               responded_at = excluded.responded_at
         `,
@@ -5298,6 +5287,7 @@ class PostgresRepository implements AgenticRepository {
           approval.decisionScope,
           approval.decisionRationale,
           JSON.stringify(approval.history),
+          index,
           approval.createdAt,
           approval.expiryAt,
           approval.respondedAt
@@ -5305,13 +5295,13 @@ class PostgresRepository implements AgenticRepository {
       );
     }
 
-    for (const watcher of validated.watchers) {
+    for (const [index, watcher] of validated.watchers.entries()) {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, position, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11, $12)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11, $12, $13)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -5322,6 +5312,7 @@ class PostgresRepository implements AgenticRepository {
               status = excluded.status,
               expiry_at = excluded.expiry_at,
               actor_context = excluded.actor_context,
+              position = excluded.position,
               updated_at = excluded.updated_at
         `,
         [
@@ -5335,17 +5326,18 @@ class PostgresRepository implements AgenticRepository {
           watcher.status,
           watcher.expiryAt,
           JSON.stringify(watcher.actorContext),
+          index,
           watcher.createdAt,
           watcher.updatedAt
         ]
       );
     }
 
-    for (const log of validated.actionLogs) {
+    for (const [index, log] of validated.actionLogs.entries()) {
       await client.query(
         `
-          insert into action_logs (id, goal_id, task_id, workflow_id, actor, kind, message, details, created_at)
-          values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+          insert into action_logs (id, goal_id, task_id, workflow_id, actor, kind, message, details, position, created_at)
+          values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
           on conflict (id) do nothing
         `,
         [
@@ -5357,6 +5349,7 @@ class PostgresRepository implements AgenticRepository {
           log.kind,
           log.message,
           JSON.stringify(log.details),
+          index,
           log.createdAt
         ]
       );
@@ -6130,10 +6123,8 @@ class PostgresRepository implements AgenticRepository {
         throw new Error(`Workspace ${workspaceId} was not found.`);
       }
 
-      const [governance, members] = await Promise.all([
-        this.getWorkspaceGovernanceWithClient(client, workspaceId),
-        this.listWorkspaceMembersForWorkspaceWithClient(client, workspaceId)
-      ]);
+      const governance = await this.getWorkspaceGovernanceWithClient(client, workspaceId);
+      const members = await this.listWorkspaceMembersForWorkspaceWithClient(client, workspaceId);
       const goalValues: unknown[] = [workspaceId];
       const goalPredicates = ["workspace_id = $1"];
 
@@ -6152,10 +6143,8 @@ class PostgresRepository implements AgenticRepository {
         goalValues
       );
       const goals = (
-        await Promise.all(goalsResult.rows.map((row) => this.mapGoalBundleWithClient(client, row.id as string)))
-      )
-        .filter((bundle): bundle is GoalBundle => bundle !== null)
-        .map((bundle) => GoalBundleSchema.parse(clone(bundle)));
+        await this.mapGoalBundlesWithClient(client, goalsResult.rows.map((row) => row.id as string))
+      ).map((bundle) => GoalBundleSchema.parse(clone(bundle)));
       const goalIds = goals.map((bundle) => bundle.goal.id);
       const goalShares =
         goalIds.length > 0
@@ -7834,14 +7823,12 @@ class PostgresRepository implements AgenticRepository {
           : [];
 
       if (activeWorkspace) {
-        [workspaceMembers, workspaceGovernance, privacyOperations] = await Promise.all([
-          this.listWorkspaceMembersForWorkspaceWithClient(client, activeWorkspace.id),
-          this.getWorkspaceGovernanceWithClient(client, activeWorkspace.id),
-          this.listPrivacyOperationsWithClient(client, {
-            userId,
-            workspaceId: activeWorkspace.id
-          })
-        ]);
+        workspaceMembers = await this.listWorkspaceMembersForWorkspaceWithClient(client, activeWorkspace.id);
+        workspaceGovernance = await this.getWorkspaceGovernanceWithClient(client, activeWorkspace.id);
+        privacyOperations = await this.listPrivacyOperationsWithClient(client, {
+          userId,
+          workspaceId: activeWorkspace.id
+        });
       }
     } finally {
       client.release();
@@ -7883,17 +7870,16 @@ class PostgresRepository implements AgenticRepository {
 }
 
 export function createRepository(options?: { storePath?: string; databaseUrl?: string }): AgenticRepository {
-  const databaseUrl = options?.databaseUrl ?? process.env.DATABASE_URL;
-
-  if (databaseUrl) {
-    return new PostgresRepository(databaseUrl);
+  if (options?.storePath) {
+    if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL must be configured in production. The file-backed repository is development-only.");
+    return new FileRepository(options.storePath);
   }
-
+  const databaseUrl = options?.databaseUrl ?? process.env.DATABASE_URL;
+  if (databaseUrl) return new PostgresRepository(databaseUrl);
   if (process.env.NODE_ENV === "production") {
     throw new Error(
       "DATABASE_URL must be configured in production. The file-backed repository is development-only."
     );
   }
-
-  return new FileRepository(options?.storePath);
+  return new FileRepository();
 }

@@ -22,4 +22,11 @@ describe("repository production configuration", () => {
 
     expect(() => createRepository()).not.toThrow();
   });
+
+  it("honors an explicit file store path in tests even when DATABASE_URL is configured", () => {
+    process.env.NODE_ENV = "test";
+    process.env.DATABASE_URL = "postgres://agentic:agentic@localhost:5432/agentic";
+
+    expect(() => createRepository({ storePath: "/tmp/agentic-test-store.json" })).not.toThrow();
+  });
 });

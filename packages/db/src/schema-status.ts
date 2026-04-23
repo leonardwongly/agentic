@@ -12,7 +12,7 @@ type ExpectedMigration = {
 const EXPECTED_MIGRATIONS: ExpectedMigration[] = [
   {
     name: "0001_init.sql",
-    checksum: "3914e3ea588032d43a0085720bd46234652db285b88b1fe1beedaf859adb5c4e"
+    checksum: "55904afe36cffa27114acce61ab192576c634bb5551eae86b9d773478e122e31"
   }
 ];
 

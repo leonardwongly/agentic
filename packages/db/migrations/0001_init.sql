@@ -94,6 +94,7 @@ create table if not exists tasks (
   depends_on jsonb not null default '[]'::jsonb,
   tool_capabilities jsonb not null default '[]'::jsonb,
   artifact_ids jsonb not null default '[]'::jsonb,
+  position integer,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -139,6 +140,7 @@ create table if not exists approval_requests (
   decision_scope text,
   decision_rationale text,
   history jsonb not null default '[]'::jsonb,
+  position integer,
   created_at timestamptz not null,
   expiry_at timestamptz not null,
   responded_at timestamptz
@@ -382,6 +384,7 @@ create table if not exists action_logs (
   kind text not null,
   message text not null,
   details jsonb not null default '{}'::jsonb,
+  position integer,
   created_at timestamptz not null
 );
 
@@ -407,6 +410,7 @@ create table if not exists evidence_records (
   action_log_ids jsonb not null default '[]'::jsonb,
   artifact_ids jsonb not null default '[]'::jsonb,
   memory_ids jsonb not null default '[]'::jsonb,
+  actor_context jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -422,10 +426,15 @@ create table if not exists watchers (
   status text not null,
   expiry_at timestamptz,
   actor_context jsonb,
+  position integer,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
 
+alter table tasks add column if not exists position integer;
+alter table approval_requests add column if not exists position integer;
+alter table action_logs add column if not exists position integer;
+alter table watchers add column if not exists position integer;
 alter table goal_templates add column if not exists actor_context jsonb;
 alter table workflow_templates add column if not exists actor_context jsonb;
 alter table autopilot_settings add column if not exists actor_context jsonb;
@@ -531,8 +540,11 @@ create table if not exists artifacts (
   title text not null,
   content text not null,
   metadata jsonb not null default '{}'::jsonb,
+  position integer,
   created_at timestamptz not null
 );
+
+alter table artifacts add column if not exists position integer;
 
 create table if not exists agent_definitions (
   id text primary key,
@@ -629,19 +641,19 @@ create index if not exists workflows_goal_id_idx
   on workflows (goal_id);
 
 create index if not exists tasks_goal_created_at_id_idx
-  on tasks (goal_id, created_at asc, id asc);
+  on tasks (goal_id, position asc, created_at asc, id asc);
 
 create index if not exists artifacts_goal_created_at_id_idx
-  on artifacts (goal_id, created_at asc, id asc);
+  on artifacts (goal_id, position asc, created_at asc, id asc);
 
 create index if not exists approval_requests_goal_created_at_id_idx
-  on approval_requests (goal_id, created_at asc, id asc);
+  on approval_requests (goal_id, position asc, created_at asc, id asc);
 
 create index if not exists watchers_goal_created_at_id_idx
-  on watchers (goal_id, created_at asc, id asc);
+  on watchers (goal_id, position asc, created_at asc, id asc);
 
 create index if not exists action_logs_goal_created_at_id_idx
-  on action_logs (goal_id, created_at asc, id asc);
+  on action_logs (goal_id, position asc, created_at asc, id asc);
 
 create index if not exists memory_records_user_created_at_id_idx
   on memory_records (user_id, created_at desc, id desc);

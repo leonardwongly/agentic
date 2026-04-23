@@ -69,8 +69,15 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
   }
 ];
 
-function uniqueTestFiles(categories: SecurityRegressionCategory[]): string[] {
+export const POSTGRES_SECURITY_REGRESSION_FILES = ["tests/repository.test.ts"] as const;
+
+export function uniqueTestFiles(categories: SecurityRegressionCategory[]): string[] {
   return [...new Set(categories.flatMap((category) => category.files))];
+}
+
+export function buildFileBackedSecurityRegressionFiles(categories: SecurityRegressionCategory[]): string[] {
+  const postgresFiles = new Set<string>(POSTGRES_SECURITY_REGRESSION_FILES);
+  return uniqueTestFiles(categories).filter((file) => !postgresFiles.has(file));
 }
 
 function printSuiteSummary(categories: SecurityRegressionCategory[]) {
@@ -85,10 +92,13 @@ function printSuiteSummary(categories: SecurityRegressionCategory[]) {
   }
 }
 
-function runVitest(files: string[]): number {
+function runVitest(label: string, files: string[], env: NodeJS.ProcessEnv): number {
+  console.log(`\nSecurity regression phase: ${label}`);
+  console.log(`- files: ${files.length}`);
+
   const result = spawnSync("npm", ["exec", "--", "vitest", "run", ...files], {
     stdio: "inherit",
-    env: process.env
+    env
   });
 
   if (result.error) {
@@ -99,13 +109,27 @@ function runVitest(files: string[]): number {
 }
 
 function main() {
-  const files = uniqueTestFiles(SECURITY_REGRESSION_CATEGORIES);
+  const fileBackedFiles = buildFileBackedSecurityRegressionFiles(SECURITY_REGRESSION_CATEGORIES);
+  const originalDatabaseUrl = process.env.DATABASE_URL;
+  const fileBackedEnv = { ...process.env };
+  delete fileBackedEnv.DATABASE_URL;
 
   printSuiteSummary(SECURITY_REGRESSION_CATEGORIES);
-  const exitCode = runVitest(files);
+  const fileBackedExitCode = runVitest("file-backed route and isolation coverage", fileBackedFiles, fileBackedEnv);
 
-  if (exitCode !== 0) {
-    process.exit(exitCode);
+  if (fileBackedExitCode !== 0) {
+    process.exit(fileBackedExitCode);
+  }
+
+  if (originalDatabaseUrl) {
+    const postgresEnv = {
+      ...process.env,
+      AGENTIC_POSTGRES_POOL_MAX: process.env.AGENTIC_POSTGRES_POOL_MAX ?? "10"
+    };
+    const postgresExitCode = runVitest("Postgres repository durability coverage", [...POSTGRES_SECURITY_REGRESSION_FILES], postgresEnv);
+    if (postgresExitCode !== 0) {
+      process.exit(postgresExitCode);
+    }
   }
 }
 
