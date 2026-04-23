@@ -435,7 +435,6 @@ alter table workspace_selections add column if not exists actor_context jsonb;
 alter table memory_records add column if not exists actor_context jsonb;
 alter table commitments add column if not exists actor_context jsonb;
 alter table briefing_preferences add column if not exists actor_context jsonb;
-alter table agent_definitions add column if not exists actor_context jsonb;
 
 create table if not exists integration_accounts (
   id text not null,
@@ -561,6 +560,8 @@ create table if not exists agent_definitions (
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
+
+alter table agent_definitions add column if not exists actor_context jsonb;
 
 create unique index if not exists agent_definitions_user_name_idx
   on agent_definitions (user_id, name);
