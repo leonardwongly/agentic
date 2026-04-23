@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
+import { E2E_UI_TIMEOUT_MS, openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
 
 test("creates and approves an inbox-triage goal end-to-end", async ({ page }) => {
   await unlockDashboard(page);
@@ -29,8 +29,13 @@ test("creates and approves an inbox-triage goal end-to-end", async ({ page }) =>
   await expect(approvalRow).toBeVisible();
   await approvalRow.getByRole("button", { name: "Approve once" }).click();
 
-  await expect(page.getByText("Marked the approval as approved.").first()).toBeVisible();
-  await expect(approvalRows).toHaveCount(initialApprovalCount - 1);
+  await expect(approvalRows).toHaveCount(initialApprovalCount - 1, {
+    timeout: E2E_UI_TIMEOUT_MS
+  });
+  await expect(approvalRow).toHaveCount(0, { timeout: E2E_UI_TIMEOUT_MS });
+  await expect(page.getByText("Marked the approval as approved.").first()).toBeVisible({
+    timeout: E2E_UI_TIMEOUT_MS
+  });
 
   const approvalTimelineRow = page
     .locator(".timeline-row")
@@ -39,6 +44,8 @@ test("creates and approves an inbox-triage goal end-to-end", async ({ page }) =>
     })
     .first();
 
-  await expect(approvalTimelineRow.getByText("approval.responded")).toBeVisible();
+  await expect(approvalTimelineRow.getByText("approval.responded")).toBeVisible({
+    timeout: E2E_UI_TIMEOUT_MS
+  });
   await expect(approvalTimelineRow).toContainText('Approved "Prepare sender-aware drafts requires approval".');
 });

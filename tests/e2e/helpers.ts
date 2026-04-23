@@ -32,6 +32,7 @@ export async function openRequestComposer(page: Page) {
 
 export async function submitRequest(requestCard: Locator, requestInput: Locator, request: string) {
   await requestInput.fill(request);
+  await expect(requestInput).toHaveValue(request, { timeout: E2E_UI_TIMEOUT_MS });
 
   const submitButton = requestCard.locator(".hero-button-row").getByRole("button", {
     name: "Submit request"
@@ -41,6 +42,8 @@ export async function submitRequest(requestCard: Locator, requestInput: Locator,
   // input events, leaving the submit button temporarily disabled.
   await expect(submitButton).toBeEnabled({ timeout: E2E_UI_TIMEOUT_MS });
   await submitButton.click();
+  await expect(submitButton).toBeDisabled({ timeout: E2E_UI_TIMEOUT_MS });
+  await expect(requestInput).toHaveValue("", { timeout: E2E_UI_TIMEOUT_MS });
   await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
     timeout: E2E_UI_TIMEOUT_MS
   });

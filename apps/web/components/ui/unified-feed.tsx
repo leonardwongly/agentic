@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { ApprovalRequest, Artifact, GoalBundle, ActionLog } from "@agentic/contracts";
+import { RelativeTime } from "./relative-time";
 
 type FeedItemType = "approval" | "goal" | "artifact" | "insight" | "alert";
 
@@ -88,8 +89,6 @@ function FeedItemCard({ item, onAction }: FeedItemCardProps) {
     alert: "⚠️"
   };
 
-  const relativeTime = formatRelativeTime(item.timestamp);
-
   return (
     <div className={`feed-item feed-item-${item.type} feed-item-${urgencyClass}`}>
       <div className="feed-item-icon">{typeIcons[item.type]}</div>
@@ -108,7 +107,7 @@ function FeedItemCard({ item, onAction }: FeedItemCardProps) {
           )}
         </div>
         <p className="feed-item-subtitle">{item.subtitle}</p>
-        <span className="feed-item-time">{relativeTime}</span>
+        <RelativeTime date={item.timestamp} className="feed-item-time" />
       </div>
       {item.actions && item.actions.length > 0 && (
         <div className="feed-item-actions">
@@ -126,20 +125,6 @@ function FeedItemCard({ item, onAction }: FeedItemCardProps) {
       )}
     </div>
   );
-}
-
-function formatRelativeTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins} min`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h`;
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d`;
 }
 
 type UseUnifiedFeedOptions = {
