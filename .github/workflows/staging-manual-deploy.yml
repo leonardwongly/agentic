@@ -39,6 +39,7 @@ jobs:
       AGENTIC_TELEMETRY_EXPORT_URL: ${{ secrets.STAGING_TELEMETRY_EXPORT_URL }}
       AGENTIC_TELEMETRY_EXPORT_TOKEN: ${{ secrets.STAGING_TELEMETRY_EXPORT_TOKEN }}
       NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v6
 
