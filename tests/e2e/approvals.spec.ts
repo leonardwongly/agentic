@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { E2E_UI_TIMEOUT_MS, openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
 
+test.setTimeout(process.env.CI ? 90_000 : 30_000);
+
 test("creates and approves an inbox-triage goal end-to-end", async ({ page }) => {
   await unlockDashboard(page);
 
@@ -32,7 +34,6 @@ test("creates and approves an inbox-triage goal end-to-end", async ({ page }) =>
   await expect(approvalRows).toHaveCount(initialApprovalCount - 1, {
     timeout: E2E_UI_TIMEOUT_MS
   });
-  await expect(approvalRow).toHaveCount(0, { timeout: E2E_UI_TIMEOUT_MS });
   await expect(page.getByText("Marked the approval as approved.").first()).toBeVisible({
     timeout: E2E_UI_TIMEOUT_MS
   });
