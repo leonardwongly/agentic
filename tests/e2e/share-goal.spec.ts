@@ -29,11 +29,15 @@ async function sumVisibleViewedCounts(page: Page): Promise<number> {
 test("creates a public goal share link and opens the shared page", async ({ page }) => {
   await unlockDashboard(page);
 
-  const { requestInput } = await openRequestComposer(page);
+  const { requestCard, requestInput, submitButton } = await openRequestComposer(page);
   await requestInput.fill(
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Submit request" }).click();
+  await expect(submitButton).toBeEnabled({ timeout: 15_000 });
+  await submitButton.click();
+  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
+    timeout: 15_000
+  });
 
   const createdGoal = page
     .locator(".request-card .list-item")
@@ -61,11 +65,15 @@ test("creates a public goal share link and opens the shared page", async ({ page
 test("keeps the share flow successful when clipboard access is blocked", async ({ page }) => {
   await unlockDashboard(page);
 
-  const { requestInput } = await openRequestComposer(page);
+  const { requestCard, requestInput, submitButton } = await openRequestComposer(page);
   await requestInput.fill(
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Submit request" }).click();
+  await expect(submitButton).toBeEnabled({ timeout: 15_000 });
+  await submitButton.click();
+  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
+    timeout: 15_000
+  });
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -100,11 +108,15 @@ test("renders a valid public share page in a fresh unauthenticated context and d
 }) => {
   await unlockDashboard(page);
 
-  const { requestInput } = await openRequestComposer(page);
+  const { requestCard, requestInput, submitButton } = await openRequestComposer(page);
   await requestInput.fill(
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Submit request" }).click();
+  await expect(submitButton).toBeEnabled({ timeout: 15_000 });
+  await submitButton.click();
+  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
+    timeout: 15_000
+  });
 
   const createdGoal = page
     .locator(".request-card .list-item")
@@ -123,8 +135,12 @@ test("renders a valid public share page in a fresh unauthenticated context and d
   const publicContext = await browser.newContext();
   const publicPage = await publicContext.newPage();
   const viewedCountBeforePublicView = await sumVisibleViewedCounts(page);
+  const viewTracked = publicPage.waitForResponse(
+    (response) => response.url().includes("/api/share/view") && response.status() === 202
+  );
 
   await publicPage.goto(shareUrl!);
+  await viewTracked;
   await expect(publicPage.getByText("Shared from Agentic")).toBeVisible();
   await expect(publicPage.getByRole("heading", { name: "Inbox triage and follow-up prep" })).toBeVisible();
   await expect(publicPage.getByText("Read-only shared goal")).toBeVisible();
@@ -136,9 +152,15 @@ test("renders a valid public share page in a fresh unauthenticated context and d
 
   await publicPage.reload();
   await publicContext.close();
-  await page.reload();
-
-  await expect.poll(() => sumVisibleViewedCounts(page)).toBe(viewedCountBeforePublicView + 1);
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        return sumVisibleViewedCounts(page);
+      },
+      { timeout: 15_000 }
+    )
+    .toBe(viewedCountBeforePublicView + 1);
 });
 
 test("shows the invalid-share page for tampered or missing shared goals", async ({ page }) => {

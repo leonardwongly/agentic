@@ -16,11 +16,13 @@ export async function openRequestComposer(page: Page) {
   await page.getByRole("button", { name: "Request work" }).click();
   const requestCard = page.locator(".request-card");
   const requestInput = requestCard.getByPlaceholder(REQUEST_PLACEHOLDER);
+  const submitButton = requestCard.locator(".hero-button-row").getByRole("button", { name: "Submit request" });
 
   await expect(requestCard).toBeVisible();
   await expect(requestInput).toBeVisible();
+  await expect(submitButton).toBeEnabled({ timeout: 15_000 });
 
-  return { requestCard, requestInput };
+  return { requestCard, requestInput, submitButton };
 }
 
 export async function showAdvancedOperations(page: Page) {
