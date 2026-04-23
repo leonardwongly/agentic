@@ -10,6 +10,7 @@ env:
   # GitHub is deprecating the Node 20 Actions runtime; opt into the Node 24
   # path now so warning-only transitions do not become surprise CI failures later.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NEXT_TELEMETRY_DISABLED: "1"
 
 permissions:
   contents: read
@@ -76,6 +77,9 @@ jobs:
 
       - name: Create security artifact directories
         run: mkdir -p artifacts/security artifacts/build artifacts/compliance
+
+      - name: Validate compliance registry references
+        run: npm run compliance:validate-registry
 
       - name: Audit production dependencies
         run: npm run security:audit-runtime -- --report artifacts/security/runtime-audit-report.json

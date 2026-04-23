@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import {
   buildComplianceEvidenceBundle,
+  findMissingComplianceRegistryReferences,
   loadComplianceControlRegistry,
   renderComplianceEvidenceMarkdown,
   renderComplianceReviewerSummary,
@@ -257,21 +258,75 @@ describe("compliance evidence collector", () => {
 
   it("keeps every real control-registry reference aligned with tracked source files", () => {
     const registry = loadComplianceControlRegistry("config/compliance/controls.json");
-    const references = registry.controls.flatMap((control) => [
-      ...control.codePaths.map((entry) => ({ controlId: control.id, kind: "codePath", path: entry })),
-      ...control.runbooks.map((entry) => ({ controlId: control.id, kind: "runbook", path: entry })),
-      ...control.automatedChecks.flatMap((check) =>
-        check.sourcePaths.map((entry) => ({
-          controlId: control.id,
-          kind: `check:${check.id}`,
-          path: entry
-        }))
-      )
-    ]);
-
-    const missing = references.filter((reference) => !existsSync(path.resolve(reference.path)));
+    const missing = findMissingComplianceRegistryReferences(registry);
 
     expect(missing).toEqual([]);
+  });
+
+  it("reports missing registry references with control and check context", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "agentic-compliance-"));
+
+    writeFixture(root, "apps/web/lib/runtime-readiness.ts");
+    writeFixture(root, "docs/runbooks/deployment.md");
+
+    const missing = findMissingComplianceRegistryReferences(
+      {
+        version: 1,
+        reviewedAt: "2026-04-18T00:00:00.000Z",
+        owners: ["platform"],
+        controls: [
+          {
+            id: "PIPELINE-01",
+            family: "Operations",
+            title: "Pipeline registry stays aligned",
+            objective: "Catch stale paths before evidence collection.",
+            owner: "platform",
+            trustBoundaries: ["source to ci"],
+            productSurfaces: ["build pipeline"],
+            codePaths: ["apps/web/lib/runtime-readiness.ts", ".github/workflows/missing.yml"],
+            runbooks: ["docs/runbooks/deployment.md", "docs/runbooks/missing.md"],
+            automatedChecks: [
+              {
+                id: "CHECK-MISSING",
+                title: "Missing check fixture",
+                command: "npm test -- missing.test.ts",
+                sourcePaths: ["tests/missing.test.ts"]
+              }
+            ],
+            evidenceArtifacts: [
+              {
+                path: "artifacts/compliance/control-matrix.json",
+                description: "Generated matrix"
+              }
+            ],
+            risks: ["stale evidence"],
+            metrics: ["registry validation pass rate"]
+          }
+        ]
+      },
+      {
+        cwd: root
+      }
+    );
+
+    expect(missing).toEqual([
+      {
+        controlId: "PIPELINE-01",
+        kind: "codePath",
+        path: ".github/workflows/missing.yml"
+      },
+      {
+        controlId: "PIPELINE-01",
+        kind: "runbook",
+        path: "docs/runbooks/missing.md"
+      },
+      {
+        controlId: "PIPELINE-01",
+        kind: "automatedCheckSource",
+        path: "tests/missing.test.ts",
+        checkId: "CHECK-MISSING"
+      }
+    ]);
   });
 
   it("renders a human-readable markdown report", () => {
