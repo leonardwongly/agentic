@@ -321,6 +321,51 @@ describe("deriveCalibrationInsights", () => {
     expect(collidingInsight?.posture).toBe("insufficient-data");
   });
 
+  it("does not attribute name-owned tasks through agent id fallback when filtered", async () => {
+    const repository = await createIsolatedRepository();
+    const agent = await loadCommunicationsAgent(repository);
+    const collidingAgent: AgentDefinition = {
+      ...agent,
+      id: agent.name,
+      name: "calendar",
+      displayName: "Colliding Calendar Agent"
+    };
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const templateTask = bundle.tasks[0];
+    const createdAt = new Date().toISOString();
+
+    expect(templateTask).toBeDefined();
+
+    const completedTask = buildTask(templateTask!, {
+      assignedAgent: agent.name,
+      state: "completed",
+      createdAt,
+      updatedAt: createdAt
+    });
+    const calibration = deriveCalibrationInsights({
+      agents: [collidingAgent],
+      goals: [
+        {
+          ...bundle,
+          tasks: [completedTask],
+          approvals: [],
+          artifacts: [],
+          actionLogs: []
+        }
+      ],
+      evidenceRecords: [],
+      options: {
+        agentId: collidingAgent.id
+      }
+    });
+
+    expect(calibration.totalAgents).toBe(1);
+    expect(calibration.insights[0]?.agentId).toBe(collidingAgent.id);
+    expect(calibration.insights[0]?.metrics.tasksCompleted).toBe(0);
+    expect(calibration.insights[0]?.events).toEqual([]);
+    expect(calibration.insights[0]?.posture).toBe("insufficient-data");
+  });
+
   it("keeps pending-only work as insufficient data", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);

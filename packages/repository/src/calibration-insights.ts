@@ -194,7 +194,6 @@ function indexCalibrationInputsByAgent(params: {
   period: CalibrationPeriod;
 }): Map<string, AgentCalibrationInput> {
   const window = resolveCalibrationWindow(params.period);
-  const agentById = new Map(params.agents.map((agent) => [agent.id, agent] as const));
   const agentByName = new Map(params.agents.map((agent) => [agent.name, agent] as const));
   const inputByAgentId = new Map<string, AgentCalibrationInput>(
     params.agents.map((agent) => [agent.id, { goals: [], evidenceRecords: [] }] as const)
@@ -209,7 +208,7 @@ function indexCalibrationInputsByAgent(params: {
         continue;
       }
 
-      const agent = agentByName.get(task.assignedAgent) ?? agentById.get(task.assignedAgent);
+      const agent = agentByName.get(task.assignedAgent);
 
       if (!agent) {
         continue;
