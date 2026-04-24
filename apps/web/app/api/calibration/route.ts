@@ -1,8 +1,8 @@
 import { z } from "zod";
+import { deriveCalibrationInsights } from "@agentic/repository";
 import { requireApiSession } from "../../../lib/auth";
 import { authenticatedJson, handleApiError } from "../../../lib/api-response";
 import { getSeededRepository } from "../../../lib/server";
-import { deriveCalibrationInsights } from "../../../../../packages/repository/src/calibration-insights";
 
 const calibrationQuerySchema = z.object({
   agentId: z.string().trim().min(1).max(160).optional(),
@@ -22,27 +22,27 @@ export async function GET(request: Request) {
     const query = parseCalibrationQuery(request);
     const repository = await getSeededRepository();
 
-    if (query.agentId) {
-      const agent = await repository.getAgent(query.agentId, principal.userId);
-
-      if (!agent) {
-        return authenticatedJson({ error: "Agent not found" }, { status: 404 });
-      }
-    }
-
     const [agents, goals, evidenceRecords] = await Promise.all([
       repository.listAgents(principal.userId),
       repository.listGoals(principal.userId),
       repository.listEvidenceRecords({ userId: principal.userId })
     ]);
+    const requestedAgent = query.agentId
+      ? agents.find((agent) => agent.id === query.agentId) ?? agents.find((agent) => agent.name === query.agentId) ?? null
+      : null;
+
+    if (query.agentId && !requestedAgent) {
+      return authenticatedJson({ error: "Agent not found" }, { status: 404 });
+    }
+
     const calibration = deriveCalibrationInsights({
       agents,
       goals,
       evidenceRecords,
       options: {
-      agentId: query.agentId ?? null,
-      period: query.period,
-      limit: query.limit
+        agentId: requestedAgent?.id ?? null,
+        period: query.period,
+        limit: query.limit
       }
     });
 

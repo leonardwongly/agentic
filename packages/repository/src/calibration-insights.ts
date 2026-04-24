@@ -75,6 +75,16 @@ export type CalibrationInsightParams = {
 const DEFAULT_CALIBRATION_EVENT_LIMIT = 12;
 const MAX_CALIBRATION_EVENT_LIMIT = 50;
 
+type CalibrationWindow = {
+  startMs: number;
+  endMs: number;
+};
+
+type AgentCalibrationInput = {
+  goals: GoalBundle[];
+  evidenceRecords: EvidenceRecord[];
+};
+
 function clampEventLimit(limit: number | null | undefined): number {
   if (limit === null || limit === undefined || !Number.isFinite(limit)) {
     return DEFAULT_CALIBRATION_EVENT_LIMIT;
@@ -85,6 +95,68 @@ function clampEventLimit(limit: number | null | undefined): number {
 
 function taskMatchesAgent(task: Task, agent: AgentDefinition): boolean {
   return task.assignedAgent === agent.id || task.assignedAgent === agent.name;
+}
+
+function resolveCalibrationWindow(period: CalibrationPeriod, now = new Date()): CalibrationWindow {
+  const end = new Date(now);
+  const start = new Date(now);
+
+  if (period === "day") {
+    start.setHours(0, 0, 0, 0);
+  } else if (period === "week") {
+    start.setHours(0, 0, 0, 0);
+    const day = start.getDay();
+    const diff = (day + 6) % 7;
+    start.setDate(start.getDate() - diff);
+  } else if (period === "month") {
+    start.setHours(0, 0, 0, 0);
+    start.setDate(1);
+  } else {
+    start.setTime(0);
+  }
+
+  return {
+    startMs: start.getTime(),
+    endMs: end.getTime()
+  };
+}
+
+function parseTimestampMs(timestamp: string | null | undefined): number | null {
+  if (!timestamp) {
+    return null;
+  }
+
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isWithinCalibrationWindow(timestamp: string | null | undefined, window: CalibrationWindow): boolean {
+  const parsed = parseTimestampMs(timestamp);
+  return parsed !== null && parsed >= window.startMs && parsed <= window.endMs;
+}
+
+function isTaskInCalibrationWindow(task: Task, window: CalibrationWindow): boolean {
+  return isWithinCalibrationWindow(task.createdAt, window);
+}
+
+function isEvidenceInCalibrationWindow(record: EvidenceRecord, window: CalibrationWindow): boolean {
+  return (
+    isWithinCalibrationWindow(record.respondedAt, window) ||
+    isWithinCalibrationWindow(record.updatedAt, window) ||
+    isWithinCalibrationWindow(record.createdAt, window)
+  );
+}
+
+function resolveRequestedAgent(agents: AgentDefinition[], requestedAgent: string): AgentDefinition | null {
+  if (!requestedAgent) {
+    return null;
+  }
+
+  return (
+    agents.find((agent) => agent.id === requestedAgent) ??
+    agents.find((agent) => agent.name === requestedAgent) ??
+    null
+  );
 }
 
 function roundRate(value: number): number {
@@ -113,6 +185,85 @@ function pickCalibrationMetrics(metrics: AgentMetrics): AgentCalibrationInsight[
 function compareEventsDesc(left: CalibrationEvent, right: CalibrationEvent): number {
   const byTime = right.createdAt.localeCompare(left.createdAt);
   return byTime === 0 ? right.id.localeCompare(left.id) : byTime;
+}
+
+function indexCalibrationInputsByAgent(params: {
+  agents: AgentDefinition[];
+  goals: GoalBundle[];
+  evidenceRecords: EvidenceRecord[];
+  period: CalibrationPeriod;
+}): Map<string, AgentCalibrationInput> {
+  const window = resolveCalibrationWindow(params.period);
+  const agentById = new Map(params.agents.map((agent) => [agent.id, agent] as const));
+  const agentByName = new Map(params.agents.map((agent) => [agent.name, agent] as const));
+  const inputByAgentId = new Map<string, AgentCalibrationInput>(
+    params.agents.map((agent) => [agent.id, { goals: [], evidenceRecords: [] }] as const)
+  );
+  const agentIdByTaskId = new Map<string, string>();
+
+  for (const bundle of params.goals) {
+    const taskGroups = new Map<string, Task[]>();
+
+    for (const task of bundle.tasks) {
+      if (!isTaskInCalibrationWindow(task, window)) {
+        continue;
+      }
+
+      const agent = agentById.get(task.assignedAgent) ?? agentByName.get(task.assignedAgent);
+
+      if (!agent) {
+        continue;
+      }
+
+      agentIdByTaskId.set(task.id, agent.id);
+      taskGroups.set(agent.id, [...(taskGroups.get(agent.id) ?? []), task]);
+    }
+
+    for (const [agentId, tasks] of taskGroups) {
+      const taskIds = new Set(tasks.map((task) => task.id));
+      const input = inputByAgentId.get(agentId);
+
+      if (!input) {
+        continue;
+      }
+
+      input.goals.push({
+        ...bundle,
+        tasks,
+        approvals: bundle.approvals.filter(
+          (approval) =>
+            taskIds.has(approval.taskId) &&
+            (isWithinCalibrationWindow(approval.respondedAt ?? approval.createdAt, window) ||
+              isWithinCalibrationWindow(approval.createdAt, window))
+        ),
+        artifacts: bundle.artifacts.filter(
+          (artifact) =>
+            artifact.taskId !== undefined &&
+            taskIds.has(artifact.taskId) &&
+            isWithinCalibrationWindow(artifact.createdAt, window)
+        ),
+        actionLogs: bundle.actionLogs.filter(
+          (log) =>
+            log.taskId !== null &&
+            log.taskId !== undefined &&
+            taskIds.has(log.taskId) &&
+            isWithinCalibrationWindow(log.createdAt, window)
+        )
+      });
+    }
+  }
+
+  for (const record of params.evidenceRecords) {
+    const agentId = agentIdByTaskId.get(record.taskId);
+
+    if (!agentId || !isEvidenceInCalibrationWindow(record, window)) {
+      continue;
+    }
+
+    inputByAgentId.get(agentId)?.evidenceRecords.push(record);
+  }
+
+  return inputByAgentId;
 }
 
 function buildCalibrationEvents(params: {
@@ -209,9 +360,11 @@ function buildCalibrationEvents(params: {
 }
 
 function classifyPosture(metrics: AgentMetrics): CalibrationPosture {
-  const activityCount = metrics.tasksTotal + metrics.approvalsRequested + metrics.feedbackCount;
+  const taskOutcomeCount = metrics.tasksCompleted + metrics.tasksFailed + metrics.tasksBlocked;
+  const resolvedApprovalCount = metrics.approvalsApproved + metrics.approvalsRejected;
+  const outcomeCount = taskOutcomeCount + Math.max(metrics.feedbackCount, resolvedApprovalCount);
 
-  if (activityCount === 0) {
+  if (outcomeCount === 0) {
     return "insufficient-data";
   }
 
@@ -219,7 +372,11 @@ function classifyPosture(metrics: AgentMetrics): CalibrationPosture {
     return "needs-review";
   }
 
-  if (metrics.correctionRate >= 0.25 || metrics.successRate < 0.8 || metrics.approvalRate < 0.5) {
+  if (
+    metrics.correctionRate >= 0.25 ||
+    metrics.successRate < 0.8 ||
+    (metrics.approvalsRequested > 0 && metrics.approvalRate < 0.5)
+  ) {
     return "watch";
   }
 
@@ -268,7 +425,9 @@ function summarizePosture(metrics: AgentMetrics, posture: CalibrationPosture): s
 }
 
 function computeConfidence(metrics: AgentMetrics): number {
-  const samples = metrics.tasksTotal + metrics.feedbackCount + metrics.approvalsRequested;
+  const taskOutcomeCount = metrics.tasksCompleted + metrics.tasksFailed + metrics.tasksBlocked;
+  const resolvedApprovalCount = metrics.approvalsApproved + metrics.approvalsRejected;
+  const samples = taskOutcomeCount + Math.max(metrics.feedbackCount, resolvedApprovalCount);
 
   if (samples === 0) {
     return 0;
@@ -296,22 +455,28 @@ export function deriveCalibrationInsights(params: {
   const period: CalibrationPeriod = params.options?.period ?? "all";
   const eventLimit = clampEventLimit(params.options?.limit);
   const requestedAgent = params.options?.agentId?.trim() ?? "";
-  const visibleAgents = requestedAgent
-    ? params.agents.filter((agent) => agent.id === requestedAgent || agent.name === requestedAgent)
-    : params.agents;
+  const resolvedRequestedAgent = resolveRequestedAgent(params.agents, requestedAgent);
+  const visibleAgents = requestedAgent ? (resolvedRequestedAgent ? [resolvedRequestedAgent] : []) : params.agents;
+  const inputByAgentId = indexCalibrationInputsByAgent({
+    agents: visibleAgents,
+    goals: params.goals,
+    evidenceRecords: params.evidenceRecords,
+    period
+  });
   const insights: AgentCalibrationInsight[] = visibleAgents.map((agent) => {
+    const input = inputByAgentId.get(agent.id) ?? { goals: [], evidenceRecords: [] };
     const metrics = deriveAgentMetricsFromGoals({
       agent,
       period,
-      goals: params.goals,
-      evidenceRecords: params.evidenceRecords,
+      goals: input.goals,
+      evidenceRecords: input.evidenceRecords,
       storedMetrics: params.storedMetrics?.find((metric) => metric.agentId === agent.id && metric.period === period) ?? null
     });
     const posture = classifyPosture(metrics);
     const events = buildCalibrationEvents({
       agent,
-      goals: params.goals,
-      evidenceRecords: params.evidenceRecords
+      goals: input.goals,
+      evidenceRecords: input.evidenceRecords
     }).slice(0, eventLimit);
 
     return {
