@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID, type ApprovalRequest, type AgentDefinition, type Task } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
-import { createRepository, deriveCalibrationInsights } from "@agentic/repository";
+import { createRepository } from "@agentic/repository";
+import { deriveCalibrationInsights } from "../packages/repository/src/calibration-insights";
 
 describe("deriveCalibrationInsights", () => {
   async function createIsolatedRepository() {

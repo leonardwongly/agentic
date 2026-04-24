@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { deriveCalibrationInsights } from "@agentic/repository";
 import { requireApiSession } from "../../../lib/auth";
 import { authenticatedJson, handleApiError } from "../../../lib/api-response";
+import { deriveCalibrationInsights } from "../../../lib/calibration-insights";
 import { getSeededRepository } from "../../../lib/server";
 
 const calibrationQuerySchema = z.object({
