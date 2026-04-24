@@ -136,7 +136,7 @@ function isWithinCalibrationWindow(timestamp: string | null | undefined, window:
 }
 
 function isTaskInCalibrationWindow(task: Task, window: CalibrationWindow): boolean {
-  return isWithinCalibrationWindow(task.createdAt, window);
+  return isWithinCalibrationWindow(task.updatedAt, window) || isWithinCalibrationWindow(task.createdAt, window);
 }
 
 function isEvidenceInCalibrationWindow(record: EvidenceRecord, window: CalibrationWindow): boolean {

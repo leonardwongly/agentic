@@ -61,6 +61,10 @@ function taskMatchesAgent(task: Task, agent: AgentDefinition): boolean {
   return task.assignedAgent === agent.id || task.assignedAgent === agent.name;
 }
 
+function isTaskInMetricsWindow(task: Task, window: MetricsWindow): boolean {
+  return isWithinMetricsWindow(task.updatedAt, window) || isWithinMetricsWindow(task.createdAt, window);
+}
+
 function averageFrom(values: number[]): number | null {
   if (values.length === 0) {
     return null;
@@ -79,7 +83,7 @@ export function deriveAgentMetricsFromGoals(params: {
   const window = resolveMetricsWindow(params.period);
   const matchingTasks = params.goals
     .flatMap((bundle) => bundle.tasks)
-    .filter((task) => taskMatchesAgent(task, params.agent) && isWithinMetricsWindow(task.createdAt, window));
+    .filter((task) => taskMatchesAgent(task, params.agent) && isTaskInMetricsWindow(task, window));
   const matchingTaskIds = new Set(matchingTasks.map((task) => task.id));
 
   const matchingApprovals = params.goals

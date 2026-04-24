@@ -255,6 +255,48 @@ describe("deriveCalibrationInsights", () => {
     expect(calibration.insights[0]?.posture).toBe("ready");
   });
 
+  it("includes tasks that reached an outcome inside the requested period", async () => {
+    const repository = await createIsolatedRepository();
+    const agent = await loadCommunicationsAgent(repository);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const templateTask = bundle.tasks[0];
+    const now = new Date();
+    const currentAt = now.toISOString();
+    const staleAt = new Date(now.getTime() - 48 * 60 * 60 * 1000).toISOString();
+
+    expect(templateTask).toBeDefined();
+
+    const recentlyFailedTask = buildTask(templateTask!, {
+      assignedAgent: agent.name,
+      state: "failed",
+      createdAt: staleAt,
+      updatedAt: currentAt
+    });
+    const calibration = deriveCalibrationInsights({
+      agents: [agent],
+      goals: [
+        {
+          ...bundle,
+          tasks: [recentlyFailedTask],
+          approvals: [],
+          artifacts: [],
+          actionLogs: []
+        }
+      ],
+      evidenceRecords: [],
+      options: {
+        period: "day",
+        limit: 10
+      }
+    });
+
+    expect(calibration.insights[0]?.metrics.tasksFailed).toBe(1);
+    expect(calibration.insights[0]?.events.map((event) => event.id)).toEqual([
+      `calibration:${recentlyFailedTask.id}:task-failure`
+    ]);
+    expect(calibration.insights[0]?.posture).toBe("needs-review");
+  });
+
   it("resolves an agent selector to one concrete agent", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
