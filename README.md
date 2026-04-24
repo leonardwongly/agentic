@@ -92,7 +92,7 @@ npm install
 3. Choose a persistence mode:
 
 - file-backed development: leave `DATABASE_URL` unset
-- Postgres parity: set `DATABASE_URL`, run migrations, and use `db:status`
+- Postgres parity: set `DATABASE_URL`, run migrations, and use `npm run db:status`
 
 4. Set a dashboard/API access key before sharing the environment:
 
@@ -100,10 +100,13 @@ npm install
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
 ```
 
-5. Start the web app and, for queued work, the worker:
+5. Start the web app and, for queued work, the worker in separate terminals:
 
 ```bash
 npm run dev
+```
+
+```bash
 npm run worker:start
 ```
 
