@@ -209,7 +209,7 @@ function indexCalibrationInputsByAgent(params: {
         continue;
       }
 
-      const agent = agentById.get(task.assignedAgent) ?? agentByName.get(task.assignedAgent);
+      const agent = agentByName.get(task.assignedAgent) ?? agentById.get(task.assignedAgent);
 
       if (!agent) {
         continue;

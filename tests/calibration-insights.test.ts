@@ -278,6 +278,49 @@ describe("deriveCalibrationInsights", () => {
     expect(calibration.insights[0]?.agentName).toBe(collidingAgent.name);
   });
 
+  it("attributes tasks by assigned agent name before id-compatible aliases", async () => {
+    const repository = await createIsolatedRepository();
+    const agent = await loadCommunicationsAgent(repository);
+    const collidingAgent: AgentDefinition = {
+      ...agent,
+      id: agent.name,
+      name: "calendar",
+      displayName: "Colliding Calendar Agent"
+    };
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const templateTask = bundle.tasks[0];
+    const createdAt = new Date().toISOString();
+
+    expect(templateTask).toBeDefined();
+
+    const completedTask = buildTask(templateTask!, {
+      assignedAgent: agent.name,
+      state: "completed",
+      createdAt,
+      updatedAt: createdAt
+    });
+    const calibration = deriveCalibrationInsights({
+      agents: [agent, collidingAgent],
+      goals: [
+        {
+          ...bundle,
+          tasks: [completedTask],
+          approvals: [],
+          artifacts: [],
+          actionLogs: []
+        }
+      ],
+      evidenceRecords: []
+    });
+    const communicationsInsight = calibration.insights.find((insight) => insight.agentId === agent.id);
+    const collidingInsight = calibration.insights.find((insight) => insight.agentId === collidingAgent.id);
+
+    expect(communicationsInsight?.metrics.tasksCompleted).toBe(1);
+    expect(communicationsInsight?.posture).toBe("ready");
+    expect(collidingInsight?.metrics.tasksCompleted).toBe(0);
+    expect(collidingInsight?.posture).toBe("insufficient-data");
+  });
+
   it("keeps pending-only work as insufficient data", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
