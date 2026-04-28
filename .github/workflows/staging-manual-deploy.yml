@@ -155,6 +155,7 @@ jobs:
           name: agentic-staging-telemetry
           path: ${{ env.AGENTIC_TELEMETRY_RETENTION_DIR }}
           if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload staging supply-chain evidence
         if: always() && (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test')
@@ -165,6 +166,7 @@ jobs:
             artifacts/security
             artifacts/build
           if-no-files-found: warn
+          retention-days: 30
 
       - name: Attest staging security evidence
         if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')

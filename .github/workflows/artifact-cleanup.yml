@@ -1,0 +1,112 @@
+name: Artifact Cleanup
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      retention-days:
+        description: "Delete artifacts older than this many days."
+        required: true
+        default: "30"
+        type: number
+      dry-run:
+        description: "List matching artifacts without deleting them."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: artifact-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      DEFAULT_RETENTION_DAYS: "30"
+    steps:
+      - name: Delete old workflow artifacts
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const inputRetentionDays = context.payload.inputs?.["retention-days"];
+            const retentionDays = Number.parseInt(inputRetentionDays ?? process.env.DEFAULT_RETENTION_DAYS, 10);
+
+            if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 90) {
+              core.setFailed(`retention-days must be an integer from 1 to 90. Received: ${inputRetentionDays}`);
+              return;
+            }
+
+            const dryRunInput = context.payload.inputs?.["dry-run"];
+            const dryRun = dryRunInput === true || String(dryRunInput).toLowerCase() === "true";
+            const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+            const { owner, repo } = context.repo;
+
+            core.info(`Scanning ${owner}/${repo} artifacts older than ${cutoff.toISOString()}.`);
+            core.info(`Dry run: ${dryRun}`);
+
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner,
+              repo,
+              per_page: 100
+            });
+
+            let eligible = 0;
+            let deleted = 0;
+            let skippedInvalidDates = 0;
+
+            for (const artifact of artifacts) {
+              const createdAt = new Date(artifact.created_at);
+
+              if (Number.isNaN(createdAt.getTime())) {
+                skippedInvalidDates += 1;
+                core.warning(`Skipping artifact ${artifact.id} (${artifact.name}) because created_at is invalid: ${artifact.created_at}`);
+                continue;
+              }
+
+              if (createdAt >= cutoff) {
+                continue;
+              }
+
+              eligible += 1;
+              const message = `${artifact.name} (${artifact.id}) from ${createdAt.toISOString()}`;
+
+              if (dryRun) {
+                core.info(`Would delete ${message}`);
+                continue;
+              }
+
+              try {
+                await github.rest.actions.deleteArtifact({
+                  owner,
+                  repo,
+                  artifact_id: artifact.id
+                });
+                deleted += 1;
+                core.info(`Deleted ${message}`);
+              } catch (error) {
+                if (error.status === 404) {
+                  core.warning(`Artifact already gone: ${message}`);
+                  continue;
+                }
+
+                throw error;
+              }
+            }
+
+            await core.summary
+              .addHeading("Artifact cleanup")
+              .addTable([
+                [{ data: "Retention days", header: true }, String(retentionDays)],
+                [{ data: "Cutoff", header: true }, cutoff.toISOString()],
+                [{ data: "Artifacts scanned", header: true }, String(artifacts.length)],
+                [{ data: "Artifacts eligible", header: true }, String(eligible)],
+                [{ data: "Artifacts deleted", header: true }, dryRun ? "0 (dry run)" : String(deleted)],
+                [{ data: "Invalid timestamps skipped", header: true }, String(skippedInvalidDates)]
+              ])
+              .write();
