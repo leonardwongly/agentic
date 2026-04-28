@@ -90,7 +90,7 @@ jobs:
                 deleted += 1;
                 core.info(`Deleted ${message}`);
               } catch (error) {
-                if (error.status === 404) {
+                if (error?.status === 404) {
                   core.warning(`Artifact already gone: ${message}`);
                   continue;
                 }
