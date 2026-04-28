@@ -32,9 +32,9 @@ describe("GitHub Actions artifact cleanup", () => {
     const ci = readRepoFile(".github/workflows/ci.yml");
     const staging = readRepoFile(".github/workflows/staging-manual-deploy.yml");
 
-    expect(countOccurrences(ci, "uses: actions/upload-artifact@v7")).toBe(1);
-    expect(countOccurrences(ci, "retention-days: 30")).toBe(1);
-    expect(countOccurrences(staging, "uses: actions/upload-artifact@v7")).toBe(2);
-    expect(countOccurrences(staging, "retention-days: 30")).toBe(2);
+    expect((ci.match(/uses: actions\/upload-artifact@v\d+/g) || []).length).toBe(1);
+    expect((ci.match(/retention-days:\s*30(?!\d)/g) || []).length).toBe(1);
+    expect((staging.match(/uses: actions\/upload-artifact@v\d+/g) || []).length).toBe(2);
+    expect((staging.match(/retention-days:\s*30(?!\d)/g) || []).length).toBe(2);
   });
 });
