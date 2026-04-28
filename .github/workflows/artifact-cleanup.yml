@@ -8,7 +8,7 @@ on:
       retention-days:
         description: "Delete artifacts older than this many days."
         required: true
-        default: "30"
+        default: "7"
         type: number
       dry-run:
         description: "List matching artifacts without deleting them."
@@ -28,7 +28,7 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     env:
-      DEFAULT_RETENTION_DAYS: "30"
+      DEFAULT_RETENTION_DAYS: "7"
     steps:
       - name: Delete old workflow artifacts
         uses: actions/github-script@v8
