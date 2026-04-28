@@ -138,6 +138,7 @@ jobs:
             artifacts/build
             artifacts/compliance
           if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 1 || 7 }}
 
       - name: Attest security evidence
         if: github.event_name != 'pull_request'
