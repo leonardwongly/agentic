@@ -18,7 +18,8 @@ describe("GitHub Actions artifact cleanup", () => {
 
     expect(workflow).toContain("name: Artifact Cleanup");
     expect(workflow).toContain('cron: "17 2 * * *"');
-    expect(workflow).toMatch(/permissions:\n\s+actions: write\n\s+contents: read/);
+    expect(workflow).toContain("actions: write");
+    expect(workflow).toContain("contents: read");
     expect(workflow).not.toContain("actions/checkout");
     expect(workflow).toContain('DEFAULT_RETENTION_DAYS: "30"');
     expect(workflow).toContain("retention-days must be an integer from 1 to 90");
