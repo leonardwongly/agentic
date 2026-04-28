@@ -259,6 +259,14 @@ export type AgenticRepository = {
     scope?: ApprovalDecisionScope;
     rationale?: string | null;
   }): Promise<GoalBundle>;
+  respondToApprovalAndEnqueueJob?(params: {
+    approvalId: string;
+    decision: Exclude<ApprovalDecision, "pending">;
+    actor: ActorContext;
+    scope?: ApprovalDecisionScope;
+    rationale?: string | null;
+    buildJob: (bundle: GoalBundle) => JobRecord;
+  }): Promise<{ bundle: GoalBundle; job: JobRecord }>;
   getGoalBundle(goalId: string): Promise<GoalBundle | null>;
   getGoalBundleForUser(goalId: string, userId?: string): Promise<GoalBundle | null>;
   listGoals(userId?: string): Promise<GoalBundle[]>;

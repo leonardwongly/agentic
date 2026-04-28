@@ -88,7 +88,8 @@ import {
 } from "./job-payloads";
 import {
   enqueueApprovalFollowUpJob,
-  enqueueApprovalNotificationJob
+  enqueueApprovalNotificationJob,
+  respondToApprovalAndEnqueueFollowUpJob
 } from "./job-dispatch";
 import {
   createPolicyReplayValidationResolver,
@@ -113,6 +114,7 @@ import { createPublicShareViewedLog } from "./public-share-log";
 export {
   enqueueApprovalFollowUpJob,
   enqueueApprovalNotificationJob,
+  respondToApprovalAndEnqueueFollowUpJob,
   enqueueAutopilotProcessJob,
   enqueueBriefingCreateJob,
   enqueueDocsRenderJob,

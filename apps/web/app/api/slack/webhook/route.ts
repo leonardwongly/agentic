@@ -5,8 +5,8 @@ import {
 } from "@agentic/integrations";
 import { ApprovalMutationError } from "@agentic/repository";
 import {
-  enqueueApprovalFollowUpJob,
-  enqueueApprovalNotificationJob
+  enqueueApprovalNotificationJob,
+  respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
 import { resolveSlackActorUserId, verifySlackApprovalToken } from "../../../../lib/slack-approvals";
 import { getSeededRepository } from "../../../../lib/server";
@@ -103,12 +103,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Approval workspace mismatch." }, { status: 403 });
     }
 
-    const updatedBundle = await (async () => {
+    const decisionResult = await (async () => {
       try {
-        return await repository.respondToApproval({
+        return await respondToApprovalAndEnqueueFollowUpJob({
+          repository,
+          userId: actorUserId,
           approvalId,
           decision,
-          actor: actorContext,
+          actorContext,
           scope: "once",
           rationale: null
         });
@@ -126,26 +128,17 @@ export async function POST(request: Request) {
       }
     })();
 
-    if (updatedBundle instanceof NextResponse) {
-      return updatedBundle;
+    if (decisionResult instanceof NextResponse) {
+      return decisionResult;
     }
+
+    const updatedBundle = decisionResult.bundle;
 
     const approval = updatedBundle.approvals.find((candidate) => candidate.id === approvalId);
 
     if (!approval) {
       throw new Error(`Approval ${approvalId} is missing after Slack response mutation.`);
     }
-
-    await enqueueApprovalFollowUpJob({
-      repository,
-      userId: actorUserId,
-      approvalId: approval.id,
-      goalId: updatedBundle.goal.id,
-      taskId: approval.taskId,
-      decision,
-      workspaceId: updatedBundle.goal.workspaceId,
-      actorContext
-    });
 
     const channel = payload.channel?.id;
     const messageTs = payload.message?.ts;

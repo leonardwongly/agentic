@@ -1,6 +1,7 @@
 import {
   buildApprovalNotificationDeliveryTarget,
   type ActorContext,
+  type ApprovalDecisionScope,
   type ApprovalFollowUpJobPayload,
   type ApprovalNotificationJobPayload,
   type AutopilotEvent,
@@ -127,6 +128,18 @@ function buildApprovalNotificationJobIdempotencyKey(params: {
 }): string {
   const baseKey = `approval-notification:${params.payload.decision}:${buildApprovalNotificationDeliveryTarget(params.payload)}`;
   return params.replayedFromJobId ? `${baseKey}:replay:${params.replayedFromJobId}` : baseKey;
+}
+
+function logEnqueuedJob(job: JobRecord, context: Record<string, unknown>) {
+  logInfo("worker.job.enqueued", {
+    jobId: job.id,
+    jobKind: job.kind,
+    userId: job.userId,
+    ...context
+  });
+  recordCounter("worker.job.enqueued.total", 1, {
+    jobKind: job.kind
+  });
 }
 
 export async function enqueueGoalCreateJob(params: {
@@ -463,6 +476,88 @@ export async function enqueueApprovalFollowUpJob(params: {
         jobKind: job.kind
       });
       return job;
+    }
+  );
+}
+
+export async function respondToApprovalAndEnqueueFollowUpJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  approvalId: string;
+  decision: ApprovalFollowUpJobPayload["decision"];
+  actorContext: ActorContext;
+  scope?: ApprovalDecisionScope;
+  rationale?: string | null;
+}): Promise<{
+  bundle: Awaited<ReturnType<AgenticRepository["respondToApproval"]>>;
+  job: JobRecord & { payload: ApprovalFollowUpJobPayload };
+}> {
+  return withSpan(
+    "worker.job.enqueue.approval_follow_up.after_decision",
+    {
+      jobKind: "approval_follow_up",
+      userId: params.userId,
+      approvalId: params.approvalId
+    },
+    async () => {
+      const buildJob = (bundle: Awaited<ReturnType<AgenticRepository["respondToApproval"]>>) => {
+        const approval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
+
+        if (!approval) {
+          throw new Error(`Approval ${params.approvalId} is missing after response mutation.`);
+        }
+
+        return createJobRecord({
+          userId: params.userId,
+          kind: "approval_follow_up",
+          payload: buildApprovalFollowUpPayload({
+            approvalId: approval.id,
+            goalId: bundle.goal.id,
+            taskId: approval.taskId,
+            decision: params.decision,
+            workspaceId: bundle.goal.workspaceId,
+            replayedFromJobId: null
+          }),
+          actorContext: params.actorContext,
+          idempotencyKey: buildApprovalFollowUpJobIdempotencyKey({
+            approvalId: approval.id,
+            decision: params.decision,
+            replayedFromJobId: null
+          }),
+          maxAttempts: 1
+        }) as JobRecord & { payload: ApprovalFollowUpJobPayload };
+      };
+
+      const result = params.repository.respondToApprovalAndEnqueueJob
+        ? await params.repository.respondToApprovalAndEnqueueJob({
+            approvalId: params.approvalId,
+            decision: params.decision,
+            actor: params.actorContext,
+            scope: params.scope,
+            rationale: params.rationale,
+            buildJob
+          })
+        : await (async () => {
+            const bundle = await params.repository.respondToApproval({
+              approvalId: params.approvalId,
+              decision: params.decision,
+              actor: params.actorContext,
+              scope: params.scope,
+              rationale: params.rationale
+            });
+            const job = await params.repository.enqueueJob(buildJob(bundle));
+            return { bundle, job };
+          })();
+      const job = result.job as JobRecord & { payload: ApprovalFollowUpJobPayload };
+
+      logEnqueuedJob(job, {
+        goalId: job.payload.goalId,
+        approvalId: job.payload.approvalId
+      });
+      return {
+        bundle: result.bundle,
+        job
+      };
     }
   );
 }

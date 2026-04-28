@@ -7,8 +7,8 @@ import {
 } from "@agentic/integrations";
 import { ApprovalMutationError } from "@agentic/repository";
 import {
-  enqueueApprovalFollowUpJob,
-  enqueueApprovalNotificationJob
+  enqueueApprovalNotificationJob,
+  respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
 import {
   consumeTelegramApprovalActions,
@@ -127,12 +127,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, skipped: true, reason: "workspace_mismatch" });
     }
 
-    const updatedBundle = await (async () => {
+    const decisionResult = await (async () => {
       try {
-        return await repository.respondToApproval({
+        return await respondToApprovalAndEnqueueFollowUpJob({
+          repository,
+          userId: actorUserId,
           approvalId: action.approvalId,
           decision: action.decision,
-          actor: actorContext,
+          actorContext,
           scope: "once",
           rationale: null
         });
@@ -156,27 +158,18 @@ export async function POST(request: Request) {
       }
     })();
 
-    if (updatedBundle instanceof NextResponse) {
+    if (decisionResult instanceof NextResponse) {
       await consumeTelegramApprovalActions(action.approvalId);
-      return updatedBundle;
+      return decisionResult;
     }
+
+    const updatedBundle = decisionResult.bundle;
 
     const approval = updatedBundle.approvals.find((candidate) => candidate.id === action.approvalId);
 
     if (!approval) {
       throw new Error(`Approval ${action.approvalId} is missing after Telegram response mutation.`);
     }
-
-    await enqueueApprovalFollowUpJob({
-      repository,
-      userId: actorUserId,
-      approvalId: approval.id,
-      goalId: updatedBundle.goal.id,
-      taskId: approval.taskId,
-      decision: action.decision,
-      workspaceId: updatedBundle.goal.workspaceId,
-      actorContext
-    });
 
     await consumeTelegramApprovalActions(action.approvalId);
 

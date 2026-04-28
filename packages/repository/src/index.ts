@@ -125,7 +125,7 @@ import {
 } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord, getMemoryFreshness } from "@agentic/memory";
-import { respondToApproval as applyApprovalResponse } from "@agentic/orchestrator";
+import { buildApprovalResponseMutation } from "./approval-response-helpers";
 import {
   buildFallbackApprovalActionIntent,
   buildFallbackApprovalPreview
@@ -160,10 +160,7 @@ import {
   buildDashboardControlPlane,
   buildNowQueue
 } from "./dashboard-control-plane";
-import {
-  buildDashboardOperationsTower,
-  type DashboardOperationsTower
-} from "./dashboard-operations";
+import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 import {
   assertRunningJobOwner,
@@ -199,6 +196,7 @@ import {
   type WorkspaceDeleteParams,
   type WorkspaceRetentionParams
 } from "./repository-types";
+import { buildWorkspaceAuditExport } from "./workspace-audit-export";
 
 const UserRecordSchema = z.object({
   id: z.string().min(1),
@@ -1033,122 +1031,6 @@ function listWorkspaceMembersForWorkspaceFromStore(store: RuntimeStore, workspac
     .map((member) => WorkspaceMemberSchema.parse(clone(member)));
 }
 
-function buildWorkspaceAuditExport(params: {
-  workspace: Workspace;
-  governance: WorkspaceGovernance | null;
-  members: WorkspaceMember[];
-  goals: GoalBundle[];
-  goalShares: GoalShareRecord[];
-  privacyOperations: PrivacyOperation[];
-}): WorkspaceAuditExport {
-  const generatedAt = nowIso();
-  const payload = {
-    generatedAt,
-    workspace: params.workspace,
-    governance: params.governance,
-    members: params.members,
-    goalShares: params.goalShares,
-    privacyOperations: params.privacyOperations,
-    goals: params.goals.map((bundle) => ({
-      goal: bundle.goal,
-      workflow: bundle.workflow,
-      tasks: bundle.tasks,
-      approvals: bundle.approvals,
-      watchers: bundle.watchers,
-      artifacts: bundle.artifacts,
-      actionLogs: bundle.actionLogs
-    }))
-  };
-  const digest = crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-  const content = JSON.stringify(
-    {
-      ...payload,
-      integrity: {
-        version: "agentic-workspace-audit-integrity-v1",
-        algorithm: "sha256",
-        canonicalization: "json-stringify-v1",
-        digest,
-        recordCounts: {
-          members: params.members.length,
-          goalShares: params.goalShares.length,
-          privacyOperations: params.privacyOperations.length,
-          goals: params.goals.length
-        }
-      }
-    },
-    null,
-    2
-  );
-
-  return {
-    workspaceId: params.workspace.id,
-    fileName: `${params.workspace.slug}-audit-${generatedAt.slice(0, 10)}.json`,
-    contentType: "application/json",
-    generatedAt,
-    content
-  };
-}
-
-function buildApprovalEvidenceRecord(params: {
-  actor: ActorContext;
-  previousBundle: GoalBundle;
-  updatedBundle: GoalBundle;
-  originalApproval: ApprovalRequest;
-}): EvidenceRecord {
-  const updatedApproval = params.updatedBundle.approvals.find(
-    (candidate) => candidate.id === params.originalApproval.id
-  );
-  const updatedTask = params.updatedBundle.tasks.find(
-    (candidate) => candidate.id === params.originalApproval.taskId
-  );
-
-  if (!updatedApproval) {
-    throw new Error(`Approval ${params.originalApproval.id} is missing after response processing.`);
-  }
-
-  if (!updatedTask) {
-    throw new Error(`Task ${params.originalApproval.taskId} is missing after response processing.`);
-  }
-
-  if (updatedApproval.decision === "pending" || !updatedApproval.respondedAt || !updatedApproval.decisionScope) {
-    throw new Error(`Approval ${params.originalApproval.id} did not persist a complete response state.`);
-  }
-
-  const previousLogIds = new Set(params.previousBundle.actionLogs.map((log) => log.id));
-  const actionLogIds = params.updatedBundle.actionLogs
-    .filter((log) => !previousLogIds.has(log.id))
-    .map((log) => log.id);
-  const artifactIds =
-    updatedApproval.actionIntent?.type === "manual_review" ? updatedApproval.actionIntent.artifactIds : [];
-
-  return EvidenceRecordSchema.parse({
-    id: crypto.randomUUID(),
-    userId: subjectUserIdForActor(params.actor),
-    goalId: params.updatedBundle.goal.id,
-    taskId: params.originalApproval.taskId,
-    approvalId: params.originalApproval.id,
-    sourceKind: "approval_response",
-    sourceId: params.originalApproval.id,
-    sourceSummary: `${updatedApproval.decision === "approved" ? "Approved" : "Rejected"} "${params.originalApproval.title}".`,
-    riskClass: params.originalApproval.riskClass,
-    requestedAction: params.originalApproval.requestedAction,
-    requestRationale: params.originalApproval.rationale,
-    requiresApproval: true,
-    decision: updatedApproval.decision,
-    decisionScope: updatedApproval.decisionScope,
-    decisionRationale: updatedApproval.decisionRationale,
-    respondedAt: updatedApproval.respondedAt,
-    resultingTaskState: updatedTask.state,
-    resultingGoalStatus: params.updatedBundle.goal.status,
-    actionLogIds,
-    artifactIds,
-    memoryIds: [],
-    actorContext: parseActorContext(params.actor),
-    createdAt: updatedApproval.respondedAt,
-    updatedAt: updatedApproval.respondedAt
-  });
-}
-
 class FileRepository implements AgenticRepository {
   backend = "file" as const;
   private mutationQueue = Promise.resolve();
@@ -1839,15 +1721,8 @@ class FileRepository implements AgenticRepository {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
 
-      const originalApproval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
-
-      if (!originalApproval) {
-        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
-      }
-
       assertSharedApprovalResponder(store, bundle.goal, userId, params.approvalId);
-
-      const updatedBundle = applyApprovalResponse({
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
         bundle,
         approvalId: params.approvalId,
         decision: params.decision,
@@ -1855,17 +1730,82 @@ class FileRepository implements AgenticRepository {
         scope: params.scope,
         rationale: params.rationale
       });
-      const evidenceRecord = buildApprovalEvidenceRecord({
-        actor,
-        previousBundle: bundle,
-        updatedBundle,
-        originalApproval
-      });
 
       mergeGoalBundleIntoStore(store, updatedBundle);
       store.evidenceRecords = upsertById(store.evidenceRecords, evidenceRecord);
       await this.writeStore(store);
-      return GoalBundleSchema.parse(clone(updatedBundle));
+      return parsedBundle;
+    });
+  }
+
+  async respondToApprovalAndEnqueueJob(params: {
+    approvalId: string;
+    decision: Exclude<ApprovalDecision, "pending">;
+    actor: ActorContext;
+    scope?: ApprovalDecisionScope;
+    rationale?: string | null;
+    buildJob: (bundle: GoalBundle) => JobRecord;
+  }): Promise<{ bundle: GoalBundle; job: JobRecord }> {
+    return this.withMutationLock(async () => {
+      const actor = parseActorContext(params.actor);
+      const userId = subjectUserIdForActor(actor);
+      const store = await this.readStore();
+      const goalIds = goalIdsForUser(store, userId);
+      const approval = store.approvals.find(
+        (candidate) => candidate.id === params.approvalId && goalIds.has(candidate.goalId)
+      );
+
+      if (!approval) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      if (approval.decision !== "pending") {
+        throw new ApprovalMutationError("already_handled", `Approval ${params.approvalId} has already been handled.`);
+      }
+
+      if (Date.parse(approval.expiryAt) <= Date.now()) {
+        throw new ApprovalMutationError("expired", `Approval ${params.approvalId} has expired and can no longer be actioned.`);
+      }
+
+      const bundle = bundleFromStore(store, approval.goalId);
+
+      if (!bundle) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      assertSharedApprovalResponder(store, bundle.goal, userId, params.approvalId);
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
+        bundle,
+        approvalId: params.approvalId,
+        decision: params.decision,
+        actor,
+        scope: params.scope,
+        rationale: params.rationale
+      });
+      const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
+      const existingJob = trimmedKey
+        ? store.jobs.find((candidate) => candidate.userId === validatedJob.userId && candidate.idempotencyKey === trimmedKey)
+        : null;
+      const savedJob = existingJob
+        ? JobRecordSchema.parse(clone(existingJob))
+        : JobRecordSchema.parse({
+            ...validatedJob,
+            idempotencyKey: trimmedKey
+          });
+
+      mergeGoalBundleIntoStore(store, updatedBundle);
+      store.evidenceRecords = upsertById(store.evidenceRecords, evidenceRecord);
+
+      if (!existingJob) {
+        store.jobs = upsertById(store.jobs, savedJob);
+      }
+
+      await this.writeStore(store);
+      return {
+        bundle: parsedBundle,
+        job: JobRecordSchema.parse(clone(savedJob))
+      };
     });
   }
 
@@ -6053,9 +5993,71 @@ class PostgresRepository implements AgenticRepository {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
 
-      const originalApproval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
+      this.assertSharedApprovalResponderWithRow({
+        approvalId: params.approvalId,
+        workspaceId: approvalRow.workspace_id ?? null,
+        workspaceRole: approvalRow.workspace_role ?? null
+      });
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
+        bundle,
+        approvalId: params.approvalId,
+        decision: params.decision,
+        actor,
+        scope: params.scope,
+        rationale: params.rationale
+      });
 
-      if (!originalApproval) {
+      await this.upsertGoalBundle(client, updatedBundle);
+      await this.saveEvidenceRecordWithClient(client, evidenceRecord);
+      return parsedBundle;
+    });
+  }
+
+  async respondToApprovalAndEnqueueJob(params: {
+    approvalId: string;
+    decision: Exclude<ApprovalDecision, "pending">;
+    actor: ActorContext;
+    scope?: ApprovalDecisionScope;
+    rationale?: string | null;
+    buildJob: (bundle: GoalBundle) => JobRecord;
+  }): Promise<{ bundle: GoalBundle; job: JobRecord }> {
+    const actor = parseActorContext(params.actor);
+    const userId = subjectUserIdForActor(actor);
+
+    return this.withTransaction(async (client) => {
+      const approvalResult = await client.query(
+        `
+          select a.id, a.goal_id, a.decision, a.expiry_at, g.workspace_id, wm.role as workspace_role
+          from approval_requests a
+          join goals g on g.id = a.goal_id
+          left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $2
+          where a.id = $1
+            and (
+              (g.workspace_id is null and g.user_id = $2)
+              or wm.user_id is not null
+            )
+          for update of a
+        `,
+        [params.approvalId, userId]
+      );
+
+      if (Number(approvalResult.rowCount ?? 0) === 0) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      const approvalRow = approvalResult.rows[0];
+
+      if (approvalRow.decision !== "pending") {
+        throw new ApprovalMutationError("already_handled", `Approval ${params.approvalId} has already been handled.`);
+      }
+
+      if (new Date(approvalRow.expiry_at).getTime() <= Date.now()) {
+        throw new ApprovalMutationError("expired", `Approval ${params.approvalId} has expired and can no longer be actioned.`);
+      }
+
+      const bundle = await this.mapGoalBundleWithClient(client, approvalRow.goal_id);
+
+      if (!bundle) {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
 
@@ -6064,8 +6066,7 @@ class PostgresRepository implements AgenticRepository {
         workspaceId: approvalRow.workspace_id ?? null,
         workspaceRole: approvalRow.workspace_role ?? null
       });
-
-      const updatedBundle = applyApprovalResponse({
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
         bundle,
         approvalId: params.approvalId,
         decision: params.decision,
@@ -6073,16 +6074,41 @@ class PostgresRepository implements AgenticRepository {
         scope: params.scope,
         rationale: params.rationale
       });
-      const evidenceRecord = buildApprovalEvidenceRecord({
-        actor,
-        previousBundle: bundle,
-        updatedBundle,
-        originalApproval
+      const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
+      let savedJob = JobRecordSchema.parse({
+        ...validatedJob,
+        idempotencyKey: trimmedKey
       });
+
+      if (trimmedKey) {
+        await client.query("select pg_advisory_xact_lock(hashtext($1))", [`job:${validatedJob.userId}:${trimmedKey}`]);
+        const existing = await client.query(
+          `
+            select *
+            from jobs
+            where user_id = $1 and idempotency_key = $2
+            limit 1
+          `,
+          [validatedJob.userId, trimmedKey]
+        );
+
+        if (existing.rows[0]) {
+          savedJob = this.mapJobRow(existing.rows[0]);
+        }
+      }
 
       await this.upsertGoalBundle(client, updatedBundle);
       await this.saveEvidenceRecordWithClient(client, evidenceRecord);
-      return GoalBundleSchema.parse(clone(updatedBundle));
+
+      if (savedJob.id === validatedJob.id) {
+        await this.saveJobWithClient(client, savedJob);
+      }
+
+      return {
+        bundle: parsedBundle,
+        job: JobRecordSchema.parse(clone(savedJob))
+      };
     });
   }
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { ApprovalMutationError, type AgenticRepository } from "@agentic/repository";
-import { enqueueApprovalFollowUpJob } from "@agentic/worker-runtime";
+import { ApprovalMutationError } from "@agentic/repository";
+import { respondToApprovalAndEnqueueFollowUpJob } from "@agentic/worker-runtime";
 import { requireApiSession } from "../../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
@@ -26,12 +26,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const approvalId = ApprovalIdSchema.parse(id);
     const body = await parseJsonBody(request, ApprovalResponseSchema);
     const repository = await getSeededRepository();
-    const updatedBundle = await (async () => {
+    const { bundle: updatedBundle, job: queuedJob } = await (async () => {
       try {
-        return await repository.respondToApproval({
+        return await respondToApprovalAndEnqueueFollowUpJob({
+          repository,
+          userId: principal.userId,
           approvalId,
           decision: body.decision,
-          actor,
+          actorContext: actor,
           scope: body.scope,
           rationale: body.rationale ?? null
         });
@@ -56,18 +58,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!approval) {
       throw new Error(`Approval ${approvalId} is missing after response mutation.`);
     }
-
-    const queuedJob = await enqueueApprovalFollowUpJob({
-      repository,
-      userId: principal.userId,
-      approvalId: approval.id,
-      goalId: updatedBundle.goal.id,
-      taskId: approval.taskId,
-      decision: body.decision,
-      workspaceId: updatedBundle.goal.workspaceId,
-      actorContext: actor
-    });
-
     return authenticatedJson(
       {
         bundle: updatedBundle,

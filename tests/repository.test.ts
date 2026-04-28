@@ -346,6 +346,110 @@ describe("repository", () => {
     });
   }, 15_000);
 
+  it("records approval decisions and follow-up jobs as one durable mutation", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    const result = await repository.respondToApprovalAndEnqueueJob!({
+      approvalId: approval!.id,
+      decision: "approved",
+      actor: systemActor,
+      scope: "once",
+      rationale: "Approved for this exact reply.",
+      buildJob: (updatedBundle) =>
+        createJobRecord({
+          userId: SYSTEM_USER_ID,
+          kind: "approval_follow_up",
+          actorContext: systemActor,
+          maxAttempts: 1,
+          idempotencyKey: `approval-follow-up:${approval!.id}:approved`,
+          payload: {
+            type: "approval_follow_up",
+            approvalId: approval!.id,
+            goalId: updatedBundle.goal.id,
+            taskId: approval!.taskId,
+            decision: "approved",
+            workspaceId: updatedBundle.goal.workspaceId,
+            metadata: {
+              replayedFromJobId: null
+            }
+          }
+        })
+    });
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+
+    expect(result.bundle.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("approved");
+    expect(result.job).toMatchObject({
+      kind: "approval_follow_up",
+      status: "queued",
+      idempotencyKey: `approval-follow-up:${approval!.id}:approved`,
+      payload: {
+        type: "approval_follow_up",
+        approvalId: approval!.id,
+        goalId: bundle.goal.id,
+        taskId: approval!.taskId,
+        decision: "approved"
+      }
+    });
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("approved");
+    expect(jobs.map((job) => job.id)).toEqual([result.job.id]);
+    expect(evidenceRecords).toHaveLength(1);
+  }, 15_000);
+
+  it("keeps approval decisions pending when atomic follow-up job construction fails", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    await expect(
+      repository.respondToApprovalAndEnqueueJob!({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: systemActor,
+        scope: "once",
+        rationale: "Approved for this exact reply.",
+        buildJob: () => {
+          throw new Error("simulated follow-up job construction failure");
+        }
+      })
+    ).rejects.toThrow("simulated follow-up job construction failure");
+
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("pending");
+    expect(jobs).toEqual([]);
+    expect(evidenceRecords).toEqual([]);
+  }, 15_000);
+
   it("hides approval responses from other users and keeps the approval pending", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
