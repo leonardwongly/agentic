@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import {
   buildApprovalNotificationDeliveryTarget,
   type ActorContext,
+  type ActionIntent,
   type ApprovalDecisionScope,
   type ApprovalFollowUpJobPayload,
   type ApprovalNotificationJobPayload,
@@ -35,12 +37,44 @@ import {
   buildTemplateRunPayload
 } from "./job-payloads";
 
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableSerialize(entry)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function buildApprovalFollowUpActionId(params: {
+  approvalId: string;
+  taskId: string;
+  actionIntent?: ActionIntent | null;
+}): string {
+  const digest = createHash("sha256")
+    .update(stableSerialize({
+      approvalId: params.approvalId,
+      taskId: params.taskId,
+      actionIntent: params.actionIntent ?? null
+    }))
+    .digest("hex")
+    .slice(0, 16);
+  return `approval-action:${digest}`;
+}
+
 function buildApprovalFollowUpPayload(params: {
   approvalId: string;
   goalId: string;
   taskId: string;
   decision: ApprovalFollowUpJobPayload["decision"];
   workspaceId: string | null;
+  actionId: string;
   replayedFromJobId?: string | null;
 }): ApprovalFollowUpJobPayload {
   return {
@@ -51,7 +85,8 @@ function buildApprovalFollowUpPayload(params: {
     decision: params.decision,
     workspaceId: params.workspaceId,
     metadata: {
-      replayedFromJobId: params.replayedFromJobId ?? null
+      replayedFromJobId: params.replayedFromJobId ?? null,
+      actionId: params.actionId
     }
   };
 }
@@ -115,10 +150,11 @@ function buildApprovalNotificationPayload(params: {
 
 function buildApprovalFollowUpJobIdempotencyKey(params: {
   approvalId: string;
+  actionId: string;
   decision: ApprovalFollowUpJobPayload["decision"];
   replayedFromJobId?: string | null;
 }): string {
-  const baseKey = `approval-follow-up:${params.approvalId}:${params.decision}`;
+  const baseKey = `approval-follow-up:${params.approvalId}:${params.actionId}:${params.decision}`;
   return params.replayedFromJobId ? `${baseKey}:replay:${params.replayedFromJobId}` : baseKey;
 }
 
@@ -429,15 +465,25 @@ export async function enqueueApprovalFollowUpJob(params: {
   decision: ApprovalFollowUpJobPayload["decision"];
   workspaceId: string | null;
   actorContext: ActorContext | null;
+  actionIntent?: ActionIntent | null;
+  actionId?: string | null;
   idempotencyKey?: string | null;
   replayedFromJobId?: string | null;
 }): Promise<JobRecord & { payload: ApprovalFollowUpJobPayload }> {
+  const actionId =
+    params.actionId?.trim() ||
+    buildApprovalFollowUpActionId({
+      approvalId: params.approvalId,
+      taskId: params.taskId,
+      actionIntent: params.actionIntent ?? null
+    });
   const payload = buildApprovalFollowUpPayload({
     approvalId: params.approvalId,
     goalId: params.goalId,
     taskId: params.taskId,
     decision: params.decision,
     workspaceId: params.workspaceId,
+    actionId,
     replayedFromJobId: params.replayedFromJobId
   });
 
@@ -459,6 +505,7 @@ export async function enqueueApprovalFollowUpJob(params: {
           params.idempotencyKey ??
           buildApprovalFollowUpJobIdempotencyKey({
             approvalId: params.approvalId,
+            actionId,
             decision: params.decision,
             replayedFromJobId: params.replayedFromJobId
           }),
@@ -507,6 +554,12 @@ export async function respondToApprovalAndEnqueueFollowUpJob(params: {
           throw new Error(`Approval ${params.approvalId} is missing after response mutation.`);
         }
 
+        const actionId = buildApprovalFollowUpActionId({
+          approvalId: approval.id,
+          taskId: approval.taskId,
+          actionIntent: approval.actionIntent
+        });
+
         return createJobRecord({
           userId: params.userId,
           kind: "approval_follow_up",
@@ -516,11 +569,13 @@ export async function respondToApprovalAndEnqueueFollowUpJob(params: {
             taskId: approval.taskId,
             decision: params.decision,
             workspaceId: bundle.goal.workspaceId,
+            actionId,
             replayedFromJobId: null
           }),
           actorContext: params.actorContext,
           idempotencyKey: buildApprovalFollowUpJobIdempotencyKey({
             approvalId: approval.id,
+            actionId,
             decision: params.decision,
             replayedFromJobId: null
           }),

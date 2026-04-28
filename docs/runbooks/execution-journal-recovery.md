@@ -36,6 +36,8 @@ Each job journal tracks:
 - `recovery`: derived operator recovery metadata, including strategy, note, operator action label, and status URL
 - `entries`: bounded append-only transition history for the latest worker lifecycle mutations
 
+Approval follow-up jobs also carry `payload.approvalId` and `payload.metadata.actionId`. The approval id ties the job to the decision record, while the action id is a stable hash of the approval/task/action intent. The follow-up job idempotency key includes both values, so duplicate callbacks and safe replays dedupe the same governed action without conflating a later approval/action shape.
+
 ## Lifecycle States
 
 The journal lifecycle is intentionally small and explicit:
@@ -107,6 +109,7 @@ Operator-facing recovery state is exposed in four places:
 The execution journal is designed around a few invariants:
 
 - request handlers do not repeat worker-owned side effects inline
+- approval follow-up job idempotency is keyed by approval id plus stable action id
 - replay eligibility is derived from persisted job state, not client claims
 - dead-letter visibility is sanitized before being returned to operators
 - replay preserves ancestry through `replayedFromJobId`

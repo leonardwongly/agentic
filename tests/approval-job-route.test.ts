@@ -205,6 +205,7 @@ describe("approval job route", () => {
         goalId: string;
         approvalId: string;
         taskId: string;
+        actionId: string | null;
         decision: string;
       };
       statusUrl: string;
@@ -216,6 +217,7 @@ describe("approval job route", () => {
     expect(payload.job.goalId).toBe(bundle.goal.id);
     expect(payload.job.approvalId).toBe(approval.id);
     expect(payload.job.taskId).toBe(approval.taskId);
+    expect(payload.job.actionId).toMatch(/^approval-action:[a-f0-9]{16}$/u);
     expect(payload.job.decision).toBe("rejected");
     expect(payload.statusUrl).toBe(`/api/approvals/jobs/${payload.job.id}`);
     expectNoStoreHeaders(response);

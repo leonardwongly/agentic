@@ -360,6 +360,7 @@ describe("repository", () => {
 
     expect(approval).toBeDefined();
 
+    const actionId = "approval-action:test";
     const result = await repository.respondToApprovalAndEnqueueJob!({
       approvalId: approval!.id,
       decision: "approved",
@@ -372,7 +373,7 @@ describe("repository", () => {
           kind: "approval_follow_up",
           actorContext: systemActor,
           maxAttempts: 1,
-          idempotencyKey: `approval-follow-up:${approval!.id}:approved`,
+          idempotencyKey: `approval-follow-up:${approval!.id}:${actionId}:approved`,
           payload: {
             type: "approval_follow_up",
             approvalId: approval!.id,
@@ -381,7 +382,8 @@ describe("repository", () => {
             decision: "approved",
             workspaceId: updatedBundle.goal.workspaceId,
             metadata: {
-              replayedFromJobId: null
+              replayedFromJobId: null,
+              actionId
             }
           }
         })
@@ -397,13 +399,16 @@ describe("repository", () => {
     expect(result.job).toMatchObject({
       kind: "approval_follow_up",
       status: "queued",
-      idempotencyKey: `approval-follow-up:${approval!.id}:approved`,
+      idempotencyKey: `approval-follow-up:${approval!.id}:${actionId}:approved`,
       payload: {
         type: "approval_follow_up",
         approvalId: approval!.id,
         goalId: bundle.goal.id,
         taskId: approval!.taskId,
-        decision: "approved"
+        decision: "approved",
+        metadata: {
+          actionId
+        }
       }
     });
     expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("approved");

@@ -69,6 +69,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           goalId: queuedJob.payload.goalId,
           approvalId: queuedJob.payload.approvalId,
           taskId: queuedJob.payload.taskId,
+          actionId: queuedJob.payload.metadata.actionId,
           decision: queuedJob.payload.decision,
           attemptCount: queuedJob.attemptCount,
           maxAttempts: queuedJob.maxAttempts,

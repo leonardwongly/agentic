@@ -68,6 +68,7 @@ export async function POST(request: Request, context: RouteContext) {
         decision: followUpPayload.decision,
         workspaceId: followUpPayload.workspaceId,
         actorContext,
+        actionId: followUpPayload.metadata.actionId,
         replayedFromJobId: job.id
       });
 
