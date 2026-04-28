@@ -1,0 +1,380 @@
+{
+  "version": 1,
+  "reviewedAt": "2026-04-28",
+  "repository": "leonardwongly/agentic",
+  "program": "Agentic OS remediation",
+  "sourceOfTruth": [
+    {
+      "id": "blueprint",
+      "path": "agentic.docx",
+      "authority": "strategic-target",
+      "rule": "Describes the target operating model; never count as shipped implementation proof."
+    },
+    {
+      "id": "assessment",
+      "path": "docs/superpowers/plans/2026-04-13-agentic-findings-implementation-plan.md",
+      "authority": "gap-analysis",
+      "rule": "Ranks gaps and sequencing; refresh with current repo evidence before planning implementation."
+    },
+    {
+      "id": "tracker",
+      "path": "https://github.com/leonardwongly/agentic/issues?q=is%3Aissue%20AOS-",
+      "authority": "engineering-backlog",
+      "rule": "Defines active AOS remediation work, ownership lanes, dependencies, and validation gates."
+    },
+    {
+      "id": "implementation",
+      "path": "code, tests, CI runs, and generated evidence artifacts",
+      "authority": "implementation-proof",
+      "rule": "Only merged code, passing checks, and evidence artifacts prove capability is implemented."
+    }
+  ],
+  "lanes": [
+    {
+      "id": "trust-spine",
+      "label": "aos-trust-spine",
+      "owner": "platform-security",
+      "scope": "API boundaries, governance defaults, public sharing, supply chain, auth state, and security headers."
+    },
+    {
+      "id": "execution-spine",
+      "label": "aos-execution-spine",
+      "owner": "runtime-platform",
+      "scope": "Durable approvals, runner contracts, typed actions, workflow DAGs, watchers, worker priority, and concurrency."
+    },
+    {
+      "id": "intelligence-fabric",
+      "label": "aos-intelligence-fabric",
+      "owner": "agent-intelligence",
+      "scope": "Context provenance, execution provenance, streamed state, and continuous governance simulation."
+    },
+    {
+      "id": "shell",
+      "label": "aos-shell",
+      "owner": "product-platform",
+      "scope": "Operator dashboard decomposition and migration discipline."
+    }
+  ],
+  "baselineCommands": [
+    {
+      "id": "branch-divergence",
+      "command": "git fetch origin --prune && git rev-list --left-right --count origin/main...HEAD",
+      "purpose": "Record branch freshness before starting or closing a remediation slice."
+    },
+    {
+      "id": "tracker-coverage",
+      "command": "gh issue list --repo leonardwongly/agentic --search 'AOS- in:title' --state open --limit 100",
+      "purpose": "Confirm GitHub tracker coverage for AOS-00 through AOS-18."
+    },
+    {
+      "id": "capability-baseline",
+      "command": "npm run test:smoke:capabilities",
+      "purpose": "Capture current runtime capability maturity without treating the strategic plan as implementation proof."
+    },
+    {
+      "id": "npm-audit",
+      "command": "npm audit --json",
+      "purpose": "Capture the raw supply-chain risk snapshot."
+    },
+    {
+      "id": "runtime-audit-gate",
+      "command": "npm run security:audit-runtime",
+      "purpose": "Evaluate production dependency risk against the repo exception policy."
+    },
+    {
+      "id": "unit-integration",
+      "command": "npm test",
+      "purpose": "Run deterministic unit and integration regression coverage."
+    },
+    {
+      "id": "security-regression",
+      "command": "npm run test:security:regression",
+      "purpose": "Run the high-signal security abuse and boundary regression suite."
+    },
+    {
+      "id": "architecture-fitness",
+      "command": "npm run test:architecture:fitness",
+      "purpose": "Prevent drift from the decomposition and durable execution boundaries."
+    },
+    {
+      "id": "performance-fitness",
+      "command": "npm run test:performance:fitness",
+      "purpose": "Run performance sanity checks for request-path and worker-runtime assumptions."
+    },
+    {
+      "id": "build",
+      "command": "npm run build",
+      "purpose": "Verify web and worker packages still compile."
+    }
+  ],
+  "items": [
+    {
+      "id": "AOS-00",
+      "issue": 11,
+      "title": "Establish remediation baseline and tracking",
+      "lane": "trust-spine",
+      "phase": "Phase 0 - Reconnaissance and baseline",
+      "priority": "critical",
+      "dependencies": [],
+      "validationGates": [
+        "gh issue list --search 'AOS-' confirms tracker coverage",
+        "npm run test:smoke:capabilities captures current runtime maturity",
+        "npm audit --json captures current supply-chain risk"
+      ]
+    },
+    {
+      "id": "AOS-01",
+      "issue": 12,
+      "title": "Add governed route wrapper for mutating APIs",
+      "lane": "trust-spine",
+      "phase": "Phase 1 - Trust spine",
+      "priority": "critical",
+      "dependencies": ["AOS-00"],
+      "validationGates": [
+        "npm run test:security:regression",
+        "Targeted route tests for every migrated endpoint",
+        "Manual review that all external inputs are validated at the boundary"
+      ]
+    },
+    {
+      "id": "AOS-02",
+      "issue": 13,
+      "title": "Move approval side-effect execution into durable jobs",
+      "lane": "execution-spine",
+      "phase": "Phase 1 - Trust spine",
+      "priority": "critical",
+      "dependencies": ["AOS-00", "AOS-01"],
+      "validationGates": [
+        "Regression tests for duplicate approval callback delivery",
+        "Failure injection test for worker crash after approval decision",
+        "Integration test verifies one external side effect for repeated approval"
+      ]
+    },
+    {
+      "id": "AOS-03",
+      "issue": 14,
+      "title": "Make governance defaults conformant by default",
+      "lane": "trust-spine",
+      "phase": "Phase 1 - Trust spine",
+      "priority": "critical",
+      "dependencies": ["AOS-00", "AOS-01"],
+      "validationGates": [
+        "Policy tests for default-deny posture",
+        "Repository production config tests",
+        "Abuse tests for public sharing and autonomous execution disabled by default"
+      ]
+    },
+    {
+      "id": "AOS-04",
+      "issue": 15,
+      "title": "Add public share disclosure review",
+      "lane": "trust-spine",
+      "phase": "Phase 1 - Trust spine",
+      "priority": "high",
+      "dependencies": ["AOS-01", "AOS-03"],
+      "validationGates": [
+        "Public share route tests for redaction and expiry",
+        "Security regression tests for token guessing and revoked access",
+        "Accessibility check for share review UI"
+      ]
+    },
+    {
+      "id": "AOS-05",
+      "issue": 16,
+      "title": "Resolve supply-chain audit and pin CI provenance",
+      "lane": "trust-spine",
+      "phase": "Phase 1 - Trust spine",
+      "priority": "critical",
+      "dependencies": ["AOS-00"],
+      "validationGates": [
+        "npm audit --json exits within accepted policy",
+        "npm test",
+        "npm run build",
+        "npm run security:audit-runtime",
+        "SBOM generation test"
+      ]
+    },
+    {
+      "id": "AOS-06",
+      "issue": 17,
+      "title": "Move shared auth runtime tables into migrations",
+      "lane": "trust-spine",
+      "phase": "Phase 1 - Trust spine",
+      "priority": "high",
+      "dependencies": ["AOS-00", "AOS-05"],
+      "validationGates": [
+        "DB migration tests for fresh and existing databases",
+        "Auth/session tests",
+        "db-status script verifies expected schema"
+      ]
+    },
+    {
+      "id": "AOS-07",
+      "issue": 18,
+      "title": "Apply uniform API security headers",
+      "lane": "trust-spine",
+      "phase": "Phase 1 - Trust spine",
+      "priority": "high",
+      "dependencies": ["AOS-01"],
+      "validationGates": [
+        "e2e security headers spec",
+        "API regression tests for error paths",
+        "Manual grep review for raw Response.json usage"
+      ]
+    },
+    {
+      "id": "AOS-08",
+      "issue": 19,
+      "title": "Introduce typed agent runner contracts",
+      "lane": "execution-spine",
+      "phase": "Phase 2 - Execution spine",
+      "priority": "high",
+      "dependencies": ["AOS-01", "AOS-02", "AOS-03"],
+      "validationGates": [
+        "Agent contract unit tests",
+        "Reference runner integration tests",
+        "Abuse tests for unauthorized capability claims"
+      ]
+    },
+    {
+      "id": "AOS-09",
+      "issue": 20,
+      "title": "Expand typed action intents and driver enforcement",
+      "lane": "execution-spine",
+      "phase": "Phase 2 - Execution spine",
+      "priority": "high",
+      "dependencies": ["AOS-08"],
+      "validationGates": [
+        "Action intent contract tests",
+        "Driver negative tests for unsupported fields",
+        "Planner-to-driver integration tests"
+      ]
+    },
+    {
+      "id": "AOS-10",
+      "issue": 21,
+      "title": "Add workflow DAG process model",
+      "lane": "execution-spine",
+      "phase": "Phase 2 - Execution spine",
+      "priority": "high",
+      "dependencies": ["AOS-02", "AOS-08", "AOS-09"],
+      "validationGates": [
+        "DAG validation tests",
+        "Retry/cancel/pause/resume integration tests",
+        "Concurrency tests for duplicate worker delivery"
+      ]
+    },
+    {
+      "id": "AOS-11",
+      "issue": 22,
+      "title": "Build watcher daemon scheduler with dry-run mode",
+      "lane": "execution-spine",
+      "phase": "Phase 2 - Execution spine",
+      "priority": "high",
+      "dependencies": ["AOS-02", "AOS-10"],
+      "validationGates": [
+        "Scheduler lease tests",
+        "Dry-run no-side-effect tests",
+        "Duplicate trigger concurrency tests"
+      ]
+    },
+    {
+      "id": "AOS-12",
+      "issue": 23,
+      "title": "Add worker job priority and concurrency controls",
+      "lane": "execution-spine",
+      "phase": "Phase 2 - Execution spine",
+      "priority": "high",
+      "dependencies": ["AOS-02", "AOS-10", "AOS-11"],
+      "validationGates": [
+        "Worker runtime tests for priority ordering and lease expiry",
+        "Failure injection for timeout and dead-letter paths",
+        "Performance sanity for large queue scans"
+      ]
+    },
+    {
+      "id": "AOS-13",
+      "issue": 24,
+      "title": "Add context packet provenance service",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 3 - Intelligence fabric",
+      "priority": "high",
+      "dependencies": ["AOS-03", "AOS-06", "AOS-08"],
+      "validationGates": [
+        "Memory route tests for policy filtering",
+        "Retention and sensitivity tests",
+        "Provenance lineage regression tests"
+      ]
+    },
+    {
+      "id": "AOS-14",
+      "issue": 25,
+      "title": "Build queryable execution provenance graph",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 3 - Intelligence fabric",
+      "priority": "high",
+      "dependencies": ["AOS-02", "AOS-10", "AOS-13"],
+      "validationGates": [
+        "Provenance graph unit tests",
+        "Authorization tests for cross-owner queries",
+        "Performance sanity for large graph traversal"
+      ]
+    },
+    {
+      "id": "AOS-15",
+      "issue": 26,
+      "title": "Replace job polling with event-streamed updates",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 3 - Intelligence fabric",
+      "priority": "medium",
+      "dependencies": ["AOS-10", "AOS-12", "AOS-14"],
+      "validationGates": [
+        "Component tests for streamed updates",
+        "API tests for auth and reconnect behavior",
+        "Load sanity for concurrent stream connections"
+      ]
+    },
+    {
+      "id": "AOS-16",
+      "issue": 27,
+      "title": "Split dashboard into maintainable OS surfaces",
+      "lane": "shell",
+      "phase": "Phase 4 - Shell and maintainability",
+      "priority": "medium",
+      "dependencies": ["AOS-08", "AOS-10", "AOS-13", "AOS-14"],
+      "validationGates": [
+        "Dashboard component tests",
+        "Playwright operating-loop tests",
+        "Accessibility and responsive layout checks"
+      ]
+    },
+    {
+      "id": "AOS-17",
+      "issue": 28,
+      "title": "Strengthen incremental migration discipline",
+      "lane": "shell",
+      "phase": "Phase 4 - Shell and maintainability",
+      "priority": "medium",
+      "dependencies": ["AOS-06", "AOS-10", "AOS-13", "AOS-14"],
+      "validationGates": [
+        "Migration runtime tests",
+        "db-status check",
+        "CI migration naming/order check"
+      ]
+    },
+    {
+      "id": "AOS-18",
+      "issue": 29,
+      "title": "Add continuous governance simulation and autonomy calibration",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 5 - Continuous intelligence and optimization",
+      "priority": "high",
+      "dependencies": ["AOS-03", "AOS-08", "AOS-09", "AOS-14"],
+      "validationGates": [
+        "Governance simulation tests",
+        "Policy regression suite",
+        "CI/report output with measurable decision quality metrics"
+      ]
+    }
+  ]
+}
