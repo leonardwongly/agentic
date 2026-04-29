@@ -8,6 +8,7 @@ import {
   enqueueApprovalNotificationJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
+import { operationalJson } from "../../../../lib/api-response";
 import { resolveSlackActorUserId, verifySlackApprovalToken } from "../../../../lib/slack-approvals";
 import { getSeededRepository } from "../../../../lib/server";
 
@@ -26,17 +27,17 @@ export async function POST(request: Request) {
     const slackTimestamp = request.headers.get("x-slack-request-timestamp") ?? "";
 
     if (!slackSignature || !slackTimestamp) {
-      return NextResponse.json({ error: "Missing Slack signature headers." }, { status: 401 });
+      return operationalJson({ error: "Missing Slack signature headers." }, { status: 401 });
     }
 
     // Reject requests older than 5 minutes to prevent replay attacks
     const now = Math.floor(Date.now() / 1000);
     if (Math.abs(now - Number(slackTimestamp)) > 300) {
-      return NextResponse.json({ error: "Request timestamp too old." }, { status: 401 });
+      return operationalJson({ error: "Request timestamp too old." }, { status: 401 });
     }
 
     if (!verifySlackSignature({ signature: slackSignature, timestamp: slackTimestamp, body: rawBody })) {
-      return NextResponse.json({ error: "Invalid Slack signature." }, { status: 401 });
+      return operationalJson({ error: "Invalid Slack signature." }, { status: 401 });
     }
 
     // Slack sends interactive payloads as application/x-www-form-urlencoded with a "payload" field
@@ -44,7 +45,7 @@ export async function POST(request: Request) {
     const payloadStr = params.get("payload");
 
     if (!payloadStr) {
-      return NextResponse.json({ error: "Missing payload." }, { status: 400 });
+      return operationalJson({ error: "Missing payload." }, { status: 400 });
     }
 
     const payload = JSON.parse(payloadStr) as {
@@ -60,19 +61,19 @@ export async function POST(request: Request) {
 
     if (payload.type !== "block_actions" || !payload.actions?.length) {
       // Acknowledge unknown interaction types gracefully
-      return NextResponse.json({ ok: true });
+      return operationalJson({ ok: true });
     }
 
     const action = payload.actions[0];
     const approvalToken = verifySlackApprovalToken(action.value);
     if (!approvalToken) {
-      return NextResponse.json({ error: "Invalid or expired approval action." }, { status: 401 });
+      return operationalJson({ error: "Invalid or expired approval action." }, { status: 401 });
     }
 
     const slackUserId = payload.user?.id?.trim() ?? "";
     const actorUserId = slackUserId ? resolveSlackActorUserId(slackUserId) : null;
     if (!actorUserId) {
-      return NextResponse.json({ error: "Slack actor is not authorized for approvals." }, { status: 403 });
+      return operationalJson({ error: "Slack actor is not authorized for approvals." }, { status: 403 });
     }
     const actorContext = createHumanActorContext(actorUserId);
 
@@ -85,22 +86,22 @@ export async function POST(request: Request) {
     } else if (actionId === "approval_reject") {
       decision = "rejected";
     } else {
-      return NextResponse.json({ ok: true });
+      return operationalJson({ ok: true });
     }
 
     const repository = await getSeededRepository();
     const actorBundle = await repository.getGoalBundleForUser(approvalToken.goalId, actorUserId);
     if (!actorBundle) {
-      return NextResponse.json({ error: "Approval is not available to this actor." }, { status: 403 });
+      return operationalJson({ error: "Approval is not available to this actor." }, { status: 403 });
     }
 
     const actorApproval = actorBundle.approvals.find((candidate) => candidate.id === approvalId);
     if (!actorApproval) {
-      return NextResponse.json({ error: "Approval not found for this goal." }, { status: 404 });
+      return operationalJson({ error: "Approval not found for this goal." }, { status: 404 });
     }
 
     if ((actorBundle.goal.workspaceId ?? null) !== approvalToken.workspaceId) {
-      return NextResponse.json({ error: "Approval workspace mismatch." }, { status: 403 });
+      return operationalJson({ error: "Approval workspace mismatch." }, { status: 403 });
     }
 
     const decisionResult = await (async () => {
@@ -117,11 +118,11 @@ export async function POST(request: Request) {
       } catch (error) {
         if (error instanceof ApprovalMutationError) {
           if (error.code === "not_found") {
-            return NextResponse.json({ error: error.message }, { status: 404 });
+            return operationalJson({ error: error.message }, { status: 404 });
           }
 
           // Acknowledge stale or duplicate Slack actions so Slack does not retry them forever.
-          return NextResponse.json({ ok: true, skipped: true, reason: error.code });
+          return operationalJson({ ok: true, skipped: true, reason: error.code });
         }
 
         throw error;
@@ -160,9 +161,9 @@ export async function POST(request: Request) {
     }
 
     // Return 200 to Slack so it stops retrying
-    return NextResponse.json({ ok: true });
+    return operationalJson({ ok: true });
   } catch (error) {
     console.error("[slack-webhook] Unhandled error:", error);
-    return NextResponse.json({ error: "Internal server error." }, { status: 500 });
+    return operationalJson({ error: "Internal server error." }, { status: 500 });
   }
 }

@@ -14,6 +14,7 @@ import {
 import { formatValidationError, isContentTypeError } from "./api-errors";
 import { isAuthError } from "./auth";
 import { AuthRuntimeStateConfigurationError } from "./auth-runtime-state";
+import { applyBaseSecurityHeaders } from "./security-headers";
 import { SharedAuthStateStoreError } from "./shared-auth-state-db";
 
 export const AUTHENTICATED_API_CACHE_CONTROL = "private, no-store, max-age=0, must-revalidate";
@@ -41,10 +42,14 @@ function mergeHeaders(init?: ResponseInit, additionalHeaders?: HeadersInit): Hea
   return headers;
 }
 
+function mergeApiHeaders(init?: ResponseInit, additionalHeaders?: HeadersInit): Headers {
+  return applyBaseSecurityHeaders(mergeHeaders(init, additionalHeaders));
+}
+
 export function authenticatedJson<T>(body: T, init?: ResponseInit) {
   return NextResponse.json(body, {
     ...init,
-    headers: appendCorrelationHeaders(mergeHeaders(init, {
+    headers: appendCorrelationHeaders(mergeApiHeaders(init, {
       "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0",
@@ -56,7 +61,7 @@ export function authenticatedJson<T>(body: T, init?: ResponseInit) {
 export function operationalJson<T>(body: T, init?: ResponseInit) {
   return NextResponse.json(body, {
     ...init,
-    headers: appendCorrelationHeaders(mergeHeaders(init, {
+    headers: appendCorrelationHeaders(mergeApiHeaders(init, {
       "Cache-Control": OPERATIONAL_API_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0"
@@ -67,11 +72,34 @@ export function operationalJson<T>(body: T, init?: ResponseInit) {
 export function authenticatedRedirect(url: string | URL, init?: ResponseInit & { status?: number }) {
   return NextResponse.redirect(url, {
     ...init,
-    headers: appendCorrelationHeaders(mergeHeaders(init, {
+    headers: appendCorrelationHeaders(mergeApiHeaders(init, {
       "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0",
       Vary: "Cookie, X-Agentic-Access-Key"
+    }))
+  });
+}
+
+export function authenticatedResponse(body?: BodyInit | null, init?: ResponseInit) {
+  return new Response(body, {
+    ...init,
+    headers: appendCorrelationHeaders(mergeApiHeaders(init, {
+      "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
+      Pragma: "no-cache",
+      Expires: "0",
+      Vary: "Cookie, X-Agentic-Access-Key"
+    }))
+  });
+}
+
+export function operationalResponse(body?: BodyInit | null, init?: ResponseInit) {
+  return new Response(body, {
+    ...init,
+    headers: appendCorrelationHeaders(mergeApiHeaders(init, {
+      "Cache-Control": OPERATIONAL_API_CACHE_CONTROL,
+      Pragma: "no-cache",
+      Expires: "0"
     }))
   });
 }
@@ -207,7 +235,7 @@ export async function withApiTelemetry(
 
           const response = await handler();
           const durationMs = Math.max(0, Date.now() - started);
-          const headers = appendCorrelationHeaders(response.headers);
+          const headers = applyBaseSecurityHeaders(appendCorrelationHeaders(response.headers));
           const finalized = new Response(response.body, {
             status: response.status,
             statusText: response.statusText,
