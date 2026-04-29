@@ -1,5 +1,8 @@
 import {
   ActionIntentSchema,
+  AgentRunnerContractSchema,
+  AgentRunnerInputSchema,
+  AgentRunnerOutputSchema,
   AgentResultSchema,
   ArtifactSchema,
   deriveAgentImplementationTier,
@@ -8,9 +11,14 @@ import {
   type AgentDefinition,
   type AgentExecutionMode,
   type AgentImplementationTier,
+  type AgentRunnerContract,
+  type AgentRunnerFailureCode,
+  type AgentRunnerInput,
+  type AgentRunnerOutput,
   type AgentName,
   type AgentResult,
   type ArtifactType,
+  type Capability,
   type Task
 } from "@agentic/contracts";
 import { assertCapabilitiesWithinAllowlist } from "@agentic/integrations";
@@ -19,9 +27,30 @@ import { assertCapabilitiesWithinAllowlist } from "@agentic/integrations";
 export type RunAgentOptions = {
   agentDefinition?: AgentDefinition;
   requestContext?: string;
+  timeoutMs?: number;
+  traceId?: string | null;
 };
 
 const SELECTED_WEDGE_EXECUTION_MODE: AgentExecutionMode = "governed_specialist";
+const RUNNER_CONTRACT_VERSION = "v1";
+const DEFAULT_AGENT_RUNNER_TIMEOUT_MS = 30_000;
+const SIDE_EFFECT_CAPABILITIES = new Set<Capability>(["create", "update", "draft", "send", "schedule", "approve", "delete"]);
+
+export class AgentRunnerExecutionError extends Error {
+  constructor(
+    public readonly code: AgentRunnerFailureCode,
+    message: string,
+    public readonly retryable = false
+  ) {
+    super(message);
+    this.name = "AgentRunnerExecutionError";
+  }
+}
+
+export type AgentRunner = {
+  contract: AgentRunnerContract;
+  run(input: AgentRunnerInput): AgentRunnerOutput;
+};
 
 function buildArtifact(
   task: Task,
@@ -367,18 +396,9 @@ function contentForBuiltInAgent(task: Task, scenario: string): AgentContent {
   }
 }
 
-export function runAgent(task: Task, scenario: string, options?: RunAgentOptions): AgentResult {
-  // Enforce that every capability granted to this agent is within its type-level allowlist.
-  assertCapabilitiesWithinAllowlist(task.assignedAgent, task.toolCapabilities);
-
-  // Use dynamic agent definition if provided, otherwise fall back to built-in
-  const executionContext = options?.requestContext ?? scenario;
-  const result = options?.agentDefinition
-    ? contentForDynamicAgent(options.agentDefinition, task, executionContext)
-    : contentForBuiltInAgent(task, executionContext);
+function buildAgentResult(task: Task, result: AgentContent, agentDefinition?: AgentDefinition | null): AgentResult {
   const implementationTier = deriveAgentImplementationTier(result.executionMode);
 
-  const agentId = options?.agentDefinition?.id;
   const artifact = buildArtifact(
     task,
     `${task.title} output`,
@@ -387,7 +407,7 @@ export function runAgent(task: Task, scenario: string, options?: RunAgentOptions
     result.executionMode,
     implementationTier,
     result.actionIntent,
-    agentId
+    agentDefinition?.id
   );
 
   return AgentResultSchema.parse({
@@ -416,7 +436,179 @@ export const BUILT_IN_AGENT_NAMES: AgentName[] = [
   "orchestrator"
 ];
 
+const builtInAgentRunner: AgentRunner = {
+  contract: AgentRunnerContractSchema.parse({
+    id: "agentic.built-in.deterministic-runner",
+    version: RUNNER_CONTRACT_VERSION,
+    agentNames: BUILT_IN_AGENT_NAMES,
+    declaredCapabilities: [],
+    outputModes: [
+      "governed_specialist",
+      "deterministic_scaffold",
+      "manual_review_required"
+    ],
+    timeoutMs: DEFAULT_AGENT_RUNNER_TIMEOUT_MS,
+    telemetryEvents: ["agent.started", "agent.completed", "agent.failed"],
+    failureCodes: [
+      "validation_failure",
+      "permission_denied",
+      "dependency_failure",
+      "timeout",
+      "unsafe_output",
+      "unsupported_agent"
+    ]
+  }),
+  run(input) {
+    const started = Date.parse(input.telemetry.startedAt);
+    const result = buildAgentResult(input.task, contentForBuiltInAgent(input.task, input.requestContext));
+
+    return AgentRunnerOutputSchema.parse({
+      result,
+      telemetry: {
+        ...input.telemetry,
+        completedAt: nowIso(),
+        durationMs: Math.max(0, Date.now() - started)
+      }
+    });
+  }
+};
+
+const customPromptAgentRunner: AgentRunner = {
+  contract: AgentRunnerContractSchema.parse({
+    id: "agentic.custom-prompt.scaffold-runner",
+    version: RUNNER_CONTRACT_VERSION,
+    agentNames: BUILT_IN_AGENT_NAMES,
+    declaredCapabilities: [],
+    outputModes: ["custom_prompt_scaffold"],
+    timeoutMs: DEFAULT_AGENT_RUNNER_TIMEOUT_MS,
+    telemetryEvents: ["agent.started", "agent.completed", "agent.failed"],
+    failureCodes: [
+      "validation_failure",
+      "permission_denied",
+      "dependency_failure",
+      "timeout",
+      "unsafe_output",
+      "unsupported_agent"
+    ]
+  }),
+  run(input) {
+    if (!input.agentDefinition) {
+      throw new AgentRunnerExecutionError("validation_failure", "Custom prompt runner requires an agent definition.");
+    }
+
+    const started = Date.parse(input.telemetry.startedAt);
+    const result = buildAgentResult(
+      input.task,
+      contentForDynamicAgent(input.agentDefinition, input.task, input.requestContext),
+      input.agentDefinition
+    );
+
+    return AgentRunnerOutputSchema.parse({
+      result,
+      telemetry: {
+        ...input.telemetry,
+        completedAt: nowIso(),
+        durationMs: Math.max(0, Date.now() - started)
+      }
+    });
+  }
+};
+
 // Check if an agent name is a built-in agent
 export function isBuiltInAgent(agentName: string): agentName is AgentName {
   return BUILT_IN_AGENT_NAMES.includes(agentName as AgentName);
+}
+
+function compareRiskClass(left: Task["riskClass"], right: Task["riskClass"]): number {
+  const order = new Map<Task["riskClass"], number>([
+    ["R1", 1],
+    ["R2", 2],
+    ["R3", 3],
+    ["R4", 4]
+  ]);
+
+  return (order.get(left) ?? Number.POSITIVE_INFINITY) - (order.get(right) ?? Number.POSITIVE_INFINITY);
+}
+
+function sideEffectCapabilitiesFor(capabilities: Capability[]): Capability[] {
+  return capabilities.filter((capability) => SIDE_EFFECT_CAPABILITIES.has(capability));
+}
+
+function permissionsForTask(task: Task, agentDefinition?: AgentDefinition | null) {
+  const allowedCapabilities = agentDefinition?.allowedCapabilities ?? task.toolCapabilities;
+
+  return {
+    allowedCapabilities,
+    blockedCapabilities: agentDefinition?.blockedCapabilities ?? [],
+    maxRiskClass: agentDefinition?.maxRiskClass ?? task.riskClass,
+    sideEffectCapabilities: sideEffectCapabilitiesFor(allowedCapabilities)
+  };
+}
+
+function validateRunnerPermissions(input: AgentRunnerInput) {
+  assertCapabilitiesWithinAllowlist(input.task.assignedAgent, input.task.toolCapabilities);
+
+  for (const capability of input.task.toolCapabilities) {
+    if (input.permissions.blockedCapabilities.includes(capability)) {
+      throw new AgentRunnerExecutionError(
+        "permission_denied",
+        `Agent runner rejected blocked capability "${capability}" for ${input.task.assignedAgent}.`
+      );
+    }
+
+    if (!input.permissions.allowedCapabilities.includes(capability)) {
+      throw new AgentRunnerExecutionError(
+        "permission_denied",
+        `Agent runner rejected undeclared capability "${capability}" for ${input.task.assignedAgent}.`
+      );
+    }
+  }
+
+  if (compareRiskClass(input.task.riskClass, input.permissions.maxRiskClass) > 0) {
+    throw new AgentRunnerExecutionError(
+      "permission_denied",
+      `Agent runner rejected ${input.task.riskClass} task because max risk is ${input.permissions.maxRiskClass}.`
+    );
+  }
+}
+
+function selectAgentRunner(options?: RunAgentOptions): AgentRunner {
+  return options?.agentDefinition ? customPromptAgentRunner : builtInAgentRunner;
+}
+
+function createAgentRunnerInput(task: Task, scenario: string, options?: RunAgentOptions): AgentRunnerInput {
+  return AgentRunnerInputSchema.parse({
+    task,
+    scenario,
+    requestContext: options?.requestContext ?? scenario,
+    agentDefinition: options?.agentDefinition ?? null,
+    permissions: permissionsForTask(task, options?.agentDefinition ?? null),
+    timeoutMs: options?.timeoutMs ?? DEFAULT_AGENT_RUNNER_TIMEOUT_MS,
+    telemetry: {
+      runnerId: selectAgentRunner(options).contract.id,
+      executionId: crypto.randomUUID(),
+      traceId: options?.traceId ?? null,
+      startedAt: nowIso()
+    }
+  });
+}
+
+export function validateAgentRunnerRegistration(runner: AgentRunner): AgentRunnerContract {
+  const contract = AgentRunnerContractSchema.parse(runner.contract);
+
+  for (const agentName of contract.agentNames) {
+    assertCapabilitiesWithinAllowlist(agentName, contract.declaredCapabilities);
+  }
+
+  return contract;
+}
+
+export function runAgent(task: Task, scenario: string, options?: RunAgentOptions): AgentResult {
+  const runner = selectAgentRunner(options);
+  validateAgentRunnerRegistration(runner);
+
+  const input = createAgentRunnerInput(task, scenario, options);
+  validateRunnerPermissions(input);
+
+  return runner.run(input).result;
 }
