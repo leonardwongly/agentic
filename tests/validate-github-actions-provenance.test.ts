@@ -64,4 +64,26 @@ jobs:
 
     expect(validateWorkflowActionPins(uses)).toEqual([]);
   });
+
+  it("does not treat uses text inside run block scalars as action references", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - run: |
+          echo "uses: actions/checkout@v6"
+          # uses: actions/setup-node@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        line: 8,
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      })
+    ]);
+  });
 });

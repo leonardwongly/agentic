@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface WorkflowActionUse {
   filePath: string;
@@ -57,11 +58,31 @@ function trimYamlScalar(value: string): string {
   return stripped;
 }
 
+function getIndent(line: string): number {
+  return line.length - line.trimStart().length;
+}
+
+function getBlockScalarStartIndent(line: string): number | null {
+  const match = line.match(/^(\s*)(?:-\s*)?[\w-]+:\s*[>|]/u);
+  return match ? match[1].length : null;
+}
+
 export function collectWorkflowActionUses(filePath: string, content: string): WorkflowActionUse[] {
   const uses: WorkflowActionUse[] = [];
   const lines = content.split(/\r?\n/u);
+  let blockScalarIndent: number | null = null;
 
   lines.forEach((lineContent, index) => {
+    const lineIndent = getIndent(lineContent);
+    if (blockScalarIndent !== null) {
+      if (lineContent.trim() === "" || lineIndent > blockScalarIndent) {
+        return;
+      }
+      blockScalarIndent = null;
+    }
+
+    blockScalarIndent = getBlockScalarStartIndent(lineContent);
+
     const match = lineContent.match(/^\s*(?:-\s*)?uses:\s*(.+)$/u);
     if (!match) {
       return;
@@ -135,6 +156,6 @@ function main() {
   process.exitCode = 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   main();
 }
