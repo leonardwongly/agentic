@@ -3,7 +3,7 @@ import { assessWorkspaceGovernanceConformance } from "@agentic/policy";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import {
   ApiRouteError,
-  AUTHENTICATED_API_CACHE_CONTROL,
+  authenticatedResponse,
   authenticatedRateLimitError,
   handleApiError
 } from "../../../../lib/api-response";
@@ -55,15 +55,11 @@ export async function GET(request: Request) {
     const audit = await repository.exportWorkspaceAudit(activeWorkspace.id, principal.userId);
     const signalHeaders = buildAuditSignalHeaders(audit);
 
-    return new Response(audit.content, {
+    return authenticatedResponse(audit.content, {
       status: 200,
       headers: {
         "content-type": audit.contentType,
         "content-disposition": `attachment; filename="${audit.fileName}"`,
-        "cache-control": AUTHENTICATED_API_CACHE_CONTROL,
-        pragma: "no-cache",
-        expires: "0",
-        vary: "Cookie, X-Agentic-Access-Key",
         ...signalHeaders
       }
     });
