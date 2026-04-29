@@ -54,3 +54,4 @@ These outputs are intended to answer three questions quickly:
 - Update the control registry whenever a new trust boundary or release gate is introduced.
 - Review `config/compliance/controls.json` and `config/security/incident-severity.json` during any significant architecture or governance change.
 - Treat missing evidence as a release blocker in CI.
+- Keep uploaded GitHub Actions evidence artifacts to 7 days unless an investigation requires manual preservation. The scheduled `Artifact Cleanup` workflow deletes older artifacts daily, and manual runs can use `dry-run` to preview deletions before changing repository state. Pull request validation still builds and validates the evidence bundle, but only non-PR runs upload it to avoid exhausting repository artifact storage with transient review artifacts.
