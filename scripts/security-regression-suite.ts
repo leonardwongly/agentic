@@ -53,6 +53,7 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
     description: "Keep public and privacy-sensitive surfaces rate-limited, asynchronous, and minimally exposed.",
     files: [
       "tests/public-share-view-route.test.ts",
+      "tests/dashboard-goals-card.test.tsx",
       "tests/share-route.test.ts",
       "tests/governance-privacy-route.test.ts"
     ]

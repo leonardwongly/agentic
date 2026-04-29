@@ -4174,6 +4174,7 @@ class PostgresRepository implements AgenticRepository {
       tokenFingerprint: row.token_fingerprint,
       status: row.status,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      disclosureReview: (row.disclosure_review as Record<string, unknown> | null) ?? null,
       expiresAt: new Date(row.expires_at as string | number | Date).toISOString(),
       lastViewedAt: row.last_viewed_at ? new Date(row.last_viewed_at as string | number | Date).toISOString() : null,
       revokedAt: row.revoked_at ? new Date(row.revoked_at as string | number | Date).toISOString() : null,
@@ -4181,7 +4182,6 @@ class PostgresRepository implements AgenticRepository {
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
   }
-
   private mapPrivacyOperationRow(row: Record<string, unknown>): PrivacyOperation {
     return PrivacyOperationSchema.parse({
       id: row.id,
@@ -4201,7 +4201,6 @@ class PostgresRepository implements AgenticRepository {
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
   }
-
   private async saveGoalShareWithClient(client: PoolClient, share: GoalShareRecord): Promise<void> {
     const validated = GoalShareRecordSchema.parse({
       ...share,
@@ -4210,10 +4209,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into goal_shares (
-          id, goal_id, user_id, workspace_id, token_fingerprint, status, actor_context,
-          expires_at, last_viewed_at, revoked_at, created_at, updated_at
+          id, goal_id, user_id, workspace_id, token_fingerprint, status, actor_context, disclosure_review, expires_at, last_viewed_at, revoked_at, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12)
+        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13)
         on conflict (id) do update
         set goal_id = excluded.goal_id,
             user_id = excluded.user_id,
@@ -4221,6 +4219,7 @@ class PostgresRepository implements AgenticRepository {
             token_fingerprint = excluded.token_fingerprint,
             status = excluded.status,
             actor_context = excluded.actor_context,
+            disclosure_review = excluded.disclosure_review,
             expires_at = excluded.expires_at,
             last_viewed_at = excluded.last_viewed_at,
             revoked_at = excluded.revoked_at,
@@ -4234,6 +4233,7 @@ class PostgresRepository implements AgenticRepository {
         validated.tokenFingerprint,
         validated.status,
         JSON.stringify(validated.actorContext),
+        JSON.stringify(validated.disclosureReview ?? null),
         validated.expiresAt,
         validated.lastViewedAt,
         validated.revokedAt,

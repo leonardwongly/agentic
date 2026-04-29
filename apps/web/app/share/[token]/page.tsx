@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
 import {
   buildSharedGoalView,
+  createGoalShareExpiredLog,
+  createGoalShareFailedAccessLog,
   fingerprintGoalShareToken,
-  verifyGoalShareToken
+  inspectGoalShareToken
 } from "../../../lib/share";
 import { PublicShareViewTracker } from "../../../components/public-share-view-tracker";
 import { getSeededRepository } from "../../../lib/server";
@@ -15,28 +17,86 @@ type SharePageProps = {
   }>;
 };
 
+async function auditBlockedShareAccess(params: {
+  repository: Awaited<ReturnType<typeof getSeededRepository>>;
+  goalId: string;
+  shareId: string;
+  tokenFingerprint: string;
+  reason: "expired" | "revoked" | "not_found";
+}) {
+  const bundle = await params.repository.getGoalBundle(params.goalId);
+
+  if (!bundle) {
+    return;
+  }
+
+  const now = Date.now();
+  const logs = [
+    ...(params.reason === "expired"
+      ? [createGoalShareExpiredLog(bundle, params.shareId, params.tokenFingerprint, now)]
+      : []),
+    createGoalShareFailedAccessLog(bundle, params.shareId, params.tokenFingerprint, params.reason, now)
+  ].filter((log) => log !== null);
+
+  if (logs.length > 0) {
+    await params.repository.saveGoalBundle({
+      ...bundle,
+      actionLogs: [...bundle.actionLogs, ...logs]
+    });
+  }
+}
+
 export default async function ShareGoalPage({ params }: SharePageProps) {
   const { token } = await params;
-  const verifiedToken = verifyGoalShareToken(token);
+  const tokenInspection = inspectGoalShareToken(token);
 
-  if (!verifiedToken) {
+  if (!tokenInspection.valid) {
     notFound();
   }
 
   const repository = await getSeededRepository();
-  const share = await repository.getGoalShareByTokenFingerprint(fingerprintGoalShareToken(token));
+  const tokenFingerprint = fingerprintGoalShareToken(token);
+  const share = await repository.getGoalShareByTokenFingerprint(tokenFingerprint);
 
-  if (
-    !share ||
-    share.id !== verifiedToken.shareId ||
-    share.goalId !== verifiedToken.goalId ||
-    share.status !== "active" ||
-    Date.parse(share.expiresAt) <= Date.now()
-  ) {
+  if (!share || share.id !== tokenInspection.payload.shareId || share.goalId !== tokenInspection.payload.goalId) {
+    if (tokenInspection.valid) {
+      await auditBlockedShareAccess({
+        repository,
+        goalId: tokenInspection.payload.goalId,
+        shareId: tokenInspection.payload.shareId,
+        tokenFingerprint,
+        reason: "not_found"
+      });
+    }
+
     notFound();
   }
 
-  let bundle = await repository.getGoalBundle(verifiedToken.goalId);
+  if (share.status !== "active") {
+    await auditBlockedShareAccess({
+      repository,
+      goalId: share.goalId,
+      shareId: share.id,
+      tokenFingerprint,
+      reason: "revoked"
+    });
+
+    notFound();
+  }
+
+  if (tokenInspection.expired || Date.parse(share.expiresAt) <= Date.now()) {
+    await auditBlockedShareAccess({
+      repository,
+      goalId: share.goalId,
+      shareId: share.id,
+      tokenFingerprint,
+      reason: "expired"
+    });
+
+    notFound();
+  }
+
+  const bundle = await repository.getGoalBundle(tokenInspection.payload.goalId);
 
   if (!bundle) {
     notFound();
@@ -52,6 +112,10 @@ export default async function ShareGoalPage({ params }: SharePageProps) {
           <p className="eyebrow">Shared from Agentic</p>
           <h1>{sharedGoal.title}</h1>
           <p className="lede">{sharedGoal.explanation}</p>
+          <p className="public-share-disclosure">
+            This read-only page shows a reviewed public projection. Internal requests, approvals, watcher details,
+            action logs, memory context, workflow checkpoints, artifact bodies, and artifact metadata stay hidden.
+          </p>
         </div>
         <div className="hero-actions">
           <p className="status-chip">Read-only shared goal</p>

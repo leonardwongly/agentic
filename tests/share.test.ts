@@ -5,11 +5,15 @@ import { createMemoryRecord } from "@agentic/memory";
 import {
   buildSharedGoalView,
   createGoalShareCreatedLog,
+  createGoalShareExpiredLog,
+  createGoalShareFailedAccessLog,
   createGoalShareToken,
   createGoalShareViewedLog,
   fingerprintGoalShareToken,
+  inspectGoalShareToken,
   verifyGoalShareToken
 } from "../apps/web/lib/share";
+import { buildGoalShareDisclosureReview } from "../apps/web/lib/share-disclosure";
 import { getGoalShareSuccessMessage } from "../apps/web/lib/share-client";
 
 async function buildBundle() {
@@ -56,6 +60,21 @@ describe("goal share helpers", () => {
     const tampered = `${encodedPayload}.${signature?.slice(0, -1)}x`;
 
     expect(verifyGoalShareToken(tampered, Date.parse("2026-04-02T00:00:00.000Z"))).toBeNull();
+    expect(verifyGoalShareToken(token, Date.parse("2026-04-04T00:00:00.000Z"))).toBeNull();
+  });
+
+  it("inspects signed expired tokens without accepting them for public access", () => {
+    const token = createGoalShareToken("share-123", "goal-123", "2026-04-03T00:00:00.000Z");
+    const inspection = inspectGoalShareToken(token, Date.parse("2026-04-04T00:00:00.000Z"));
+
+    expect(inspection).toMatchObject({
+      valid: true,
+      expired: true,
+      payload: {
+        shareId: "share-123",
+        goalId: "goal-123"
+      }
+    });
     expect(verifyGoalShareToken(token, Date.parse("2026-04-04T00:00:00.000Z"))).toBeNull();
   });
 
@@ -145,6 +164,63 @@ describe("goal share helpers", () => {
     expect(sharedView.artifacts[0]).not.toHaveProperty("id");
   });
 
+  it("builds a disclosure review with sensitive field detection and explicit redaction classes", async () => {
+    const bundle = await buildBundle();
+    const review = buildGoalShareDisclosureReview(
+      {
+        ...bundle,
+        goal: {
+          ...bundle.goal,
+          explanation: "Share this with reviewer@example.com after removing API token details."
+        },
+        tasks: [
+          {
+            ...bundle.tasks[0]!,
+            summary: "Call +65 6123 4567 only after the public share is checked."
+          }
+        ]
+      },
+      {
+        expiresAt: "2026-04-09T00:00:00.000Z",
+        expiryDays: 7
+      }
+    );
+
+    expect(review.confirmationRequired).toBe(true);
+    expect(review.redactedFields).toEqual(
+      expect.arrayContaining(["goal.request", "approvals", "actionLogs", "artifacts.content", "workflow.checkpoint"])
+    );
+    expect(review.dataClasses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "operator_context",
+          disposition: "redacted"
+        }),
+        expect.objectContaining({
+          id: "goal_summary",
+          disposition: "requires_confirmation"
+        })
+      ])
+    );
+    expect(review.sensitiveFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          fieldPath: "goal.explanation",
+          detector: "email_address"
+        }),
+        expect.objectContaining({
+          fieldPath: "goal.explanation",
+          detector: "secret_keyword"
+        }),
+        expect.objectContaining({
+          fieldPath: "tasks.0.summary",
+          detector: "phone_number"
+        })
+      ])
+    );
+    expect(JSON.stringify(review)).not.toContain(bundle.goal.request);
+  });
+
   it("deduplicates repeated public share views within the cooldown window", async () => {
     const bundle = await buildBundle();
     const shareId = "share-dedupe";
@@ -221,6 +297,50 @@ describe("goal share helpers", () => {
     expect(viewedLog?.details.tokenFingerprint).toBe(fingerprintGoalShareToken(token));
     expect(JSON.stringify(createdLog.details)).not.toContain(token);
     expect(JSON.stringify(viewedLog?.details ?? {})).not.toContain(token);
+  });
+
+  it("builds deduplicated expired and failed-access audit logs without raw tokens", async () => {
+    const bundle = await buildBundle();
+    const shareId = "share-audit";
+    const token = createGoalShareToken(shareId, bundle.goal.id, "2026-04-09T00:00:00.000Z");
+    const tokenFingerprint = fingerprintGoalShareToken(token);
+    const expiredLog = createGoalShareExpiredLog(bundle, shareId, tokenFingerprint, Date.parse("2026-04-10T00:00:00.000Z"));
+    const duplicateExpiredLog = createGoalShareExpiredLog(
+      {
+        ...bundle,
+        actionLogs: [...bundle.actionLogs, expiredLog!]
+      },
+      shareId,
+      tokenFingerprint,
+      Date.parse("2026-04-10T00:00:01.000Z")
+    );
+    const failedLog = createGoalShareFailedAccessLog(
+      {
+        ...bundle,
+        actionLogs: [...bundle.actionLogs, expiredLog!]
+      },
+      shareId,
+      tokenFingerprint,
+      "expired",
+      Date.parse("2026-04-10T00:00:01.000Z")
+    );
+    const duplicateFailedLog = createGoalShareFailedAccessLog(
+      {
+        ...bundle,
+        actionLogs: [...bundle.actionLogs, expiredLog!, failedLog!]
+      },
+      shareId,
+      tokenFingerprint,
+      "expired",
+      Date.parse("2026-04-10T00:05:00.000Z")
+    );
+
+    expect(expiredLog?.kind).toBe("share.link_expired");
+    expect(duplicateExpiredLog).toBeNull();
+    expect(failedLog?.kind).toBe("share.access_failed");
+    expect(failedLog?.details.reason).toBe("expired");
+    expect(duplicateFailedLog).toBeNull();
+    expect(JSON.stringify([expiredLog, failedLog])).not.toContain(token);
   });
 
   it("projects large goal bundles without dropping shared content", async () => {

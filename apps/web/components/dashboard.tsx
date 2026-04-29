@@ -58,7 +58,6 @@ import {
   summarizeFeatureCapabilities
 } from "../lib/feature-capabilities";
 import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
-import { getGoalShareSuccessMessage } from "../lib/share-client";
 import {
   GOAL_SHARE_MUTATION_DENIED_REASON,
   canManageGoalSharesForRole,
@@ -91,6 +90,7 @@ import {
 } from "./dashboard-async";
 import { DashboardOperatingSectionsCard } from "./dashboard-operating-sections";
 import { DashboardOperationsSections } from "./dashboard-operations-sections";
+import { useGoalShareReview } from "./use-goal-share-review";
 import {
   StatusBadge,
   RiskBadge,
@@ -278,8 +278,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [privacyState, setPrivacyState] = useState<RequestState>({ kind: "idle", message: "" });
   const [privacyInventoryState, setPrivacyInventoryState] = useState<RequestState>({ kind: "idle", message: "" });
   const [privacyControls, setPrivacyControls] = useState<PrivacyControlSummary | null>(null);
-  const [lastShareUrl, setLastShareUrl] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const {
+    lastShareUrl,
+    pendingShareReview,
+    shareGoal,
+    confirmGoalShare,
+    cancelGoalShareReview
+  } = useGoalShareReview({ setData, setIsPending, setShareState });
   const [templates, setTemplates] = useState<GoalTemplate[]>([]);
   const [templateState, setTemplateState] = useState<RequestState>({ kind: "idle", message: "" });
   const [operatorProducts, setOperatorProducts] = useState<OperatorProduct[]>([]);
@@ -1567,45 +1573,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       const errorMessage = error instanceof Error ? error.message : "Failed to generate briefing.";
       setBriefingState({ kind: "error", message: errorMessage });
       toast.error("Action failed", errorMessage);
-    } finally {
-      setIsPending(false);
-    }
-  };
-
-  const shareGoal = async (goalId: string, title: string) => {
-    setIsPending(true);
-
-    try {
-      const payload = await readJson<{ shareId: string; shareUrl: string; dashboard: DashboardData }>(
-        await fetch(`/api/goals/${encodeURIComponent(goalId)}/share`, {
-          method: "POST"
-        })
-      );
-      const canCopy = typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function";
-      let copiedToClipboard = false;
-
-      if (canCopy) {
-        try {
-          await navigator.clipboard.writeText(payload.shareUrl);
-          copiedToClipboard = true;
-        } catch {
-          copiedToClipboard = false;
-        }
-      }
-
-      startTransition(() => {
-        setData(payload.dashboard);
-        setLastShareUrl(payload.shareUrl);
-        setShareState({
-          kind: "success",
-          message: getGoalShareSuccessMessage(title, copiedToClipboard)
-        });
-      });
-    } catch (error) {
-      setShareState({
-        kind: "error",
-        message: error instanceof Error ? error.message : "Failed to create the public share link."
-      });
     } finally {
       setIsPending(false);
     }
@@ -3027,7 +2994,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           focusRequestComposer={focusRequestComposer}
           canManageGoalShares={canManageGoalShares}
           goalSharePermissionReason={goalSharePermissionReason}
+          pendingShareReview={pendingShareReview}
           shareGoal={shareGoal}
+          confirmGoalShare={confirmGoalShare}
+          cancelGoalShareReview={cancelGoalShareReview}
           saveAsTemplate={saveAsTemplate}
           shareStatsByGoal={shareStatsByGoal}
           highlightedItemId={highlightedItemId}

@@ -67,6 +67,19 @@ function buildPublicShareViewRequest(
   });
 }
 
+function buildConfirmedShareRequest(goalId: string): Request {
+  return new Request(`http://localhost/api/goals/${goalId}/share`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+    },
+    body: JSON.stringify({
+      confirmed: true
+    })
+  });
+}
+
 describe("public share view route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
@@ -92,17 +105,9 @@ describe("public share view route", () => {
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share my planning context with a reviewer.");
-    const shareResponse = await goalShareRoute(
-      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-        method: "POST",
-        headers: {
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
-        }
-      }),
-      {
-        params: Promise.resolve({ id: bundle.goal.id })
-      }
-    );
+    const shareResponse = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
     const sharePayload = (await shareResponse.json()) as {
       shareId: string;
       shareUrl: string;
@@ -207,6 +212,63 @@ describe("public share view route", () => {
       tracked: false
     });
     expectOperationalNoStoreHeaders(response);
+  });
+
+  it("returns accepted no-ops for revoked and expired signed share tracking without queueing jobs", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const revokedBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a context that will be revoked.");
+    const expiredBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a context that will expire.");
+
+    const revokedShareResponse = await goalShareRoute(buildConfirmedShareRequest(revokedBundle.goal.id), {
+      params: Promise.resolve({ id: revokedBundle.goal.id })
+    });
+    const expiredShareResponse = await goalShareRoute(buildConfirmedShareRequest(expiredBundle.goal.id), {
+      params: Promise.resolve({ id: expiredBundle.goal.id })
+    });
+    const revokedPayload = (await revokedShareResponse.json()) as { shareId: string; shareUrl: string };
+    const expiredPayload = (await expiredShareResponse.json()) as { shareId: string; shareUrl: string };
+    const revokedToken = decodeURIComponent(revokedPayload.shareUrl.split("/share/")[1] ?? "");
+    const expiredToken = decodeURIComponent(expiredPayload.shareUrl.split("/share/")[1] ?? "");
+    const revokedShare = await repository.getGoalShare(revokedPayload.shareId, SYSTEM_USER_ID);
+    const expiredShare = await repository.getGoalShare(expiredPayload.shareId, SYSTEM_USER_ID);
+
+    await repository.saveGoalShare({
+      ...revokedShare!,
+      status: "revoked",
+      revokedAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+    await repository.saveGoalShare({
+      ...expiredShare!,
+      expiresAt: "2020-01-01T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    const revokedResponse = await publicShareViewRoute(buildPublicShareViewRequest({ token: revokedToken }));
+    const expiredResponse = await publicShareViewRoute(buildPublicShareViewRequest({ token: expiredToken }));
+    const revokedResult = (await revokedResponse.json()) as { accepted: boolean; tracked: boolean };
+    const expiredResult = (await expiredResponse.json()) as { accepted: boolean; tracked: boolean };
+    const reloadedRepository = createRouteTestRepository();
+    const queuedJobs = await reloadedRepository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["public_share_view"]
+    });
+    const reloadedRevokedBundle = await reloadedRepository.getGoalBundle(revokedBundle.goal.id);
+    const reloadedExpiredBundle = await reloadedRepository.getGoalBundle(expiredBundle.goal.id);
+
+    expect(revokedResponse.status).toBe(202);
+    expect(expiredResponse.status).toBe(202);
+    expect(revokedResult).toEqual({ accepted: true, tracked: false });
+    expect(expiredResult).toEqual({ accepted: true, tracked: false });
+    expect(queuedJobs).toHaveLength(0);
+    expect(reloadedRevokedBundle?.actionLogs.filter((log) => log.kind.startsWith("share."))).toHaveLength(1);
+    expect(reloadedExpiredBundle?.actionLogs.filter((log) => log.kind.startsWith("share."))).toHaveLength(1);
+    expect(JSON.stringify(reloadedRevokedBundle?.actionLogs ?? [])).not.toContain(revokedToken);
+    expect(JSON.stringify(reloadedExpiredBundle?.actionLogs ?? [])).not.toContain(expiredToken);
+    expectOperationalNoStoreHeaders(revokedResponse);
+    expectOperationalNoStoreHeaders(expiredResponse);
   });
 
   it("rejects malformed JSON with a sanitized validation error", async () => {
@@ -323,17 +385,9 @@ describe("public share view route", () => {
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a goal with a reviewer.");
-    const shareResponse = await goalShareRoute(
-      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-        method: "POST",
-        headers: {
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
-        }
-      }),
-      {
-        params: Promise.resolve({ id: bundle.goal.id })
-      }
-    );
+    const shareResponse = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
     const sharePayload = (await shareResponse.json()) as {
       shareId: string;
       shareUrl: string;

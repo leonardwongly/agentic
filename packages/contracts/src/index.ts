@@ -1428,6 +1428,7 @@ export const GoalShareRecordSchema = z.object({
   tokenFingerprint: z.string().regex(/^[a-f0-9]{12,64}$/),
   status: GoalShareStatusSchema,
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+  disclosureReview: z.record(z.string(), z.unknown()).nullable().optional(),
   expiresAt: z.string().datetime(),
   lastViewedAt: z.string().datetime().nullable().default(null),
   revokedAt: z.string().datetime().nullable().default(null),

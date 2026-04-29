@@ -231,6 +231,7 @@ create table if not exists goal_shares (
   token_fingerprint text not null,
   status text not null,
   actor_context jsonb,
+  disclosure_review jsonb,
   expires_at timestamptz not null,
   last_viewed_at timestamptz,
   revoked_at timestamptz,
