@@ -41,6 +41,7 @@ CI and staging deploy both emit:
 - container image tarball
 
 These artifacts are uploaded into workflow storage for audit and incident-response use.
+Pull request builds still generate and validate the same evidence bundle, but skip upload to avoid artifact-quota failures before merge. Push-based builds keep uploading the evidence bundle.
 
 ## Provenance
 
