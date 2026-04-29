@@ -416,6 +416,66 @@ describe("repository", () => {
     expect(evidenceRecords).toHaveLength(1);
   }, 15_000);
 
+  it("rejects atomic approval follow-up jobs owned by a different user", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const mismatchedUserId = "user-approval-job-owner-mismatch";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(mismatchedUserId);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    await expect(
+      repository.respondToApprovalAndEnqueueJob!({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: systemActor,
+        scope: "once",
+        rationale: "Approved for this exact reply.",
+        buildJob: (updatedBundle) =>
+          createJobRecord({
+            userId: mismatchedUserId,
+            kind: "approval_follow_up",
+            actorContext: systemActor,
+            maxAttempts: 1,
+            idempotencyKey: `approval-follow-up:${approval!.id}:owner-mismatch:approved`,
+            payload: {
+              type: "approval_follow_up",
+              approvalId: approval!.id,
+              goalId: updatedBundle.goal.id,
+              taskId: approval!.taskId,
+              decision: "approved",
+              workspaceId: updatedBundle.goal.workspaceId,
+              metadata: {
+                replayedFromJobId: null,
+                actionId: "owner-mismatch"
+              }
+            }
+          })
+      })
+    ).rejects.toThrow(/job owner must match/i);
+
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const ownerJobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const mismatchedJobs = await repository.listJobs({ userId: mismatchedUserId, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("pending");
+    expect(ownerJobs).toEqual([]);
+    expect(mismatchedJobs).toEqual([]);
+    expect(evidenceRecords).toEqual([]);
+  }, 15_000);
+
   it("keeps approval decisions pending when atomic follow-up job construction fails", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -1416,6 +1476,70 @@ describe("repository", () => {
 
     await expectApprovalEvidenceCapture(repository, "approved");
     await expectApprovalEvidenceCapture(repository, "rejected");
+  });
+
+  postgresIt("rejects atomic approval follow-up jobs owned by a different user in Postgres when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+    const ownerUserId = `approval-owner-postgres-${Date.now()}`;
+    const mismatchedUserId = `approval-owner-mismatch-postgres-${Date.now()}`;
+    const ownerActor = createSystemActorContext(ownerUserId);
+
+    await repository.seedDefaults(ownerUserId);
+    await repository.seedDefaults(mismatchedUserId);
+
+    const bundle = await createGoalForUser(
+      repository,
+      ownerUserId,
+      `Review my inbox and send one external reply for Postgres ownership ${Date.now()}.`
+    );
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    await expect(
+      repository.respondToApprovalAndEnqueueJob!({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: ownerActor,
+        scope: "once",
+        rationale: "Approved for this exact reply.",
+        buildJob: (updatedBundle) =>
+          createJobRecord({
+            userId: mismatchedUserId,
+            kind: "approval_follow_up",
+            actorContext: ownerActor,
+            maxAttempts: 1,
+            idempotencyKey: `approval-follow-up:${approval!.id}:owner-mismatch:approved`,
+            payload: {
+              type: "approval_follow_up",
+              approvalId: approval!.id,
+              goalId: updatedBundle.goal.id,
+              taskId: approval!.taskId,
+              decision: "approved",
+              workspaceId: updatedBundle.goal.workspaceId,
+              metadata: {
+                replayedFromJobId: null,
+                actionId: "owner-mismatch"
+              }
+            }
+          })
+      })
+    ).rejects.toThrow(/job owner must match/i);
+
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, ownerUserId);
+    const ownerJobs = await repository.listJobs({ userId: ownerUserId, kinds: ["approval_follow_up"] });
+    const mismatchedJobs = await repository.listJobs({ userId: mismatchedUserId, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: ownerUserId,
+      approvalId: approval!.id
+    });
+
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("pending");
+    expect(ownerJobs).toEqual([]);
+    expect(mismatchedJobs).toEqual([]);
+    expect(evidenceRecords).toEqual([]);
   });
 
   postgresIt("persists agent actor attribution and enforces user scoping in Postgres when DATABASE_URL is configured", async () => {
