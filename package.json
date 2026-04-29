@@ -16,6 +16,7 @@
     "db:status": "tsx scripts/db-status.ts",
     "security:audit-runtime": "tsx scripts/runtime-vulnerability-gate.ts",
     "security:sbom": "tsx scripts/generate-sbom.ts",
+    "ci:validate-provenance": "tsx scripts/validate-github-actions-provenance.ts",
     "security:collect-evidence": "tsx scripts/collect-compliance-evidence.ts",
     "compliance:validate-registry": "tsx scripts/validate-compliance-registry.ts",
     "test": "vitest run",
@@ -55,6 +56,9 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.1.12"
+  },
+  "overrides": {
+    "postcss": "8.5.12"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",
