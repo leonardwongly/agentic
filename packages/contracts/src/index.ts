@@ -129,6 +129,7 @@ export const jobKindValues = [
   "public_share_view"
 ] as const;
 export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
+export const jobPriorityValues = ["critical", "high", "normal", "low", "maintenance"] as const;
 export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
 export const workspaceApprovalModeValues = ["always_review", "risk_based"] as const;
@@ -205,6 +206,7 @@ export const PrivacyOperationKindSchema = z.enum(privacyOperationKindValues);
 export const PrivacyOperationStatusSchema = z.enum(privacyOperationStatusValues);
 export const JobKindSchema = z.enum(jobKindValues);
 export const JobStatusSchema = z.enum(jobStatusValues);
+export const JobPrioritySchema = z.enum(jobPriorityValues);
 export const EvidenceRecordSourceKindSchema = z.enum(evidenceRecordSourceKindValues);
 export const WorkspaceRoleSchema = z.enum(workspaceRoleValues);
 export const WorkspaceApprovalModeSchema = z.enum(workspaceApprovalModeValues);
@@ -2220,6 +2222,10 @@ const JobRecordBaseSchema = z
     userId: z.string().min(1),
     kind: JobKindSchema,
     status: JobStatusSchema,
+    priority: JobPrioritySchema.default("normal"),
+    queue: z.string().trim().min(1).max(80).default("default"),
+    concurrencyKey: z.string().trim().min(1).max(160).nullable().default(null),
+    timeoutMs: z.number().int().min(100).max(30 * 60_000).nullable().default(null),
     idempotencyKey: z.string().min(1).max(200).nullable().default(null),
     payload: JobPayloadSchema,
     actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
@@ -3176,6 +3182,7 @@ export type JobRecoveryStrategy = z.infer<typeof JobRecoveryStrategySchema>;
 export type JobRecoveryState = z.infer<typeof JobRecoveryStateSchema>;
 export type JobExecutionJournal = z.infer<typeof JobExecutionJournalSchema>;
 export type JobRecord = z.infer<typeof JobRecordSchema>;
+export type JobPriority = z.infer<typeof JobPrioritySchema>;
 export type WatcherFrequency = z.infer<typeof WatcherFrequencySchema>;
 export type Watcher = z.infer<typeof WatcherSchema>;
 export type ActionLog = z.infer<typeof ActionLogSchema>;

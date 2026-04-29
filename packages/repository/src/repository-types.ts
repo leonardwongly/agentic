@@ -51,6 +51,12 @@ import type {
 import type { GovernanceConformanceReport } from "@agentic/policy";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
+export type JobConcurrencyLimits = {
+  maxRunningPerKind?: number;
+  maxRunningPerUser?: number;
+  maxRunningPerConcurrencyKey?: number;
+};
+
 export type DashboardData = {
   workspaces: Workspace[];
   activeWorkspace: Workspace | null;
@@ -319,6 +325,7 @@ export type AgenticRepository = {
     runnerId: string;
     leaseMs: number;
     now?: string;
+    concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null>;
   completeJob(params: {
     jobId: string;

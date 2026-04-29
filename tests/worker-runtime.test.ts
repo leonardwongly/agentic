@@ -77,7 +77,8 @@ import {
   executePrivacyOperationJob,
   executePublicShareViewJob,
   executeTemplateRunJob,
-  runWorkerRuntime
+  runWorkerRuntime,
+  summarizeWorkerQueueHealth
 } from "@agentic/worker-runtime";
 
 describe("worker runtime", () => {
@@ -123,6 +124,91 @@ describe("worker runtime", () => {
       selfImprovementRepository
     };
   }
+
+  it("summarizes worker queue health across priorities, retries, dead letters, and leases", () => {
+    const payload = {
+      type: "goal_create" as const,
+      goalId: "goal-1",
+      workflowId: "workflow-1",
+      request: "Create a goal.",
+      workspaceId: null,
+      agentId: null,
+      metadata: {}
+    };
+    const queuedCritical = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "goal_create",
+      priority: "critical",
+      payload
+    });
+    const runningActive = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "goal_refine",
+      payload: {
+        type: "goal_refine",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        refinement: "Refine a goal.",
+        workspaceId: null,
+        metadata: {}
+      }
+    });
+    const runningExpired = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "goal_create",
+      payload
+    });
+    const retrying = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "goal_create",
+      payload
+    });
+    const deadLetter = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "goal_create",
+      payload
+    });
+
+    const summary = summarizeWorkerQueueHealth(
+      [
+        queuedCritical,
+        {
+          ...runningActive,
+          status: "running",
+          leaseExpiresAt: "2026-04-16T00:01:00.000Z"
+        },
+        {
+          ...runningExpired,
+          status: "running",
+          leaseExpiresAt: "2026-04-15T23:59:59.000Z"
+        },
+        {
+          ...retrying,
+          status: "retrying"
+        },
+        {
+          ...deadLetter,
+          status: "dead_letter"
+        }
+      ],
+      "2026-04-16T00:00:00.000Z"
+    );
+
+    expect(summary).toMatchObject({
+      queuedDepth: 1,
+      retryingDepth: 1,
+      deadLetterDepth: 1,
+      activeLeaseCount: 1,
+      expiredLeaseCount: 1,
+      queuedByPriority: {
+        critical: 1
+      },
+      runningByKind: {
+        goal_create: 1,
+        goal_refine: 1
+      }
+    });
+  });
 
   async function createPrivacyOperation(params: {
     repository: Awaited<ReturnType<typeof createTestRuntime>>["repository"];

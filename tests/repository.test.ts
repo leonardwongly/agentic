@@ -165,6 +165,8 @@ describe("repository", () => {
     maxAttempts?: number;
     goalId?: string;
     workflowId?: string;
+    priority?: "critical" | "high" | "normal" | "low" | "maintenance";
+    concurrencyKey?: string | null;
   }) {
     return createJobRecord({
       userId: params.userId,
@@ -172,6 +174,8 @@ describe("repository", () => {
       idempotencyKey: params.idempotencyKey,
       availableAt: params.availableAt,
       maxAttempts: params.maxAttempts,
+      priority: params.priority,
+      concurrencyKey: params.concurrencyKey,
       payload: {
         type: "goal_create",
         goalId: params.goalId ?? crypto.randomUUID(),
@@ -248,6 +252,56 @@ describe("repository", () => {
       attemptCount: 2,
       deadLetteredAt: "2026-04-16T03:05:00.000Z"
     });
+  }
+
+  async function expectPriorityAndConcurrencyControls(repository: ReturnType<typeof createRepository>, userId: string) {
+    const queue = createDurableJobQueue(repository, {
+      runnerId: `worker-${userId}`,
+      leaseMs: 60_000
+    });
+    const normal = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId,
+        priority: "normal",
+        concurrencyKey: `${userId}:exclusive`,
+        availableAt: "2026-04-16T03:00:00.000Z"
+      })
+    );
+    const critical = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId,
+        priority: "critical",
+        concurrencyKey: `${userId}:exclusive`,
+        availableAt: "2026-04-16T03:00:00.000Z"
+      })
+    );
+    const claimedCritical = await queue.claimNext({
+      userId,
+      now: "2026-04-16T03:00:00.000Z",
+      concurrencyLimits: {
+        maxRunningPerConcurrencyKey: 1
+      }
+    });
+    const blockedByConcurrency = await queue.claimNext({
+      userId,
+      now: "2026-04-16T03:00:01.000Z",
+      concurrencyLimits: {
+        maxRunningPerConcurrencyKey: 1
+      }
+    });
+    const reclaimedAfterLeaseExpiry = await queue.claimNext({
+      userId,
+      now: "2026-04-16T03:01:01.000Z",
+      concurrencyLimits: {
+        maxRunningPerConcurrencyKey: 1
+      }
+    });
+
+    expect(claimedCritical?.id).toBe(critical.id);
+    expect(claimedCritical?.priority).toBe("critical");
+    expect(blockedByConcurrency).toBeNull();
+    expect(reclaimedAfterLeaseExpiry?.id).toBe(critical.id);
+    expect(normal.id).not.toBe(critical.id);
   }
 
   it("persists a goal bundle to the file-backed store", async () => {
@@ -1118,6 +1172,16 @@ describe("repository", () => {
     await expectDurableQueueLifecycle(repository, `jobs-queue-${Date.now()}`);
   });
 
+  it("claims higher-priority jobs first and respects concurrency keys in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await expectPriorityAndConcurrencyControls(repository, `jobs-priority-${Date.now()}`);
+  });
+
   it("persists provider credentials, encrypted secrets, and managed Google integrations in the file-backed store", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -1514,6 +1578,7 @@ describe("repository", () => {
     expect(await repository.listJobs({ userId })).toHaveLength(1);
 
     await expectDurableQueueLifecycle(repository, `${userId}-queue`);
+    await expectPriorityAndConcurrencyControls(repository, `${userId}-priority`);
   });
 
   postgresIt("reclaims expired job leases ahead of later work in Postgres when DATABASE_URL is configured", async () => {

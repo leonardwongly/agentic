@@ -11,11 +11,19 @@ import {
   type GoalBundle,
   type GoalShareRecord,
   type JobExecutionJournal,
+  type JobKind,
+  type JobPriority,
   type JobRecord,
   type JobStatus,
   type Workspace
 } from "@agentic/contracts";
 import { JobMutationError } from "./repository-types";
+
+export type JobConcurrencyLimits = {
+  maxRunningPerKind?: number;
+  maxRunningPerUser?: number;
+  maxRunningPerConcurrencyKey?: number;
+};
 
 type GoalStoreView = {
   goals: GoalBundle["goal"][];
@@ -159,8 +167,21 @@ export function autopilotEventMatchesBudget(params: {
   return details.budget?.key === params.budget.key;
 }
 
+const jobPriorityRank: Record<JobPriority, number> = {
+  critical: 0,
+  high: 1,
+  normal: 2,
+  low: 3,
+  maintenance: 4
+};
+
 export function sortJobsForClaim(items: JobRecord[]): JobRecord[] {
   return [...items].sort((left, right) => {
+    const priorityOrder = jobPriorityRank[left.priority] - jobPriorityRank[right.priority];
+    if (priorityOrder !== 0) {
+      return priorityOrder;
+    }
+
     const availableOrder = left.availableAt.localeCompare(right.availableAt);
     if (availableOrder !== 0) {
       return availableOrder;
@@ -180,6 +201,85 @@ export function isJobClaimableAt(job: JobRecord, now: number): boolean {
   }
 
   return false;
+}
+
+function normalizeConcurrencyLimit(value: number | undefined): number | null {
+  if (!Number.isInteger(value) || value === undefined || value <= 0) {
+    return null;
+  }
+
+  return value;
+}
+
+function isActiveRunningJob(job: JobRecord, now: number): boolean {
+  if (job.status !== "running") {
+    return false;
+  }
+
+  if (!job.leaseExpiresAt) {
+    return true;
+  }
+
+  const leaseExpiresAt = Date.parse(job.leaseExpiresAt);
+  return !Number.isFinite(leaseExpiresAt) || leaseExpiresAt > now;
+}
+
+export function isJobBlockedByConcurrency(
+  candidate: JobRecord,
+  runningJobs: JobRecord[],
+  limits: JobConcurrencyLimits | undefined,
+  now: number
+): boolean {
+  const maxRunningPerKind = normalizeConcurrencyLimit(limits?.maxRunningPerKind);
+  const maxRunningPerUser = normalizeConcurrencyLimit(limits?.maxRunningPerUser);
+  const maxRunningPerConcurrencyKey = normalizeConcurrencyLimit(limits?.maxRunningPerConcurrencyKey);
+
+  if (!maxRunningPerKind && !maxRunningPerUser && !maxRunningPerConcurrencyKey) {
+    return false;
+  }
+
+  let runningForKind = 0;
+  let runningForUser = 0;
+  let runningForConcurrencyKey = 0;
+
+  for (const runningJob of runningJobs) {
+    if (!isActiveRunningJob(runningJob, now)) {
+      continue;
+    }
+
+    if (maxRunningPerKind && runningJob.kind === candidate.kind) {
+      runningForKind += 1;
+    }
+
+    if (maxRunningPerUser && runningJob.userId === candidate.userId) {
+      runningForUser += 1;
+    }
+
+    if (
+      maxRunningPerConcurrencyKey &&
+      candidate.concurrencyKey &&
+      runningJob.concurrencyKey === candidate.concurrencyKey
+    ) {
+      runningForConcurrencyKey += 1;
+    }
+  }
+
+  return (
+    (maxRunningPerKind !== null && runningForKind >= maxRunningPerKind) ||
+    (maxRunningPerUser !== null && runningForUser >= maxRunningPerUser) ||
+    (maxRunningPerConcurrencyKey !== null && runningForConcurrencyKey >= maxRunningPerConcurrencyKey)
+  );
+}
+
+export function buildJobConcurrencySnapshot(jobs: JobRecord[], now: number): Partial<Record<JobKind, number>> {
+  return jobs.reduce<Partial<Record<JobKind, number>>>((snapshot, job) => {
+    if (!isActiveRunningJob(job, now)) {
+      return snapshot;
+    }
+
+    snapshot[job.kind] = (snapshot[job.kind] ?? 0) + 1;
+    return snapshot;
+  }, {});
 }
 
 export function buildJobLifecycleJournal(params: {

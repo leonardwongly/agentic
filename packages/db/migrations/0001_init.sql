@@ -353,6 +353,10 @@ create table if not exists jobs (
   user_id text not null,
   kind text not null,
   status text not null,
+  priority text not null default 'normal',
+  queue_name text not null default 'default',
+  concurrency_key text,
+  timeout_ms integer,
   idempotency_key text,
   payload jsonb not null default '{}'::jsonb,
   actor_context jsonb,
@@ -379,6 +383,13 @@ create index if not exists jobs_user_status_available_at_idx
 
 create index if not exists jobs_kind_status_available_at_idx
   on jobs (kind, status, available_at);
+
+create index if not exists jobs_queue_status_priority_available_at_idx
+  on jobs (queue_name, status, priority, available_at);
+
+create index if not exists jobs_concurrency_key_status_idx
+  on jobs (concurrency_key, status)
+  where concurrency_key is not null;
 
 create index if not exists jobs_lease_expires_at_idx
   on jobs (lease_expires_at);

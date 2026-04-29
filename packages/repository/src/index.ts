@@ -168,6 +168,7 @@ import {
   buildDeletedWorkspaceTombstone,
   buildJobLifecycleJournal,
   claimJobRecord,
+  isJobBlockedByConcurrency,
   goalShareTerminalAt,
   isJobClaimableAt,
   isJobScopedToWorkspace,
@@ -189,6 +190,7 @@ import {
   type DashboardDiagnostics,
   type GoalPageParams,
   type GoalShareListFilters,
+  type JobConcurrencyLimits,
   type PrivacyOperationListFilters,
   type WatcherListFilters,
   type WatcherPageParams,
@@ -2285,11 +2287,14 @@ class FileRepository implements AgenticRepository {
     runnerId: string;
     leaseMs: number;
     now?: string;
+    concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const claimedAt = params.now ?? nowIso();
+      const claimedAtMs = Date.parse(claimedAt);
       const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
+      const runningJobs = store.jobs.filter((job) => job.status === "running");
       const claimable = sortJobsForClaim(
         store.jobs.filter((job) => {
           if (params.userId && job.userId !== params.userId) {
@@ -2300,7 +2305,11 @@ class FileRepository implements AgenticRepository {
             return false;
           }
 
-          return isJobClaimableAt(job, Date.parse(claimedAt));
+          if (!isJobClaimableAt(job, claimedAtMs)) {
+            return false;
+          }
+
+          return !isJobBlockedByConcurrency(job, runningJobs, params.concurrencyLimits, claimedAtMs);
         })
       )[0];
 
@@ -3689,19 +3698,25 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into jobs (
-          id, user_id, kind, status, idempotency_key, payload, actor_context, max_attempts, attempt_count,
+          id, user_id, kind, status, priority, queue_name, concurrency_key, timeout_ms,
+          idempotency_key, payload, actor_context, max_attempts, attempt_count,
           claimed_by, last_attempt_at, claimed_at, lease_expires_at, available_at, completed_at, dead_lettered_at,
           last_error, execution_journal, created_at, updated_at
         )
         values (
-          $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9,
-          $10, $11, $12, $13, $14, $15, $16,
-          $17, $18::jsonb, $19, $20
+          $1, $2, $3, $4, $5, $6, $7, $8,
+          $9, $10::jsonb, $11::jsonb, $12, $13,
+          $14, $15, $16, $17, $18, $19, $20,
+          $21, $22::jsonb, $23, $24
         )
         on conflict (id) do update
         set user_id = excluded.user_id,
             kind = excluded.kind,
             status = excluded.status,
+            priority = excluded.priority,
+            queue_name = excluded.queue_name,
+            concurrency_key = excluded.concurrency_key,
+            timeout_ms = excluded.timeout_ms,
             idempotency_key = excluded.idempotency_key,
             payload = excluded.payload,
             actor_context = excluded.actor_context,
@@ -3723,6 +3738,10 @@ class PostgresRepository implements AgenticRepository {
         validated.userId,
         validated.kind,
         validated.status,
+        validated.priority,
+        validated.queue,
+        validated.concurrencyKey,
+        validated.timeoutMs,
         validated.idempotencyKey,
         JSON.stringify(validated.payload),
         JSON.stringify(validated.actorContext),
@@ -3943,6 +3962,10 @@ class PostgresRepository implements AgenticRepository {
       userId: row.user_id,
       kind: row.kind,
       status: row.status,
+      priority: typeof row.priority === "string" ? row.priority : "normal",
+      queue: typeof row.queue_name === "string" ? row.queue_name : "default",
+      concurrencyKey: typeof row.concurrency_key === "string" ? row.concurrency_key : null,
+      timeoutMs: typeof row.timeout_ms === "number" ? row.timeout_ms : null,
       idempotencyKey: typeof row.idempotency_key === "string" ? row.idempotency_key : null,
       payload: row.payload,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
@@ -6901,9 +6924,11 @@ class PostgresRepository implements AgenticRepository {
     runnerId: string;
     leaseMs: number;
     now?: string;
+    concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null> {
     return this.withTransaction(async (client) => {
       const claimedAt = params.now ?? nowIso();
+      const claimedAtMs = Date.parse(claimedAt);
       const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
       const values: unknown[] = [claimedAt];
       const predicates = [
@@ -6923,23 +6948,53 @@ class PostgresRepository implements AgenticRepository {
         predicates.push(`kind = any($${values.length}::text[])`);
       }
 
+      if (params.concurrencyLimits) {
+        await client.query("lock table jobs in share row exclusive mode");
+      }
+
       const result = await client.query(
         `
           select *
           from jobs
           where ${predicates.join(" and ")}
-          order by available_at asc, created_at asc
-          limit 1
+          order by
+            case priority
+              when 'critical' then 0
+              when 'high' then 1
+              when 'normal' then 2
+              when 'low' then 3
+              when 'maintenance' then 4
+              else 2
+            end asc,
+            available_at asc,
+            created_at asc
+          limit 100
           for update skip locked
         `,
         values
       );
 
-      if (!result.rows[0]) {
+      const candidates = result.rows.map((row) => this.mapJobRow(row));
+      const runningJobs = params.concurrencyLimits
+        ? (
+            await client.query(
+              `
+                select *
+                from jobs
+                where status = 'running'
+              `
+            )
+          ).rows.map((row) => this.mapJobRow(row))
+        : [];
+      const claimable = candidates.find(
+        (job) => !isJobBlockedByConcurrency(job, runningJobs, params.concurrencyLimits, claimedAtMs)
+      );
+
+      if (!claimable) {
         return null;
       }
 
-      const claimed = claimJobRecord(this.mapJobRow(result.rows[0]), params.runnerId, params.leaseMs, claimedAt);
+      const claimed = claimJobRecord(claimable, params.runnerId, params.leaseMs, claimedAt);
       await this.saveJobWithClient(client, claimed);
       return JobRecordSchema.parse(clone(claimed));
     });

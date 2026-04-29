@@ -21,6 +21,38 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+function parseOptionalPositiveIntEnv(name: string): number | undefined {
+  const value = process.env[name]?.trim();
+
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer when configured.`);
+  }
+
+  return parsed;
+}
+
+function parseRatioEnv(name: string, fallback: number): number {
+  const value = process.env[name]?.trim();
+
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseFloat(value);
+
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new Error(`${name} must be a number between 0 and 1 when configured.`);
+  }
+
+  return parsed;
+}
+
 async function ensureWorkerRepositoryReady(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
 
@@ -39,6 +71,12 @@ async function main() {
   const runnerId = process.env.AGENTIC_WORKER_RUNNER_ID?.trim() || `worker-${process.pid}`;
   const pollIntervalMs = parsePositiveIntEnv("AGENTIC_WORKER_POLL_INTERVAL_MS", 1_000);
   const leaseMs = parsePositiveIntEnv("AGENTIC_WORKER_LEASE_MS", 30_000);
+  const concurrencyLimits = {
+    maxRunningPerKind: parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_KIND"),
+    maxRunningPerUser: parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_USER"),
+    maxRunningPerConcurrencyKey: parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY")
+  };
+  const retryJitterRatio = parseRatioEnv("AGENTIC_WORKER_RETRY_JITTER_RATIO", 0.1);
 
   const shutdown = (signal: string) => {
     if (controller.signal.aborted) {
@@ -69,7 +107,9 @@ async function main() {
       logInfo("worker.starting", {
         runnerId,
         pollIntervalMs,
-        leaseMs
+        leaseMs,
+        retryJitterRatio,
+        concurrencyLimits
       });
 
       const result = await runWorkerRuntime({
@@ -78,6 +118,9 @@ async function main() {
         runnerId,
         pollIntervalMs,
         leaseMs,
+        concurrencyLimits,
+        retryJitterRatio,
+        requireIdempotencyForRetry: true,
         signal: controller.signal
       });
 
