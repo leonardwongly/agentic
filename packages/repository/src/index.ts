@@ -155,27 +155,13 @@ import {
   CommitmentInboxQueryError
 } from "./commitment-helpers";
 import { assembleDashboardData } from "./dashboard-data";
-import {
-  buildBriefingHistory,
-  buildDashboardControlPlane,
-  buildNowQueue
-} from "./dashboard-control-plane";
+import { buildBriefingHistory, buildDashboardControlPlane, buildNowQueue } from "./dashboard-control-plane";
 import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 import {
-  assertRunningJobOwner,
-  autopilotEventMatchesBudget,
-  buildDeletedWorkspaceTombstone,
-  buildJobLifecycleJournal,
-  claimJobRecord,
-  isJobBlockedByConcurrency,
-  goalShareTerminalAt,
-  isJobClaimableAt,
-  isJobScopedToWorkspace,
-  normalizeAutopilotEventDetails,
-  resolveRetentionWindow,
-  sortJobsForClaim,
-  withAutopilotSuppression,
+  assertRunningJobOwner, autopilotEventMatchesBudget, buildDeletedWorkspaceTombstone, buildJobLifecycleJournal,
+  claimJobRecord, isJobBlockedByConcurrency, goalShareTerminalAt, isJobClaimableAt, isJobScopedToWorkspace,
+  normalizeAutopilotEventDetails, resolveRetentionWindow, sortJobsForClaim, withAutopilotSuppression,
   workspaceGoalIdsFromStore
 } from "./repository-runtime-helpers";
 import {
@@ -256,26 +242,12 @@ type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 
 export { CommitmentInboxQueryError, CollectionPageQueryError };
 export {
-  ApprovalMutationError,
-  JobMutationError,
-  type AgenticRepository,
-  type AutopilotEventClaim,
-  type CollectionPageParams,
-  type DashboardControlPlane,
-  type DashboardControlPlaneSection,
-  type DashboardData,
-  type DashboardDiagnostic,
-  type DashboardDiagnosticTarget,
-  type DashboardDiagnostics,
-  type GoalPageParams,
-  type GoalShareListFilters,
-  type PrivacyOperationListFilters,
-  type WatcherListFilters,
-  type WatcherPageParams,
-  type WorkspaceAuditExport,
-  type WorkspaceDeleteParams,
-  type WorkspaceRetentionParams
+  ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams,
+  type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic,
+  type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters,
+  type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams
 } from "./repository-types";
+export { buildExecutionProvenanceGraph } from "./provenance-graph";
 
 const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
@@ -3698,17 +3670,11 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into jobs (
-          id, user_id, kind, status, priority, queue_name, concurrency_key, timeout_ms,
-          idempotency_key, payload, actor_context, max_attempts, attempt_count,
-          claimed_by, last_attempt_at, claimed_at, lease_expires_at, available_at, completed_at, dead_lettered_at,
-          last_error, execution_journal, created_at, updated_at
+          id, user_id, kind, status, priority, queue_name, concurrency_key, timeout_ms, idempotency_key, payload,
+          actor_context, max_attempts, attempt_count, claimed_by, last_attempt_at, claimed_at, lease_expires_at,
+          available_at, completed_at, dead_lettered_at, last_error, execution_journal, created_at, updated_at
         )
-        values (
-          $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10::jsonb, $11::jsonb, $12, $13,
-          $14, $15, $16, $17, $18, $19, $20,
-          $21, $22::jsonb, $23, $24
-        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24)
         on conflict (id) do update
         set user_id = excluded.user_id,
             kind = excluded.kind,
@@ -6932,10 +6898,7 @@ class PostgresRepository implements AgenticRepository {
       const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
       const values: unknown[] = [claimedAt];
       const predicates = [
-        `(
-          (status in ('queued', 'retrying') and available_at <= $1)
-          or (status = 'running' and lease_expires_at is not null and lease_expires_at <= $1)
-        )`
+        `((status in ('queued', 'retrying') and available_at <= $1) or (status = 'running' and lease_expires_at is not null and lease_expires_at <= $1))`
       ];
 
       if (params.userId) {
@@ -6954,20 +6917,10 @@ class PostgresRepository implements AgenticRepository {
 
       const result = await client.query(
         `
-          select *
-          from jobs
+          select * from jobs
           where ${predicates.join(" and ")}
-          order by
-            case priority
-              when 'critical' then 0
-              when 'high' then 1
-              when 'normal' then 2
-              when 'low' then 3
-              when 'maintenance' then 4
-              else 2
-            end asc,
-            available_at asc,
-            created_at asc
+          order by case priority when 'critical' then 0 when 'high' then 1 when 'normal' then 2 when 'low' then 3 when 'maintenance' then 4 else 2 end asc,
+            available_at asc, created_at asc
           limit 100
           for update skip locked
         `,
@@ -6976,15 +6929,7 @@ class PostgresRepository implements AgenticRepository {
 
       const candidates = result.rows.map((row) => this.mapJobRow(row));
       const runningJobs = params.concurrencyLimits
-        ? (
-            await client.query(
-              `
-                select *
-                from jobs
-                where status = 'running'
-              `
-            )
-          ).rows.map((row) => this.mapJobRow(row))
+        ? (await client.query(`select * from jobs where status = 'running'`)).rows.map((row) => this.mapJobRow(row))
         : [];
       const claimable = candidates.find(
         (job) => !isJobBlockedByConcurrency(job, runningJobs, params.concurrencyLimits, claimedAtMs)

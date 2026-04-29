@@ -887,6 +887,85 @@ export const ContextPacketSchema = z
   })
   .strict();
 
+export const executionProvenanceNodeTypeValues = [
+  "goal",
+  "decision",
+  "approval",
+  "action",
+  "job",
+  "memory",
+  "context_packet",
+  "output",
+  "failure"
+] as const;
+export const executionProvenanceEdgeTypeValues = [
+  "created",
+  "decided",
+  "approved",
+  "queued",
+  "executed",
+  "produced",
+  "captured",
+  "derived_from",
+  "failed",
+  "replayed_from",
+  "uses_context"
+] as const;
+
+export const ExecutionProvenanceNodeTypeSchema = z.enum(executionProvenanceNodeTypeValues);
+export const ExecutionProvenanceEdgeTypeSchema = z.enum(executionProvenanceEdgeTypeValues);
+
+export const ExecutionProvenanceNodeSchema = z
+  .object({
+    id: z.string().min(1).max(240),
+    type: ExecutionProvenanceNodeTypeSchema,
+    ownerUserId: z.string().min(1),
+    label: z.string().min(1).max(160),
+    summary: z.string().min(1).max(500),
+    sensitivity: z.string().min(1).max(80).default("internal"),
+    createdAt: z.string().datetime().nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
+export const ExecutionProvenanceEdgeSchema = z
+  .object({
+    id: z.string().min(1).max(260),
+    type: ExecutionProvenanceEdgeTypeSchema,
+    from: z.string().min(1).max(240),
+    to: z.string().min(1).max(240),
+    label: z.string().min(1).max(160),
+    createdAt: z.string().datetime().nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
+export const ExecutionProvenanceTimelineEntrySchema = z
+  .object({
+    id: z.string().min(1).max(260),
+    nodeId: z.string().min(1).max(240),
+    at: z.string().datetime(),
+    type: ExecutionProvenanceNodeTypeSchema,
+    label: z.string().min(1).max(160),
+    summary: z.string().min(1).max(500)
+  })
+  .strict();
+
+export const ExecutionProvenanceGraphSchema = z
+  .object({
+    nodes: z.array(ExecutionProvenanceNodeSchema).max(500),
+    edges: z.array(ExecutionProvenanceEdgeSchema).max(1_000),
+    timeline: z.array(ExecutionProvenanceTimelineEntrySchema).max(500),
+    query: z
+      .object({
+        rootId: z.string().min(1).max(240).nullable().default(null),
+        depth: z.number().int().min(0).max(4),
+        limit: z.number().int().min(1).max(500)
+      })
+      .strict()
+  })
+  .strict();
+
 export const PolicyDecisionSchema = z.object({
   riskClass: RiskClassSchema,
   outcome: z.enum(["allowed", "allowed_with_confirmation", "blocked", "downgrade_to_draft", "escalate"]),
@@ -3167,6 +3246,11 @@ export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
 export type ContextPacket = z.infer<typeof ContextPacketSchema>;
 export type ContextPacketTransformation = z.infer<typeof ContextPacketTransformationSchema>;
 export type ContextPacketUsage = z.infer<typeof ContextPacketUsageSchema>;
+export type ExecutionProvenanceNodeType = z.infer<typeof ExecutionProvenanceNodeTypeSchema>;
+export type ExecutionProvenanceEdgeType = z.infer<typeof ExecutionProvenanceEdgeTypeSchema>;
+export type ExecutionProvenanceNode = z.infer<typeof ExecutionProvenanceNodeSchema>;
+export type ExecutionProvenanceEdge = z.infer<typeof ExecutionProvenanceEdgeSchema>;
+export type ExecutionProvenanceGraph = z.infer<typeof ExecutionProvenanceGraphSchema>;
 export type PolicyDecision = z.infer<typeof PolicyDecisionSchema>;
 export type GovernanceConformanceCheck = z.infer<typeof GovernanceConformanceCheckSchema>;
 export type GovernanceConformanceReport = z.infer<typeof GovernanceConformanceReportSchema>;
