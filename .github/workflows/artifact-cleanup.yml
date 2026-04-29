@@ -8,7 +8,7 @@ on:
       retention-days:
         description: "Delete artifacts older than this many days."
         required: true
-        default: "7"
+        default: 7
         type: number
       dry-run:
         description: "List matching artifacts without deleting them."
@@ -35,7 +35,8 @@ jobs:
         with:
           script: |
             const inputRetentionDays = context.payload.inputs?.["retention-days"];
-            const retentionDays = Number.parseInt(inputRetentionDays ?? process.env.DEFAULT_RETENTION_DAYS, 10);
+            const rawRetentionDays = String(inputRetentionDays ?? process.env.DEFAULT_RETENTION_DAYS);
+            const retentionDays = /^[1-9]\d*$/.test(rawRetentionDays) ? Number(rawRetentionDays) : NaN;
 
             if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 90) {
               core.setFailed(`retention-days must be an integer from 1 to 90. Received: ${inputRetentionDays}`);
@@ -54,7 +55,7 @@ jobs:
               owner,
               repo,
               per_page: 100
-            });
+            }, (response) => response.data.artifacts);
 
             let eligible = 0;
             let deleted = 0;

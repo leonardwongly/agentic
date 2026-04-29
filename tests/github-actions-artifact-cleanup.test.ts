@@ -18,8 +18,12 @@ describe("GitHub Actions artifact cleanup", () => {
     expect(workflow).toContain("contents: read");
     expect(workflow).not.toContain("actions/checkout");
     expect(workflow).toContain('DEFAULT_RETENTION_DAYS: "7"');
+    expect(workflow).toContain("default: 7");
+    expect(workflow).toContain("const rawRetentionDays = String");
+    expect(workflow).toContain("/^[1-9]\\d*$/.test(rawRetentionDays)");
     expect(workflow).toContain("retention-days must be an integer from 1 to 90");
     expect(workflow).toContain("github.rest.actions.listArtifactsForRepo");
+    expect(workflow).toContain("(response) => response.data.artifacts");
     expect(workflow).toContain("github.rest.actions.deleteArtifact");
     expect(workflow).toContain("dryRun");
   });
