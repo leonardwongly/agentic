@@ -65,7 +65,8 @@ describe("api security headers", () => {
     const directJsonRoutes: string[] = [];
     const directResponseRoutes: string[] = [];
     const documentedRawResponseAllowlist = new Set([
-      path.join(process.cwd(), "apps/web/app/api/agents/activity/route.ts")
+      path.join(process.cwd(), "apps/web/app/api/agents/activity/route.ts"),
+      path.join(process.cwd(), "apps/web/app/api/jobs/[id]/events/route.ts")
     ]);
 
     for (const routeFile of routeFiles) {

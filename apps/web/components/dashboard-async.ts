@@ -121,9 +121,13 @@ type DashboardAsyncOptions = {
   fetchImpl?: typeof fetch;
 };
 
+type JobEventSource = Pick<EventSource, "addEventListener" | "close">;
+
 type PollJobStatusOptions = DashboardAsyncOptions & {
   pollIntervalMs?: number;
   timeoutMs?: number;
+  eventSourceFactory?: (url: string) => JobEventSource;
+  preferEventStream?: boolean;
 };
 
 const GOAL_JOB_POLL_INTERVAL_MS = 500;
@@ -175,6 +179,22 @@ export async function pollJobStatusUntilSettled<T extends { job: { status: Queue
   const pollIntervalMs = options.pollIntervalMs ?? GOAL_JOB_POLL_INTERVAL_MS;
   const timeoutMs = options.timeoutMs ?? GOAL_JOB_POLL_TIMEOUT_MS;
 
+  if (timeoutMs <= 0) {
+    return null;
+  }
+
+  if (options.preferEventStream !== false) {
+    const streamed = await waitForJobEventStream<T>(statusUrl, {
+      eventSourceFactory: options.eventSourceFactory,
+      fetchImpl,
+      timeoutMs
+    });
+
+    if (streamed !== "fallback") {
+      return streamed;
+    }
+  }
+
   while (Date.now() - startedAt < timeoutMs) {
     const payload = await readJson<T>(
       await fetchImpl(statusUrl, {
@@ -187,6 +207,111 @@ export async function pollJobStatusUntilSettled<T extends { job: { status: Queue
     }
 
     await waitForDelay(pollIntervalMs);
+  }
+
+  return null;
+}
+
+function deriveJobEventsUrl(statusUrl: string): string | null {
+  try {
+    const baseUrl = "http://agentic.local";
+    const parsed = new URL(statusUrl, baseUrl);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const jobsIndex = segments.lastIndexOf("jobs");
+
+    if (jobsIndex < 0 || !segments[jobsIndex + 1]) {
+      return null;
+    }
+
+    const jobId = encodeURIComponent(decodeURIComponent(segments[jobsIndex + 1]!));
+    const eventsPath = `/api/jobs/${jobId}/events`;
+    return parsed.origin === baseUrl ? eventsPath : new URL(eventsPath, parsed.origin).toString();
+  } catch {
+    return null;
+  }
+}
+
+async function waitForJobEventStream<T extends { job: { status: QueuedJobStatus } }>(
+  statusUrl: string,
+  options: {
+    eventSourceFactory?: (url: string) => JobEventSource;
+    fetchImpl: typeof fetch;
+    timeoutMs: number;
+  }
+): Promise<T | null | "fallback"> {
+  const eventsUrl = deriveJobEventsUrl(statusUrl);
+  const eventSourceFactory =
+    options.eventSourceFactory ??
+    (typeof globalThis.EventSource === "function" ? (url: string) => new globalThis.EventSource(url) : null);
+
+  if (!eventsUrl || !eventSourceFactory) {
+    return "fallback";
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const eventSource = eventSourceFactory(eventsUrl);
+    const timeout = globalThis.setTimeout(() => settle(null), options.timeoutMs);
+
+    function settle(value: T | null | "fallback") {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      globalThis.clearTimeout(timeout);
+      eventSource.close();
+      resolve(value);
+    }
+
+    eventSource.addEventListener("job.snapshot", (event) => {
+      const payload = parseJobEventSnapshot(event);
+      if (!payload) {
+        settle("fallback");
+        return;
+      }
+
+      if (payload.job.status !== "completed" && payload.job.status !== "dead_letter") {
+        return;
+      }
+
+      void options
+        .fetchImpl(statusUrl, {
+          cache: "no-store"
+        })
+        .then((response) => readJson<T>(response))
+        .then((finalPayload) => settle(finalPayload))
+        .catch(() => settle("fallback"));
+    });
+
+    eventSource.addEventListener("error", () => settle("fallback"));
+  });
+}
+
+function parseJobEventSnapshot(event: Event): { job: { status: QueuedJobStatus } } | null {
+  if (!("data" in event) || typeof event.data !== "string") {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(event.data) as { job?: { status?: unknown } };
+    const status = payload.job?.status;
+
+    if (
+      status === "queued" ||
+      status === "running" ||
+      status === "retrying" ||
+      status === "completed" ||
+      status === "dead_letter"
+    ) {
+      return {
+        job: {
+          status
+        }
+      };
+    }
+  } catch {
+    return null;
   }
 
   return null;
