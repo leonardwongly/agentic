@@ -33,6 +33,7 @@ describe("governance simulate route", () => {
     const response = await governanceSimulatePostRoute(
       buildAuthorizedJsonRequest("http://localhost/api/governance/simulate", {
         governance: {
+          approvalMode: "risk_based",
           requireAuditExports: true,
           externalSendRequiresApproval: false,
           calendarWriteRequiresApproval: true,

@@ -210,8 +210,11 @@ create table if not exists workspace_selections (
 create table if not exists workspace_governance (
   workspace_id text primary key,
   approval_mode text not null,
-  require_audit_exports boolean not null default false,
+  require_audit_exports boolean not null default true,
   max_auto_run_risk_class text not null,
+  public_sharing_enabled boolean not null default false,
+  provider_access_requires_approval boolean not null default true,
+  escalation_requires_approval boolean not null default true,
   external_send_requires_approval boolean not null default true,
   calendar_write_requires_approval boolean not null default true,
   retention_days integer not null,

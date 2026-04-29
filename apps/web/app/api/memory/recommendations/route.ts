@@ -7,7 +7,7 @@ import {
   filterRecommendationEvidenceEpisodes,
   RecommendationTraceSchema
 } from "@agentic/self-improvement-memory";
-import { CapabilitySchema, WorkspaceGovernanceSchema } from "@agentic/contracts";
+import { CapabilitySchema, WorkspaceGovernanceSchema, enterpriseWorkspaceGovernanceDefaults } from "@agentic/contracts";
 import {
   assessShadowReplayReadiness,
   buildAutonomyBudget,
@@ -69,13 +69,7 @@ async function resolveActiveWorkspaceGovernance(userId: string) {
     (await repository.getWorkspaceGovernance(activeWorkspace.id, userId)) ??
     WorkspaceGovernanceSchema.parse({
       workspaceId: activeWorkspace.id,
-      approvalMode: "risk_based",
-      requireAuditExports: false,
-      maxAutoRunRiskClass: "R1",
-      externalSendRequiresApproval: true,
-      calendarWriteRequiresApproval: true,
-      shadowReplayPolicy: {},
-      retentionDays: 365,
+      ...enterpriseWorkspaceGovernanceDefaults,
       updatedBy: userId,
       createdAt: activeWorkspace.createdAt,
       updatedAt: activeWorkspace.updatedAt

@@ -38,6 +38,7 @@ describe("governance route", () => {
     await repository.saveWorkspaceGovernance(
       {
         ...dashboard.workspaceGovernance!,
+        approvalMode: "risk_based",
         requireAuditExports: true,
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
@@ -130,7 +131,11 @@ describe("governance route", () => {
 
     const response = await governancePostRoute(
       buildAuthorizedJsonRequest("http://localhost/api/governance", {
+        approvalMode: "risk_based",
         requireAuditExports: true,
+        publicSharingEnabled: false,
+        providerAccessRequiresApproval: true,
+        escalationRequiresApproval: true,
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
         maxAutoRunRiskClass: "R2",
@@ -147,6 +152,9 @@ describe("governance route", () => {
       governance: {
         workspaceId: string;
         requireAuditExports: boolean;
+        publicSharingEnabled: boolean;
+        providerAccessRequiresApproval: boolean;
+        escalationRequiresApproval: boolean;
         retentionDays: number;
         shadowReplayPolicy: {
           enabled: boolean;
@@ -187,6 +195,9 @@ describe("governance route", () => {
     expect(payload.governance).toMatchObject({
       workspaceId: dashboard.activeWorkspace!.id,
       requireAuditExports: true,
+      publicSharingEnabled: false,
+      providerAccessRequiresApproval: true,
+      escalationRequiresApproval: true,
       retentionDays: 90,
       shadowReplayPolicy: {
         enabled: false,

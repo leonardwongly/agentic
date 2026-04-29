@@ -113,7 +113,7 @@ export async function POST(request: Request) {
       requestedBy: principal.userId,
       actorContext,
       jobId: null,
-      details: body.kind === "retention_enforcement" ? { retentionDays: dashboard.workspaceGovernance?.retentionDays ?? 365 } : {},
+      details: body.kind === "retention_enforcement" ? { retentionDays: dashboard.workspaceGovernance?.retentionDays ?? 90 } : {},
       result: {},
       startedAt: null,
       completedAt: null,

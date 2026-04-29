@@ -47,6 +47,22 @@ async function assertCanManageGoalShares(
   }
 }
 
+async function assertPublicSharingEnabled(
+  repository: Awaited<ReturnType<typeof getSeededRepository>>,
+  workspaceId: string | null,
+  userId: string
+) {
+  if (!workspaceId) {
+    throw new ApiRouteError(403, "Public sharing is disabled until workspace governance explicitly enables it.");
+  }
+
+  const governance = await repository.getWorkspaceGovernance(workspaceId, userId);
+
+  if (!governance?.publicSharingEnabled) {
+    throw new ApiRouteError(403, "Public sharing is disabled until workspace governance explicitly enables it.");
+  }
+}
+
 export async function POST(request: Request, context: RouteContext) {
   try {
     const principal = await requireApiSession(request);
@@ -61,6 +77,7 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     await assertCanManageGoalShares(repository, bundle.goal.workspaceId, bundle.goal.userId, principal.userId);
+    await assertPublicSharingEnabled(repository, bundle.goal.workspaceId, principal.userId);
 
     const expiresAt = getGoalShareExpiry();
     const createdAt = new Date().toISOString();

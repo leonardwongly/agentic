@@ -5,6 +5,7 @@ import {
   commitmentInboxBucketValues,
   privacyOperationKindValues,
   workspaceRoleValues,
+  enterpriseWorkspaceGovernanceDefaults,
   DEFAULT_COMMITMENT_INBOX_LIMIT,
   type OperatorProduct,
   type OperatorProductSelection,
@@ -172,21 +173,36 @@ type DashboardProps = {
 
 function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt"> {
   return {
-    approvalMode: governance?.approvalMode ?? "risk_based",
-    requireAuditExports: governance?.requireAuditExports ?? false,
-    maxAutoRunRiskClass: governance?.maxAutoRunRiskClass ?? "R1",
-    externalSendRequiresApproval: governance?.externalSendRequiresApproval ?? true,
-    calendarWriteRequiresApproval: governance?.calendarWriteRequiresApproval ?? true,
+    approvalMode: governance?.approvalMode ?? enterpriseWorkspaceGovernanceDefaults.approvalMode,
+    requireAuditExports: governance?.requireAuditExports ?? enterpriseWorkspaceGovernanceDefaults.requireAuditExports,
+    maxAutoRunRiskClass: governance?.maxAutoRunRiskClass ?? enterpriseWorkspaceGovernanceDefaults.maxAutoRunRiskClass,
+    publicSharingEnabled: governance?.publicSharingEnabled ?? enterpriseWorkspaceGovernanceDefaults.publicSharingEnabled,
+    providerAccessRequiresApproval:
+      governance?.providerAccessRequiresApproval ?? enterpriseWorkspaceGovernanceDefaults.providerAccessRequiresApproval,
+    escalationRequiresApproval: governance?.escalationRequiresApproval ?? enterpriseWorkspaceGovernanceDefaults.escalationRequiresApproval,
+    externalSendRequiresApproval:
+      governance?.externalSendRequiresApproval ?? enterpriseWorkspaceGovernanceDefaults.externalSendRequiresApproval,
+    calendarWriteRequiresApproval:
+      governance?.calendarWriteRequiresApproval ?? enterpriseWorkspaceGovernanceDefaults.calendarWriteRequiresApproval,
     shadowReplayPolicy: {
-      enabled: governance?.shadowReplayPolicy?.enabled ?? true,
-      promotionMode: governance?.shadowReplayPolicy?.promotionMode ?? "validated_autonomy",
-      rollbackOutcome: governance?.shadowReplayPolicy?.rollbackOutcome ?? "allowed_with_confirmation",
-      minimumMatchedEpisodes: governance?.shadowReplayPolicy?.minimumMatchedEpisodes ?? 3,
-      minimumPrecision: governance?.shadowReplayPolicy?.minimumPrecision ?? 0.8,
-      maximumNegativeOutcomeRate: governance?.shadowReplayPolicy?.maximumNegativeOutcomeRate ?? 0.15,
-      maximumFailureCostRate: governance?.shadowReplayPolicy?.maximumFailureCostRate ?? 0.2
+      enabled: governance?.shadowReplayPolicy?.enabled ?? enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy.enabled,
+      promotionMode:
+        governance?.shadowReplayPolicy?.promotionMode ?? enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy.promotionMode,
+      rollbackOutcome:
+        governance?.shadowReplayPolicy?.rollbackOutcome ?? enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy.rollbackOutcome,
+      minimumMatchedEpisodes:
+        governance?.shadowReplayPolicy?.minimumMatchedEpisodes ??
+        enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy.minimumMatchedEpisodes,
+      minimumPrecision:
+        governance?.shadowReplayPolicy?.minimumPrecision ?? enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy.minimumPrecision,
+      maximumNegativeOutcomeRate:
+        governance?.shadowReplayPolicy?.maximumNegativeOutcomeRate ??
+        enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy.maximumNegativeOutcomeRate,
+      maximumFailureCostRate:
+        governance?.shadowReplayPolicy?.maximumFailureCostRate ??
+        enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy.maximumFailureCostRate
     },
-    retentionDays: governance?.retentionDays ?? 365
+    retentionDays: governance?.retentionDays ?? enterpriseWorkspaceGovernanceDefaults.retentionDays
   };
 }
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema } from "@agentic/contracts";
+import { WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema, enterpriseWorkspaceGovernanceDefaults } from "@agentic/contracts";
 import {
   assessWorkspaceGovernanceConformance,
   buildAutonomyBudget,
@@ -17,6 +17,9 @@ const GovernanceUpdateSchema = z
     approvalMode: WorkspaceGovernanceSchema.shape.approvalMode.optional(),
     requireAuditExports: z.boolean().optional(),
     maxAutoRunRiskClass: WorkspaceGovernanceSchema.shape.maxAutoRunRiskClass.optional(),
+    publicSharingEnabled: z.boolean().optional(),
+    providerAccessRequiresApproval: z.boolean().optional(),
+    escalationRequiresApproval: z.boolean().optional(),
     externalSendRequiresApproval: z.boolean().optional(),
     calendarWriteRequiresApproval: z.boolean().optional(),
     shadowReplayPolicy: WorkspaceShadowReplayPolicySchema.partial().strict().optional(),
@@ -79,13 +82,7 @@ export async function POST(request: Request) {
       (await repository.getWorkspaceGovernance(activeWorkspace.id, principal.userId)) ??
       WorkspaceGovernanceSchema.parse({
         workspaceId: activeWorkspace.id,
-        approvalMode: "risk_based",
-        requireAuditExports: false,
-        maxAutoRunRiskClass: "R1",
-        externalSendRequiresApproval: true,
-        calendarWriteRequiresApproval: true,
-        shadowReplayPolicy: {},
-        retentionDays: 365,
+        ...enterpriseWorkspaceGovernanceDefaults,
         updatedBy: principal.userId,
         createdAt: activeWorkspace.createdAt,
         updatedAt: activeWorkspace.updatedAt

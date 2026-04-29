@@ -80,12 +80,15 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     saveWorkspaceSelection: async (selection) => selection,
     getWorkspaceGovernance: async () => ({
       workspaceId: workspace.id,
-      approvalMode: "risk_based",
-      requireAuditExports: false,
+      approvalMode: "always_review",
+      requireAuditExports: true,
       maxAutoRunRiskClass: "R1",
+      publicSharingEnabled: true,
+      providerAccessRequiresApproval: true,
+      escalationRequiresApproval: true,
       externalSendRequiresApproval: true,
       calendarWriteRequiresApproval: true,
-      retentionDays: 365,
+      retentionDays: 90,
       updatedBy: SYSTEM_USER_ID,
       createdAt: timestamp,
       updatedAt: timestamp
@@ -159,12 +162,15 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       ],
       workspaceGovernance: {
         workspaceId: workspace.id,
-        approvalMode: "risk_based",
-        requireAuditExports: false,
+        approvalMode: "always_review",
+        requireAuditExports: true,
         maxAutoRunRiskClass: "R1",
+        publicSharingEnabled: false,
+        providerAccessRequiresApproval: true,
+        escalationRequiresApproval: true,
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
-        retentionDays: 365,
+        retentionDays: 90,
         updatedBy: SYSTEM_USER_ID,
         createdAt: timestamp,
         updatedAt: timestamp
@@ -318,17 +324,37 @@ describe("goal share route", () => {
     repository: ReturnType<typeof createRepository>,
     userId: string,
     request: string,
-    workspaceId?: string | null
+    workspaceId?: string | null,
+    options: { enablePublicSharing?: boolean } = {}
   ) {
+    const effectiveWorkspaceId =
+      workspaceId === undefined ? (await repository.getDashboardData(userId)).activeWorkspace?.id ?? null : workspaceId;
     const bundle = await processUserRequest({
       userId,
       request,
-      workspaceId,
+      workspaceId: effectiveWorkspaceId,
       memories: await repository.listMemory(userId),
       integrations: await repository.listIntegrations(userId)
     });
 
     await repository.saveGoalBundle(bundle);
+
+    if (options.enablePublicSharing ?? true) {
+      const governance = bundle.goal.workspaceId ? await repository.getWorkspaceGovernance(bundle.goal.workspaceId, userId) : null;
+
+      if (governance) {
+        await repository.saveWorkspaceGovernance(
+          {
+            ...governance,
+            publicSharingEnabled: true,
+            updatedBy: userId,
+            updatedAt: new Date().toISOString()
+          },
+          createSystemActorContext(userId)
+        );
+      }
+    }
+
     return bundle;
   }
 
@@ -360,6 +386,33 @@ describe("goal share route", () => {
         userId: ownerUserId,
         role: "owner",
         joinedAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z"
+      },
+      ownerActor
+    );
+    await repository.saveWorkspaceGovernance(
+      {
+        workspaceId,
+        approvalMode: "always_review",
+        requireAuditExports: true,
+        maxAutoRunRiskClass: "R1",
+        publicSharingEnabled: true,
+        providerAccessRequiresApproval: true,
+        escalationRequiresApproval: true,
+        externalSendRequiresApproval: true,
+        calendarWriteRequiresApproval: true,
+        shadowReplayPolicy: {
+          enabled: true,
+          promotionMode: "shadow_only",
+          rollbackOutcome: "downgrade_to_draft",
+          minimumMatchedEpisodes: 3,
+          minimumPrecision: 0.8,
+          maximumNegativeOutcomeRate: 0.15,
+          maximumFailureCostRate: 0.2
+        },
+        retentionDays: 90,
+        updatedBy: ownerUserId,
+        createdAt: "2026-04-22T00:00:00.000Z",
         updatedAt: "2026-04-22T00:00:00.000Z"
       },
       ownerActor
@@ -434,6 +487,39 @@ describe("goal share route", () => {
     expect(createdLog?.details.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(JSON.stringify(createdLog?.details ?? {})).not.toContain(decodeURIComponent(token) ?? "");
     expectNoStoreHeaders(response);
+  });
+
+  it("rejects public share creation until workspace governance explicitly enables it", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Prepare a private board report that should not be shared by default.",
+      undefined,
+      { enablePublicSharing: false }
+    );
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await goalShareRoute(
+      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const payload = (await response.json()) as { error: string };
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+
+    expect(response.status).toBe(403);
+    expect(payload.error).toBe("Public sharing is disabled until workspace governance explicitly enables it.");
+    expect(shares).toHaveLength(0);
   });
 
   it("stamps session actor context onto share creation logs", async () => {
@@ -541,6 +627,7 @@ describe("goal share route", () => {
     const bundle = await processUserRequest({
       userId: SYSTEM_USER_ID,
       request: "Triage my inbox and prepare replies for important clients.",
+      workspaceId: "workspace-personal-system-user",
       memories: [],
       integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
     });
