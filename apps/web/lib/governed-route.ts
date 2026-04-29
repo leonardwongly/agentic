@@ -19,7 +19,23 @@ type GovernedRouteRateLimitOptions = {
 
 type GovernedRouteIdempotencyMode = false | "optional" | "required";
 
-export type GovernedMutationContext<TBody, TRouteContext> = {
+type GovernedMutationRouteBaseOptions = {
+  route: string;
+  fallbackError: string;
+  requireJson?: boolean;
+  rateLimit?: GovernedRouteRateLimitOptions;
+  idempotency?: GovernedRouteIdempotencyMode;
+};
+
+type GovernedMutationHandler<TBody, TRouteContext> = (
+  context: GovernedMutationContext<TBody, TRouteContext>
+) => Promise<Response> | Response;
+
+type GovernedMutationRoute<TRouteContext> = [TRouteContext] extends [undefined]
+  ? (request: Request, routeContext?: unknown) => Promise<Response>
+  : (request: Request, routeContext: TRouteContext) => Promise<Response>;
+
+export type GovernedMutationContext<TBody = undefined, TRouteContext = undefined> = {
   request: Request;
   routeContext: TRouteContext;
   principal: AuthPrincipal;
@@ -28,20 +44,29 @@ export type GovernedMutationContext<TBody, TRouteContext> = {
   idempotencyKey: string | null;
 };
 
-export type GovernedMutationRouteOptions<TBody> = {
-  route: string;
-  fallbackError: string;
-  bodySchema?: z.ZodType<TBody>;
-  requireJson?: boolean;
-  rateLimit?: GovernedRouteRateLimitOptions;
-  idempotency?: GovernedRouteIdempotencyMode;
+type GovernedMutationNoBodyRouteOptions = GovernedMutationRouteBaseOptions & {
+  bodySchema?: never;
 };
 
-export function createGovernedMutationRoute<TBody = undefined, TRouteContext = unknown>(
+export type GovernedMutationRouteOptions<TBody> = GovernedMutationRouteBaseOptions & {
+  bodySchema: z.ZodType<TBody>;
+};
+
+export function createGovernedMutationRoute<TBody, TRouteContext = undefined>(
   options: GovernedMutationRouteOptions<TBody>,
-  handler: (context: GovernedMutationContext<TBody, TRouteContext>) => Promise<Response> | Response
-) {
-  return async function governedMutationRoute(request: Request, routeContext?: TRouteContext): Promise<Response> {
+  handler: GovernedMutationHandler<TBody, TRouteContext>
+): GovernedMutationRoute<TRouteContext>;
+
+export function createGovernedMutationRoute<TBody extends undefined = undefined, TRouteContext = undefined>(
+  options: GovernedMutationNoBodyRouteOptions,
+  handler: GovernedMutationHandler<undefined, TRouteContext>
+): GovernedMutationRoute<TRouteContext>;
+
+export function createGovernedMutationRoute<TBody = undefined, TRouteContext = undefined>(
+  options: GovernedMutationRouteOptions<TBody> | GovernedMutationNoBodyRouteOptions,
+  handler: GovernedMutationHandler<TBody, TRouteContext>
+): GovernedMutationRoute<TRouteContext> {
+  const governedMutationRoute = async (request: Request, routeContext: TRouteContext): Promise<Response> => {
     return withApiTelemetry(request, options.route, async () => {
       try {
         const principal = await requireApiSession(request);
@@ -76,7 +101,7 @@ export function createGovernedMutationRoute<TBody = undefined, TRouteContext = u
 
         return await handler({
           request,
-          routeContext: routeContext as TRouteContext,
+          routeContext,
           principal,
           actorContext,
           body,
@@ -87,4 +112,6 @@ export function createGovernedMutationRoute<TBody = undefined, TRouteContext = u
       }
     });
   };
+
+  return governedMutationRoute as GovernedMutationRoute<TRouteContext>;
 }

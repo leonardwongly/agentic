@@ -36,6 +36,30 @@ function buildRoute() {
   );
 }
 
+type RouteContext = {
+  params: Promise<{
+    id: string;
+  }>;
+};
+
+function buildNoBodyRoute() {
+  return createGovernedMutationRoute<undefined, RouteContext>({
+    route: "api.test.no_body_governed_mutation",
+    fallbackError: "Failed to run no-body governed mutation.",
+    rateLimit: {
+      namespace: "test-no-body-governed-mutation",
+      error: "Too many no-body governed mutation requests."
+    },
+    idempotency: "optional"
+  }, async ({ routeContext, body }) => {
+    const { id } = await routeContext.params;
+    return authenticatedJson({
+      id,
+      hasBody: body !== undefined
+    });
+  });
+}
+
 describe("governed mutation route wrapper", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
 
@@ -80,6 +104,48 @@ describe("governed mutation route wrapper", () => {
         name: "Ada"
       },
       idempotencyKey: "test-governed-mutation-1"
+    });
+    expectNoStoreHeaders(response);
+  });
+
+  it("accepts JSON content types case-insensitively for governed body routes", async () => {
+    const route = buildRoute();
+    const response = await route(
+      new Request("http://localhost/api/test-governed-mutation", {
+        method: "POST",
+        headers: {
+          "content-type": "Application/JSON; charset=utf-8",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          name: "Ada"
+        })
+      })
+    );
+    const payload = (await response.json()) as { body: { name: string } };
+
+    expect(response.status).toBe(200);
+    expect(payload.body.name).toBe("Ada");
+    expectNoStoreHeaders(response);
+  });
+
+  it("does not require a JSON content type for no-body governed routes", async () => {
+    const route = buildNoBodyRoute();
+    const response = await route(
+      new Request("http://localhost/api/test-no-body-governed-mutation", {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      { params: Promise.resolve({ id: "route-1" }) }
+    );
+    const payload = (await response.json()) as { id: string; hasBody: boolean };
+
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({
+      id: "route-1",
+      hasBody: false
     });
     expectNoStoreHeaders(response);
   });
@@ -147,3 +213,15 @@ describe("governed mutation route wrapper", () => {
     expectNoStoreHeaders(response);
   });
 });
+
+if (false) {
+  // @ts-expect-error body-typed governed routes must provide a bodySchema.
+  createGovernedMutationRoute<{ name: string }>({
+    route: "api.test.invalid_body_typed_route",
+    fallbackError: "Failed to run invalid body-typed route."
+  }, async ({ body }) => authenticatedJson(body));
+
+  const route = buildNoBodyRoute();
+  // @ts-expect-error routes with typed route context must receive that context.
+  void route(new Request("http://localhost/api/test-no-body-governed-mutation"));
+}
