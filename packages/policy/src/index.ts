@@ -123,10 +123,38 @@ export type GovernanceSimulationScenario = {
   description: string;
   capabilities: Capability[];
   confidence: number;
+  expectedDecision?: "allow" | "approval" | "block" | "draft";
 };
 
 export type GovernanceSimulationScenarioResult = GovernanceSimulationScenario & {
   result: PolicySimulationResult;
+};
+
+export type GovernanceSimulationCalibrationThresholds = {
+  maximumFalseAllowRate: number;
+  maximumFalseDenyRate: number;
+  maximumLatencyMs: number;
+  minimumScenarioCoverageRate: number;
+};
+
+export type GovernanceSimulationCalibrationReport = {
+  status: "pass" | "degraded" | "fail";
+  autonomyExpansionAllowed: boolean;
+  thresholds: GovernanceSimulationCalibrationThresholds;
+  metrics: {
+    totalScenarios: number;
+    expectedScenarioCount: number;
+    scenarioCoverageRate: number;
+    falseAllowCount: number;
+    falseDenyCount: number;
+    escalationCount: number;
+    falseAllowRate: number;
+    falseDenyRate: number;
+    escalationRate: number;
+    latencyMs: number;
+  };
+  findings: string[];
+  simulations: GovernanceSimulationScenarioResult[];
 };
 
 export function computeTrustFromMemories(memories: MemoryRecord[], taskTitle: string, capabilities: Capability[]): TrustSignal {
@@ -811,35 +839,40 @@ export function buildGovernanceSimulationScenarios(): GovernanceSimulationScenar
       title: "Read project notes",
       description: "Low-risk information retrieval inside the workspace.",
       capabilities: ["read", "search"],
-      confidence: 0.94
+      confidence: 0.94,
+      expectedDecision: "allow"
     },
     {
       id: "draft-update",
       title: "Draft and update the weekly operating note",
       description: "Normal internal drafting and update work.",
       capabilities: ["create", "update", "draft"],
-      confidence: 0.9
+      confidence: 0.9,
+      expectedDecision: "allow"
     },
     {
       id: "external-send",
       title: "Send an external stakeholder update",
       description: "External commitment with communication risk.",
       capabilities: ["send"],
-      confidence: 0.9
+      confidence: 0.9,
+      expectedDecision: "approval"
     },
     {
       id: "calendar-write",
       title: "Schedule an executive review meeting",
       description: "Calendar write that creates an external commitment.",
       capabilities: ["schedule"],
-      confidence: 0.9
+      confidence: 0.9,
+      expectedDecision: "approval"
     },
     {
       id: "destructive-action",
       title: "Delete a workspace note permanently",
       description: "Irreversible destructive action.",
       capabilities: ["delete"],
-      confidence: 0.95
+      confidence: 0.95,
+      expectedDecision: "block"
     }
   ];
 }
@@ -862,6 +895,112 @@ export function simulateGovernanceScenarios(params: {
       scorecard: params.scorecard
     })
   }));
+}
+
+function classifyPolicyDecision(decision: PolicyDecision): NonNullable<GovernanceSimulationScenario["expectedDecision"]> {
+  if (decision.outcome === "blocked") {
+    return "block";
+  }
+
+  if (decision.outcome === "downgrade_to_draft") {
+    return "draft";
+  }
+
+  if (decision.requiresApproval || decision.outcome === "allowed_with_confirmation" || decision.outcome === "escalate") {
+    return "approval";
+  }
+
+  return "allow";
+}
+
+export function evaluateGovernanceSimulationCalibration(params: {
+  simulations: GovernanceSimulationScenarioResult[];
+  latencyMs: number;
+  thresholds?: Partial<GovernanceSimulationCalibrationThresholds>;
+}): GovernanceSimulationCalibrationReport {
+  const thresholds: GovernanceSimulationCalibrationThresholds = {
+    maximumFalseAllowRate: params.thresholds?.maximumFalseAllowRate ?? 0,
+    maximumFalseDenyRate: params.thresholds?.maximumFalseDenyRate ?? 0.2,
+    maximumLatencyMs: params.thresholds?.maximumLatencyMs ?? 250,
+    minimumScenarioCoverageRate: params.thresholds?.minimumScenarioCoverageRate ?? 0.8
+  };
+  const expectedScenarios = params.simulations.filter((scenario) => scenario.expectedDecision);
+  const falseAllowCount = expectedScenarios.filter((scenario) => {
+    const actual = classifyPolicyDecision(scenario.result.decision);
+    return actual === "allow" && scenario.expectedDecision !== "allow";
+  }).length;
+  const falseDenyCount = expectedScenarios.filter((scenario) => {
+    const actual = classifyPolicyDecision(scenario.result.decision);
+    return actual !== "allow" && scenario.expectedDecision === "allow";
+  }).length;
+  const escalationCount = params.simulations.filter((scenario) => scenario.result.decision.requiresApproval).length;
+  const expectedScenarioCount = expectedScenarios.length;
+  const scenarioCoverageRate = params.simulations.length > 0 ? expectedScenarioCount / params.simulations.length : 0;
+  const falseAllowRate = expectedScenarioCount > 0 ? falseAllowCount / expectedScenarioCount : 0;
+  const falseDenyRate = expectedScenarioCount > 0 ? falseDenyCount / expectedScenarioCount : 0;
+  const escalationRate = params.simulations.length > 0 ? escalationCount / params.simulations.length : 0;
+  const findings: string[] = [];
+
+  if (scenarioCoverageRate < thresholds.minimumScenarioCoverageRate) {
+    findings.push(
+      `Scenario coverage ${(scenarioCoverageRate * 100).toFixed(0)}% is below the ${(thresholds.minimumScenarioCoverageRate * 100).toFixed(0)}% minimum.`
+    );
+  }
+
+  if (falseAllowRate > thresholds.maximumFalseAllowRate) {
+    findings.push(
+      `False allow rate ${(falseAllowRate * 100).toFixed(0)}% exceeds the ${(thresholds.maximumFalseAllowRate * 100).toFixed(0)}% maximum.`
+    );
+  }
+
+  if (falseDenyRate > thresholds.maximumFalseDenyRate) {
+    findings.push(
+      `False deny rate ${(falseDenyRate * 100).toFixed(0)}% exceeds the ${(thresholds.maximumFalseDenyRate * 100).toFixed(0)}% maximum.`
+    );
+  }
+
+  if (params.latencyMs > thresholds.maximumLatencyMs) {
+    findings.push(`Simulation latency ${params.latencyMs}ms exceeds the ${thresholds.maximumLatencyMs}ms maximum.`);
+  }
+
+  const status = findings.some((finding) => finding.includes("False allow")) ? "fail" : findings.length > 0 ? "degraded" : "pass";
+
+  return {
+    status,
+    autonomyExpansionAllowed: status === "pass",
+    thresholds,
+    metrics: {
+      totalScenarios: params.simulations.length,
+      expectedScenarioCount,
+      scenarioCoverageRate,
+      falseAllowCount,
+      falseDenyCount,
+      escalationCount,
+      falseAllowRate,
+      falseDenyRate,
+      escalationRate,
+      latencyMs: params.latencyMs
+    },
+    findings,
+    simulations: params.simulations
+  };
+}
+
+export function buildContinuousGovernanceSimulationReport(params: {
+  governance?: WorkspaceGovernance | null;
+  memories?: MemoryRecord[];
+  scorecard?: AgentMetrics | null;
+  scenarios?: GovernanceSimulationScenario[];
+  thresholds?: Partial<GovernanceSimulationCalibrationThresholds>;
+}): GovernanceSimulationCalibrationReport {
+  const startedAt = Date.now();
+  const simulations = simulateGovernanceScenarios(params);
+
+  return evaluateGovernanceSimulationCalibration({
+    simulations,
+    latencyMs: Date.now() - startedAt,
+    thresholds: params.thresholds
+  });
 }
 
 export function getGovernanceApprovalReason(params: {

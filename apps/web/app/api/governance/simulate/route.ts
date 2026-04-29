@@ -9,6 +9,7 @@ import {
   assessWorkspaceGovernanceConformance,
   buildAutonomyBudget,
   buildGovernanceSimulationScenarios,
+  evaluateGovernanceSimulationCalibration,
   simulateGovernanceScenarios
 } from "@agentic/policy";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
@@ -115,15 +116,28 @@ export async function POST(request: Request) {
         capabilities: scenario.capabilities,
         confidence: scenario.confidence
       })) ?? buildGovernanceSimulationScenarios();
+    const simulationStartedAt = Date.now();
+    const simulations = simulateGovernanceScenarios({
+      governance: effectiveGovernance,
+      scenarios
+    });
+    const calibration = evaluateGovernanceSimulationCalibration({
+      simulations,
+      latencyMs: Date.now() - simulationStartedAt
+    });
 
     return authenticatedJson({
       governance: effectiveGovernance,
       autonomyBudget: buildAutonomyBudget(effectiveGovernance),
       conformance: assessWorkspaceGovernanceConformance(effectiveGovernance),
-      simulations: simulateGovernanceScenarios({
-        governance: effectiveGovernance,
-        scenarios
-      }),
+      simulations,
+      calibration: {
+        status: calibration.status,
+        autonomyExpansionAllowed: calibration.autonomyExpansionAllowed,
+        thresholds: calibration.thresholds,
+        metrics: calibration.metrics,
+        findings: calibration.findings
+      },
       dashboard
     });
   } catch (error) {

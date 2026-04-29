@@ -1,5 +1,9 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { runDatabaseMigrations } from "@agentic/db/migration-runtime";
+import { analyzeMigrationDiscipline } from "@agentic/db/migration-discipline";
+import { getDatabaseSchemaStatus, runDatabaseMigrations } from "@agentic/db/migration-runtime";
 
 type AppliedMigrationRow = {
   name: string;
@@ -115,4 +119,102 @@ describe("runDatabaseMigrations", () => {
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(initMigrationIndex).toBeGreaterThan(bootstrapIndex);
   });
+
+  it("reports fresh databases as metadata-missing with pending migrations", async () => {
+    const migrationsDir = await writeMigrationFixtures(["0001_init.sql", "0002_queue.sql"]);
+
+    const status = await getDatabaseSchemaStatus({
+      pool: pool as never,
+      migrationsDir
+    });
+
+    expect(status).toMatchObject({
+      ready: false,
+      failureReason: "metadata_missing",
+      missingMetadataTable: true,
+      pendingMigrations: ["0001_init.sql", "0002_queue.sql"]
+    });
+  });
+
+  it("distinguishes ready existing schemas from partial migration state", async () => {
+    const migrationsDir = await writeMigrationFixtures(["0001_init.sql", "0002_queue.sql"]);
+
+    await runDatabaseMigrations({
+      pool: pool as never,
+      migrationsDir
+    });
+
+    await expect(
+      getDatabaseSchemaStatus({
+        pool: pool as never,
+        migrationsDir
+      })
+    ).resolves.toMatchObject({
+      ready: true,
+      failureReason: null,
+      pendingMigrations: []
+    });
+
+    await writeFile(path.join(migrationsDir, "0003_policy.sql"), "select 3;\n");
+
+    await expect(
+      getDatabaseSchemaStatus({
+        pool: pool as never,
+        migrationsDir
+      })
+    ).resolves.toMatchObject({
+      ready: false,
+      failureReason: "pending_migrations",
+      pendingMigrations: ["0003_policy.sql"]
+    });
+  });
+
+  it("fails migration discipline checks for malformed names, new duplicate prefixes, and missing rollback notes", () => {
+    const report = analyzeMigrationDiscipline({
+      rollbackNotes: "- `0001_init.sql`: restore from backup.\n",
+      migrations: [
+        { name: "0001_init.sql", sql: "select 1;" },
+        { name: "0002-good.sql", sql: "select 2;" },
+        { name: "0003_policy.sql", sql: "select 3;" },
+        { name: "0003_more_policy.sql", sql: "select 4;" }
+      ]
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "invalid_name", migration: "0002-good.sql", severity: "fail" }),
+        expect.objectContaining({ code: "duplicate_prefix", migration: "0003_policy.sql", severity: "fail" }),
+        expect.objectContaining({ code: "missing_rollback_note", migration: "0003_more_policy.sql", severity: "fail" })
+      ])
+    );
+  });
+
+  it("tolerates documented legacy duplicate prefixes as warnings while keeping the gate non-failing", () => {
+    const report = analyzeMigrationDiscipline({
+      rollbackNotes: [
+        "- `0004_team_responsibility.sql`: restore from backup.",
+        "- `0004_workspace_shadow_replay_policy.sql`: restore from backup."
+      ].join("\n"),
+      migrations: [
+        { name: "0004_team_responsibility.sql", sql: "select 1;" },
+        { name: "0004_workspace_shadow_replay_policy.sql", sql: "select 2;" }
+      ]
+    });
+
+    expect(report.status).toBe("warn");
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "duplicate_prefix", severity: "warn" })
+      ])
+    );
+  });
 });
+
+async function writeMigrationFixtures(names: string[]): Promise<string> {
+  const migrationsDir = await mkdtemp(path.join(os.tmpdir(), "agentic-migrations-"));
+
+  await Promise.all(names.map((name, index) => writeFile(path.join(migrationsDir, name), `select ${index + 1};\n`)));
+
+  return migrationsDir;
+}
