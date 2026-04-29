@@ -807,6 +807,86 @@ export const MemoryRecordSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
+export const ContextPacketSourceSchema = z
+  .object({
+    kind: z.enum(["memory", "user_input", "system", "integration", "job", "derived"]),
+    id: z.string().min(1).max(200),
+    summary: z.string().min(1).max(280)
+  })
+  .strict();
+
+export const ContextPacketConsentSchema = z
+  .object({
+    basis: z.enum(["explicit", "implied", "system", "derived"]),
+    grantedBy: z.string().min(1).max(120).nullable().default(null),
+    grantedAt: z.string().datetime().nullable().default(null)
+  })
+  .strict();
+
+export const ContextPacketRetentionSchema = z
+  .object({
+    reviewAt: z.string().datetime().nullable().default(null),
+    expiryAt: z.string().datetime().nullable().default(null)
+  })
+  .strict();
+
+export const ContextPacketFreshnessSchema = z
+  .object({
+    status: z.enum(["fresh", "review_due", "expired", "low_confidence"]),
+    observedAt: z.string().datetime(),
+    staleAt: z.string().datetime().nullable().default(null)
+  })
+  .strict();
+
+export const ContextPacketTransformationSchema = z
+  .object({
+    id: z.string().min(1).max(120),
+    kind: z.enum(["derived_from_memory", "summarized", "redacted", "normalized"]),
+    at: z.string().datetime(),
+    inputIds: z.array(z.string().min(1).max(200)).max(20).default([]),
+    outputId: z.string().min(1).max(200),
+    summary: z.string().min(1).max(280)
+  })
+  .strict();
+
+export const ContextPacketUsageSchema = z
+  .object({
+    usedBy: z.string().min(1).max(120),
+    purpose: z.string().min(1).max(160),
+    usedAt: z.string().datetime()
+  })
+  .strict();
+
+export const ContextPacketLineageSchema = z
+  .object({
+    parentPacketIds: z.array(z.string().min(1).max(200)).max(20).default([]),
+    sourceMemoryIds: z.array(z.string().min(1).max(200)).max(20).default([]),
+    transformationIds: z.array(z.string().min(1).max(120)).max(20).default([])
+  })
+  .strict();
+
+export const ContextPacketSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    userId: z.string().min(1),
+    source: ContextPacketSourceSchema,
+    category: z.string().min(1).max(120),
+    contentSummary: z.string().min(1).max(500),
+    memoryType: MemoryTypeSchema,
+    sensitivity: z.string().min(1).max(80),
+    permissions: z.array(AgentNameSchema).default([]),
+    retention: ContextPacketRetentionSchema,
+    consent: ContextPacketConsentSchema,
+    freshness: ContextPacketFreshnessSchema,
+    lineage: ContextPacketLineageSchema,
+    transformations: z.array(ContextPacketTransformationSchema).max(20).default([]),
+    usage: z.array(ContextPacketUsageSchema).max(20).default([]),
+    actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime()
+  })
+  .strict();
+
 export const PolicyDecisionSchema = z.object({
   riskClass: RiskClassSchema,
   outcome: z.enum(["allowed", "allowed_with_confirmation", "blocked", "downgrade_to_draft", "escalate"]),
@@ -3084,6 +3164,9 @@ export type WorkflowResponsibilityAssignee = z.infer<typeof WorkflowResponsibili
 export type WorkflowResponsibilityAudit = z.infer<typeof WorkflowResponsibilityAuditSchema>;
 export type WorkflowResponsibility = z.infer<typeof WorkflowResponsibilitySchema>;
 export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
+export type ContextPacket = z.infer<typeof ContextPacketSchema>;
+export type ContextPacketTransformation = z.infer<typeof ContextPacketTransformationSchema>;
+export type ContextPacketUsage = z.infer<typeof ContextPacketUsageSchema>;
 export type PolicyDecision = z.infer<typeof PolicyDecisionSchema>;
 export type GovernanceConformanceCheck = z.infer<typeof GovernanceConformanceCheckSchema>;
 export type GovernanceConformanceReport = z.infer<typeof GovernanceConformanceReportSchema>;
