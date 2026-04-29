@@ -110,6 +110,8 @@ function buildDatabaseCheck(params: ReadinessEvaluationParams): ReadinessCheck {
         reachable: true,
         pendingMigrations: params.databaseStatus.pendingMigrations.length,
         driftedMigrations: params.databaseStatus.driftedMigrations.length,
+        missingAuthRuntimeTables: params.databaseStatus.requiredSchemaObjects.missingTables.length,
+        missingAuthRuntimeIndexes: params.databaseStatus.requiredSchemaObjects.missingIndexes.length,
         metadataMissing: params.databaseStatus.missingMetadataTable
       }
     };
@@ -122,7 +124,9 @@ function buildDatabaseCheck(params: ReadinessEvaluationParams): ReadinessCheck {
     details: {
       reachable: true,
       ready: true,
-      appliedMigrations: params.databaseStatus.appliedMigrations.length
+      appliedMigrations: params.databaseStatus.appliedMigrations.length,
+      authRuntimeTables: params.databaseStatus.requiredSchemaObjects.tables.length,
+      authRuntimeIndexes: params.databaseStatus.requiredSchemaObjects.indexes.length
     }
   };
 }
