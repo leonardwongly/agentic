@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { REQUIRED_AUTH_RUNTIME_INDEXES, REQUIRED_AUTH_RUNTIME_TABLES } from "@agentic/db/auth-runtime-schema";
 import { listMigrationFiles } from "@agentic/db/migration-runtime";
 import { getDatabaseSchemaStatus } from "@agentic/db/schema-status";
 
@@ -10,12 +11,8 @@ type AppliedMigrationRow = {
 
 const REQUIRED_AUTH_RUNTIME_OBJECTS = new Set([
   "agentic_schema_migrations",
-  "auth_session_rate_limits",
-  "auth_revoked_sessions",
-  "session_unlock_attempts",
-  "auth_session_rate_limits_updated_at_idx",
-  "auth_revoked_sessions_expires_at_idx",
-  "session_unlock_attempts_last_seen_at_idx"
+  ...REQUIRED_AUTH_RUNTIME_TABLES,
+  ...REQUIRED_AUTH_RUNTIME_INDEXES
 ]);
 
 class FakeSchemaPool {
@@ -35,15 +32,16 @@ class FakeSchemaPool {
     }
 
     if (normalized === "select to_regclass($1) as exists") {
-      const objectName = String((params ?? [])[0] ?? "").replace(/^public\./u, "");
+      const objectName = String((params ?? [])[0] ?? "");
+      expect(objectName).not.toMatch(/^public\./u);
+      if (objectName === "agentic_schema_migrations") {
+        return {
+          rows: [{ exists: this.state.metadataTableExists ? objectName : null }]
+        };
+      }
+
       return {
         rows: [{ exists: this.state.schemaObjects?.has(objectName) ? objectName : null }]
-      };
-    }
-
-    if (normalized.includes("select to_regclass('public.agentic_schema_migrations') as exists")) {
-      return {
-        rows: [{ exists: this.state.metadataTableExists ? "agentic_schema_migrations" : null }]
       };
     }
 

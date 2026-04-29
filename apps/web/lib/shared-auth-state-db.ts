@@ -1,4 +1,8 @@
 import { Pool, type PoolClient } from "pg";
+import {
+  getRequiredAuthRuntimeSchemaObjectStatus,
+  type SchemaObjectQueryable
+} from "@agentic/db/auth-runtime-schema";
 import type { AuthSessionStateStore, SessionRateLimitStatus } from "./auth-session-store";
 import type { SessionUnlockStateStore, UnlockRateLimitStatus } from "./session-unlock-store";
 
@@ -13,18 +17,6 @@ const MAX_FAILED_UNLOCK_ATTEMPTS = 5;
 const STALE_UNLOCK_ENTRY_TTL_MS = Math.max(UNLOCK_WINDOW_MS, UNLOCK_BLOCK_MS) * 2;
 
 const CLEANUP_INTERVAL_MS = 60_000;
-
-const REQUIRED_SHARED_AUTH_STATE_TABLES = [
-  "auth_session_rate_limits",
-  "auth_revoked_sessions",
-  "session_unlock_attempts"
-] as const;
-
-const REQUIRED_SHARED_AUTH_STATE_INDEXES = [
-  "auth_session_rate_limits_updated_at_idx",
-  "auth_revoked_sessions_expires_at_idx",
-  "session_unlock_attempts_last_seen_at_idx"
-] as const;
 
 type Queryable = {
   query: Pool["query"];
@@ -46,32 +38,11 @@ export class SharedAuthStateStoreError extends Error {
   }
 }
 
-async function schemaObjectExists(queryable: Queryable, objectName: string): Promise<boolean> {
-  const result = await queryable.query<{ exists: string | null }>("select to_regclass($1) as exists", [`public.${objectName}`]);
-  return Boolean(result.rows[0]?.exists);
-}
-
 async function findMissingSharedAuthStateObjects(queryable: Queryable): Promise<{
   missingTables: string[];
   missingIndexes: string[];
 }> {
-  const tableChecks = await Promise.all(
-    REQUIRED_SHARED_AUTH_STATE_TABLES.map(async (table) => ({
-      name: table,
-      exists: await schemaObjectExists(queryable, table)
-    }))
-  );
-  const indexChecks = await Promise.all(
-    REQUIRED_SHARED_AUTH_STATE_INDEXES.map(async (index) => ({
-      name: index,
-      exists: await schemaObjectExists(queryable, index)
-    }))
-  );
-
-  return {
-    missingTables: tableChecks.filter((check) => !check.exists).map((check) => check.name),
-    missingIndexes: indexChecks.filter((check) => !check.exists).map((check) => check.name)
-  };
+  return getRequiredAuthRuntimeSchemaObjectStatus(queryable as SchemaObjectQueryable);
 }
 
 export async function assertSharedAuthStateSchemaReady(queryable: Queryable = getSharedAuthStatePool()): Promise<void> {
@@ -114,9 +85,8 @@ function getSharedAuthStatePool(): Pool {
 }
 
 async function ensureSharedAuthStateSchemaReady(): Promise<void> {
-  globalThis.__agenticSharedAuthStateBootstrap ??= getSharedAuthStatePool()
-    .query("select 1")
-    .then(() => assertSharedAuthStateSchemaReady())
+  const pool = getSharedAuthStatePool();
+  globalThis.__agenticSharedAuthStateBootstrap ??= assertSharedAuthStateSchemaReady(pool)
     .catch((error) => {
       globalThis.__agenticSharedAuthStateBootstrap = undefined;
       if (error instanceof SharedAuthStateStoreError) {

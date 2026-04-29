@@ -3,19 +3,15 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
+import {
+  getRequiredAuthRuntimeSchemaObjectStatus,
+  REQUIRED_AUTH_RUNTIME_INDEXES,
+  REQUIRED_AUTH_RUNTIME_TABLES,
+  type AuthRuntimeSchemaObjectStatus
+} from "./auth-runtime-schema";
 
 const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const SCHEMA_MIGRATIONS_TABLE = "agentic_schema_migrations";
-const REQUIRED_AUTH_RUNTIME_TABLES = [
-  "auth_session_rate_limits",
-  "auth_revoked_sessions",
-  "session_unlock_attempts"
-] as const;
-const REQUIRED_AUTH_RUNTIME_INDEXES = [
-  "auth_session_rate_limits_updated_at_idx",
-  "auth_revoked_sessions_expires_at_idx",
-  "session_unlock_attempts_last_seen_at_idx"
-] as const;
 const LEGACY_AGENT_DEFINITIONS_BOOTSTRAP_SQL = `
   create table if not exists agent_definitions (
     id text primary key,
@@ -71,12 +67,7 @@ export type DatabaseSchemaStatus = {
   appliedMigrations: string[];
   pendingMigrations: string[];
   driftedMigrations: string[];
-  requiredSchemaObjects: {
-    tables: string[];
-    indexes: string[];
-    missingTables: string[];
-    missingIndexes: string[];
-  };
+  requiredSchemaObjects: AuthRuntimeSchemaObjectStatus;
   lastAppliedAt: string | null;
 };
 
@@ -188,33 +179,6 @@ async function loadAppliedMigrationRows(
   }));
 }
 
-async function schemaObjectExists(queryable: MigrationQueryable, objectName: string): Promise<boolean> {
-  const result = await queryable.query<{ exists: string | null }>("select to_regclass($1) as exists", [`public.${objectName}`]);
-  return Boolean(result.rows[0]?.exists);
-}
-
-async function getRequiredSchemaObjectStatus(queryable: MigrationQueryable): Promise<DatabaseSchemaStatus["requiredSchemaObjects"]> {
-  const tableChecks = await Promise.all(
-    REQUIRED_AUTH_RUNTIME_TABLES.map(async (table) => ({
-      name: table,
-      exists: await schemaObjectExists(queryable, table)
-    }))
-  );
-  const indexChecks = await Promise.all(
-    REQUIRED_AUTH_RUNTIME_INDEXES.map(async (index) => ({
-      name: index,
-      exists: await schemaObjectExists(queryable, index)
-    }))
-  );
-
-  return {
-    tables: [...REQUIRED_AUTH_RUNTIME_TABLES],
-    indexes: [...REQUIRED_AUTH_RUNTIME_INDEXES],
-    missingTables: tableChecks.filter((check) => !check.exists).map((check) => check.name),
-    missingIndexes: indexChecks.filter((check) => !check.exists).map((check) => check.name)
-  };
-}
-
 function summarizeDatabaseSchemaStatus(params: {
   missingMetadataTable: boolean;
   pendingMigrations: string[];
@@ -312,9 +276,9 @@ export async function getDatabaseSchemaStatus(options?: {
         });
       }
 
-      const metadataTableResult = await queryable.query<{ exists: string | null }>(
-        `select to_regclass('public.${SCHEMA_MIGRATIONS_TABLE}') as exists`
-      );
+      const metadataTableResult = await queryable.query<{ exists: string | null }>("select to_regclass($1) as exists", [
+        SCHEMA_MIGRATIONS_TABLE
+      ]);
       const metadataTableExists = Boolean(metadataTableResult.rows[0]?.exists);
 
       if (!metadataTableExists) {
@@ -333,7 +297,7 @@ export async function getDatabaseSchemaStatus(options?: {
       }
 
       const appliedRows = await loadAppliedMigrationRows(queryable);
-      const requiredSchemaObjects = await getRequiredSchemaObjectStatus(queryable);
+      const requiredSchemaObjects = await getRequiredAuthRuntimeSchemaObjectStatus(queryable);
       const appliedByName = new Map(appliedRows.map((row) => [row.name, row]));
       const migrationNames = new Set(migrationFiles.map((migration) => migration.name));
       const pendingMigrations: string[] = [];

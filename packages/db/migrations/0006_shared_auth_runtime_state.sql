@@ -1,3 +1,8 @@
+-- Backfill migration for environments that applied an older 0001_init.sql
+-- before the shared auth runtime tables were migration-managed. These DDL
+-- statements remain intentionally idempotent because fresh databases may
+-- already create the same objects through the current initial migration.
+
 create table if not exists auth_session_rate_limits (
   key text primary key,
   attempts integer not null,
