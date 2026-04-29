@@ -14,38 +14,17 @@ const STALE_UNLOCK_ENTRY_TTL_MS = Math.max(UNLOCK_WINDOW_MS, UNLOCK_BLOCK_MS) * 
 
 const CLEANUP_INTERVAL_MS = 60_000;
 
-const SHARED_AUTH_STATE_BOOTSTRAP_SQL = `
-create table if not exists auth_session_rate_limits (
-  key text primary key,
-  attempts integer not null,
-  window_start timestamptz not null,
-  locked_until timestamptz,
-  updated_at timestamptz not null
-);
+const REQUIRED_SHARED_AUTH_STATE_TABLES = [
+  "auth_session_rate_limits",
+  "auth_revoked_sessions",
+  "session_unlock_attempts"
+] as const;
 
-create table if not exists auth_revoked_sessions (
-  session_id text primary key,
-  expires_at timestamptz not null,
-  revoked_at timestamptz not null
-);
-
-create table if not exists session_unlock_attempts (
-  key text primary key,
-  failures integer not null,
-  first_failure_at timestamptz not null,
-  last_seen_at timestamptz not null,
-  blocked_until timestamptz not null
-);
-
-create index if not exists auth_revoked_sessions_expires_at_idx
-  on auth_revoked_sessions (expires_at);
-
-create index if not exists auth_session_rate_limits_updated_at_idx
-  on auth_session_rate_limits (updated_at);
-
-create index if not exists session_unlock_attempts_last_seen_at_idx
-  on session_unlock_attempts (last_seen_at);
-`;
+const REQUIRED_SHARED_AUTH_STATE_INDEXES = [
+  "auth_session_rate_limits_updated_at_idx",
+  "auth_revoked_sessions_expires_at_idx",
+  "session_unlock_attempts_last_seen_at_idx"
+] as const;
 
 type Queryable = {
   query: Pool["query"];
@@ -64,6 +43,49 @@ export class SharedAuthStateStoreError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message, { cause });
     this.name = "SharedAuthStateStoreError";
+  }
+}
+
+async function schemaObjectExists(queryable: Queryable, objectName: string): Promise<boolean> {
+  const result = await queryable.query<{ exists: string | null }>("select to_regclass($1) as exists", [`public.${objectName}`]);
+  return Boolean(result.rows[0]?.exists);
+}
+
+async function findMissingSharedAuthStateObjects(queryable: Queryable): Promise<{
+  missingTables: string[];
+  missingIndexes: string[];
+}> {
+  const tableChecks = await Promise.all(
+    REQUIRED_SHARED_AUTH_STATE_TABLES.map(async (table) => ({
+      name: table,
+      exists: await schemaObjectExists(queryable, table)
+    }))
+  );
+  const indexChecks = await Promise.all(
+    REQUIRED_SHARED_AUTH_STATE_INDEXES.map(async (index) => ({
+      name: index,
+      exists: await schemaObjectExists(queryable, index)
+    }))
+  );
+
+  return {
+    missingTables: tableChecks.filter((check) => !check.exists).map((check) => check.name),
+    missingIndexes: indexChecks.filter((check) => !check.exists).map((check) => check.name)
+  };
+}
+
+export async function assertSharedAuthStateSchemaReady(queryable: Queryable = getSharedAuthStatePool()): Promise<void> {
+  const missing = await findMissingSharedAuthStateObjects(queryable);
+
+  if (missing.missingTables.length > 0 || missing.missingIndexes.length > 0) {
+    const missingObjects = [
+      ...missing.missingTables.map((name) => `table:${name}`),
+      ...missing.missingIndexes.map((name) => `index:${name}`)
+    ].join(", ");
+
+    throw new SharedAuthStateStoreError(
+      `Shared auth state schema is not ready. Run database migrations before enabling shared auth state. Missing: ${missingObjects}.`
+    );
   }
 }
 
@@ -91,13 +113,17 @@ function getSharedAuthStatePool(): Pool {
   return globalThis.__agenticSharedAuthStatePool;
 }
 
-async function ensureSharedAuthStateTables(): Promise<void> {
+async function ensureSharedAuthStateSchemaReady(): Promise<void> {
   globalThis.__agenticSharedAuthStateBootstrap ??= getSharedAuthStatePool()
-    .query(SHARED_AUTH_STATE_BOOTSTRAP_SQL)
-    .then(() => undefined)
+    .query("select 1")
+    .then(() => assertSharedAuthStateSchemaReady())
     .catch((error) => {
       globalThis.__agenticSharedAuthStateBootstrap = undefined;
-      throw new SharedAuthStateStoreError("Failed to initialize shared auth state tables.", error);
+      if (error instanceof SharedAuthStateStoreError) {
+        throw error;
+      }
+
+      throw new SharedAuthStateStoreError("Failed to verify shared auth state schema.", error);
     });
 
   return globalThis.__agenticSharedAuthStateBootstrap;
@@ -176,7 +202,7 @@ class PostgresAuthSessionStateStore implements AuthSessionStateStore {
 
   async checkRateLimit(key: string, now = Date.now()): Promise<SessionRateLimitStatus> {
     try {
-      await ensureSharedAuthStateTables();
+      await ensureSharedAuthStateSchemaReady();
       await maybeRunCleanup(now);
 
       return await withTransaction(async (client) => {
@@ -271,7 +297,7 @@ class PostgresAuthSessionStateStore implements AuthSessionStateStore {
 
   async clearRateLimit(key: string): Promise<void> {
     try {
-      await ensureSharedAuthStateTables();
+      await ensureSharedAuthStateSchemaReady();
       await getSharedAuthStatePool().query("delete from auth_session_rate_limits where key = $1", [key]);
     } catch (error) {
       throw new SharedAuthStateStoreError("Failed to clear shared session rate limit state.", error);
@@ -280,7 +306,7 @@ class PostgresAuthSessionStateStore implements AuthSessionStateStore {
 
   async revokeSession(sessionId: string, expiresAtMs: number): Promise<void> {
     try {
-      await ensureSharedAuthStateTables();
+      await ensureSharedAuthStateSchemaReady();
       await maybeRunCleanup();
       await getSharedAuthStatePool().query(
         `
@@ -299,7 +325,7 @@ class PostgresAuthSessionStateStore implements AuthSessionStateStore {
 
   async isSessionRevoked(sessionId: string, now = Date.now()): Promise<boolean> {
     try {
-      await ensureSharedAuthStateTables();
+      await ensureSharedAuthStateSchemaReady();
       await getSharedAuthStatePool().query(
         "delete from auth_revoked_sessions where session_id = $1 and expires_at <= $2",
         [sessionId, toIsoString(now)]
@@ -314,7 +340,7 @@ class PostgresAuthSessionStateStore implements AuthSessionStateStore {
 
   async reset(): Promise<void> {
     try {
-      await ensureSharedAuthStateTables();
+      await ensureSharedAuthStateSchemaReady();
       await withTransaction(async (client) => {
         await client.query("delete from auth_session_rate_limits");
         await client.query("delete from auth_revoked_sessions");
@@ -330,7 +356,7 @@ class PostgresSessionUnlockStateStore implements SessionUnlockStateStore {
 
   async getStatus(key: string, now = Date.now()): Promise<UnlockRateLimitStatus> {
     try {
-      await ensureSharedAuthStateTables();
+      await ensureSharedAuthStateSchemaReady();
       await maybeRunCleanup(now);
       const result = await getSharedAuthStatePool().query<{ blocked_until: string | Date }>(
         "select blocked_until from session_unlock_attempts where key = $1",
@@ -356,7 +382,7 @@ class PostgresSessionUnlockStateStore implements SessionUnlockStateStore {
 
   async recordFailure(key: string, now = Date.now()): Promise<UnlockRateLimitStatus> {
     try {
-      await ensureSharedAuthStateTables();
+      await ensureSharedAuthStateSchemaReady();
       await maybeRunCleanup(now);
 
       return await withTransaction(async (client) => {
@@ -447,7 +473,7 @@ class PostgresSessionUnlockStateStore implements SessionUnlockStateStore {
 
   async clear(key: string): Promise<void> {
     try {
-      await ensureSharedAuthStateTables();
+      await ensureSharedAuthStateSchemaReady();
       await getSharedAuthStatePool().query("delete from session_unlock_attempts where key = $1", [key]);
     } catch (error) {
       throw new SharedAuthStateStoreError("Failed to clear shared unlock throttling state.", error);
@@ -456,7 +482,7 @@ class PostgresSessionUnlockStateStore implements SessionUnlockStateStore {
 
   async reset(): Promise<void> {
     try {
-      await ensureSharedAuthStateTables();
+      await ensureSharedAuthStateSchemaReady();
       await getSharedAuthStatePool().query("delete from session_unlock_attempts");
     } catch (error) {
       throw new SharedAuthStateStoreError("Failed to reset shared unlock throttling state.", error);

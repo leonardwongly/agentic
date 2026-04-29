@@ -1,11 +1,21 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { runDatabaseMigrations } from "@agentic/db/migration-runtime";
+import { listMigrationFiles, runDatabaseMigrations, assertDatabaseSchemaReady } from "@agentic/db/migration-runtime";
 
 type AppliedMigrationRow = {
   name: string;
   checksum: string;
   applied_at: string;
 };
+
+const REQUIRED_AUTH_RUNTIME_OBJECTS = new Set([
+  "agentic_schema_migrations",
+  "auth_session_rate_limits",
+  "auth_revoked_sessions",
+  "session_unlock_attempts",
+  "auth_session_rate_limits_updated_at_idx",
+  "auth_revoked_sessions_expires_at_idx",
+  "session_unlock_attempts_last_seen_at_idx"
+]);
 
 class FakeMigrationClient {
   constructor(
@@ -14,6 +24,7 @@ class FakeMigrationClient {
       appliedRows: AppliedMigrationRow[];
       executedQueries: string[];
       bootstrapSeen: boolean;
+      schemaObjects: Set<string>;
     }
   ) {}
 
@@ -31,6 +42,7 @@ class FakeMigrationClient {
 
     if (normalized.includes("create table if not exists agentic_schema_migrations")) {
       this.state.metadataTableExists = true;
+      this.state.schemaObjects.add("agentic_schema_migrations");
       return { rows: [] };
     }
 
@@ -41,6 +53,13 @@ class FakeMigrationClient {
 
     if (normalized.includes("select name, checksum, applied_at")) {
       return { rows: this.state.appliedRows };
+    }
+
+    if (normalized === "select to_regclass($1) as exists") {
+      const objectName = String((params ?? [])[0] ?? "").replace(/^public\./u, "");
+      return {
+        rows: [{ exists: this.state.schemaObjects.has(objectName) ? objectName : null }]
+      };
     }
 
     if (normalized.includes("select to_regclass('public.agentic_schema_migrations') as exists")) {
@@ -66,6 +85,12 @@ class FakeMigrationClient {
       throw new Error('relation "agent_definitions" does not exist');
     }
 
+    for (const objectName of REQUIRED_AUTH_RUNTIME_OBJECTS) {
+      if (normalized.includes(objectName)) {
+        this.state.schemaObjects.add(objectName);
+      }
+    }
+
     return { rows: [] };
   }
 
@@ -77,7 +102,8 @@ class FakeMigrationPool {
     metadataTableExists: false,
     appliedRows: [] as AppliedMigrationRow[],
     executedQueries: [] as string[],
-    bootstrapSeen: false
+    bootstrapSeen: false,
+    schemaObjects: new Set<string>()
   };
 
   async query(sql: string, params?: unknown[]) {
@@ -114,5 +140,28 @@ describe("runDatabaseMigrations", () => {
 
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(initMigrationIndex).toBeGreaterThan(bootstrapIndex);
+  });
+
+  it("reports missing shared auth runtime objects even when migration metadata is current", async () => {
+    const migrations = await listMigrationFiles();
+    pool.state.metadataTableExists = true;
+    pool.state.schemaObjects = new Set(REQUIRED_AUTH_RUNTIME_OBJECTS);
+    pool.state.schemaObjects.delete("auth_revoked_sessions_expires_at_idx");
+    pool.state.appliedRows = migrations.map((migration) => ({
+      name: migration.name,
+      checksum: migration.checksum,
+      applied_at: "2026-04-23T00:00:00.000Z"
+    }));
+
+    await expect(assertDatabaseSchemaReady({ pool: pool as never })).rejects.toMatchObject({
+      name: "DatabaseSchemaNotReadyError",
+      status: expect.objectContaining({
+        ready: false,
+        failureReason: "required_schema_missing",
+        requiredSchemaObjects: expect.objectContaining({
+          missingIndexes: ["auth_revoked_sessions_expires_at_idx"]
+        })
+      })
+    });
   });
 });
