@@ -1,5 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { expectShareLinkReady, openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
+import {
+  enablePublicSharingForE2E,
+  expectShareLinkReady,
+  openRequestComposer,
+  submitRequest,
+  unlockDashboard
+} from "./helpers";
 
 const useProductionServer = process.env.PLAYWRIGHT_USE_PROD_SERVER === "true" && Boolean(process.env.DATABASE_URL?.trim());
 
@@ -39,6 +45,7 @@ test("serves a nonce-backed content security policy on HTML pages", async ({ pag
 
 test("keeps the authenticated dashboard non-cacheable and applies security headers to public share pages", async ({ browser, page }) => {
   await unlockDashboard(page);
+  await enablePublicSharingForE2E(page);
 
   const dashboardResponse = await page.goto("/");
   const cacheControl = dashboardResponse?.headers()["cache-control"] ?? "";
