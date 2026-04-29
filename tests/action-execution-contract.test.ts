@@ -181,4 +181,36 @@ describe("action execution contract", () => {
     });
     expect(outcome.detail).toContain("disk full");
   });
+
+  it("plans expanded typed intents but rejects unsupported drivers explicitly", async () => {
+    const task = buildTask(["read", "update"]);
+    const actionIntent = ActionIntentSchema.parse({
+      type: "update_record",
+      targetType: "goal",
+      targetId: "goal-action",
+      patch: { status: "running" },
+      reason: "Planner normalized a state update request."
+    });
+
+    const { plan, outcome } = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {}
+    });
+
+    expect(plan).toMatchObject({
+      actionType: "update_record",
+      adapter: "workspace",
+      operation: "update_record",
+      sideEffectTarget: "workspace:update:goal:goal-action:409443a6ee5aa296"
+    });
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      retryable: false,
+      recovery: {
+        strategy: "manual_review"
+      }
+    });
+    expect(outcome.detail).toContain("no enforcing driver is registered");
+  });
 });

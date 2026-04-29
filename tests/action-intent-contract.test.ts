@@ -50,15 +50,67 @@ describe("action intent contract", () => {
     ).toMatchObject({
       type: "manual_review"
     });
+
+    expect(
+      ActionIntentSchema.parse({
+        type: "update_record",
+        targetType: "goal",
+        targetId: "goal-1",
+        patch: { status: "running" },
+        reason: "Planner requested a governed state update."
+      })
+    ).toMatchObject({
+      schemaVersion: "v1",
+      type: "update_record",
+      adapter: "workspace",
+      riskClass: "R3"
+    });
+
+    expect(
+      ActionIntentSchema.parse({
+        type: "monitor_signal",
+        targetEntity: "VIP inbox",
+        condition: "High-priority sender arrives.",
+        triggerAction: "Draft an operator escalation.",
+        sourceSystems: ["gmail"]
+      })
+    ).toMatchObject({
+      schemaVersion: "v1",
+      type: "monitor_signal",
+      adapter: "watcher",
+      riskClass: "R2"
+    });
   });
 
   it("rejects unknown action families instead of accepting stringly typed payloads", () => {
     expect(() =>
       ActionIntentSchema.parse({
-        type: "delete_record",
+        type: "invoke_shell",
         recordId: "record-1"
       })
     ).toThrow(/no matching discriminator|invalid input/i);
+  });
+
+  it("rejects structurally invalid expanded intents before dispatch", () => {
+    expect(() =>
+      ActionIntentSchema.parse({
+        type: "update_record",
+        targetType: "goal",
+        targetId: "goal-1",
+        patch: {},
+        reason: "Empty patches must not reach a driver."
+      })
+    ).toThrow(/at least one patch field/i);
+
+    expect(() =>
+      ActionIntentSchema.parse({
+        type: "delete_record",
+        targetType: "goal",
+        targetId: "goal-1",
+        reason: "No confirmation token is required by schema, but unknown fields are rejected.",
+        unexpected: "field"
+      })
+    ).toThrow(/unrecognized key/i);
   });
 
   it("rejects malformed schedule windows", () => {
