@@ -7213,25 +7213,7 @@ class PostgresRepository implements AgenticRepository {
       values
     );
 
-    return result.rows.map((row) =>
-      WatcherSchema.parse({
-        id: row.id,
-        goalId: row.goal_id,
-        targetEntity: row.target_entity,
-        condition: row.condition,
-        frequency: row.frequency,
-        triggerAction: row.trigger_action,
-        sourceSystems: row.source_systems ?? [],
-        status: row.status,
-        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-        schedule: row.schedule ?? undefined,
-        lastEvaluation: row.last_evaluation ?? null,
-        escalationPolicy: row.escalation_policy ?? undefined,
-        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-        createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
-      })
-    );
+    return result.rows.map((row) => this.mapWatcherRow(row));
   }
 
   async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
