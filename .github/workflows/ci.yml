@@ -154,6 +154,7 @@ jobs:
             artifacts/build
             artifacts/compliance
           if-no-files-found: error
+          retention-days: 7
 
       - name: Note pull request evidence upload skip
         if: github.event_name == 'pull_request'
