@@ -57,7 +57,7 @@ Run these before closing `AOS-00` and repeat the relevant subset before closing 
 | Gate | Command |
 | --- | --- |
 | Branch divergence | `git fetch origin --prune && git rev-list --left-right --count origin/main...HEAD` |
-| Tracker coverage | `gh issue list --repo leonardwongly/agentic --search 'AOS- in:title' --state open --limit 100` |
+| Tracker coverage | `gh issue list --repo leonardwongly/agentic --search 'AOS- in:title' --state all --limit 100` |
 | Capability baseline | `npm run test:smoke:capabilities` |
 | Raw supply-chain risk | `npm audit --json` |
 | Runtime audit policy | `npm run security:audit-runtime` |

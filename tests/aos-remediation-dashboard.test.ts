@@ -1,16 +1,28 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const spawnSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", () => ({
+  spawnSync: spawnSyncMock
+}));
 
 import {
   loadAosTracker,
   renderAosDashboard,
   summarizeAosTracker,
-  validateAosTracker
+  validateAosTracker,
+  verifyLiveIssueCoverage
 } from "../scripts/aos-remediation-dashboard";
 
 const repoRoot = process.cwd();
 
 describe("AOS remediation tracker", () => {
+  beforeEach(() => {
+    spawnSyncMock.mockReset();
+  });
+
   it("keeps AOS-00 through AOS-18 covered by a valid manifest", () => {
     const tracker = loadAosTracker();
 
@@ -68,9 +80,77 @@ describe("AOS remediation tracker", () => {
 
     expect(dashboard).toContain("# Agentic OS remediation Dashboard");
     expect(dashboard).toContain("gh issue list --repo leonardwongly/agentic --search 'AOS- in:title'");
+    expect(dashboard).toContain("--state all");
+    expect(dashboard).not.toContain("--state open");
     expect(dashboard).toContain("git fetch origin --prune && git rev-list --left-right --count origin/main...HEAD");
     expect(dashboard).toContain("| AOS-00 | #11 | trust-spine | critical | none |");
     expect(dashboard).toContain("- Manifest validation: pass");
+  });
+
+  it("rejects malformed tracker fields before they corrupt summaries", () => {
+    const tracker = loadAosTracker();
+    const malformedTracker = structuredClone(tracker);
+    malformedTracker.lanes[0].label = null as unknown as string;
+    malformedTracker.lanes[0].owner = 42 as unknown as string;
+    malformedTracker.items[0].priority = "critcal" as unknown as (typeof malformedTracker.items)[number]["priority"];
+
+    expect(validateAosTracker(malformedTracker)).toEqual(
+      expect.arrayContaining([
+        "trust-spine.label must be a string.",
+        "trust-spine.owner must be a string.",
+        "AOS-00 uses unknown priority critcal."
+      ])
+    );
+    expect(summarizeAosTracker(malformedTracker).byPriority).toEqual({
+      critical: summarizeAosTracker(tracker).byPriority.critical - 1,
+      high: summarizeAosTracker(tracker).byPriority.high,
+      medium: summarizeAosTracker(tracker).byPriority.medium,
+      low: summarizeAosTracker(tracker).byPriority.low
+    });
+    expect(renderAosDashboard(malformedTracker)).toContain("- Manifest validation: fail");
+  });
+
+  it("verifies live issue coverage across open and closed tracker issues", () => {
+    const tracker = loadAosTracker();
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      status: 0,
+      stdout: JSON.stringify(
+        tracker.items.map((item) => ({
+          number: item.issue,
+          title: `[${item.id}] ${item.title}`,
+          labels: [{ name: "aos-remediation" }, { name: tracker.lanes.find((lane) => lane.id === item.lane)?.label }],
+          url: `https://github.com/leonardwongly/agentic/issues/${item.issue}`
+        }))
+      ),
+      stderr: ""
+    });
+
+    expect(verifyLiveIssueCoverage(tracker)).toEqual([]);
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "gh",
+      expect.arrayContaining(["issue", "list", "--state", "all"]),
+      expect.objectContaining({ encoding: "utf8" })
+    );
+  });
+
+  it("rejects live issues that claim the wrong AOS identifier", () => {
+    const tracker = loadAosTracker();
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      status: 0,
+      stdout: JSON.stringify(
+        tracker.items.map((item) => ({
+          number: item.issue,
+          title: `[${item.id === "AOS-01" ? "AOS-02" : item.id}] ${item.title}`,
+          labels: [{ name: "aos-remediation" }, { name: tracker.lanes.find((lane) => lane.id === item.lane)?.label }],
+          url: `https://github.com/leonardwongly/agentic/issues/${item.issue}`
+        }))
+      ),
+      stderr: ""
+    });
+
+    expect(verifyLiveIssueCoverage(tracker)).toContain("Live issue #12 claims to be AOS-02, but manifest says AOS-02 is #13.");
   });
 
   it("references repo files that exist for local baseline evidence", () => {

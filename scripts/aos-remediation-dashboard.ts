@@ -86,6 +86,8 @@ interface ParsedArgs {
 
 const DEFAULT_CONFIG_PATH = "config/remediation/aos-tracker.json";
 const EXPECTED_AOS_IDS = Array.from({ length: 19 }, (_, index) => `AOS-${String(index).padStart(2, "0")}`);
+const VALID_PRIORITIES: Priority[] = ["critical", "high", "medium", "low"];
+const VALID_PRIORITY_SET = new Set<string>(VALID_PRIORITIES);
 const REQUIRED_SOURCE_IDS = ["blueprint", "assessment", "tracker", "implementation"];
 const REQUIRED_BASELINE_COMMAND_IDS = [
   "branch-divergence",
@@ -106,6 +108,7 @@ export function loadAosTracker(configPath = DEFAULT_CONFIG_PATH, cwd = process.c
 }
 
 export function summarizeAosTracker(tracker: AosTracker): AosTrackerSummary {
+  const items = Array.isArray(tracker.items) ? tracker.items : [];
   const byLane: Record<string, number> = {};
   const byPriority: Record<Priority, number> = {
     critical: 0,
@@ -114,56 +117,104 @@ export function summarizeAosTracker(tracker: AosTracker): AosTrackerSummary {
     low: 0
   };
 
-  for (const item of tracker.items) {
-    byLane[item.lane] = (byLane[item.lane] ?? 0) + 1;
-    byPriority[item.priority] += 1;
+  for (const item of items) {
+    if (typeof item.lane === "string") {
+      byLane[item.lane] = (byLane[item.lane] ?? 0) + 1;
+    }
+    if (isPriority(item.priority)) {
+      byPriority[item.priority] += 1;
+    }
   }
 
   return {
-    totalItems: tracker.items.length,
+    totalItems: items.length,
     byLane,
     byPriority,
-    blockedByBaseline: tracker.items
-      .filter((item) => item.dependencies.includes("AOS-00"))
+    blockedByBaseline: items
+      .filter((item) => Array.isArray(item.dependencies) && item.dependencies.includes("AOS-00"))
       .map((item) => item.id)
+      .filter((id): id is string => typeof id === "string")
       .sort()
   };
 }
 
 export function validateAosTracker(tracker: AosTracker): string[] {
   const errors: string[] = [];
-  const laneIds = new Set(tracker.lanes.map((lane) => lane.id));
-  const itemIds = tracker.items.map((item) => item.id).sort();
+  if (!isRecord(tracker)) {
+    return ["Tracker manifest must be an object."];
+  }
+
+  const sourceOfTruth = readArray<AosSourceOfTruth>(tracker.sourceOfTruth, "sourceOfTruth", errors);
+  const lanes = readArray<AosLane>(tracker.lanes, "lanes", errors);
+  const baselineCommands = readArray<AosBaselineCommand>(tracker.baselineCommands, "baselineCommands", errors);
+  const items = readArray<AosTrackerItem>(tracker.items, "items", errors);
+  const laneIds = new Set<string>();
+  const itemIds: string[] = [];
   const itemIdSet = new Set(itemIds);
 
   if (tracker.version !== 1) {
     errors.push("Tracker version must be 1.");
   }
 
-  const sourceIds = tracker.sourceOfTruth.map((source) => source.id).sort();
+  const sourceIds: string[] = [];
+  for (let index = 0; index < sourceOfTruth.length; index += 1) {
+    const source = sourceOfTruth[index];
+    const id = readString(source.id, `sourceOfTruth[${index}].id`, errors);
+    if (id) {
+      sourceIds.push(id);
+    }
+  }
+  sourceIds.sort();
   for (const requiredSourceId of REQUIRED_SOURCE_IDS) {
     if (!sourceIds.includes(requiredSourceId)) {
       errors.push(`Missing source-of-truth entry: ${requiredSourceId}.`);
     }
   }
 
-  if (laneIds.size !== tracker.lanes.length) {
-    errors.push("Lane ids must be unique.");
+  for (let index = 0; index < lanes.length; index += 1) {
+    const lane = lanes[index];
+    const id = readString(lane.id, `lanes[${index}].id`, errors);
+    if (id) {
+      if (laneIds.has(id)) {
+        errors.push(`Duplicate lane id: ${id}.`);
+      }
+      laneIds.add(id);
+    }
+    const laneName = id ?? `lanes[${index}]`;
+    const label = readString(lane.label, `${laneName}.label`, errors);
+    if (label !== null && !label.trim()) {
+      errors.push(`${laneName} must have a GitHub lane label.`);
+    }
+    const owner = readString(lane.owner, `${laneName}.owner`, errors);
+    if (owner !== null && !owner.trim()) {
+      errors.push(`${laneName} must have an owner.`);
+    }
   }
 
-  for (const lane of tracker.lanes) {
-    if (!lane.label.trim()) {
-      errors.push(`${lane.id} must have a GitHub lane label.`);
-    }
-    if (!lane.owner.trim()) {
-      errors.push(`${lane.id} must have an owner.`);
+  const commandIds = new Set<string>();
+  for (let index = 0; index < baselineCommands.length; index += 1) {
+    const command = baselineCommands[index];
+    const id = readString(command.id, `baselineCommands[${index}].id`, errors);
+    if (id) {
+      commandIds.add(id);
     }
   }
-
   for (const requiredCommandId of REQUIRED_BASELINE_COMMAND_IDS) {
-    if (!tracker.baselineCommands.some((command) => command.id === requiredCommandId)) {
+    if (!commandIds.has(requiredCommandId)) {
       errors.push(`Missing baseline command: ${requiredCommandId}.`);
     }
+  }
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const id = readString(item.id, `items[${index}].id`, errors);
+    if (id) {
+      itemIds.push(id);
+    }
+  }
+  itemIds.sort();
+  for (const itemId of itemIds) {
+    itemIdSet.add(itemId);
   }
 
   if (JSON.stringify(itemIds) !== JSON.stringify(EXPECTED_AOS_IDS)) {
@@ -171,37 +222,76 @@ export function validateAosTracker(tracker: AosTracker): string[] {
   }
 
   const issueNumbers = new Set<number>();
-  for (const item of tracker.items) {
-    if (issueNumbers.has(item.issue)) {
-      errors.push(`Duplicate GitHub issue number: ${item.issue}.`);
+  const cycleCandidates: AosTrackerItem[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const id = readString(item.id, `items[${index}].id`, errors);
+    const itemName = id ?? `items[${index}]`;
+    const issue = readIssueNumber(item.issue, `${itemName}.issue`, errors);
+    if (issue !== null && issueNumbers.has(issue)) {
+      errors.push(`Duplicate GitHub issue number: ${issue}.`);
     }
-    issueNumbers.add(item.issue);
-
-    if (!laneIds.has(item.lane)) {
-      errors.push(`${item.id} uses unknown lane ${item.lane}.`);
-    }
-
-    if (!item.title.trim()) {
-      errors.push(`${item.id} must have a title.`);
-    }
-
-    if (!item.phase.trim()) {
-      errors.push(`${item.id} must have a phase.`);
+    if (issue !== null) {
+      issueNumbers.add(issue);
     }
 
-    if (item.validationGates.length === 0) {
-      errors.push(`${item.id} must define at least one validation gate.`);
+    const lane = readString(item.lane, `${itemName}.lane`, errors);
+    if (lane !== null && !laneIds.has(lane)) {
+      errors.push(`${itemName} uses unknown lane ${lane}.`);
     }
 
-    for (const dependency of item.dependencies) {
+    const priority = readString(item.priority, `${itemName}.priority`, errors);
+    if (priority !== null && !isPriority(priority)) {
+      errors.push(`${itemName} uses unknown priority ${priority}.`);
+    }
+
+    const title = readString(item.title, `${itemName}.title`, errors);
+    if (title !== null && !title.trim()) {
+      errors.push(`${itemName} must have a title.`);
+    }
+
+    const phase = readString(item.phase, `${itemName}.phase`, errors);
+    if (phase !== null && !phase.trim()) {
+      errors.push(`${itemName} must have a phase.`);
+    }
+
+    const validationGates = readArray<string>(item.validationGates, `${itemName}.validationGates`, errors);
+    if (validationGates.length === 0) {
+      errors.push(`${itemName} must define at least one validation gate.`);
+    }
+
+    for (let gateIndex = 0; gateIndex < validationGates.length; gateIndex += 1) {
+      readString(validationGates[gateIndex], `${itemName}.validationGates[${gateIndex}]`, errors);
+    }
+
+    const dependencies = readArray<string>(item.dependencies, `${itemName}.dependencies`, errors);
+    const validDependencies: string[] = [];
+    for (let dependencyIndex = 0; dependencyIndex < dependencies.length; dependencyIndex += 1) {
+      const dependency = readString(dependencies[dependencyIndex], `${itemName}.dependencies[${dependencyIndex}]`, errors);
+      if (dependency === null) {
+        continue;
+      }
+      validDependencies.push(dependency);
       if (!itemIdSet.has(dependency)) {
-        errors.push(`${item.id} depends on unknown item ${dependency}.`);
+        errors.push(`${itemName} depends on unknown item ${dependency}.`);
       }
     }
 
+    if (id && issue !== null && lane !== null && phase !== null && isPriority(priority) && title !== null) {
+      cycleCandidates.push({
+        id,
+        issue,
+        title,
+        lane,
+        phase,
+        priority,
+        dependencies: validDependencies,
+        validationGates
+      });
+    }
   }
 
-  for (const cycle of findDependencyCycles(tracker.items)) {
+  for (const cycle of findDependencyCycles(cycleCandidates)) {
     errors.push(`Dependency cycle detected: ${cycle.join(" -> ")}.`);
   }
 
@@ -230,8 +320,12 @@ export function collectGitSnapshot(cwd = process.cwd()): GitSnapshot {
 }
 
 export function renderAosDashboard(tracker: AosTracker, options: RenderOptions = {}): string {
-  const summary = summarizeAosTracker(tracker);
   const validationErrors = validateAosTracker(tracker);
+  const summary = summarizeAosTracker(tracker);
+  const sourceOfTruth = Array.isArray(tracker.sourceOfTruth) ? tracker.sourceOfTruth : [];
+  const lanes = Array.isArray(tracker.lanes) ? tracker.lanes : [];
+  const baselineCommands = Array.isArray(tracker.baselineCommands) ? tracker.baselineCommands : [];
+  const items = Array.isArray(tracker.items) ? tracker.items : [];
   const lines: string[] = [];
 
   lines.push(`# ${tracker.program} Dashboard`);
@@ -255,7 +349,7 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push("");
   lines.push("| Source | Authority | Rule |");
   lines.push("| --- | --- | --- |");
-  for (const source of tracker.sourceOfTruth) {
+  for (const source of sourceOfTruth) {
     lines.push(`| ${source.id} | ${source.authority} | ${source.rule} |`);
   }
 
@@ -264,7 +358,7 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push("");
   lines.push("| Lane | Label | Owner | Items | Scope |");
   lines.push("| --- | --- | --- | ---: | --- |");
-  for (const lane of tracker.lanes) {
+  for (const lane of lanes) {
     lines.push(`| ${lane.id} | ${lane.label} | ${lane.owner} | ${summary.byLane[lane.id] ?? 0} | ${lane.scope} |`);
   }
 
@@ -273,7 +367,7 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push("");
   lines.push("| Gate | Command | Purpose |");
   lines.push("| --- | --- | --- |");
-  for (const command of tracker.baselineCommands) {
+  for (const command of baselineCommands) {
     lines.push(`| ${command.id} | \`${command.command}\` | ${command.purpose} |`);
   }
 
@@ -282,11 +376,11 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push("");
   lines.push("| ID | Issue | Lane | Priority | Dependencies | First validation gate |");
   lines.push("| --- | ---: | --- | --- | --- | --- |");
-  for (const item of [...tracker.items].sort((left, right) => left.id.localeCompare(right.id))) {
+  for (const item of [...items].sort((left, right) => String(left.id).localeCompare(String(right.id)))) {
+    const dependencies = Array.isArray(item.dependencies) ? item.dependencies.join(", ") : "invalid";
+    const firstValidationGate = Array.isArray(item.validationGates) ? item.validationGates[0] ?? "none" : "invalid";
     lines.push(
-      `| ${item.id} | #${item.issue} | ${item.lane} | ${item.priority} | ${item.dependencies.join(", ") || "none"} | ${
-        item.validationGates[0]
-      } |`
+      `| ${item.id} | #${item.issue} | ${item.lane} | ${item.priority} | ${dependencies || "none"} | ${firstValidationGate} |`
     );
   }
 
@@ -302,7 +396,7 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
     }
   }
   lines.push(
-    "- Live coverage query: `gh issue list --repo leonardwongly/agentic --search 'AOS- in:title' --state open --limit 100`"
+    "- Live coverage query: `gh issue list --repo leonardwongly/agentic --search 'AOS- in:title' --state all --limit 100`"
   );
 
   return `${lines.join("\n")}\n`;
@@ -311,7 +405,7 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
 export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repository): string[] {
   const result = spawnSync(
     "gh",
-    ["issue", "list", "--repo", repo, "--search", "AOS- in:title", "--state", "open", "--limit", "100", "--json", "number,title,labels,url"],
+    ["issue", "list", "--repo", repo, "--search", "AOS- in:title", "--state", "all", "--limit", "100", "--json", "number,title,labels,url"],
     {
       encoding: "utf8"
     }
@@ -333,6 +427,7 @@ export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repo
   }
 
   const expected = new Map(tracker.items.map((item) => [item.issue, item]));
+  const expectedById = new Map(tracker.items.map((item) => [item.id, item]));
   const live = new Map(liveIssues.map((issue) => [issue.number, issue]));
   const laneLabels = new Map(tracker.lanes.map((lane) => [lane.id, lane.label]));
   const errors: string[] = [];
@@ -358,8 +453,14 @@ export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repo
 
   for (const issue of live.values()) {
     const id = extractAosId(issue.title);
-    if (id && !EXPECTED_AOS_IDS.includes(id)) {
+    if (!id) {
+      continue;
+    }
+    const expectedIssue = expectedById.get(id);
+    if (!expectedIssue) {
       errors.push(`Unexpected live AOS issue id ${id} on #${issue.number}.`);
+    } else if (expectedIssue.issue !== issue.number) {
+      errors.push(`Live issue #${issue.number} claims to be ${id}, but manifest says ${id} is #${expectedIssue.issue}.`);
     }
   }
 
@@ -409,10 +510,42 @@ function extractAosId(title: string): string | null {
 
 function runGit(args: string[], cwd: string): string | null {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-  if (result.status !== 0) {
+  if (result.error || result.status !== 0) {
     return null;
   }
   return result.stdout.trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readArray<T>(value: unknown, field: string, errors: string[]): T[] {
+  if (!Array.isArray(value)) {
+    errors.push(`${field} must be an array.`);
+    return [];
+  }
+  return value as T[];
+}
+
+function readString(value: unknown, field: string, errors: string[]): string | null {
+  if (typeof value !== "string") {
+    errors.push(`${field} must be a string.`);
+    return null;
+  }
+  return value;
+}
+
+function readIssueNumber(value: unknown, field: string, errors: string[]): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    errors.push(`${field} must be a positive integer.`);
+    return null;
+  }
+  return value;
+}
+
+function isPriority(value: unknown): value is Priority {
+  return typeof value === "string" && VALID_PRIORITY_SET.has(value);
 }
 
 function resolveRepoPath(cwd: string, targetPath: string): string {
@@ -491,7 +624,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const tracker = loadAosTracker(args.configPath);
   const manifestErrors = validateAosTracker(tracker);
-  const liveErrors = args.verifyIssueQuery ? verifyLiveIssueCoverage(tracker) : [];
+  const liveErrors = args.verifyIssueQuery && manifestErrors.length === 0 ? verifyLiveIssueCoverage(tracker) : [];
   const errors = [...manifestErrors, ...liveErrors];
   const output =
     args.format === "json"

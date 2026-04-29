@@ -63,7 +63,7 @@
     },
     {
       "id": "tracker-coverage",
-      "command": "gh issue list --repo leonardwongly/agentic --search 'AOS- in:title' --state open --limit 100",
+      "command": "gh issue list --repo leonardwongly/agentic --search 'AOS- in:title' --state all --limit 100",
       "purpose": "Confirm GitHub tracker coverage for AOS-00 through AOS-18."
     },
     {
@@ -141,7 +141,7 @@
       "issue": 13,
       "title": "Move approval side-effect execution into durable jobs",
       "lane": "execution-spine",
-      "phase": "Phase 1 - Trust spine",
+      "phase": "Phase 2 - Execution spine",
       "priority": "critical",
       "dependencies": ["AOS-00", "AOS-01"],
       "validationGates": [
