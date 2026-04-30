@@ -27,8 +27,8 @@ jobs:
 jobs:
   validate:
     steps:
-      - uses : actions/checkout@v6
-      - uses: actions/setup-node
+      - 'uses' : actions/checkout@v6
+      - "uses": actions/setup-node
 `
     );
 

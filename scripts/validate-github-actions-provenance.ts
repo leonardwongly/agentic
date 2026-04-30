@@ -78,15 +78,15 @@ function getIndent(line: string): number {
 }
 
 function parseYamlKeyValueLine(line: string): { indent: number; key: string; value: string } | null {
-  const match = line.match(/^(\s*)(?:-\s*)?([A-Za-z_][\w-]*)\s*:(?:\s+(.+)|\s*)$/u);
+  const match = line.match(/^(\s*)(?:-\s*)?(?:"([A-Za-z_][\w-]*)"|'([A-Za-z_][\w-]*)'|([A-Za-z_][\w-]*))\s*:(?:\s+(.+)|\s*)$/u);
   if (!match) {
     return null;
   }
 
   return {
     indent: match[1].length,
-    key: match[2],
-    value: match[3] ?? ""
+    key: match[2] ?? match[3] ?? match[4],
+    value: match[5] ?? ""
   };
 }
 
