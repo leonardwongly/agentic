@@ -290,6 +290,21 @@ describe("repository", () => {
     const appendedLogs = reloaded?.actionLogs.filter((log) => log.id.startsWith("share-audit-append-")) ?? [];
 
     expect(appendedLogs.map((log) => log.id)).toEqual(["share-audit-append-1", "share-audit-append-2"]);
+    expect(appendedLogs[0]?.message).toBe("Blocked public share access.");
+
+    await repository.appendGoalActionLogs(bundle.goal.id, [
+      {
+        ...firstLog,
+        message: "Mutated duplicate audit entry."
+      }
+    ]);
+
+    const reloadedAfterDuplicate = await repository.getGoalBundle(bundle.goal.id);
+    const duplicateLogs =
+      reloadedAfterDuplicate?.actionLogs.filter((log) => log.id === "share-audit-append-1") ?? [];
+
+    expect(duplicateLogs).toHaveLength(1);
+    expect(duplicateLogs[0]?.message).toBe("Blocked public share access.");
     expect(reloaded?.tasks.map((task) => task.id)).toEqual(bundle.tasks.map((task) => task.id));
     await expect(
       repository.appendGoalActionLogs("missing-goal", [

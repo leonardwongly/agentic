@@ -6,8 +6,20 @@ type ActionLogStore = {
   actionLogs: ActionLog[];
 };
 
-function uniqueActionLogsById(logs: ActionLog[]): ActionLog[] {
-  return [...new Map(logs.map((log) => [log.id, log])).values()];
+function appendMissingActionLogs(existingLogs: ActionLog[], nextLogs: ActionLog[]): ActionLog[] {
+  const seenIds = new Set(existingLogs.map((log) => log.id));
+  const appendedLogs = [...existingLogs];
+
+  for (const log of nextLogs) {
+    if (seenIds.has(log.id)) {
+      continue;
+    }
+
+    seenIds.add(log.id);
+    appendedLogs.push(log);
+  }
+
+  return appendedLogs;
 }
 
 export function validateGoalActionLogs(goalId: string, logs: ActionLog[]): ActionLog[] {
@@ -37,7 +49,7 @@ export async function appendGoalActionLogsToStore<TStore extends ActionLogStore>
   }
 
   const validatedLogs = validateGoalActionLogs(goalId, logs);
-  store.actionLogs = uniqueActionLogsById([...store.actionLogs, ...validatedLogs]);
+  store.actionLogs = appendMissingActionLogs(store.actionLogs, validatedLogs);
   await writeStore(store);
   return cloneActionLogs(validatedLogs);
 }
