@@ -86,8 +86,12 @@ jobs:
 
       - name: Validate migrations
         run: |
+          npm run db:check-migrations
           npm run db:migrate
           npm run db:status -- --require-ready
+
+      - name: Run governance simulation suite
+        run: npm run governance:simulate
 
       - name: Run security regression suite
         run: npm run test:security:regression

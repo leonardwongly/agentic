@@ -98,6 +98,15 @@ describe("governance simulate route", () => {
           };
         };
       }>;
+      calibration: {
+        status: string;
+        autonomyExpansionAllowed: boolean;
+        metrics: {
+          totalScenarios: number;
+          expectedScenarioCount: number;
+          scenarioCoverageRate: number;
+        };
+      };
     };
 
     expect(response.status).toBe(200);
@@ -140,6 +149,15 @@ describe("governance simulate route", () => {
         })
       })
     ]);
+    expect(payload.calibration).toMatchObject({
+      status: "degraded",
+      autonomyExpansionAllowed: false,
+      metrics: {
+        totalScenarios: 1,
+        expectedScenarioCount: 0,
+        scenarioCoverageRate: 0
+      }
+    });
     expectNoStoreHeaders(response);
   });
 

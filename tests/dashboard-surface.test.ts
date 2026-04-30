@@ -1,4 +1,10 @@
-import { ADVANCED_DASHBOARD_SECTIONS, isAdvancedDashboardSection } from "../apps/web/lib/dashboard-surface";
+import {
+  ADVANCED_DASHBOARD_SECTIONS,
+  DASHBOARD_OS_SURFACES,
+  getDashboardOsSurface,
+  getDashboardOsSurfaceForSection,
+  isAdvancedDashboardSection
+} from "../apps/web/lib/dashboard-surface";
 
 describe("dashboard surface helpers", () => {
   it("marks advanced sections explicitly instead of relying on scattered UI checks", () => {
@@ -15,5 +21,36 @@ describe("dashboard surface helpers", () => {
     expect(isAdvancedDashboardSection("artifacts")).toBe(false);
     expect(isAdvancedDashboardSection("")).toBe(false);
     expect(isAdvancedDashboardSection(null)).toBe(false);
+  });
+
+  it("defines explicit OS surfaces for command, operations, agents, governance, memory, provenance, and observability", () => {
+    expect(DASHBOARD_OS_SURFACES.map((surface) => surface.id)).toEqual([
+      "command",
+      "operations",
+      "agents",
+      "governance",
+      "memory",
+      "provenance",
+      "observability"
+    ]);
+
+    for (const surface of DASHBOARD_OS_SURFACES) {
+      expect(surface.routeBoundary).toMatch(/^#/u);
+      expect(surface.componentBoundary).toMatch(/^Dashboard/u);
+      expect(surface.states).toMatchObject({
+        loading: expect.any(String),
+        empty: expect.any(String),
+        error: expect.any(String),
+        permission: expect.any(String)
+      });
+    }
+  });
+
+  it("maps advanced sections to their owning OS surfaces", () => {
+    expect(getDashboardOsSurface("governance")?.sections).toEqual(expect.arrayContaining(["governance", "autopilot"]));
+    expect(getDashboardOsSurfaceForSection("templates").map((surface) => surface.id)).toEqual(["operations"]);
+    expect(getDashboardOsSurfaceForSection("integrations").map((surface) => surface.id)).toEqual(["agents"]);
+    expect(getDashboardOsSurfaceForSection("notes").map((surface) => surface.id)).toEqual(["memory", "provenance"]);
+    expect(getDashboardOsSurfaceForSection("unknown")).toEqual([]);
   });
 });
