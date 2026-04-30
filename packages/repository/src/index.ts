@@ -6105,7 +6105,6 @@ class PostgresRepository implements AgenticRepository {
       if (shouldSaveJob) {
         await this.saveJobWithClient(client, savedJob);
       }
-
       return {
         bundle: parsedBundle,
         job: JobRecordSchema.parse(clone(savedJob))
