@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 export function requireJsonContentType(request: Request): void {
-  const contentType = request.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.startsWith("application/json")) {
     throw Object.assign(new Error("Request Content-Type must be application/json."), { name: "ContentTypeError" });
   }
 }

@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
-import { requireApiSession } from "../../../../../lib/auth";
-import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
+import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
+import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { GOAL_SHARE_MUTATION_DENIED_REASON, canManageGoalSharesForRole } from "../../../../../lib/workspace-role-permissions";
 import {
   buildGoalShareUrl,
@@ -63,11 +62,18 @@ async function assertPublicSharingEnabled(
   }
 }
 
-export async function POST(request: Request, context: RouteContext) {
-  try {
-    const principal = await requireApiSession(request);
-    const actorContext = createActorContextFromPrincipal(principal);
-    const { id } = await context.params;
+export const POST = createGovernedMutationRoute<undefined, RouteContext>(
+  {
+    route: "api.goals.share.create",
+    fallbackError: "Failed to create a goal share link.",
+    rateLimit: {
+      namespace: "goal-share-create",
+      error: "Too many goal share creation requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ request, routeContext, principal, actorContext }) => {
+    const { id } = await routeContext.params;
     const goalId = GoalIdSchema.parse(id);
     const repository = await getSeededRepository();
     const bundle = await repository.getGoalBundleForUser(goalId, principal.userId);
@@ -110,18 +116,24 @@ export async function POST(request: Request, context: RouteContext) {
       expiresAt,
       dashboard: await repository.getDashboardData(principal.userId)
     });
-  } catch (error) {
-    return handleApiError(error, "Failed to create a goal share link.");
   }
-}
+);
 
-export async function DELETE(request: Request, context: RouteContext) {
-  try {
-    const principal = await requireApiSession(request);
-    const actorContext = createActorContextFromPrincipal(principal);
-    const { id } = await context.params;
+export const DELETE = createGovernedMutationRoute<z.infer<typeof RevokeGoalShareBodySchema>, RouteContext>(
+  {
+    route: "api.goals.share.revoke",
+    fallbackError: "Failed to revoke the goal share link.",
+    bodySchema: RevokeGoalShareBodySchema,
+    rateLimit: {
+      namespace: "goal-share-revoke",
+      error: "Too many goal share revoke requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ routeContext, principal, actorContext, body }) => {
+    const { id } = await routeContext.params;
     const goalId = GoalIdSchema.parse(id);
-    const { shareId } = await parseJsonBody(request, RevokeGoalShareBodySchema);
+    const { shareId } = body;
     const repository = await getSeededRepository();
     const [bundle, share] = await Promise.all([
       repository.getGoalBundleForUser(goalId, principal.userId),
@@ -152,7 +164,5 @@ export async function DELETE(request: Request, context: RouteContext) {
       shareId,
       dashboard: await repository.getDashboardData(principal.userId)
     });
-  } catch (error) {
-    return handleApiError(error, "Failed to revoke the goal share link.");
   }
-}
+);
