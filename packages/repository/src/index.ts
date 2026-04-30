@@ -189,6 +189,7 @@ import {
   type DashboardControlPlane,
   type DashboardControlPlaneSection,
   type DashboardData,
+  type DashboardDiagnostic,
   type DashboardDiagnostics,
   type GoalPageParams,
   type GoalShareListFilters,

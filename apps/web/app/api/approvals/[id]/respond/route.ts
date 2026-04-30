@@ -1,10 +1,8 @@
 import { z } from "zod";
-import { ApprovalMutationError, type AgenticRepository } from "@agentic/repository";
+import { ApprovalMutationError } from "@agentic/repository";
 import { enqueueApprovalFollowUpJob } from "@agentic/worker-runtime";
-import { requireApiSession } from "../../../../../lib/auth";
-import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
-import { requireJsonContentType } from "../../../../../lib/api-errors";
+import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
+import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { getSeededRepository } from "../../../../../lib/server";
 
 const ApprovalIdSchema = z.string().trim().min(1).max(200);
@@ -17,14 +15,22 @@ const ApprovalResponseSchema = z
   })
   .strict();
 
-export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  try {
-    requireJsonContentType(request);
-    const principal = await requireApiSession(request);
-    const actor = createActorContextFromPrincipal(principal);
-    const { id } = await context.params;
+type RouteContext = { params: Promise<{ id: string }> };
+
+export const POST = createGovernedMutationRoute<z.infer<typeof ApprovalResponseSchema>, RouteContext>(
+  {
+    route: "api.approvals.respond",
+    fallbackError: "Failed to respond to approval.",
+    bodySchema: ApprovalResponseSchema,
+    rateLimit: {
+      namespace: "approval-response",
+      error: "Too many approval response requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ routeContext, principal, actorContext: actor, body }) => {
+    const { id } = await routeContext.params;
     const approvalId = ApprovalIdSchema.parse(id);
-    const body = await parseJsonBody(request, ApprovalResponseSchema);
     const repository = await getSeededRepository();
     const updatedBundle = await (async () => {
       try {
@@ -89,7 +95,5 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       },
       { status: 202 }
     );
-  } catch (error) {
-    return handleApiError(error, "Failed to respond to approval.");
   }
-}
+);
