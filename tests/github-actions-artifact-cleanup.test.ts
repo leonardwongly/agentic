@@ -33,7 +33,7 @@ describe("GitHub Actions artifact cleanup", () => {
     const staging = readRepoFile(".github/workflows/staging-manual-deploy.yml");
 
     expect((ci.match(/uses: actions\/upload-artifact@v\d+/g) || []).length).toBe(1);
-    expect(ci).toContain("if: github.event_name != 'pull_request'");
+    expect(ci).toContain("if: github.event_name != 'pull_request' && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true'");
     expect((ci.match(/retention-days:\s*7(?!\d)/g) || []).length).toBe(1);
     expect((staging.match(/uses: actions\/upload-artifact@v\d+/g) || []).length).toBe(2);
     expect((staging.match(/retention-days:\s*7(?!\d)/g) || []).length).toBe(2);

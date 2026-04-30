@@ -142,7 +142,7 @@ jobs:
         run: npm run security:collect-evidence -- --require-artifacts --output-dir artifacts/compliance
 
       - name: Upload supply-chain evidence
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: agentic-supply-chain-evidence
