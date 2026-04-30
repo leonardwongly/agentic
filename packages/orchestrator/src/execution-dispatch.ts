@@ -82,11 +82,24 @@ function requiredCapabilitiesForActionIntent(actionIntent: ActionIntent): Capabi
       return ["schedule"];
     case "create_note":
       return ["create"];
+    case "update_record":
+      return ["update"];
+    case "delete_record":
+      return ["delete"];
+    case "monitor_signal":
+      return ["monitor"];
     case "manual_review":
     default:
       return [];
   }
 }
+
+const riskRank: Record<ActionIntent["riskClass"], number> = {
+  R1: 1,
+  R2: 2,
+  R3: 3,
+  R4: 4
+};
 
 function validateTypedActionBoundary(params: { task: Task; actionIntent: ActionIntent }): string | null {
   const { task, actionIntent } = params;
@@ -102,6 +115,10 @@ function validateTypedActionBoundary(params: { task: Task; actionIntent: ActionI
   }
 
   const requiredCapabilities = requiredCapabilitiesForActionIntent(actionIntent);
+
+  if (riskRank[actionIntent.riskClass] > riskRank[task.riskClass]) {
+    return `Execution skipped: typed ${actionIntent.type} intent risk ${actionIntent.riskClass} exceeds task risk grant ${task.riskClass}.`;
+  }
 
   if (requiredCapabilities.length === 0) {
     return null;

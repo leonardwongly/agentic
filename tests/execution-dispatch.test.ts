@@ -432,6 +432,32 @@ describe("execution dispatch", () => {
     expect(log.kind).toBe("execution.skipped");
   });
 
+  it("skips expanded typed intents when the intent risk exceeds the task grant", async () => {
+    const bundle = buildBundle({
+      assignedAgent: "workflow",
+      taskCapabilities: ["read", "update"],
+      actionIntent: ActionIntentSchema.parse({
+        type: "update_record",
+        riskClass: "R4",
+        targetType: "goal",
+        targetId: "goal-exec",
+        patch: { status: "running" },
+        reason: "Attempt to update a high-risk record without matching grant."
+      })
+    });
+
+    const { result, log } = await executeApprovedTask({
+      task: bundle.tasks[0],
+      bundle,
+      adapters: {}
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.kind).toBe("execution.skipped");
+    expect(result.detail).toContain("risk R4 exceeds task risk grant R3");
+    expect(log.kind).toBe("execution.skipped");
+  });
+
   it("skips execution when the task capability grant violates the agent allowlist", async () => {
     const bundle = buildBundle({
       assignedAgent: "communications",
