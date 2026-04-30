@@ -94,6 +94,13 @@ function resolveYamlUseValue(value: string, anchors: Map<string, string>): strin
   return resolved;
 }
 
+function recordYamlAnchor(value: string, anchors: Map<string, string>): void {
+  const anchor = trimYamlScalar(value).match(/^&([A-Za-z0-9_-]+)\s+(.+)$/u);
+  if (anchor) {
+    anchors.set(anchor[1], trimYamlScalar(anchor[2]));
+  }
+}
+
 function getIndent(line: string): number {
   return line.length - line.trimStart().length;
 }
@@ -232,6 +239,17 @@ function parseYamlFlowUsesMappings(line: string): Array<{ indent: number; value:
   return uses;
 }
 
+function recordYamlFlowAnchors(line: string, anchors: Map<string, string>): void {
+  for (const mapping of extractYamlFlowMappings(line)) {
+    for (const field of splitYamlFlowFields(mapping.body)) {
+      const parsed = parseYamlFlowField(field);
+      if (parsed) {
+        recordYamlAnchor(parsed.value, anchors);
+      }
+    }
+  }
+}
+
 function isBlockScalarValue(value: string): boolean {
   return /^[>|](?:(?:[+-]?[1-9])|(?:[1-9][+-]?)|[+-])?(?:\s+#.*)?$/u.test(value.trim());
 }
@@ -251,6 +269,7 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
       blockScalarIndent = null;
     }
 
+    recordYamlFlowAnchors(lineContent, yamlAnchors);
     const parsedFlowUses = parseYamlFlowUsesMappings(lineContent);
     if (parsedFlowUses.length > 0) {
       for (const parsedFlowUse of parsedFlowUses) {
@@ -274,6 +293,7 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
     if (isBlockScalarValue(parsedLine.value)) {
       blockScalarIndent = parsedLine.indent;
     }
+    recordYamlAnchor(parsedLine.value, yamlAnchors);
 
     if (parsedLine.key !== "uses") {
       return;

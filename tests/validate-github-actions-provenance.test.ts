@@ -56,6 +56,34 @@ jobs:
     expect(validateWorkflowActionPins(uses)).toEqual([]);
   });
 
+  it("resolves action aliases from anchors declared on non-uses keys", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+env:
+  CHECKOUT_ACTION: &checkout actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+jobs:
+  validate:
+    steps:
+      - uses: *checkout
+      - { name: Setup, action: &setup-node actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e }
+      - { uses: *setup-node }
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        line: 7,
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      }),
+      expect.objectContaining({
+        line: 9,
+        value: "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+      })
+    ]);
+    expect(validateWorkflowActionPins(uses)).toEqual([]);
+  });
+
   it("rejects mutable tag references and unpinned external actions", () => {
     const uses = collectWorkflowActionUses(
       ".github/workflows/ci.yml",
