@@ -42,8 +42,23 @@ function parseArgs(argv: string[]) {
 }
 
 function stripInlineComment(value: string): string {
-  const hashIndex = value.indexOf("#");
-  return (hashIndex >= 0 ? value.slice(0, hashIndex) : value).trim();
+  let quote: "\"" | "'" | null = null;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    const previous = value[index - 1];
+
+    if ((character === "\"" || character === "'") && previous !== "\\") {
+      quote = quote === character ? null : quote ?? character;
+      continue;
+    }
+
+    if (character === "#" && quote === null && (index === 0 || /\s/u.test(previous))) {
+      return value.slice(0, index).trim();
+    }
+  }
+
+  return value.trim();
 }
 
 function trimYamlScalar(value: string): string {
@@ -62,9 +77,21 @@ function getIndent(line: string): number {
   return line.length - line.trimStart().length;
 }
 
-function getBlockScalarStartIndent(line: string): number | null {
-  const match = line.match(/^(\s*)(?:-\s*)?[\w-]+:\s*[>|]/u);
-  return match ? match[1].length : null;
+function parseYamlKeyValueLine(line: string): { indent: number; key: string; value: string } | null {
+  const match = line.match(/^(\s*)(?:-\s*)?([A-Za-z_][\w-]*):(?:\s+(.+)|\s*)$/u);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    indent: match[1].length,
+    key: match[2],
+    value: match[3] ?? ""
+  };
+}
+
+function isBlockScalarValue(value: string): boolean {
+  return /^[>|][+-]?(?:\s+#.*)?$/u.test(value.trim());
 }
 
 export function collectWorkflowActionUses(filePath: string, content: string): WorkflowActionUse[] {
@@ -81,14 +108,20 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
       blockScalarIndent = null;
     }
 
-    blockScalarIndent = getBlockScalarStartIndent(lineContent);
-
-    const match = lineContent.match(/^\s*(?:-\s*)?uses:\s*(.+)$/u);
-    if (!match) {
+    const parsedLine = parseYamlKeyValueLine(lineContent);
+    if (!parsedLine) {
       return;
     }
 
-    const value = trimYamlScalar(match[1]);
+    if (isBlockScalarValue(parsedLine.value)) {
+      blockScalarIndent = parsedLine.indent;
+    }
+
+    if (parsedLine.key !== "uses") {
+      return;
+    }
+
+    const value = trimYamlScalar(parsedLine.value);
     const refSeparator = value.lastIndexOf("@");
     uses.push({
       filePath,

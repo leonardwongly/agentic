@@ -86,4 +86,54 @@ jobs:
       })
     ]);
   });
+
+  it("does not treat uses text inside nested block scalar inputs as action references", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - uses: actions/github-script@6b7254ff8b482b4d753a1e2f286705a42a696a5a
+        with:
+          script: >-
+            core.info("uses: actions/checkout@v6")
+            return "uses: actions/setup-node@v5"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        line: 5,
+        value: "actions/github-script@6b7254ff8b482b4d753a1e2f286705a42a696a5a"
+      }),
+      expect.objectContaining({
+        line: 10,
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      })
+    ]);
+  });
+
+  it("strips inline YAML comments without truncating quoted scalars", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: "example/action@0123456789012345678901234567890123456789#quoted"
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      }),
+      expect.objectContaining({
+        value: "example/action@0123456789012345678901234567890123456789#quoted"
+      })
+    ]);
+  });
 });
