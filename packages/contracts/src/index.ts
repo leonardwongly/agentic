@@ -129,6 +129,7 @@ export const jobKindValues = [
   "public_share_view"
 ] as const;
 export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
+export const jobPriorityValues = ["critical", "high", "normal", "low", "maintenance"] as const;
 export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
 export const workspaceApprovalModeValues = ["always_review", "risk_based"] as const;
@@ -207,6 +208,7 @@ export const PrivacyOperationKindSchema = z.enum(privacyOperationKindValues);
 export const PrivacyOperationStatusSchema = z.enum(privacyOperationStatusValues);
 export const JobKindSchema = z.enum(jobKindValues);
 export const JobStatusSchema = z.enum(jobStatusValues);
+export const JobPrioritySchema = z.enum(jobPriorityValues);
 export const EvidenceRecordSourceKindSchema = z.enum(evidenceRecordSourceKindValues);
 export const WorkspaceRoleSchema = z.enum(workspaceRoleValues);
 export const WorkspaceApprovalModeSchema = z.enum(workspaceApprovalModeValues);
@@ -800,6 +802,11 @@ export const MemoryRecordSchema = z.object({
   sensitivity: z.string().min(1),
   permissions: z.array(AgentNameSchema).default([]),
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+  contextPacketConsent: z.object({
+    basis: z.enum(["explicit", "implied", "system", "derived"]),
+    grantedBy: z.string().min(1).max(120).nullable().default(null),
+    grantedAt: z.string().datetime().nullable().default(null)
+  }).strict().nullable().default(null),
   // Agent-scoped memories
   agentId: z.string().nullable().default(null),
   agentScope: z.enum(["global", "agent-only", "agent-preferred"]).default("global"),
@@ -808,6 +815,165 @@ export const MemoryRecordSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
+
+export const ContextPacketSourceSchema = z
+  .object({
+    kind: z.enum(["memory", "user_input", "system", "integration", "job", "derived"]),
+    id: z.string().min(1),
+    summary: z.string().min(1).max(280)
+  })
+  .strict();
+
+export const ContextPacketConsentSchema = z
+  .object({
+    basis: z.enum(["explicit", "implied", "system", "derived"]),
+    grantedBy: z.string().min(1).max(120).nullable().default(null),
+    grantedAt: z.string().datetime().nullable().default(null)
+  })
+  .strict();
+
+export const ContextPacketRetentionSchema = z
+  .object({
+    reviewAt: z.string().datetime().nullable().default(null),
+    expiryAt: z.string().datetime().nullable().default(null)
+  })
+  .strict();
+
+export const ContextPacketFreshnessSchema = z
+  .object({
+    status: z.enum(["fresh", "review_due", "expired", "low_confidence"]),
+    observedAt: z.string().datetime(),
+    staleAt: z.string().datetime().nullable().default(null)
+  })
+  .strict();
+
+export const ContextPacketTransformationSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum(["derived_from_memory", "summarized", "redacted", "normalized"]),
+    at: z.string().datetime(),
+    inputIds: z.array(z.string().min(1)).max(20).default([]),
+    outputId: z.string().min(1),
+    summary: z.string().min(1).max(280)
+  })
+  .strict();
+
+export const ContextPacketUsageSchema = z
+  .object({
+    usedBy: z.string().min(1).max(120),
+    purpose: z.string().min(1).max(160),
+    usedAt: z.string().datetime()
+  })
+  .strict();
+
+export const ContextPacketLineageSchema = z
+  .object({
+    parentPacketIds: z.array(z.string().min(1)).max(20).default([]),
+    sourceMemoryIds: z.array(z.string().min(1)).max(20).default([]),
+    transformationIds: z.array(z.string().min(1)).max(20).default([])
+  })
+  .strict();
+
+export const ContextPacketSchema = z
+  .object({
+    id: z.string().min(1),
+    userId: z.string().min(1),
+    source: ContextPacketSourceSchema,
+    category: z.string().min(1).max(120),
+    contentSummary: z.string().min(1).max(500),
+    memoryType: MemoryTypeSchema,
+    sensitivity: z.string().min(1).max(80),
+    permissions: z.array(AgentNameSchema).default([]),
+    retention: ContextPacketRetentionSchema,
+    consent: ContextPacketConsentSchema,
+    freshness: ContextPacketFreshnessSchema,
+    lineage: ContextPacketLineageSchema,
+    transformations: z.array(ContextPacketTransformationSchema).max(20).default([]),
+    usage: z.array(ContextPacketUsageSchema).max(20).default([]),
+    actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime()
+  })
+  .strict();
+
+export const executionProvenanceNodeTypeValues = [
+  "goal",
+  "decision",
+  "approval",
+  "action",
+  "job",
+  "memory",
+  "context_packet",
+  "output",
+  "failure"
+] as const;
+export const executionProvenanceEdgeTypeValues = [
+  "created",
+  "decided",
+  "approved",
+  "queued",
+  "executed",
+  "produced",
+  "captured",
+  "derived_from",
+  "failed",
+  "replayed_from",
+  "uses_context"
+] as const;
+
+export const ExecutionProvenanceNodeTypeSchema = z.enum(executionProvenanceNodeTypeValues);
+export const ExecutionProvenanceEdgeTypeSchema = z.enum(executionProvenanceEdgeTypeValues);
+
+export const ExecutionProvenanceNodeSchema = z
+  .object({
+    id: z.string().min(1),
+    type: ExecutionProvenanceNodeTypeSchema,
+    ownerUserId: z.string().min(1),
+    label: z.string().min(1).max(160),
+    summary: z.string().min(1).max(500),
+    sensitivity: z.string().min(1).max(80).default("internal"),
+    createdAt: z.string().datetime().nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
+export const ExecutionProvenanceEdgeSchema = z
+  .object({
+    id: z.string().min(1),
+    type: ExecutionProvenanceEdgeTypeSchema,
+    from: z.string().min(1),
+    to: z.string().min(1),
+    label: z.string().min(1).max(160),
+    createdAt: z.string().datetime().nullable().default(null),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
+export const ExecutionProvenanceTimelineEntrySchema = z
+  .object({
+    id: z.string().min(1),
+    nodeId: z.string().min(1),
+    at: z.string().datetime(),
+    type: ExecutionProvenanceNodeTypeSchema,
+    label: z.string().min(1).max(160),
+    summary: z.string().min(1).max(500)
+  })
+  .strict();
+
+export const ExecutionProvenanceGraphSchema = z
+  .object({
+    nodes: z.array(ExecutionProvenanceNodeSchema).max(500),
+    edges: z.array(ExecutionProvenanceEdgeSchema).max(1_000),
+    timeline: z.array(ExecutionProvenanceTimelineEntrySchema).max(500),
+    query: z
+      .object({
+        rootId: z.string().min(1).nullable().default(null),
+        depth: z.number().int().min(0).max(4),
+        limit: z.number().int().min(1).max(500)
+      })
+      .strict()
+  })
+  .strict();
 
 export const PolicyDecisionSchema = z.object({
   riskClass: RiskClassSchema,
@@ -2298,6 +2464,10 @@ const JobRecordBaseSchema = z
     userId: z.string().min(1),
     kind: JobKindSchema,
     status: JobStatusSchema,
+    priority: JobPrioritySchema.default("normal"),
+    queue: z.string().trim().min(1).max(80).default("default"),
+    concurrencyKey: z.string().trim().min(1).max(160).nullable().default(null),
+    timeoutMs: z.number().int().min(100).max(30 * 60_000).nullable().default(null),
     idempotencyKey: z.string().min(1).max(200).nullable().default(null),
     payload: JobPayloadSchema,
     actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
@@ -3428,6 +3598,14 @@ export type WorkflowResponsibilityAssignee = z.infer<typeof WorkflowResponsibili
 export type WorkflowResponsibilityAudit = z.infer<typeof WorkflowResponsibilityAuditSchema>;
 export type WorkflowResponsibility = z.infer<typeof WorkflowResponsibilitySchema>;
 export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
+export type ContextPacket = z.infer<typeof ContextPacketSchema>;
+export type ContextPacketTransformation = z.infer<typeof ContextPacketTransformationSchema>;
+export type ContextPacketUsage = z.infer<typeof ContextPacketUsageSchema>;
+export type ExecutionProvenanceNodeType = z.infer<typeof ExecutionProvenanceNodeTypeSchema>;
+export type ExecutionProvenanceEdgeType = z.infer<typeof ExecutionProvenanceEdgeTypeSchema>;
+export type ExecutionProvenanceNode = z.infer<typeof ExecutionProvenanceNodeSchema>;
+export type ExecutionProvenanceEdge = z.infer<typeof ExecutionProvenanceEdgeSchema>;
+export type ExecutionProvenanceGraph = z.infer<typeof ExecutionProvenanceGraphSchema>;
 export type PolicyDecision = z.infer<typeof PolicyDecisionSchema>;
 export type GovernanceConformanceCheck = z.infer<typeof GovernanceConformanceCheckSchema>;
 export type GovernanceConformanceReport = z.infer<typeof GovernanceConformanceReportSchema>;
@@ -3529,6 +3707,7 @@ export type JobRecoveryStrategy = z.infer<typeof JobRecoveryStrategySchema>;
 export type JobRecoveryState = z.infer<typeof JobRecoveryStateSchema>;
 export type JobExecutionJournal = z.infer<typeof JobExecutionJournalSchema>;
 export type JobRecord = z.infer<typeof JobRecordSchema>;
+export type JobPriority = z.infer<typeof JobPrioritySchema>;
 export type WorkflowDag = z.infer<typeof WorkflowDagSchema>;
 export type WorkflowDagNode = z.infer<typeof WorkflowDagNodeSchema>;
 export type WorkflowDagInstance = z.infer<typeof WorkflowDagInstanceSchema>;

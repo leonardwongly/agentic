@@ -1,8 +1,12 @@
 import {
+  ContextPacketSchema,
+  ContextPacketTransformationSchema,
   MemoryRecordSchema,
   nowIso,
   type ActorContext,
   type AgentName,
+  type ContextPacket,
+  type ContextPacketTransformation,
   type MemoryRecord,
   type MemoryType
 } from "@agentic/contracts";
@@ -43,6 +47,15 @@ export type WorkflowContextPack = {
 };
 
 export type WorkflowContextPackSummary = Omit<WorkflowContextPack, "selectedMemories">;
+
+export type ContextPacketQuery = {
+  userId?: string;
+  agent?: AgentName;
+  includeExpired?: boolean;
+  allowedSensitivities?: string[];
+  now?: number;
+  limit?: number;
+};
 
 const STOP_WORDS = new Set([
   "a",
@@ -195,6 +208,7 @@ export function createMemoryRecord(params: {
   sensitivity?: string;
   permissions?: AgentName[];
   actorContext?: ActorContext | null;
+  contextPacketConsent?: MemoryRecord["contextPacketConsent"];
   agentId?: string | null;
   agentScope?: "global" | "agent-only" | "agent-preferred";
   reviewAt?: string | null;
@@ -216,6 +230,7 @@ export function createMemoryRecord(params: {
     sensitivity: params.sensitivity ?? "internal",
     permissions: params.permissions ?? ["orchestrator", "workflow", "knowledge"],
     actorContext: params.actorContext ?? null,
+    contextPacketConsent: params.contextPacketConsent ?? null,
     agentId: params.agentId ?? null,
     agentScope: params.agentScope ?? "global",
     reviewAt: params.reviewAt ?? null,
@@ -247,6 +262,139 @@ export function getMemoryFreshness(record: MemoryRecord, now = Date.now()): Memo
   }
 
   return "fresh";
+}
+
+function summarizeContextContent(content: string): string {
+  return content.replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+function inferStaleAt(record: MemoryRecord): string | null {
+  return record.expiryAt ?? record.reviewAt ?? null;
+}
+
+function defaultContextPacketConsent(record: MemoryRecord) {
+  if (record.contextPacketConsent) {
+    return record.contextPacketConsent;
+  }
+
+  if (record.actorContext?.initiator.kind === "human") {
+    return {
+      basis: "explicit" as const,
+      grantedBy: record.actorContext.initiator.userId,
+      grantedAt: record.createdAt
+    };
+  }
+
+  if (record.source === "ui") {
+    return {
+      basis: "explicit" as const,
+      grantedBy: record.userId,
+      grantedAt: record.createdAt
+    };
+  }
+
+  return {
+    basis: "derived" as const,
+    grantedBy: record.actorContext?.initiator.userId ?? null,
+    grantedAt: record.createdAt
+  };
+}
+
+export function buildContextPacketFromMemory(
+  record: MemoryRecord,
+  options?: {
+    now?: number;
+    transformations?: ContextPacketTransformation[];
+    usage?: ContextPacket["usage"];
+    consent?: ContextPacket["consent"];
+  }
+): ContextPacket {
+  const freshness = getMemoryFreshness(record, options?.now ?? Date.now());
+  const packetId = `ctx_${record.id}`;
+  const derivedTransformation = ContextPacketTransformationSchema.parse({
+    id: `memory:${record.id}:packet`,
+    kind: "derived_from_memory",
+    at: record.updatedAt,
+    inputIds: [record.id],
+    outputId: packetId,
+    summary: "Context packet derived from memory record provenance."
+  });
+  const transformations = [derivedTransformation, ...(options?.transformations ?? [])];
+
+  return ContextPacketSchema.parse({
+    id: packetId,
+    userId: record.userId,
+    source: {
+      kind: "memory",
+      id: record.id,
+      summary: `${record.memoryType} memory from ${record.source}`
+    },
+    category: record.category,
+    contentSummary: summarizeContextContent(record.content),
+    memoryType: record.memoryType,
+    sensitivity: record.sensitivity,
+    permissions: record.permissions,
+    retention: {
+      reviewAt: record.reviewAt,
+      expiryAt: record.expiryAt
+    },
+    consent: options?.consent ?? defaultContextPacketConsent(record),
+    freshness: {
+      status: freshness,
+      observedAt: record.updatedAt,
+      staleAt: inferStaleAt(record)
+    },
+    lineage: {
+      parentPacketIds: [],
+      sourceMemoryIds: [record.id],
+      transformationIds: transformations.map((transformation) => transformation.id)
+    },
+    transformations,
+    usage: options?.usage ?? [],
+    actorContext: record.actorContext,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  });
+}
+
+function normalizeSensitivity(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function canExposeSensitivity(record: MemoryRecord, allowedSensitivities: Set<string> | null): boolean {
+  if (!allowedSensitivities) {
+    return normalizeSensitivity(record.sensitivity) !== "restricted";
+  }
+
+  return allowedSensitivities.has(normalizeSensitivity(record.sensitivity));
+}
+
+export function queryContextPackets(records: MemoryRecord[], query: ContextPacketQuery = {}): ContextPacket[] {
+  const now = query.now ?? Date.now();
+  const allowedSensitivities = query.allowedSensitivities
+    ? new Set(query.allowedSensitivities.map((sensitivity) => normalizeSensitivity(sensitivity)))
+    : null;
+  const limit = Math.max(0, Math.min(Math.trunc(query.limit ?? 50), 200));
+
+  return records
+    .filter((record) => {
+      if (query.userId && record.userId !== query.userId) {
+        return false;
+      }
+
+      if (!query.includeExpired && isMemoryExpired(record, now)) {
+        return false;
+      }
+
+      if (query.agent && !canAgentAccessMemory(record, query.agent)) {
+        return false;
+      }
+
+      return canExposeSensitivity(record, allowedSensitivities);
+    })
+    .map((record) => buildContextPacketFromMemory(record, { now }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, limit);
 }
 
 export function canAgentAccessMemory(record: MemoryRecord, agent: AgentName): boolean {

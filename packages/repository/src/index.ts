@@ -77,6 +77,7 @@ import {
   nowIso,
   type ActionLog,
   type AgentDefinition,
+  type AgentName,
   type AgentMetrics,
   type ActorContext,
   type ApprovalRequest,
@@ -160,20 +161,12 @@ import { appendGoalActionLogsToStore, appendGoalActionLogsWithClient } from "./a
 import { buildBriefingHistory, buildDashboardControlPlane, buildNowQueue } from "./dashboard-control-plane";
 import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
+import { listContextPacketMemoryFromStore, listContextPacketMemoryWithPool } from "./repository-context-packet-memory";
+import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
 import {
-  assertRunningJobOwner,
-  autopilotEventMatchesBudget,
-  buildDeletedWorkspaceTombstone,
-  buildJobLifecycleJournal,
-  claimJobRecord,
-  goalShareTerminalAt,
-  isJobClaimableAt,
-  isJobScopedToWorkspace,
-  normalizeAutopilotEventDetails,
-  resolveRetentionWindow,
-  sortJobsForClaim,
-  withAutopilotSuppression,
-  workspaceGoalIdsFromStore
+  assertRunningJobOwner, autopilotEventMatchesBudget, buildDeletedWorkspaceTombstone, buildJobLifecycleJournal,
+  goalShareTerminalAt, isJobScopedToWorkspace, normalizeAutopilotEventDetails, resolveRetentionWindow,
+  withAutopilotSuppression, workspaceGoalIdsFromStore
 } from "./repository-runtime-helpers";
 import {
   ApprovalMutationError,
@@ -188,6 +181,7 @@ import {
   type DashboardDiagnostics,
   type GoalPageParams,
   type GoalShareListFilters,
+  type JobConcurrencyLimits,
   type PrivacyOperationListFilters,
   type WatcherListFilters,
   type WatcherPageParams,
@@ -252,6 +246,7 @@ type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 
 export { CommitmentInboxQueryError, CollectionPageQueryError };
 export { ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters, type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
+export { buildExecutionProvenanceGraph } from "./provenance-graph";
 
 const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
@@ -261,10 +256,11 @@ const DASHBOARD_GOAL_LIMIT = 40;
 const DASHBOARD_AUTOPILOT_EVENT_LIMIT = 24;
 const DASHBOARD_MEMORY_LIMIT = 40;
 const DASHBOARD_INTEGRATION_LIMIT = 24;
-const DEFAULT_RUNTIME_STORE_PATH = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../../.agentic/runtime-store.json"
-);
+const DEFAULT_RUNTIME_STORE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.agentic/runtime-store.json");
+
+function normalizeProvenanceCollectionLimit(value: number | undefined): number | null {
+  return value === undefined ? null : Math.max(1, Math.min(Math.trunc(value), 500));
+}
 
 function resolveDefaultStorePath(): string {
   const configured = process.env.AGENTIC_RUNTIME_STORE_PATH?.trim();
@@ -1850,16 +1846,13 @@ class FileRepository implements AgenticRepository {
     );
   }
 
-  async listEvidenceRecords(params?: {
-    userId?: string;
-    goalId?: string;
-    approvalId?: string;
-  }): Promise<EvidenceRecord[]> {
+  async listEvidenceRecords(params?: { userId?: string; goalId?: string; approvalId?: string; limit?: number }): Promise<EvidenceRecord[]> {
     const userId = params?.userId ?? SYSTEM_USER_ID;
     const store = await this.readStore();
     const goalIds = goalIdsForUser(store, userId);
+    const limit = normalizeProvenanceCollectionLimit(params?.limit);
 
-    return sortByCreatedDesc(
+    const records = sortByCreatedDesc(
       store.evidenceRecords.filter((record) => {
         if (record.userId !== userId || !goalIds.has(record.goalId)) {
           return false;
@@ -1875,7 +1868,9 @@ class FileRepository implements AgenticRepository {
 
         return true;
       })
-    ).map((record) => EvidenceRecordSchema.parse(clone(record)));
+    );
+
+    return (limit === null ? records : records.slice(0, limit)).map((record) => EvidenceRecordSchema.parse(clone(record)));
   }
 
   async listCommitments(userId = SYSTEM_USER_ID): Promise<Commitment[]> {
@@ -2191,17 +2186,14 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listJobs(params?: {
-    userId?: string;
-    kinds?: JobKind[];
-    statuses?: JobStatus[];
-  }): Promise<JobRecord[]> {
+  async listJobs(params?: { userId?: string; kinds?: JobKind[]; statuses?: JobStatus[]; limit?: number }): Promise<JobRecord[]> {
     const store = await this.readStore();
     const kinds = params?.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
     const statuses = params?.statuses?.map((status) => JobStatusSchema.parse(status)) ?? [];
     const workspaceIds = params?.userId ? workspaceIdsForUser(store, params.userId) : null;
+    const limit = normalizeProvenanceCollectionLimit(params?.limit);
 
-    return sortByCreatedDesc(
+    const jobs = sortByCreatedDesc(
       store.jobs.filter((job) => {
         if (
           params?.userId &&
@@ -2220,7 +2212,9 @@ class FileRepository implements AgenticRepository {
 
         return true;
       })
-    ).map((job) => JobRecordSchema.parse(clone(job)));
+    );
+
+    return (limit === null ? jobs : jobs.slice(0, limit)).map((job) => JobRecordSchema.parse(clone(job)));
   }
 
   async getJob(jobId: string, userId = SYSTEM_USER_ID): Promise<JobRecord | null> {
@@ -2260,33 +2254,18 @@ class FileRepository implements AgenticRepository {
   async claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;
+    concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const claimedAt = params.now ?? nowIso();
-      const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
-      const claimable = sortJobsForClaim(
-        store.jobs.filter((job) => {
-          if (params.userId && job.userId !== params.userId) {
-            return false;
-          }
-
-          if (kinds.length > 0 && !kinds.includes(job.kind)) {
-            return false;
-          }
-
-          return isJobClaimableAt(job, Date.parse(claimedAt));
-        })
-      )[0];
-
-      if (!claimable) {
+      const claimed = claimNextJobFromStore(store, params);
+      if (!claimed) {
         return null;
       }
-
-      const claimed = claimJobRecord(claimable, params.runnerId, params.leaseMs, claimedAt);
       store.jobs = upsertById(store.jobs, claimed);
       await this.writeStore(store);
       return JobRecordSchema.parse(clone(claimed));
@@ -2409,12 +2388,23 @@ class FileRepository implements AgenticRepository {
       return JobRecordSchema.parse(clone(deadLettered));
     });
   }
-
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
     const store = await this.readStore();
     return sortByCreatedDesc(store.memories.filter((memory) => memory.userId === userId)).map((memory) =>
       MemoryRecordSchema.parse(clone(memory))
     );
+  }
+
+  async listContextPacketMemory(params: {
+    userId: string;
+    agent?: AgentName;
+    includeExpired?: boolean;
+    allowedSensitivities?: string[];
+    limit?: number;
+    now?: number;
+  }): Promise<MemoryRecord[]> {
+    const store = await this.readStore();
+    return listContextPacketMemoryFromStore(store.memories, params);
   }
 
   async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
@@ -2962,9 +2952,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into memory_records (
-          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, review_at, expiry_at, created_at, updated_at
+          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, context_packet_consent, review_at, expiry_at, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
         on conflict (id) do update
         set category = excluded.category,
             memory_type = excluded.memory_type,
@@ -2974,6 +2964,7 @@ class PostgresRepository implements AgenticRepository {
             sensitivity = excluded.sensitivity,
             permissions = excluded.permissions,
             actor_context = excluded.actor_context,
+            context_packet_consent = excluded.context_packet_consent,
             review_at = excluded.review_at,
             expiry_at = excluded.expiry_at,
             updated_at = excluded.updated_at
@@ -2989,6 +2980,7 @@ class PostgresRepository implements AgenticRepository {
         memory.sensitivity,
         JSON.stringify(memory.permissions),
         JSON.stringify(memory.actorContext),
+        JSON.stringify(memory.contextPacketConsent),
         memory.reviewAt,
         memory.expiryAt,
         memory.createdAt,
@@ -2996,7 +2988,6 @@ class PostgresRepository implements AgenticRepository {
       ]
     );
   }
-
   private async saveEvidenceRecordWithClient(client: PoolClient, record: EvidenceRecord): Promise<void> {
     const evidence = EvidenceRecordSchema.parse(record);
     await client.query(
@@ -3681,19 +3672,19 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into jobs (
-          id, user_id, kind, status, idempotency_key, payload, actor_context, max_attempts, attempt_count,
-          claimed_by, last_attempt_at, claimed_at, lease_expires_at, available_at, completed_at, dead_lettered_at,
-          last_error, execution_journal, created_at, updated_at
+          id, user_id, kind, status, priority, queue_name, concurrency_key, timeout_ms, idempotency_key, payload,
+          actor_context, max_attempts, attempt_count, claimed_by, last_attempt_at, claimed_at, lease_expires_at,
+          available_at, completed_at, dead_lettered_at, last_error, execution_journal, created_at, updated_at
         )
-        values (
-          $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9,
-          $10, $11, $12, $13, $14, $15, $16,
-          $17, $18::jsonb, $19, $20
-        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24)
         on conflict (id) do update
         set user_id = excluded.user_id,
             kind = excluded.kind,
             status = excluded.status,
+            priority = excluded.priority,
+            queue_name = excluded.queue_name,
+            concurrency_key = excluded.concurrency_key,
+            timeout_ms = excluded.timeout_ms,
             idempotency_key = excluded.idempotency_key,
             payload = excluded.payload,
             actor_context = excluded.actor_context,
@@ -3715,6 +3706,10 @@ class PostgresRepository implements AgenticRepository {
         validated.userId,
         validated.kind,
         validated.status,
+        validated.priority,
+        validated.queue,
+        validated.concurrencyKey,
+        validated.timeoutMs,
         validated.idempotencyKey,
         JSON.stringify(validated.payload),
         JSON.stringify(validated.actorContext),
@@ -3938,6 +3933,10 @@ class PostgresRepository implements AgenticRepository {
       userId: row.user_id,
       kind: row.kind,
       status: row.status,
+      priority: typeof row.priority === "string" ? row.priority : "normal",
+      queue: typeof row.queue_name === "string" ? row.queue_name : "default",
+      concurrencyKey: typeof row.concurrency_key === "string" ? row.concurrency_key : null,
+      timeoutMs: typeof row.timeout_ms === "number" ? row.timeout_ms : null,
       idempotencyKey: typeof row.idempotency_key === "string" ? row.idempotency_key : null,
       payload: row.payload,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
@@ -6265,16 +6264,13 @@ class PostgresRepository implements AgenticRepository {
     return result.rows.map((row) => this.mapApprovalRow(row as Record<string, unknown>));
   }
 
-  async listEvidenceRecords(params?: {
-    userId?: string;
-    goalId?: string;
-    approvalId?: string;
-  }): Promise<EvidenceRecord[]> {
+  async listEvidenceRecords(params?: { userId?: string; goalId?: string; approvalId?: string; limit?: number }): Promise<EvidenceRecord[]> {
     await this.ready;
     const userId = params?.userId ?? SYSTEM_USER_ID;
-    const values: string[] = [userId];
+    const values: unknown[] = [userId];
     let index = values.length + 1;
     let filters = "";
+    const limit = normalizeProvenanceCollectionLimit(params?.limit);
 
     if (params?.goalId) {
       values.push(params.goalId);
@@ -6284,6 +6280,11 @@ class PostgresRepository implements AgenticRepository {
     if (params?.approvalId) {
       values.push(params.approvalId);
       filters += ` and er.approval_id = $${index++}`;
+    }
+
+    const limitClause = limit === null ? "" : `limit $${index}`;
+    if (limit !== null) {
+      values.push(limit);
     }
 
     const result = await this.pool.query(
@@ -6298,6 +6299,7 @@ class PostgresRepository implements AgenticRepository {
         )
         ${filters}
         order by er.created_at desc
+        ${limitClause}
       `,
       values
     );
@@ -6735,12 +6737,9 @@ class PostgresRepository implements AgenticRepository {
     return AutopilotEventSchema.parse(clone(validated));
   }
 
-  async listJobs(params?: {
-    userId?: string;
-    kinds?: JobKind[];
-    statuses?: JobStatus[];
-  }): Promise<JobRecord[]> {
+  async listJobs(params?: { userId?: string; kinds?: JobKind[]; statuses?: JobStatus[]; limit?: number }): Promise<JobRecord[]> {
     await this.ready;
+    const limit = normalizeProvenanceCollectionLimit(params?.limit);
     if (params?.userId) {
       const values: unknown[] = [params.userId];
       const predicates = [
@@ -6768,6 +6767,11 @@ class PostgresRepository implements AgenticRepository {
         predicates.push(`j.status = any($${values.length}::text[])`);
       }
 
+      const limitClause = limit === null ? "" : `limit $${values.length + 1}`;
+      if (limit !== null) {
+        values.push(limit);
+      }
+
       const result = await this.pool.query(
         `
           select distinct j.*
@@ -6789,6 +6793,7 @@ class PostgresRepository implements AgenticRepository {
             and watcher_wm.user_id = $1
           where ${predicates.join(" and ")}
           order by j.created_at desc
+          ${limitClause}
         `,
         values
       );
@@ -6809,6 +6814,11 @@ class PostgresRepository implements AgenticRepository {
       predicates.push(`status = any($${values.length}::text[])`);
     }
 
+    const limitClause = limit === null ? "" : `limit $${values.length + 1}`;
+    if (limit !== null) {
+      values.push(limit);
+    }
+
     const whereClause = predicates.length > 0 ? `where ${predicates.join(" and ")}` : "";
     const result = await this.pool.query(
       `
@@ -6816,6 +6826,7 @@ class PostgresRepository implements AgenticRepository {
         from jobs
         ${whereClause}
         order by created_at desc
+        ${limitClause}
       `,
       values
     );
@@ -6902,51 +6913,20 @@ class PostgresRepository implements AgenticRepository {
   async claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;
+    concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null> {
-    return this.withTransaction(async (client) => {
-      const claimedAt = params.now ?? nowIso();
-      const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
-      const values: unknown[] = [claimedAt];
-      const predicates = [
-        `(
-          (status in ('queued', 'retrying') and available_at <= $1)
-          or (status = 'running' and lease_expires_at is not null and lease_expires_at <= $1)
-        )`
-      ];
-
-      if (params.userId) {
-        values.push(params.userId);
-        predicates.push(`user_id = $${values.length}`);
-      }
-
-      if (kinds.length > 0) {
-        values.push(kinds);
-        predicates.push(`kind = any($${values.length}::text[])`);
-      }
-
-      const result = await client.query(
-        `
-          select *
-          from jobs
-          where ${predicates.join(" and ")}
-          order by available_at asc, created_at asc
-          limit 1
-          for update skip locked
-        `,
-        values
-      );
-
-      if (!result.rows[0]) {
-        return null;
-      }
-
-      const claimed = claimJobRecord(this.mapJobRow(result.rows[0]), params.runnerId, params.leaseMs, claimedAt);
-      await this.saveJobWithClient(client, claimed);
-      return JobRecordSchema.parse(clone(claimed));
-    });
+    return this.withTransaction((client) =>
+      claimNextJobWithClient(
+        client,
+        params,
+        (row) => this.mapJobRow(row),
+        (transactionClient, job) => this.saveJobWithClient(transactionClient, job)
+      )
+    );
   }
 
   async completeJob(params: {
@@ -7066,7 +7046,6 @@ class PostgresRepository implements AgenticRepository {
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
     await this.ready;
     const result = await this.pool.query("select * from memory_records where user_id = $1 order by created_at desc, id desc", [userId]);
-
     return result.rows.map((row) =>
       MemoryRecordSchema.parse({
         id: row.id,
@@ -7079,12 +7058,25 @@ class PostgresRepository implements AgenticRepository {
         sensitivity: row.sensitivity,
         permissions: row.permissions ?? [],
         actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        contextPacketConsent: row.context_packet_consent ?? null,
         reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString()
       })
     );
+  }
+
+  async listContextPacketMemory(params: {
+    userId: string;
+    agent?: AgentName;
+    includeExpired?: boolean;
+    allowedSensitivities?: string[];
+    limit?: number;
+    now?: number;
+  }): Promise<MemoryRecord[]> {
+    await this.ready;
+    return listContextPacketMemoryWithPool(this.pool, params);
   }
 
   async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
@@ -7126,6 +7118,7 @@ class PostgresRepository implements AgenticRepository {
         sensitivity: row.sensitivity,
         permissions: row.permissions ?? [],
         actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        contextPacketConsent: row.context_packet_consent ?? null,
         reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
         createdAt: new Date(row.created_at).toISOString(),
@@ -7133,7 +7126,6 @@ class PostgresRepository implements AgenticRepository {
       })
     );
     const last = items.at(-1);
-
     return MemoryRecordPageSchema.parse({
       items,
       limit,

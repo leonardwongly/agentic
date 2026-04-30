@@ -18,6 +18,7 @@ import {
   type Goal,
   type JobKind,
   type JobPayload,
+  type JobPriority,
   type JobRecord,
   type JobStatus,
   type RiskClass,
@@ -95,7 +96,9 @@ const workflowRiskRank: Record<RiskClass, number> = {
 export type ClaimNextJobParams = {
   userId?: string;
   kinds?: JobKind[];
+  queue?: string;
   now?: string;
+  concurrencyLimits?: JobConcurrencyLimits;
 };
 
 export type AcknowledgeJobParams = {
@@ -114,9 +117,11 @@ export type JobQueueStore = {
   claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;
+    concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null>;
   completeJob(params: {
     jobId: string;
@@ -150,7 +155,17 @@ export type JobRetryPolicy = {
   maxDelayMs: number;
 };
 
-export type JobHandler = (job: JobRecord) => Promise<void>;
+export type JobConcurrencyLimits = {
+  maxRunningPerKind?: number;
+  maxRunningPerUser?: number;
+  maxRunningPerConcurrencyKey?: number;
+};
+
+export type JobHandlerContext = {
+  signal: AbortSignal;
+};
+
+export type JobHandler = (job: JobRecord, context?: JobHandlerContext) => Promise<void>;
 
 export type JobHandlerMap = Partial<Record<JobKind, JobHandler>>;
 
@@ -199,6 +214,11 @@ function deriveReplayedFromJobId(payload: JobPayload): string | null {
       ? payload.metadata.replayedFromJobId.trim()
       : "";
   return candidate || null;
+}
+
+function deriveJobConcurrencyKey(userId: string, kind: JobKind, payload: JobPayload): string {
+  const sideEffectTarget = deriveJobSideEffectTarget(payload);
+  return sideEffectTarget ? `${userId}:${sideEffectTarget}` : `${userId}:${kind}`;
 }
 
 export function createWorkflowState(
@@ -267,6 +287,10 @@ export function createJobRecord(params: {
   idempotencyKey?: string | null;
   maxAttempts?: number;
   availableAt?: string;
+  priority?: JobPriority;
+  queue?: string;
+  concurrencyKey?: string | null;
+  timeoutMs?: number | null;
 }): JobRecord {
   const timestamp = nowIso();
   const replayedFromJobId = deriveReplayedFromJobId(params.payload);
@@ -276,6 +300,13 @@ export function createJobRecord(params: {
     userId: params.userId,
     kind: params.kind,
     status: "queued",
+    priority: params.priority ?? "normal",
+    queue: params.queue?.trim() || "default",
+    concurrencyKey:
+      params.concurrencyKey === null
+        ? null
+        : params.concurrencyKey?.trim() || deriveJobConcurrencyKey(params.userId, params.kind, params.payload),
+    timeoutMs: params.timeoutMs ?? null,
     idempotencyKey: params.idempotencyKey?.trim() || null,
     payload: params.payload,
     actorContext: params.actorContext ?? null,
@@ -632,14 +663,31 @@ export function isJobClaimable(job: JobRecord, now = Date.now()): boolean {
   return false;
 }
 
-export function computeJobRetryDelayMs(attemptCount: number, policy?: Partial<JobRetryPolicy>): number {
+export function computeJobRetryDelayMs(
+  attemptCount: number,
+  policy?: Partial<JobRetryPolicy>,
+  options?: {
+    jitterRatio?: number;
+    random?: () => number;
+  }
+): number {
   const normalized = {
     ...defaultRetryPolicy,
     ...policy
   };
   const attemptIndex = Math.max(0, attemptCount - 1);
   const multiplier = normalized.factor ** attemptIndex;
-  return Math.min(normalized.maxDelayMs, Math.round(normalized.baseDelayMs * multiplier));
+  const baseDelay = Math.min(normalized.maxDelayMs, Math.round(normalized.baseDelayMs * multiplier));
+  const jitterRatio = Math.max(0, Math.min(1, options?.jitterRatio ?? 0));
+
+  if (jitterRatio === 0) {
+    return baseDelay;
+  }
+
+  const random = options?.random ?? Math.random;
+  const spread = Math.round(baseDelay * jitterRatio);
+  const offset = Math.round((random() * 2 - 1) * spread);
+  return Math.max(0, Math.min(normalized.maxDelayMs, baseDelay + offset));
 }
 
 export function createDurableJobQueue(
@@ -648,6 +696,9 @@ export function createDurableJobQueue(
     runnerId: string;
     leaseMs?: number;
     retryPolicy?: Partial<JobRetryPolicy>;
+    concurrencyLimits?: JobConcurrencyLimits;
+    retryJitterRatio?: number;
+    requireIdempotencyForRetry?: boolean;
   }
 ): DurableJobQueue {
   const leaseMs = options.leaseMs ?? 30_000;
@@ -684,9 +735,11 @@ export function createDurableJobQueue(
           const claimed = await store.claimNextJob({
             userId: params?.userId,
             kinds: params?.kinds,
+            queue: params?.queue,
             runnerId: options.runnerId,
             leaseMs,
-            now: params?.now
+            now: params?.now,
+            concurrencyLimits: params?.concurrencyLimits ?? options.concurrencyLimits
           });
 
           recordCounter("durable_job.claim.total", 1, {
@@ -726,7 +779,10 @@ export function createDurableJobQueue(
       const timestamp = params.now ?? nowIso();
       const error = normalizeJobError(params.error);
 
-      if (params.job.attemptCount >= params.job.maxAttempts) {
+      if (
+        params.job.attemptCount >= params.job.maxAttempts ||
+        (options.requireIdempotencyForRetry === true && !params.job.idempotencyKey)
+      ) {
         return withSpan(
           "durable_job.dead_letter",
           {
@@ -752,9 +808,10 @@ export function createDurableJobQueue(
         );
       }
 
-      const nextAvailableAt = new Date(
-        Date.parse(timestamp) + computeJobRetryDelayMs(params.job.attemptCount, retryPolicy)
-      ).toISOString();
+      const retryDelayMs = computeJobRetryDelayMs(params.job.attemptCount, retryPolicy, {
+        jitterRatio: params.job.idempotencyKey ? options.retryJitterRatio : 0
+      });
+      const nextAvailableAt = new Date(Date.parse(timestamp) + retryDelayMs).toISOString();
 
       return withSpan(
         "durable_job.retry",
@@ -822,7 +879,7 @@ export async function processNextDurableJob(params: {
             jobId: job.id,
             jobKind: job.kind
           },
-          async () => handler(job)
+          async () => runJobHandlerWithOptionalTimeout(job, handler)
         )
     );
     return {
@@ -837,6 +894,39 @@ export async function processNextDurableJob(params: {
       claimedJob: job,
       finalJob: await params.queue.fail({ job, error: coerceJobFailure(error) })
     };
+  }
+}
+
+async function runJobHandlerWithOptionalTimeout(job: JobRecord, handler: JobHandler): Promise<void> {
+  if (!job.timeoutMs) {
+    await handler(job, { signal: new AbortController().signal });
+    return;
+  }
+
+  let timeout: NodeJS.Timeout | null = null;
+  const controller = new AbortController();
+  const timeoutError = new Error(`Durable job ${job.id} timed out after ${job.timeoutMs}ms.`);
+  const handlerPromise = Promise.resolve().then(() => handler(job, { signal: controller.signal }));
+  handlerPromise.catch(() => {
+    // The worker settles the durable job on the first failure result. Late handler
+    // failures after a timeout must not create unhandled rejections or a second
+    // queue transition.
+  });
+
+  try {
+    await Promise.race([
+      handlerPromise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort(timeoutError);
+          reject(timeoutError);
+        }, job.timeoutMs ?? 0);
+      })
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 

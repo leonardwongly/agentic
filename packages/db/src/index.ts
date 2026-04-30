@@ -132,6 +132,7 @@ export const memoryRecords = pgTable("memory_records", {
   sensitivity: text("sensitivity").notNull(),
   permissions: jsonb("permissions").$type<string[]>().notNull(),
   actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+  contextPacketConsent: jsonb("context_packet_consent").$type<Record<string, unknown> | null>(),
   reviewAt: timestamp("review_at", { withTimezone: true }),
   expiryAt: timestamp("expiry_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),

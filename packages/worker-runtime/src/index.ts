@@ -25,6 +25,7 @@ import {
   createJobRecord,
   processNextDurableJob,
   type ClaimNextJobParams,
+  type JobConcurrencyLimits,
   type JobHandlerMap,
   type JobRetryPolicy
 } from "@agentic/execution";
@@ -169,8 +170,21 @@ export type WorkerRuntimeOptions = {
   pollIntervalMs?: number;
   leaseMs?: number;
   retryPolicy?: Partial<JobRetryPolicy>;
+  concurrencyLimits?: JobConcurrencyLimits;
+  retryJitterRatio?: number;
+  requireIdempotencyForRetry?: boolean;
   maxJobs?: number;
   claim?: ClaimNextJobParams;
+};
+
+export type WorkerQueueHealthSummary = {
+  queuedDepth: number;
+  retryingDepth: number;
+  deadLetterDepth: number;
+  activeLeaseCount: number;
+  expiredLeaseCount: number;
+  queuedByPriority: Partial<Record<JobRecord["priority"], number>>;
+  runningByKind: Partial<Record<JobKind, number>>;
 };
 
 class AutopilotExecutionError extends Error {
@@ -1436,7 +1450,10 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
       const queue = createDurableJobQueue(options.repository, {
         runnerId: options.runnerId,
         leaseMs: options.leaseMs,
-        retryPolicy: options.retryPolicy
+        retryPolicy: options.retryPolicy,
+        concurrencyLimits: options.concurrencyLimits,
+        retryJitterRatio: options.retryJitterRatio,
+        requireIdempotencyForRetry: options.requireIdempotencyForRetry
       });
       const handlers = createWorkerJobHandlers({
         repository: options.repository,
@@ -1482,6 +1499,49 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
         processedCount,
         stopReason: "aborted"
       };
+    }
+  );
+}
+
+export function summarizeWorkerQueueHealth(jobs: JobRecord[], now = nowIso()): WorkerQueueHealthSummary {
+  const nowMs = Date.parse(now);
+
+  return jobs.reduce<WorkerQueueHealthSummary>(
+    (summary, job) => {
+      if (job.status === "queued") {
+        summary.queuedDepth += 1;
+        summary.queuedByPriority[job.priority] = (summary.queuedByPriority[job.priority] ?? 0) + 1;
+      }
+
+      if (job.status === "retrying") {
+        summary.retryingDepth += 1;
+      }
+
+      if (job.status === "dead_letter") {
+        summary.deadLetterDepth += 1;
+      }
+
+      if (job.status === "running") {
+        summary.runningByKind[job.kind] = (summary.runningByKind[job.kind] ?? 0) + 1;
+
+        const leaseExpiresAt = job.leaseExpiresAt ? Date.parse(job.leaseExpiresAt) : Number.NaN;
+        if (Number.isFinite(leaseExpiresAt) && leaseExpiresAt <= nowMs) {
+          summary.expiredLeaseCount += 1;
+        } else {
+          summary.activeLeaseCount += 1;
+        }
+      }
+
+      return summary;
+    },
+    {
+      queuedDepth: 0,
+      retryingDepth: 0,
+      deadLetterDepth: 0,
+      activeLeaseCount: 0,
+      expiredLeaseCount: 0,
+      queuedByPriority: {},
+      runningByKind: {}
     }
   );
 }
