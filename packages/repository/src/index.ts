@@ -186,6 +186,7 @@ import {
   type DashboardControlPlane,
   type DashboardControlPlaneSection,
   type DashboardData,
+  type DashboardDiagnostic,
   type DashboardDiagnostics,
   type GoalPageParams,
   type GoalShareListFilters,
@@ -197,7 +198,6 @@ import {
   type WorkspaceRetentionParams
 } from "./repository-types";
 import { buildWorkspaceAuditExport } from "./workspace-audit-export";
-
 const UserRecordSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
