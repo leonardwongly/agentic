@@ -92,6 +92,9 @@ describe("AOS remediation tracker", () => {
   it("rejects malformed tracker fields before they corrupt summaries", () => {
     const tracker = loadAosTracker();
     const malformedTracker = structuredClone(tracker);
+    malformedTracker.repository = null as unknown as string;
+    malformedTracker.program = "";
+    malformedTracker.reviewedAt = 42 as unknown as string;
     malformedTracker.sourceOfTruth[0].path = null as unknown as string;
     malformedTracker.sourceOfTruth[0].authority = "   ";
     malformedTracker.baselineCommands[0].command = 42 as unknown as string;
@@ -102,6 +105,9 @@ describe("AOS remediation tracker", () => {
 
     expect(validateAosTracker(malformedTracker)).toEqual(
       expect.arrayContaining([
+        "repository must be a string.",
+        "program must not be empty.",
+        "reviewedAt must be a string.",
         "sourceOfTruth[0].path must be a string.",
         "sourceOfTruth[0].authority must not be empty.",
         "baselineCommands[0].command must be a string.",

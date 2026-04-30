@@ -161,6 +161,12 @@ export function validateAosTracker(tracker: AosTracker): string[] {
   if (tracker.version !== 1) {
     errors.push("Tracker version must be 1.");
   }
+  for (const field of ["repository", "program", "reviewedAt"] as const) {
+    const value = readString(tracker[field], field, errors);
+    if (value !== null && !value.trim()) {
+      errors.push(`${field} must not be empty.`);
+    }
+  }
 
   const sourceIds: string[] = [];
   for (let index = 0; index < sourceOfTruth.length; index += 1) {
