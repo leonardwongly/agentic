@@ -45,16 +45,18 @@ export async function GET(request: Request) {
       : repository.listGoalsPage({ userId: principal.userId, limit: query.limit }).then((page) => page.items);
     const rootJobPromise =
       root?.type === "job" || root?.type === "failure" ? repository.getJob(root.id, principal.userId) : Promise.resolve(null);
+    const allMemoriesPromise = repository.listMemory(principal.userId);
+    const memoriesPromise = allMemoriesPromise.then((memories) => memories.slice(0, query.limit));
     const rootMemoryPromise =
       root?.type === "memory" || root?.type === "context_packet"
-        ? repository.listMemory(principal.userId).then((memories) =>
-            memories.find((memory) => memory.id === root.id || `ctx_${memory.id}` === root.id) ?? null
+        ? allMemoriesPromise.then(
+            (memories) => memories.find((memory) => memory.id === root.id || `ctx_${memory.id}` === root.id) ?? null
           )
         : Promise.resolve(null);
     const [goals, jobs, memories, evidenceRecords, rootJob, rootMemory] = await Promise.all([
       goalsPromise,
       repository.listJobs({ userId: principal.userId, limit: query.limit }),
-      repository.listContextPacketMemory({ userId: principal.userId, limit: query.limit }),
+      memoriesPromise,
       repository.listEvidenceRecords({ userId: principal.userId, goalId: rootGoalId ?? undefined, limit: query.limit }),
       rootJobPromise,
       rootMemoryPromise

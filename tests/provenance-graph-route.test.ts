@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
+import { createMemoryRecord } from "@agentic/memory";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { buildAuthorizedGetRequest, expectNoStoreHeaders } from "./route-test-helpers";
@@ -140,5 +141,69 @@ describe("provenance graph route", () => {
 
     expect(response.status).toBe(200);
     expect(payload.graph.nodes.some((node) => node.id === `job:${rootJob.id}`)).toBe(true);
+  });
+
+  it("includes restricted owner memories in audit provenance graphs", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const restrictedMemory = createMemoryRecord({
+      id: "restricted-owner-memory",
+      userId: SYSTEM_USER_ID,
+      category: "audit",
+      memoryType: "confirmed",
+      content: "Restricted owner-only audit context.",
+      confidence: 0.95,
+      source: "test",
+      sensitivity: "restricted",
+      createdAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z"
+    });
+    await repository.saveMemory(restrictedMemory);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await graphRoute(buildAuthorizedGetRequest("http://localhost/api/provenance/graph?limit=10"));
+    const payload = (await response.json()) as { graph: { nodes: Array<{ id: string; sensitivity?: string }> } };
+
+    expect(response.status).toBe(200);
+    expect(payload.graph.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: `memory:${restrictedMemory.id}`,
+          sensitivity: "restricted"
+        })
+      ])
+    );
+  });
+
+  it("projects more than 200 memory-derived nodes when the provenance limit allows it", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    for (let index = 0; index < 225; index += 1) {
+      const padded = String(index).padStart(3, "0");
+      await repository.saveMemory(
+        createMemoryRecord({
+          id: `memory-scale-${padded}`,
+          userId: SYSTEM_USER_ID,
+          category: "scale",
+          memoryType: "observed",
+          content: `Scale memory ${padded}.`,
+          confidence: 0.75,
+          source: "test",
+          createdAt: `2026-04-20T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
+          updatedAt: `2026-04-20T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`
+        })
+      );
+    }
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await graphRoute(buildAuthorizedGetRequest("http://localhost/api/provenance/graph?limit=500"));
+    const payload = (await response.json()) as { graph: { nodes: Array<{ id: string; type: string }> } };
+
+    expect(response.status).toBe(200);
+    expect(payload.graph.nodes.filter((node) => node.type === "memory")).toHaveLength(225);
+    expect(payload.graph.nodes.some((node) => node.id === "memory:memory-scale-000")).toBe(true);
   });
 });
