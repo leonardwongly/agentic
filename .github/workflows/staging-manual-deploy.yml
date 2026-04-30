@@ -57,14 +57,17 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=4096
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 20
           cache: npm
 
       - run: npm ci --include=dev
+
+      - name: Validate GitHub Actions provenance pins
+        run: npm run ci:validate-provenance
 
       - name: Resolve staging execution mode
         id: inspect
@@ -83,7 +86,7 @@ jobs:
 
       - name: Audit production dependencies
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
-        run: npm run security:audit-runtime -- --report artifacts/security/runtime-audit-report.json
+        run: npm run security:audit-runtime -- --minimum-severity moderate --report artifacts/security/runtime-audit-report.json
 
       - name: Build deployable artifacts
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
@@ -150,7 +153,7 @@ jobs:
 
       - name: Upload telemetry rollout evidence
         if: always() && (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agentic-staging-telemetry
           path: ${{ env.AGENTIC_TELEMETRY_RETENTION_DIR }}
@@ -159,7 +162,7 @@ jobs:
 
       - name: Upload staging supply-chain evidence
         if: always() && (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agentic-staging-supply-chain
           path: |
@@ -170,13 +173,13 @@ jobs:
 
       - name: Attest staging security evidence
         if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: artifacts/security/agentic-sbom.spdx.json
 
       - name: Attest staging deployable build artifacts
         if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: |
             artifacts/build/agentic-runtime-bundle.tgz

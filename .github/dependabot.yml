@@ -8,6 +8,22 @@ updates:
     commit-message:
       prefix: "ci(deps)"
     groups:
+      runtime-security-patches:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
       dependencies:
         patterns:
           - "*"
