@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { WorkspaceGovernanceSchema } from "@agentic/contracts";
 import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
-import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
+import { ApiRouteError, authenticatedJson, parseJsonBody } from "../../../../../lib/api-response";
 import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { GOAL_SHARE_MUTATION_DENIED_REASON, canManageGoalSharesForRole } from "../../../../../lib/workspace-role-permissions";
 import {
@@ -10,12 +10,28 @@ import {
   createGoalShareCreatedLog,
   createGoalShareRevokedLog,
   createGoalShareToken,
+  buildSharedGoalView,
   fingerprintGoalShareToken,
   getGoalShareExpiry
 } from "../../../../../lib/share";
+import {
+  GOAL_SHARE_DEFAULT_EXPIRY_DAYS,
+  GOAL_SHARE_MAX_EXPIRY_DAYS,
+  GOAL_SHARE_MIN_EXPIRY_DAYS,
+  buildGoalShareDisclosureReview,
+  buildGoalShareDisclosureReviewFingerprint
+} from "../../../../../lib/share-disclosure";
 import { getSeededRepository } from "../../../../../lib/server";
 
 const GoalIdSchema = z.string().trim().min(1).max(200);
+const CreateGoalShareBodySchema = z
+  .object({
+    preview: z.boolean().optional(),
+    confirmed: z.boolean().optional(),
+    reviewFingerprint: z.string().trim().regex(/^[0-9a-f]{64}$/).optional(),
+    expiryDays: z.number().int().min(GOAL_SHARE_MIN_EXPIRY_DAYS).max(GOAL_SHARE_MAX_EXPIRY_DAYS).optional()
+  })
+  .strict();
 const RevokeGoalShareBodySchema = z.object({
   shareId: z.string().trim().min(1).max(200)
 }).strict();
@@ -74,6 +90,36 @@ async function assertPublicSharingEnabled(
   }
 }
 
+function hasJsonRequestBody(request: Request): boolean {
+  const contentType = request.headers.get("content-type");
+  const contentLength = request.headers.get("content-length");
+
+  if (contentLength === "0") {
+    return false;
+  }
+
+  return Boolean(contentType) && request.body !== null;
+}
+
+async function parseCreateGoalShareBody(request: Request) {
+  if (!hasJsonRequestBody(request)) {
+    return {
+      preview: true,
+      confirmed: false,
+      expiryDays: GOAL_SHARE_DEFAULT_EXPIRY_DAYS
+    };
+  }
+
+  const body = await parseJsonBody(request, CreateGoalShareBodySchema);
+
+  return {
+    preview: body.preview ?? false,
+    confirmed: body.confirmed ?? false,
+    reviewFingerprint: body.reviewFingerprint ?? null,
+    expiryDays: body.expiryDays ?? GOAL_SHARE_DEFAULT_EXPIRY_DAYS
+  };
+}
+
 export const POST = createGovernedMutationRoute<undefined, RouteContext>(
   {
     route: "api.goals.share.create",
@@ -97,7 +143,35 @@ export const POST = createGovernedMutationRoute<undefined, RouteContext>(
     await assertCanManageGoalShares(repository, bundle.goal.workspaceId, bundle.goal.userId, principal.userId);
     await assertPublicSharingEnabled(repository, bundle.goal.workspaceId, principal.userId);
 
-    const expiresAt = getGoalShareExpiry();
+    const body = await parseCreateGoalShareBody(request);
+    const expiresAt = getGoalShareExpiry(Date.now(), body.expiryDays);
+    const disclosureReview = buildGoalShareDisclosureReview(bundle, {
+      expiresAt,
+      expiryDays: body.expiryDays
+    });
+    const reviewFingerprint = buildGoalShareDisclosureReviewFingerprint({
+      publicProjection: buildSharedGoalView(bundle),
+      disclosureReview
+    });
+
+    if (body.preview || !body.confirmed) {
+      return authenticatedJson(
+        {
+          reviewRequired: true,
+          disclosureReview,
+          reviewFingerprint,
+          dashboard: await repository.getDashboardData(principal.userId)
+        },
+        {
+          status: body.preview ? 200 : 409
+        }
+      );
+    }
+
+    if (body.reviewFingerprint !== reviewFingerprint) {
+      throw new ApiRouteError(409, "Public share confirmation must match the latest reviewed disclosure snapshot.");
+    }
+
     const createdAt = new Date().toISOString();
     const shareId = crypto.randomUUID();
     const token = createGoalShareToken(shareId, goalId, expiresAt);
@@ -109,13 +183,24 @@ export const POST = createGovernedMutationRoute<undefined, RouteContext>(
       tokenFingerprint: fingerprintGoalShareToken(token),
       status: "active",
       actorContext,
+      disclosureReview,
       expiresAt,
       lastViewedAt: null,
       revokedAt: null,
       createdAt,
       updatedAt: createdAt
     });
-    const shareLog = createGoalShareCreatedLog(bundle, shareId, token, expiresAt, actorContext);
+    const shareLog = createGoalShareCreatedLog(bundle, shareId, token, expiresAt, actorContext, {
+      disclosureReview: {
+        expiryDays: disclosureReview.expiryDays,
+        sensitiveFindingCount: disclosureReview.sensitiveFindings.length,
+        redactedFields: disclosureReview.redactedFields,
+        dataClasses: disclosureReview.dataClasses.map((dataClass) => ({
+          id: dataClass.id,
+          disposition: dataClass.disposition
+        }))
+      }
+    });
 
     await repository.saveGoalBundle({
       ...bundle,
@@ -126,6 +211,7 @@ export const POST = createGovernedMutationRoute<undefined, RouteContext>(
       shareId,
       shareUrl: buildGoalShareUrl(request.url, token),
       expiresAt,
+      disclosureReview,
       dashboard: await repository.getDashboardData(principal.userId)
     });
   }

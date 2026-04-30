@@ -14,7 +14,11 @@ import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
-import { verifyGoalShareToken } from "../apps/web/lib/share";
+import { buildSharedGoalView, verifyGoalShareToken } from "../apps/web/lib/share";
+import {
+  buildGoalShareDisclosureReview,
+  buildGoalShareDisclosureReviewFingerprint
+} from "../apps/web/lib/share-disclosure";
 import { GOAL_SHARE_MUTATION_DENIED_REASON } from "../apps/web/lib/workspace-role-permissions";
 import { DELETE as revokeGoalShareRoute, POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/route";
 import { createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
@@ -47,6 +51,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     backend: "file",
     seedDefaults: async () => {},
     saveGoalBundle: async (bundle) => bundle,
+    appendGoalActionLogs: async (_goalId, logs) => logs,
     respondToApproval: async () => {
       throw new Error("respondToApproval is not used in this test.");
     },
@@ -450,6 +455,145 @@ describe("goal share route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
+  function buildReviewFingerprint(bundle: Awaited<ReturnType<typeof createGoalForUser>>) {
+    const disclosureReview = buildGoalShareDisclosureReview(bundle, {
+      expiresAt: "2026-05-07T00:00:00.000Z",
+      expiryDays: 7
+    });
+
+    return buildGoalShareDisclosureReviewFingerprint({
+      publicProjection: buildSharedGoalView(bundle),
+      disclosureReview
+    });
+  }
+
+  function buildConfirmedShareRequest(
+    goalId: string,
+    reviewFingerprint: string,
+    headers: Record<string, string> = {}
+  ) {
+    return new Request(`http://localhost/api/goals/${goalId}/share`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+        ...headers
+      },
+      body: JSON.stringify({
+        confirmed: true,
+        reviewFingerprint
+      })
+    });
+  }
+
+  function buildPreviewShareRequest(goalId: string) {
+    return new Request(`http://localhost/api/goals/${goalId}/share`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+      },
+      body: JSON.stringify({
+        preview: true
+      })
+    });
+  }
+
+  it("returns a disclosure review before creating a public share link", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Share a vendor follow-up summary with reviewer@example.com before Friday."
+    );
+    await repository.saveGoalBundle({
+      ...bundle,
+      goal: {
+        ...bundle.goal,
+        explanation: "Share this reviewed summary with reviewer@example.com without exposing token details."
+      }
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await goalShareRoute(buildPreviewShareRequest(bundle.goal.id), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
+    const payload = (await response.json()) as {
+      reviewRequired: boolean;
+      reviewFingerprint: string;
+      disclosureReview: {
+        sensitiveFindings: Array<{ fieldPath: string; detector: string }>;
+        redactedFields: string[];
+        dataClasses: Array<{ id: string; disposition: string }>;
+      };
+    };
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+    const reloadedBundle = await createRouteTestRepository().getGoalBundle(bundle.goal.id);
+
+    expect(response.status).toBe(200);
+    expect(payload.reviewRequired).toBe(true);
+    expect(payload.reviewFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(payload.disclosureReview.sensitiveFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          detector: "email_address"
+        })
+      ])
+    );
+    expect(payload.disclosureReview.redactedFields).toEqual(expect.arrayContaining(["goal.request", "approvals"]));
+    expect(payload.disclosureReview.dataClasses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "operator_context",
+          disposition: "redacted"
+        })
+      ])
+    );
+    expect(shares).toHaveLength(0);
+    expect(reloadedBundle?.actionLogs.filter((log) => log.kind === "share.link_created")).toHaveLength(0);
+    expectNoStoreHeaders(response);
+  });
+
+  it("treats an empty JSON request as the default disclosure preview path", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a default preview with the workspace reviewer.");
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await goalShareRoute(
+      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const payload = (await response.json()) as {
+      reviewRequired: boolean;
+      disclosureReview: { confirmationRequired: boolean };
+    };
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      reviewRequired: true,
+      disclosureReview: {
+        confirmationRequired: true
+      }
+    });
+    expect(shares).toHaveLength(0);
+    expectNoStoreHeaders(response);
+  });
+
   it("creates a signed public share link and records a measurement log", async () => {
     const repository = createRouteTestRepository();
 
@@ -458,18 +602,14 @@ describe("goal share route", () => {
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const response = await goalShareRoute(
-      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-        method: "POST",
-        headers: {
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
-        }
-      }),
-      {
-        params: Promise.resolve({ id: bundle.goal.id })
-      }
-    );
-    const payload = (await response.json()) as { shareUrl: string; expiresAt: string };
+    const response = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
+    const payload = (await response.json()) as {
+      shareUrl: string;
+      expiresAt: string;
+      disclosureReview: { redactedFields: string[] };
+    };
     const token = payload.shareUrl.split("/share/")[1];
     const reloadedBundle = await createRouteTestRepository().getGoalBundle(bundle.goal.id);
     const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
@@ -478,14 +618,51 @@ describe("goal share route", () => {
     expect(response.status).toBe(200);
     expect(payload.shareUrl).toContain("/share/");
     expect(Date.parse(payload.expiresAt)).toBeGreaterThan(Date.now());
+    expect(payload.disclosureReview.redactedFields).toEqual(expect.arrayContaining(["goal.request", "artifacts.content"]));
     expect(shares).toHaveLength(1);
+    expect(shares[0]?.disclosureReview).toMatchObject({
+      confirmationRequired: true,
+      redactedFields: expect.arrayContaining(["goal.request", "artifacts.content"])
+    });
     expect(verifyGoalShareToken(decodeURIComponent(token) ?? "")).toMatchObject({
       shareId: shares[0]?.id,
       goalId: bundle.goal.id
     });
     expect(createdLog).toBeDefined();
     expect(createdLog?.details.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(createdLog?.details.disclosureReview).toMatchObject({
+      sensitiveFindingCount: expect.any(Number),
+      redactedFields: expect.arrayContaining(["goal.request", "artifacts.content"])
+    });
     expect(JSON.stringify(createdLog?.details ?? {})).not.toContain(decodeURIComponent(token) ?? "");
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects confirmation when the reviewed disclosure snapshot is stale", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a stable plan with a public reviewer.");
+    const staleFingerprint = buildReviewFingerprint(bundle);
+
+    await repository.saveGoalBundle({
+      ...bundle,
+      goal: {
+        ...bundle.goal,
+        explanation: `${bundle.goal.explanation} Updated after preview.`
+      }
+    });
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, staleFingerprint), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
+    const payload = (await response.json()) as { error: string };
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+
+    expect(response.status).toBe(409);
+    expect(payload.error).toBe("Public share confirmation must match the latest reviewed disclosure snapshot.");
+    expect(shares).toHaveLength(0);
     expectNoStoreHeaders(response);
   });
 
@@ -503,17 +680,9 @@ describe("goal share route", () => {
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const response = await goalShareRoute(
-      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-        method: "POST",
-        headers: {
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
-        }
-      }),
-      {
-        params: Promise.resolve({ id: bundle.goal.id })
-      }
-    );
+    const response = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
     const payload = (await response.json()) as { error: string };
     const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
 
@@ -551,19 +720,16 @@ describe("goal share route", () => {
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const response = await goalShareRoute(
-      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-        method: "POST",
-        headers: {
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
-        }
-      }),
-      {
-        params: Promise.resolve({ id: bundle.goal.id })
-      }
-    );
+    const previewResponse = await goalShareRoute(buildPreviewShareRequest(bundle.goal.id), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
+    const previewPayload = (await previewResponse.json()) as { reviewFingerprint: string };
+    const response = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, previewPayload.reviewFingerprint), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
     const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
 
+    expect(previewResponse.status).toBe(200);
     expect(response.status).toBe(200);
     expect(shares).toHaveLength(1);
     expect(shares[0]?.workspaceId).toBeNull();
@@ -585,14 +751,9 @@ describe("goal share route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     try {
-      const response = await goalShareRoute(
-        new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-          method: "POST"
-        }),
-        {
-          params: Promise.resolve({ id: bundle.goal.id })
-        }
-      );
+      const response = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
+        params: Promise.resolve({ id: bundle.goal.id })
+      });
       const payload = (await response.json()) as { shareUrl: string };
       const reloadedBundle = await createRouteTestRepository().getGoalBundle(bundle.goal.id);
       const createdLog = reloadedBundle?.actionLogs.find((log) => log.kind === "share.link_created");
@@ -690,17 +851,9 @@ describe("goal share route", () => {
       })
     );
 
-    const response = await goalShareRoute(
-      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-        method: "POST",
-        headers: {
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
-        }
-      }),
-      {
-        params: Promise.resolve({ id: bundle.goal.id })
-      }
-    );
+    const response = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
     const payload = (await response.json()) as { error?: string };
 
     expect(response.status).toBe(500);
@@ -741,14 +894,9 @@ describe("goal share route", () => {
 
       Reflect.set(globalThis, "__agenticRepository", undefined);
 
-      const response = await goalShareRoute(
-        new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-          method: "POST"
-        }),
-        {
-          params: Promise.resolve({ id: bundle.goal.id })
-        }
-      );
+      const response = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
+        params: Promise.resolve({ id: bundle.goal.id })
+      });
       const payload = (await response.json()) as { shareUrl?: string; error?: string };
 
       expect(response.status).toBe(200);
@@ -820,17 +968,9 @@ describe("goal share route", () => {
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share the current planning context with a reviewer.");
-    const shareResponse = await goalShareRoute(
-      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-        method: "POST",
-        headers: {
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
-        }
-      }),
-      {
-        params: Promise.resolve({ id: bundle.goal.id })
-      }
-    );
+    const shareResponse = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
     const sharePayload = (await shareResponse.json()) as { shareId: string };
 
     const revokeResponse = await revokeGoalShareRoute(
@@ -878,17 +1018,9 @@ describe("goal share route", () => {
       "Share the execution context, then verify viewers cannot revoke it.",
       workspace.workspaceId
     );
-    const shareResponse = await goalShareRoute(
-      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
-        method: "POST",
-        headers: {
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
-        }
-      }),
-      {
-        params: Promise.resolve({ id: bundle.goal.id })
-      }
-    );
+    const shareResponse = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
     const sharePayload = (await shareResponse.json()) as { shareId: string };
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
       authMethod: "session",

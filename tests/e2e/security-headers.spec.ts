@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   enablePublicSharingForE2E,
+  E2E_UI_TIMEOUT_MS,
   expectShareLinkReady,
   openRequestComposer,
   submitRequest,
@@ -72,7 +73,11 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
     })
     .first();
 
-  await createdGoal.getByRole("button", { name: "Copy share link" }).click();
+  await createdGoal.getByRole("button", { name: "Review share" }).click();
+  await expect(page.getByRole("heading", { name: "Public Share Review" })).toBeVisible({
+    timeout: E2E_UI_TIMEOUT_MS
+  });
+  await page.getByRole("button", { name: "Create public link" }).click();
   await expectShareLinkReady(page, "Inbox triage and follow-up prep");
 
   const shareLink = page.getByRole("link", { name: "Open public share page" });

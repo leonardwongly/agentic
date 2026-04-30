@@ -1,16 +1,18 @@
 import { createHmac } from "node:crypto";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   enablePublicSharingForE2E,
+  E2E_UI_TIMEOUT_MS,
   expectShareLinkReady,
   openRequestComposer,
   submitRequest,
   unlockDashboard
 } from "./helpers";
 
-function createSignedShareToken(goalId: string, expiresAt: string): string {
+function createSignedShareToken(goalId: string, shareId: string, expiresAt: string): string {
   const payload = Buffer.from(
     JSON.stringify({
+      shareId,
       goalId,
       exp: Date.parse(expiresAt),
       v: 1
@@ -36,6 +38,19 @@ function isPublicShareViewRequest(url: string, method: string): boolean {
   return method === "POST" && url.includes("/api/share/view");
 }
 
+async function reviewAndCreateShareLink(page: Page, createdGoal: Locator, goalTitle: string) {
+  const reviewShareButton = createdGoal.getByRole("button", { name: "Review share" });
+
+  await expect(reviewShareButton).toBeEnabled();
+  await reviewShareButton.click();
+  await expect(page.getByRole("heading", { name: "Public Share Review" })).toBeVisible({
+    timeout: E2E_UI_TIMEOUT_MS
+  });
+  await expect(page.getByText("Hidden fields")).toBeVisible({ timeout: E2E_UI_TIMEOUT_MS });
+  await page.getByRole("button", { name: "Create public link" }).click();
+  await expectShareLinkReady(page, goalTitle);
+}
+
 test("creates a public goal share link and opens the shared page", async ({ page }) => {
   await unlockDashboard(page);
   await enablePublicSharingForE2E(page);
@@ -53,17 +68,17 @@ test("creates a public goal share link and opens the shared page", async ({ page
       hasText: "Inbox triage and follow-up prep"
     })
     .first();
-  const copyShareLinkButton = createdGoal.getByRole("button", { name: "Copy share link" });
+  const reviewShareButton = createdGoal.getByRole("button", { name: "Review share" });
 
   await expect(createdGoal).toBeVisible();
-  await expect(copyShareLinkButton).toBeEnabled();
-  await copyShareLinkButton.click();
-  await expectShareLinkReady(page, "Inbox triage and follow-up prep");
+  await expect(reviewShareButton).toBeEnabled();
+  await reviewAndCreateShareLink(page, createdGoal, "Inbox triage and follow-up prep");
   await page.getByRole("link", { name: "Open public share page" }).click();
 
   await expect(page.getByText("Shared from Agentic")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Inbox triage and follow-up prep" })).toBeVisible();
   await expect(page.getByText("Read-only shared goal")).toBeVisible();
+  await expect(page.getByText("This read-only page shows a reviewed public projection.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Artifacts" })).toBeVisible();
 });
 
@@ -94,12 +109,11 @@ test("keeps the share flow successful when clipboard access is blocked", async (
       hasText: "Inbox triage and follow-up prep"
     })
     .first();
-  const copyShareLinkButton = createdGoal.getByRole("button", { name: "Copy share link" });
+  const reviewShareButton = createdGoal.getByRole("button", { name: "Review share" });
 
   await expect(createdGoal).toBeVisible();
-  await expect(copyShareLinkButton).toBeEnabled();
-  await copyShareLinkButton.click();
-  await expectShareLinkReady(page, "Inbox triage and follow-up prep");
+  await expect(reviewShareButton).toBeEnabled();
+  await reviewAndCreateShareLink(page, createdGoal, "Inbox triage and follow-up prep");
   await expect(page.getByRole("link", { name: "Open public share page" })).toBeVisible();
 });
 
@@ -123,11 +137,11 @@ test("renders a valid public share page in a fresh unauthenticated context and d
       hasText: "Inbox triage and follow-up prep"
     })
     .first();
-  const copyShareLinkButton = createdGoal.getByRole("button", { name: "Copy share link" });
+  const reviewShareButton = createdGoal.getByRole("button", { name: "Review share" });
 
   await expect(createdGoal).toBeVisible();
-  await expect(copyShareLinkButton).toBeEnabled();
-  await copyShareLinkButton.click();
+  await expect(reviewShareButton).toBeEnabled();
+  await reviewAndCreateShareLink(page, createdGoal, "Inbox triage and follow-up prep");
 
   const shareLink = page.getByRole("link", { name: "Open public share page" });
   const shareUrl = await shareLink.getAttribute("href");
@@ -145,6 +159,7 @@ test("renders a valid public share page in a fresh unauthenticated context and d
   await expect(publicPage.getByText("Shared from Agentic")).toBeVisible();
   await expect(publicPage.getByRole("heading", { name: "Inbox triage and follow-up prep" })).toBeVisible();
   await expect(publicPage.getByText("Read-only shared goal")).toBeVisible();
+  await expect(publicPage.getByText("This read-only page shows a reviewed public projection.")).toBeVisible();
   expect((await firstViewTracked).status()).toBe(202);
 
   const publicHtml = await publicPage.content();
@@ -172,7 +187,7 @@ test("renders a valid public share page in a fresh unauthenticated context and d
 
 test("shows the invalid-share page for tampered or missing shared goals", async ({ page }) => {
   const tamperedToken = "invalid-token";
-  const missingGoalToken = createSignedShareToken("goal-does-not-exist", "2026-04-09T00:00:00.000Z");
+  const missingGoalToken = createSignedShareToken("goal-does-not-exist", "share-does-not-exist", "2026-04-09T00:00:00.000Z");
 
   await page.goto(`/share/${tamperedToken}`);
   await expect(page.getByRole("heading", { name: "That share link is invalid or expired." })).toBeVisible();

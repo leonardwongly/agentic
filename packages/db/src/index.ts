@@ -240,6 +240,7 @@ export const goalShares = pgTable(
     tokenFingerprint: text("token_fingerprint").notNull(),
     status: text("status").notNull(),
     actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+    disclosureReview: jsonb("disclosure_review").$type<Record<string, unknown> | null>(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),

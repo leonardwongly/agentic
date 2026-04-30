@@ -9,6 +9,7 @@ import type {
 import type { PolicyLearningInfluenceComparison, PolicyShadowReplayReadiness } from "@agentic/policy";
 import type { DashboardData } from "@agentic/repository";
 import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
+import type { GoalShareDisclosureReview } from "../lib/share-disclosure";
 import { formatRecommendationOperatorActionLabel, isGoalRecommendationEligible } from "../lib/workflow-recommendations";
 import {
   AgentOverride,
@@ -62,7 +63,14 @@ type DashboardGoalsCardProps = {
   focusRequestComposer: () => void;
   canManageGoalShares: boolean;
   goalSharePermissionReason: string;
+  pendingShareReview: {
+    goalId: string;
+    goalTitle: string;
+    review: GoalShareDisclosureReview;
+  } | null;
   shareGoal: (goalId: string, goalTitle: string) => void;
+  confirmGoalShare: () => Promise<void>;
+  cancelGoalShareReview: () => void;
   saveAsTemplate: (name: string, request: string) => void;
   shareStatsByGoal: Map<string, { total: number; active: number; viewed: number }>;
   highlightedItemId: string | null;
@@ -160,7 +168,10 @@ export function DashboardGoalsCard({
   focusRequestComposer,
   canManageGoalShares,
   goalSharePermissionReason,
+  pendingShareReview,
   shareGoal,
+  confirmGoalShare,
+  cancelGoalShareReview,
   saveAsTemplate,
   shareStatsByGoal,
   highlightedItemId,
@@ -224,6 +235,66 @@ export function DashboardGoalsCard({
           ) : null}
         </div>
       ) : null}
+      {pendingShareReview ? (
+        <section
+          className="share-disclosure-review"
+          aria-labelledby="share-disclosure-review-title"
+          aria-describedby="share-disclosure-review-summary"
+        >
+          <div className="card-header">
+            <div>
+              <h3 id="share-disclosure-review-title">Public Share Review</h3>
+              <p id="share-disclosure-review-summary">{pendingShareReview.review.summary}</p>
+            </div>
+            <span className="pill">Expires in {pendingShareReview.review.expiryDays} days</span>
+          </div>
+          <div className="share-disclosure-grid">
+            <div className="list-item vertical">
+              <strong>Reviewed goal</strong>
+              <p>{pendingShareReview.goalTitle}</p>
+            </div>
+            <div className="list-item vertical">
+              <strong>Hidden fields</strong>
+              <p>{pendingShareReview.review.redactedFields.join(", ")}</p>
+            </div>
+          </div>
+          {pendingShareReview.review.sensitiveFindings.length > 0 ? (
+            <div className="list-stack">
+              {pendingShareReview.review.sensitiveFindings.map((finding) => (
+                <div className="list-item vertical" key={`${finding.fieldPath}-${finding.detector}`}>
+                  <strong>{finding.label}</strong>
+                  <p>{finding.fieldPath} was flagged for operator review before creating an external link.</p>
+                  <span className="pill">{finding.severity}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="status-chip success">No sensitive public fields were detected in the reviewed projection.</p>
+          )}
+          <div className="list-stack">
+            {pendingShareReview.review.dataClasses.map((dataClass) => (
+              <div className="list-item vertical" key={dataClass.id}>
+                <div>
+                  <strong>{dataClass.label}</strong>
+                  <p>{dataClass.reason}</p>
+                </div>
+                <div className="share-tag-row">
+                  <span className="pill">{dataClass.disposition.replaceAll("_", " ")}</span>
+                  <small>{dataClass.fields.join(", ")}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hero-button-row">
+            <button type="button" className="primary-button" onClick={() => void confirmGoalShare()} disabled={isPending}>
+              Create public link
+            </button>
+            <button type="button" className="secondary-button" onClick={cancelGoalShareReview} disabled={isPending}>
+              Cancel
+            </button>
+          </div>
+        </section>
+      ) : null}
       {refinementState.message ? (
         <p className={`status-chip ${refinementState.kind}`}>{refinementState.message}</p>
       ) : null}
@@ -271,7 +342,7 @@ export function DashboardGoalsCard({
                   disabled={isPending || !canManageGoalShares}
                   title={!canManageGoalShares ? goalSharePermissionReason : undefined}
                 >
-                  Copy share link
+                  Review share
                 </button>
                 {bundle.goal.status === "completed" ? (
                   <button

@@ -10,4 +10,5 @@ Every migration must have an explicit rollback note before it can pass the migra
 - `0005_bundle_child_sort_order.sql`: Adds child ordering metadata. Roll back by ignoring the field in application code; restore from backup only if the column must be removed.
 - `0005_governance_default_deny.sql`: Legacy duplicate prefix retained for compatibility. Roll back by restoring the prior governance defaults from backup after disabling dependent code.
 - `0006_watcher_scheduler.sql`: Adds watcher scheduler policy and due-date metadata. Roll back by disabling scheduler execution paths first, then restoring a pre-migration backup if scheduler metadata must be removed.
+- `0007_goal_share_disclosure_review.sql`: Adds public-share disclosure review metadata. Roll back by disabling public share creation/confirmation first, then restoring a pre-migration backup if stored review snapshots must be removed.
 - `0008_shared_auth_runtime_state.sql`: Adds shared auth/session runtime tables and indexes. Roll back application code first; preserve revocation and throttling state unless an operator-approved restore plan removes those tables from backup.

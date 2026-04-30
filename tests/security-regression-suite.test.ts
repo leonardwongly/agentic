@@ -28,6 +28,7 @@ describe("security regression suite inventory", () => {
 
     expect(files.has("tests/api-validation.test.ts")).toBe(true);
     expect(files.has("tests/public-share-view-route.test.ts")).toBe(true);
+    expect(files.has("tests/dashboard-goals-card.test.tsx")).toBe(true);
     expect(files.has("tests/google-provider-routes.test.ts")).toBe(true);
     expect(files.has("tests/route-user-scope.test.ts")).toBe(true);
     expect(files.has("tests/goal-route.test.ts")).toBe(true);

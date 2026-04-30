@@ -250,6 +250,82 @@ describe("repository", () => {
     });
   }
 
+  it("appends goal action logs without rewriting the full bundle", async () => {
+    const repository = createRepository({
+      storePath: path.join(await mkdtemp(path.join(os.tmpdir(), "agentic-repository-append-logs-")), "runtime-store.json")
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Record public-share audit logs append-only.");
+    const firstLog = {
+      id: "share-audit-append-1",
+      goalId: bundle.goal.id,
+      taskId: null,
+      workflowId: bundle.workflow.id,
+      actor: "public-share",
+      kind: "share.access_failed",
+      message: "Blocked public share access.",
+      details: {
+        shareId: "share-append",
+        tokenFingerprint: "abc123def456",
+        reason: "expired"
+      },
+      createdAt: "2026-04-30T00:00:00.000Z"
+    };
+    const secondLog = {
+      ...firstLog,
+      id: "share-audit-append-2",
+      details: {
+        shareId: "share-append",
+        tokenFingerprint: "abc123def456",
+        reason: "revoked"
+      },
+      createdAt: "2026-04-30T00:00:01.000Z"
+    };
+
+    await repository.appendGoalActionLogs(bundle.goal.id, [firstLog]);
+    await repository.appendGoalActionLogs(bundle.goal.id, [secondLog, firstLog]);
+
+    const reloaded = await repository.getGoalBundle(bundle.goal.id);
+    const appendedLogs = reloaded?.actionLogs.filter((log) => log.id.startsWith("share-audit-append-")) ?? [];
+
+    expect(appendedLogs.map((log) => log.id)).toEqual(["share-audit-append-1", "share-audit-append-2"]);
+    expect(appendedLogs[0]?.message).toBe("Blocked public share access.");
+
+    await repository.appendGoalActionLogs(bundle.goal.id, [
+      {
+        ...firstLog,
+        message: "Mutated duplicate audit entry."
+      }
+    ]);
+
+    const reloadedAfterDuplicate = await repository.getGoalBundle(bundle.goal.id);
+    const duplicateLogs =
+      reloadedAfterDuplicate?.actionLogs.filter((log) => log.id === "share-audit-append-1") ?? [];
+
+    expect(duplicateLogs).toHaveLength(1);
+    expect(duplicateLogs[0]?.message).toBe("Blocked public share access.");
+    expect(reloaded?.tasks.map((task) => task.id)).toEqual(bundle.tasks.map((task) => task.id));
+    await expect(
+      repository.appendGoalActionLogs("missing-goal", [
+        {
+          ...firstLog,
+          id: "share-audit-missing-goal",
+          goalId: "missing-goal"
+        }
+      ])
+    ).rejects.toThrow("Goal missing-goal was not found.");
+    await expect(
+      repository.appendGoalActionLogs(bundle.goal.id, [
+        {
+          ...firstLog,
+          id: "share-audit-wrong-goal",
+          goalId: "another-goal"
+        }
+      ])
+    ).rejects.toThrow(`Action log share-audit-wrong-goal belongs to goal another-goal, not ${bundle.goal.id}.`);
+  });
+
   it("persists a goal bundle to the file-backed store", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
