@@ -35,6 +35,10 @@ type GovernedMutationRoute<TRouteContext> = [TRouteContext] extends [undefined]
   ? (request: Request, routeContext?: unknown) => Promise<Response>
   : (request: Request, routeContext: TRouteContext) => Promise<Response>;
 
+type GovernedMutationRouteImplementationOptions<TBody> =
+  | GovernedMutationRouteOptions<TBody>
+  | GovernedMutationNoBodyRouteOptions;
+
 export type GovernedMutationContext<TBody = undefined, TRouteContext = undefined> = {
   request: Request;
   routeContext: TRouteContext;
@@ -63,8 +67,8 @@ export function createGovernedMutationRoute<TBody extends undefined = undefined,
 ): GovernedMutationRoute<TRouteContext>;
 
 export function createGovernedMutationRoute<TBody = undefined, TRouteContext = undefined>(
-  options: GovernedMutationRouteOptions<TBody> | GovernedMutationNoBodyRouteOptions,
-  handler: GovernedMutationHandler<TBody, TRouteContext>
+  options: GovernedMutationRouteImplementationOptions<TBody>,
+  handler: GovernedMutationHandler<TBody | undefined, TRouteContext>
 ): GovernedMutationRoute<TRouteContext> {
   const governedMutationRoute = async (request: Request, routeContext: TRouteContext): Promise<Response> => {
     return withApiTelemetry(request, options.route, async () => {
@@ -91,7 +95,9 @@ export function createGovernedMutationRoute<TBody = undefined, TRouteContext = u
           requireJsonContentType(request);
         }
 
-        const body = options.bodySchema ? await parseJsonBody(request, options.bodySchema) : (undefined as TBody);
+        const body = hasGovernedMutationBodySchema(options)
+          ? await parseJsonBody(request, options.bodySchema)
+          : undefined;
         const idempotencyMode = options.idempotency ?? false;
         const idempotencyKey = idempotencyMode === false ? null : parseIdempotencyKey(request);
 
@@ -114,4 +120,10 @@ export function createGovernedMutationRoute<TBody = undefined, TRouteContext = u
   };
 
   return governedMutationRoute as GovernedMutationRoute<TRouteContext>;
+}
+
+function hasGovernedMutationBodySchema<TBody>(
+  options: GovernedMutationRouteImplementationOptions<TBody>
+): options is GovernedMutationRouteOptions<TBody> {
+  return options.bodySchema !== undefined;
 }
