@@ -210,7 +210,7 @@ export const workspaceSelections = pgTable("workspace_selections", {
 export const workspaceGovernance = pgTable("workspace_governance", {
   workspaceId: text("workspace_id").primaryKey(),
   approvalMode: text("approval_mode").notNull(),
-  requireAuditExports: boolean("require_audit_exports").notNull(),
+  requireAuditExports: boolean("require_audit_exports").notNull().default(true),
   maxAutoRunRiskClass: text("max_auto_run_risk_class").notNull(),
   publicSharingEnabled: boolean("public_sharing_enabled").notNull().default(false),
   providerAccessRequiresApproval: boolean("provider_access_requires_approval").notNull().default(true),

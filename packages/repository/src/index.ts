@@ -129,7 +129,7 @@ import {
   buildFallbackApprovalActionIntent,
   buildFallbackApprovalPreview
 } from "./approval-fallbacks";
-import { assertWorkspaceGovernanceStartupConfig, resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults";
+import { assertWorkspaceGovernanceStartupConfig, resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults"; export { resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults";
 import { deriveAgentMetricsFromGoals } from "./agent-metrics";
 import {
   buildPendingAutopilotEvent,

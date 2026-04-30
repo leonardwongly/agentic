@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema, enterpriseWorkspaceGovernanceDefaults } from "@agentic/contracts";
+import { WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema } from "@agentic/contracts";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import {
   assessWorkspaceGovernanceConformance,
   buildAutonomyBudget,
@@ -87,7 +88,7 @@ export const POST = createGovernedMutationRoute(
       (await repository.getWorkspaceGovernance(activeWorkspace.id, principal.userId)) ??
       WorkspaceGovernanceSchema.parse({
         workspaceId: activeWorkspace.id,
-        ...enterpriseWorkspaceGovernanceDefaults,
+        ...resolveWorkspaceGovernanceDefaultsFromEnv(),
         updatedBy: principal.userId,
         createdAt: activeWorkspace.createdAt,
         updatedAt: activeWorkspace.updatedAt
