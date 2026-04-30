@@ -5,6 +5,7 @@ import {
   answerTelegramCallbackQuery,
   verifyTelegramWebhookSecret
 } from "@agentic/integrations";
+import { logError } from "@agentic/observability";
 import { ApprovalMutationError } from "@agentic/repository";
 import {
   enqueueApprovalNotificationJob,
@@ -54,7 +55,7 @@ async function acknowledgeTelegramCallback(callbackQueryId: string, text: string
       showAlert
     });
   } catch (error) {
-    console.error("[telegram-webhook] Failed to answer callback query:", error);
+    logError("telegram.webhook.callback_ack_failed", error);
   }
 }
 
@@ -197,7 +198,7 @@ export async function POST(request: Request) {
 
     return operationalJson({ ok: true });
   } catch (error) {
-    console.error("[telegram-webhook] Unhandled error:", error);
+    logError("telegram.webhook.unhandled_error", error);
     return operationalJson({ error: "Internal server error." }, { status: 500 });
   }
 }
