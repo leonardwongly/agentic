@@ -15,6 +15,7 @@ import {
   riskFromCapabilities
 } from "@agentic/policy";
 import { recordHistogram } from "@agentic/observability";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError } from "../../../../lib/api-response";
 import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../lib/server";
@@ -69,13 +70,7 @@ async function resolveActiveWorkspaceGovernance(userId: string) {
     (await repository.getWorkspaceGovernance(activeWorkspace.id, userId)) ??
     WorkspaceGovernanceSchema.parse({
       workspaceId: activeWorkspace.id,
-      approvalMode: "risk_based",
-      requireAuditExports: false,
-      maxAutoRunRiskClass: "R1",
-      externalSendRequiresApproval: true,
-      calendarWriteRequiresApproval: true,
-      shadowReplayPolicy: {},
-      retentionDays: 365,
+      ...resolveWorkspaceGovernanceDefaultsFromEnv(),
       updatedBy: userId,
       createdAt: activeWorkspace.createdAt,
       updatedAt: activeWorkspace.updatedAt

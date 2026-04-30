@@ -38,7 +38,7 @@ describe("privacy control registry", () => {
         }),
         expect.objectContaining({
           id: "audit-and-export-packages",
-          retentionLabel: "365 days default via workspace governance",
+          retentionLabel: "90 days default via workspace governance",
           tokenizationStrategy: "redacted_reference"
         })
       ])

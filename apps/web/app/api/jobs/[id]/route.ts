@@ -66,6 +66,7 @@ export async function GET(request: Request, context: RouteContext) {
           goalId: followUpPayload.goalId,
           approvalId: followUpPayload.approvalId,
           taskId: followUpPayload.taskId,
+          actionId: followUpPayload.metadata.actionId,
           decision: followUpPayload.decision,
           attemptCount: job.attemptCount,
           maxAttempts: job.maxAttempts,

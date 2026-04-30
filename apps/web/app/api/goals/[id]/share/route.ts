@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import { z } from "zod";
-import { requireApiSession } from "../../../../../lib/auth";
-import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
+import { WorkspaceGovernanceSchema } from "@agentic/contracts";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
+import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
+import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { GOAL_SHARE_MUTATION_DENIED_REASON, canManageGoalSharesForRole } from "../../../../../lib/workspace-role-permissions";
 import {
   buildGoalShareUrl,
@@ -47,11 +48,44 @@ async function assertCanManageGoalShares(
   }
 }
 
-export async function POST(request: Request, context: RouteContext) {
-  try {
-    const principal = await requireApiSession(request);
-    const actorContext = createActorContextFromPrincipal(principal);
-    const { id } = await context.params;
+async function assertPublicSharingEnabled(
+  repository: Awaited<ReturnType<typeof getSeededRepository>>,
+  workspaceId: string | null,
+  userId: string
+) {
+  const dashboard = workspaceId ? null : await repository.getDashboardData(userId);
+  const governanceWorkspaceId = workspaceId ?? dashboard?.activeWorkspace?.id ?? null;
+  if (!governanceWorkspaceId) {
+    throw new ApiRouteError(403, "Public sharing is disabled until workspace governance explicitly enables it.");
+  }
+  const governance =
+    (workspaceId ? null : dashboard?.workspaceGovernance) ??
+    (await repository.getWorkspaceGovernance(governanceWorkspaceId, userId)) ??
+    WorkspaceGovernanceSchema.parse({
+      workspaceId: governanceWorkspaceId,
+      ...resolveWorkspaceGovernanceDefaultsFromEnv(),
+      updatedBy: userId,
+      createdAt: dashboard?.activeWorkspace?.createdAt ?? new Date().toISOString(),
+      updatedAt: dashboard?.activeWorkspace?.updatedAt ?? new Date().toISOString()
+    });
+
+  if (!governance?.publicSharingEnabled) {
+    throw new ApiRouteError(403, "Public sharing is disabled until workspace governance explicitly enables it.");
+  }
+}
+
+export const POST = createGovernedMutationRoute<undefined, RouteContext>(
+  {
+    route: "api.goals.share.create",
+    fallbackError: "Failed to create a goal share link.",
+    rateLimit: {
+      namespace: "goal-share-create",
+      error: "Too many goal share creation requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ request, routeContext, principal, actorContext }) => {
+    const { id } = await routeContext.params;
     const goalId = GoalIdSchema.parse(id);
     const repository = await getSeededRepository();
     const bundle = await repository.getGoalBundleForUser(goalId, principal.userId);
@@ -61,6 +95,7 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     await assertCanManageGoalShares(repository, bundle.goal.workspaceId, bundle.goal.userId, principal.userId);
+    await assertPublicSharingEnabled(repository, bundle.goal.workspaceId, principal.userId);
 
     const expiresAt = getGoalShareExpiry();
     const createdAt = new Date().toISOString();
@@ -93,18 +128,24 @@ export async function POST(request: Request, context: RouteContext) {
       expiresAt,
       dashboard: await repository.getDashboardData(principal.userId)
     });
-  } catch (error) {
-    return handleApiError(error, "Failed to create a goal share link.");
   }
-}
+);
 
-export async function DELETE(request: Request, context: RouteContext) {
-  try {
-    const principal = await requireApiSession(request);
-    const actorContext = createActorContextFromPrincipal(principal);
-    const { id } = await context.params;
+export const DELETE = createGovernedMutationRoute<z.infer<typeof RevokeGoalShareBodySchema>, RouteContext>(
+  {
+    route: "api.goals.share.revoke",
+    fallbackError: "Failed to revoke the goal share link.",
+    bodySchema: RevokeGoalShareBodySchema,
+    rateLimit: {
+      namespace: "goal-share-revoke",
+      error: "Too many goal share revoke requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ routeContext, principal, actorContext, body }) => {
+    const { id } = await routeContext.params;
     const goalId = GoalIdSchema.parse(id);
-    const { shareId } = await parseJsonBody(request, RevokeGoalShareBodySchema);
+    const { shareId } = body;
     const repository = await getSeededRepository();
     const [bundle, share] = await Promise.all([
       repository.getGoalBundleForUser(goalId, principal.userId),
@@ -135,7 +176,5 @@ export async function DELETE(request: Request, context: RouteContext) {
       shareId,
       dashboard: await repository.getDashboardData(principal.userId)
     });
-  } catch (error) {
-    return handleApiError(error, "Failed to revoke the goal share link.");
   }
-}
+);

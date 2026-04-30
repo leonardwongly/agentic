@@ -50,6 +50,7 @@ import type {
 } from "@agentic/contracts";
 import type { GovernanceConformanceReport } from "@agentic/policy";
 import type { DashboardOperationsTower } from "./dashboard-operations";
+import type { WatcherLeaseClaimParams } from "./watcher-lease-helpers";
 
 export type DashboardData = {
   workspaces: Workspace[];
@@ -259,6 +260,14 @@ export type AgenticRepository = {
     scope?: ApprovalDecisionScope;
     rationale?: string | null;
   }): Promise<GoalBundle>;
+  respondToApprovalAndEnqueueJob?(params: {
+    approvalId: string;
+    decision: Exclude<ApprovalDecision, "pending">;
+    actor: ActorContext;
+    scope?: ApprovalDecisionScope;
+    rationale?: string | null;
+    buildJob: (bundle: GoalBundle) => JobRecord;
+  }): Promise<{ bundle: GoalBundle; job: JobRecord }>;
   getGoalBundle(goalId: string): Promise<GoalBundle | null>;
   getGoalBundleForUser(goalId: string, userId?: string): Promise<GoalBundle | null>;
   listGoals(userId?: string): Promise<GoalBundle[]>;
@@ -335,6 +344,7 @@ export type AgenticRepository = {
   saveEvidenceRecord(record: EvidenceRecord): Promise<EvidenceRecord>;
   listWatchers(filters?: WatcherListFilters): Promise<Watcher[]>;
   listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage>;
+  claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null>;
   saveWatcher(watcher: Watcher): Promise<Watcher>;
   listIntegrations(userId?: string): Promise<IntegrationAccount[]>;
   listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage>;

@@ -313,7 +313,7 @@ describe("nl intent route", () => {
     expect(completedStatusPayload.job.status).toBe("completed");
     expect(completedStatusPayload.result.goalId).toBe(payload.job.goalId);
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
-    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
     expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
     expect(await repository.getGoalBundleForUser(payload.job.goalId, SYSTEM_USER_ID)).toEqual(
@@ -421,7 +421,7 @@ describe("nl intent route", () => {
     expect(completedStatusPayload.job.briefingType).toBe("startup");
     expect(completedStatusPayload.result.goalId).toBe(payload.job.goalId);
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
-    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
     expect(persistedBundle?.goal.intent).toBe("briefing:startup");
     expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);

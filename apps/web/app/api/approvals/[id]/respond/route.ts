@@ -1,10 +1,8 @@
 import { z } from "zod";
-import { ApprovalMutationError, type AgenticRepository } from "@agentic/repository";
-import { enqueueApprovalFollowUpJob } from "@agentic/worker-runtime";
-import { requireApiSession } from "../../../../../lib/auth";
-import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
-import { requireJsonContentType } from "../../../../../lib/api-errors";
+import { ApprovalMutationError } from "@agentic/repository";
+import { respondToApprovalAndEnqueueFollowUpJob } from "@agentic/worker-runtime";
+import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
+import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { getSeededRepository } from "../../../../../lib/server";
 
 const ApprovalIdSchema = z.string().trim().min(1).max(200);
@@ -17,21 +15,31 @@ const ApprovalResponseSchema = z
   })
   .strict();
 
-export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  try {
-    requireJsonContentType(request);
-    const principal = await requireApiSession(request);
-    const actor = createActorContextFromPrincipal(principal);
-    const { id } = await context.params;
+type RouteContext = { params: Promise<{ id: string }> };
+
+export const POST = createGovernedMutationRoute<z.infer<typeof ApprovalResponseSchema>, RouteContext>(
+  {
+    route: "api.approvals.respond",
+    fallbackError: "Failed to respond to approval.",
+    bodySchema: ApprovalResponseSchema,
+    rateLimit: {
+      namespace: "approval-response",
+      error: "Too many approval response requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ routeContext, principal, actorContext: actor, body }) => {
+    const { id } = await routeContext.params;
     const approvalId = ApprovalIdSchema.parse(id);
-    const body = await parseJsonBody(request, ApprovalResponseSchema);
     const repository = await getSeededRepository();
-    const updatedBundle = await (async () => {
+    const { bundle: updatedBundle, job: queuedJob } = await (async () => {
       try {
-        return await repository.respondToApproval({
+        return await respondToApprovalAndEnqueueFollowUpJob({
+          repository,
+          userId: principal.userId,
           approvalId,
           decision: body.decision,
-          actor,
+          actorContext: actor,
           scope: body.scope,
           rationale: body.rationale ?? null
         });
@@ -56,18 +64,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!approval) {
       throw new Error(`Approval ${approvalId} is missing after response mutation.`);
     }
-
-    const queuedJob = await enqueueApprovalFollowUpJob({
-      repository,
-      userId: principal.userId,
-      approvalId: approval.id,
-      goalId: updatedBundle.goal.id,
-      taskId: approval.taskId,
-      decision: body.decision,
-      workspaceId: updatedBundle.goal.workspaceId,
-      actorContext: actor
-    });
-
     return authenticatedJson(
       {
         bundle: updatedBundle,
@@ -79,6 +75,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           goalId: queuedJob.payload.goalId,
           approvalId: queuedJob.payload.approvalId,
           taskId: queuedJob.payload.taskId,
+          actionId: queuedJob.payload.metadata.actionId,
           decision: queuedJob.payload.decision,
           attemptCount: queuedJob.attemptCount,
           maxAttempts: queuedJob.maxAttempts,
@@ -89,7 +86,5 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       },
       { status: 202 }
     );
-  } catch (error) {
-    return handleApiError(error, "Failed to respond to approval.");
   }
-}
+);

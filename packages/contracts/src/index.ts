@@ -170,6 +170,8 @@ export const operatorProductStatusValues = ["active", "draft", "archived"] as co
 export const operatorProductReadinessValues = ["ready", "recommended", "optional", "missing"] as const;
 export const learningPromotionModeValues = ["disabled", "shadow_only", "validated_autonomy"] as const;
 export const learningRollbackOutcomeValues = ["allowed_with_confirmation", "downgrade_to_draft"] as const;
+export const workflowDagStatusValues = ["queued", "running", "paused", "completed", "failed", "cancelled"] as const;
+export const workflowDagNodeStatusValues = ["queued", "running", "paused", "completed", "failed", "skipped", "cancelled"] as const;
 
 export const CapabilitySchema = z.enum(capabilityValues);
 export const RiskClassSchema = z.enum(riskClassValues);
@@ -220,6 +222,8 @@ export const OperatorProductStatusSchema = z.enum(operatorProductStatusValues);
 export const OperatorProductReadinessSchema = z.enum(operatorProductReadinessValues);
 export const LearningPromotionModeSchema = z.enum(learningPromotionModeValues);
 export const LearningRollbackOutcomeSchema = z.enum(learningRollbackOutcomeValues);
+export const WorkflowDagStatusSchema = z.enum(workflowDagStatusValues);
+export const WorkflowDagNodeStatusSchema = z.enum(workflowDagNodeStatusValues);
 
 const TimeOfDaySchema = z
   .string()
@@ -934,28 +938,36 @@ export const ApprovalPreviewSchema = z.object({
 });
 
 const ActionIntentEmailSchema = z.string().trim().email().max(320);
+const ActionIntentSchemaVersionSchema = z.literal("v1");
+const ActionIntentMetadataSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({});
 
 export const SendMessageActionIntentSchema = z
   .object({
+    schemaVersion: ActionIntentSchemaVersionSchema.default("v1"),
     type: z.literal("send_message"),
     adapter: z.literal("gmail").default("gmail"),
+    riskClass: RiskClassSchema.default("R3"),
     to: ActionIntentEmailSchema,
     subject: z.string().trim().min(1).max(240),
     body: z.string().min(1).max(20_000),
     threadId: z.string().trim().min(1).max(200).nullable().default(null),
-    mode: z.enum(["draft", "send"]).default("draft")
+    mode: z.enum(["draft", "send"]).default("draft"),
+    metadata: ActionIntentMetadataSchema
   })
   .strict();
 
 export const ScheduleEventActionIntentSchema = z
   .object({
+    schemaVersion: ActionIntentSchemaVersionSchema.default("v1"),
     type: z.literal("schedule_event"),
     adapter: z.literal("calendar").default("calendar"),
+    riskClass: RiskClassSchema.default("R3"),
     summary: z.string().trim().min(1).max(240),
     start: z.string().datetime(),
     end: z.string().datetime(),
     description: z.string().max(10_000).nullable().default(null),
-    attendees: z.array(ActionIntentEmailSchema).max(50).default([])
+    attendees: z.array(ActionIntentEmailSchema).max(50).default([]),
+    metadata: ActionIntentMetadataSchema
   })
   .strict()
   .refine((value) => new Date(value.start).getTime() < new Date(value.end).getTime(), {
@@ -965,34 +977,97 @@ export const ScheduleEventActionIntentSchema = z
 
 export const CreateNoteActionIntentSchema = z
   .object({
+    schemaVersion: ActionIntentSchemaVersionSchema.default("v1"),
     type: z.literal("create_note"),
     adapter: z.literal("notes").default("notes"),
+    riskClass: RiskClassSchema.default("R2"),
     title: z.string().trim().min(1).max(240),
-    content: z.string().min(1).max(20_000)
+    content: z.string().min(1).max(20_000),
+    metadata: ActionIntentMetadataSchema
   })
   .strict();
 
 export const ManualReviewActionIntentSchema = z
   .object({
+    schemaVersion: ActionIntentSchemaVersionSchema.default("v1"),
     type: z.literal("manual_review"),
+    riskClass: RiskClassSchema.default("R2"),
     actionType: ApprovalActionTypeSchema,
     summary: z.string().min(1).max(500),
     reason: z.string().min(1).max(1_000),
-    artifactIds: z.array(z.string().min(1)).max(20).default([])
+    artifactIds: z.array(z.string().min(1)).max(20).default([]),
+    metadata: ActionIntentMetadataSchema
   })
   .strict();
 
-export const actionIntentTypeValues = ["send_message", "schedule_event", "create_note", "manual_review"] as const;
+export const UpdateRecordActionIntentSchema = z
+  .object({
+    schemaVersion: ActionIntentSchemaVersionSchema.default("v1"),
+    type: z.literal("update_record"),
+    adapter: z.literal("workspace").default("workspace"),
+    riskClass: RiskClassSchema.default("R3"),
+    targetType: z.string().trim().min(1).max(120),
+    targetId: z.string().trim().min(1).max(200),
+    patch: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
+    reason: z.string().trim().min(1).max(1_000),
+    metadata: ActionIntentMetadataSchema
+  })
+  .strict()
+  .refine((value) => Object.keys(value.patch).length > 0, {
+    message: "Update record intents require at least one patch field.",
+    path: ["patch"]
+  });
+
+export const DeleteRecordActionIntentSchema = z
+  .object({
+    schemaVersion: ActionIntentSchemaVersionSchema.default("v1"),
+    type: z.literal("delete_record"),
+    adapter: z.literal("workspace").default("workspace"),
+    riskClass: RiskClassSchema.default("R4"),
+    targetType: z.string().trim().min(1).max(120),
+    targetId: z.string().trim().min(1).max(200),
+    reason: z.string().trim().min(1).max(1_000),
+    confirmationToken: z.string().trim().min(8).max(120).nullable().default(null),
+    metadata: ActionIntentMetadataSchema
+  })
+  .strict();
+
+export const MonitorSignalActionIntentSchema = z
+  .object({
+    schemaVersion: ActionIntentSchemaVersionSchema.default("v1"),
+    type: z.literal("monitor_signal"),
+    adapter: z.literal("watcher").default("watcher"),
+    riskClass: RiskClassSchema.default("R2"),
+    targetEntity: z.string().trim().min(1).max(240),
+    condition: z.string().trim().min(1).max(1_000),
+    triggerAction: z.string().trim().min(1).max(1_000),
+    sourceSystems: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
+    metadata: ActionIntentMetadataSchema
+  })
+  .strict();
+
+export const actionIntentTypeValues = [
+  "send_message",
+  "schedule_event",
+  "create_note",
+  "manual_review",
+  "update_record",
+  "delete_record",
+  "monitor_signal"
+] as const;
 export const ActionIntentTypeSchema = z.enum(actionIntentTypeValues);
 
 export const ActionIntentSchema = z.discriminatedUnion("type", [
   SendMessageActionIntentSchema,
   ScheduleEventActionIntentSchema,
   CreateNoteActionIntentSchema,
-  ManualReviewActionIntentSchema
+  ManualReviewActionIntentSchema,
+  UpdateRecordActionIntentSchema,
+  DeleteRecordActionIntentSchema,
+  MonitorSignalActionIntentSchema
 ]);
 
-export const actionAdapterKeyValues = ["gmail", "calendar", "notes", "manual_review"] as const;
+export const actionAdapterKeyValues = ["gmail", "calendar", "notes", "manual_review", "workspace", "watcher"] as const;
 export const ActionAdapterKeySchema = z.enum(actionAdapterKeyValues);
 
 export const actionExecutionOperationValues = [
@@ -1000,7 +1075,10 @@ export const actionExecutionOperationValues = [
   "create_draft",
   "create_event",
   "create_note",
-  "manual_review"
+  "manual_review",
+  "update_record",
+  "delete_record",
+  "monitor_signal"
 ] as const;
 export const ActionExecutionOperationSchema = z.enum(actionExecutionOperationValues);
 
@@ -1342,12 +1420,25 @@ export const DashboardOperatingSectionsSchema = z.object({
 
 export const defaultWorkspaceShadowReplayPolicy = {
   enabled: true,
-  promotionMode: "validated_autonomy",
-  rollbackOutcome: "allowed_with_confirmation",
+  promotionMode: "shadow_only",
+  rollbackOutcome: "downgrade_to_draft",
   minimumMatchedEpisodes: 3,
   minimumPrecision: 0.8,
   maximumNegativeOutcomeRate: 0.15,
   maximumFailureCostRate: 0.2
+} as const;
+
+export const enterpriseWorkspaceGovernanceDefaults = {
+  approvalMode: "always_review",
+  requireAuditExports: true,
+  maxAutoRunRiskClass: "R1",
+  publicSharingEnabled: false,
+  providerAccessRequiresApproval: true,
+  escalationRequiresApproval: true,
+  externalSendRequiresApproval: true,
+  calendarWriteRequiresApproval: true,
+  shadowReplayPolicy: defaultWorkspaceShadowReplayPolicy,
+  retentionDays: 90
 } as const;
 
 export const WorkspaceShadowReplayPolicySchema = z
@@ -1392,13 +1483,16 @@ export const WorkspaceSelectionSchema = z.object({
 
 export const WorkspaceGovernanceSchema = z.object({
   workspaceId: z.string().min(1),
-  approvalMode: WorkspaceApprovalModeSchema,
-  requireAuditExports: z.boolean().default(false),
-  maxAutoRunRiskClass: RiskClassSchema.default("R1"),
-  externalSendRequiresApproval: z.boolean().default(true),
-  calendarWriteRequiresApproval: z.boolean().default(true),
-  shadowReplayPolicy: WorkspaceShadowReplayPolicySchema.default(defaultWorkspaceShadowReplayPolicy),
-  retentionDays: z.number().int().min(7).max(3650).default(365),
+  approvalMode: WorkspaceApprovalModeSchema.default(enterpriseWorkspaceGovernanceDefaults.approvalMode),
+  requireAuditExports: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.requireAuditExports),
+  maxAutoRunRiskClass: RiskClassSchema.default(enterpriseWorkspaceGovernanceDefaults.maxAutoRunRiskClass),
+  publicSharingEnabled: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.publicSharingEnabled),
+  providerAccessRequiresApproval: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.providerAccessRequiresApproval),
+  escalationRequiresApproval: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.escalationRequiresApproval),
+  externalSendRequiresApproval: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.externalSendRequiresApproval),
+  calendarWriteRequiresApproval: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.calendarWriteRequiresApproval),
+  shadowReplayPolicy: WorkspaceShadowReplayPolicySchema.default(enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy),
+  retentionDays: z.number().int().min(7).max(3650).default(enterpriseWorkspaceGovernanceDefaults.retentionDays),
   updatedBy: z.string().min(1),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
@@ -1794,11 +1888,13 @@ export const ApprovalFollowUpJobPayloadSchema = z
     workspaceId: z.string().min(1).nullable().default(null),
     metadata: z
       .object({
-        replayedFromJobId: z.string().min(1).nullable().default(null)
+        replayedFromJobId: z.string().min(1).nullable().default(null),
+        actionId: z.string().min(1).max(200).nullable().default(null)
       })
       .catchall(z.unknown())
       .default({
-        replayedFromJobId: null
+        replayedFromJobId: null,
+        actionId: null
       })
   })
   .strict();
@@ -2364,8 +2460,180 @@ export const JobRecordSchema = JobRecordBaseSchema
     }
   });
 
+export const WorkflowDagRetryPolicySchema = z
+  .object({
+    maxAttempts: z.number().int().min(1).max(25).default(3),
+    backoffMs: z.number().int().min(0).max(3_600_000).default(1_000)
+  })
+  .strict();
+
+export const WorkflowDagPermissionGrantSchema = z
+  .object({
+    capabilities: z.array(CapabilitySchema).default([]),
+    maxRiskClass: RiskClassSchema.default("R2")
+  })
+  .strict();
+
+export const WorkflowDagCompensationSchema = z
+  .object({
+    actionIntent: ActionIntentSchema.nullable().default(null),
+    required: z.boolean().default(false),
+    note: z.string().min(1).max(500).nullable().default(null)
+  })
+  .strict();
+
+export const WorkflowDagNodeSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160),
+    label: z.string().trim().min(1).max(240),
+    actionIntent: ActionIntentSchema,
+    dependsOn: z.array(z.string().trim().min(1).max(160)).default([]),
+    permissionGrant: WorkflowDagPermissionGrantSchema,
+    retryPolicy: WorkflowDagRetryPolicySchema.default({ maxAttempts: 3, backoffMs: 1_000 }),
+    compensation: WorkflowDagCompensationSchema.default({ actionIntent: null, required: false, note: null })
+  })
+  .strict();
+
+export const WorkflowDagEdgeSchema = z
+  .object({
+    from: z.string().trim().min(1).max(160),
+    to: z.string().trim().min(1).max(160),
+    condition: z.enum(["success", "failure", "always"]).default("success")
+  })
+  .strict()
+  .refine((edge) => edge.from !== edge.to, {
+    message: "Workflow DAG edges cannot target the same node they originate from.",
+    path: ["to"]
+  });
+
+export const WorkflowDagSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160),
+    workflowId: z.string().trim().min(1).max(160),
+    schemaVersion: z.literal("v1").default("v1"),
+    nodes: z.array(WorkflowDagNodeSchema).min(1).max(250),
+    edges: z.array(WorkflowDagEdgeSchema).max(1_000).default([]),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime()
+  })
+  .strict()
+  .superRefine((dag, context) => {
+    const nodeIds = new Set<string>();
+
+    for (const [index, node] of dag.nodes.entries()) {
+      if (nodeIds.has(node.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate workflow DAG node "${node.id}".`,
+          path: ["nodes", index, "id"]
+        });
+      }
+
+      nodeIds.add(node.id);
+    }
+
+    for (const [index, node] of dag.nodes.entries()) {
+      for (const dependency of node.dependsOn) {
+        if (!nodeIds.has(dependency)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Workflow DAG node "${node.id}" depends on missing node "${dependency}".`,
+            path: ["nodes", index, "dependsOn"]
+          });
+        }
+      }
+    }
+
+    for (const [index, edge] of dag.edges.entries()) {
+      if (!nodeIds.has(edge.from)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Workflow DAG edge references missing source node "${edge.from}".`,
+          path: ["edges", index, "from"]
+        });
+      }
+
+      if (!nodeIds.has(edge.to)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Workflow DAG edge references missing target node "${edge.to}".`,
+          path: ["edges", index, "to"]
+        });
+      }
+    }
+  });
+
+export const WorkflowDagNodeExecutionSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160),
+    instanceId: z.string().trim().min(1).max(160),
+    nodeId: z.string().trim().min(1).max(160),
+    status: WorkflowDagNodeStatusSchema.default("queued"),
+    attemptCount: z.number().int().min(0).max(25).default(0),
+    maxAttempts: z.number().int().min(1).max(25).default(3),
+    runnerId: z.string().trim().min(1).max(120).nullable().default(null),
+    lastError: z.string().max(1_000).nullable().default(null),
+    startedAt: z.string().datetime().nullable().default(null),
+    completedAt: z.string().datetime().nullable().default(null),
+    updatedAt: z.string().datetime()
+  })
+  .strict();
+
+export const WorkflowDagInstanceSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160),
+    dagId: z.string().trim().min(1).max(160),
+    workflowId: z.string().trim().min(1).max(160),
+    status: WorkflowDagStatusSchema.default("queued"),
+    pausedAt: z.string().datetime().nullable().default(null),
+    cancelledAt: z.string().datetime().nullable().default(null),
+    cancelReason: z.string().max(500).nullable().default(null),
+    nodeExecutions: z.array(WorkflowDagNodeExecutionSchema).default([]),
+    auditLog: z.array(z.string().min(1).max(500)).default([]),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime()
+  })
+  .strict();
+
 export const watcherFrequencyValues = ["realtime", "5min", "15min", "hourly", "daily"] as const;
 export const WatcherFrequencySchema = z.enum(watcherFrequencyValues);
+
+export const WatcherScheduleLeaseSchema = z
+  .object({
+    ownerId: z.string().trim().min(1).max(120),
+    acquiredAt: z.string().datetime(),
+    expiresAt: z.string().datetime()
+  })
+  .strict();
+
+export const WatcherScheduleSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    dryRun: z.boolean().default(true),
+    cursor: z.string().max(500).nullable().default(null),
+    lastRunAt: z.string().datetime().nullable().default(null),
+    nextRunAt: z.string().datetime().nullable().default(null),
+    lease: WatcherScheduleLeaseSchema.nullable().default(null)
+  })
+  .strict();
+
+export const WatcherDryRunResultSchema = z
+  .object({
+    evaluatedAt: z.string().datetime(),
+    wouldTrigger: z.boolean(),
+    reason: z.string().min(1).max(500),
+    idempotencyKey: z.string().min(1).max(200).nullable().default(null),
+    sideEffectsSuppressed: z.boolean().default(true)
+  })
+  .strict();
+
+export const WatcherEscalationPolicySchema = z
+  .object({
+    notify: z.boolean().default(true),
+    minSuppressionMs: z.number().int().min(0).max(86_400_000).default(15 * 60_000),
+    maxTriggersPerHour: z.number().int().min(1).max(60).default(4)
+  })
+  .strict();
 
 export const WatcherSchema = z.object({
   id: z.string().min(1),
@@ -2377,6 +2645,20 @@ export const WatcherSchema = z.object({
   sourceSystems: z.array(z.string()).default([]),
   status: z.enum(["active", "paused", "expired"]).default("active"),
   expiryAt: z.string().datetime().nullable().default(null),
+  schedule: WatcherScheduleSchema.default({
+    enabled: true,
+    dryRun: true,
+    cursor: null,
+    lastRunAt: null,
+    nextRunAt: null,
+    lease: null
+  }),
+  lastEvaluation: WatcherDryRunResultSchema.nullable().default(null),
+  escalationPolicy: WatcherEscalationPolicySchema.default({
+    notify: true,
+    minSuppressionMs: 15 * 60_000,
+    maxTriggersPerHour: 4
+  }),
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   responsibility: WorkflowResponsibilitySchema.optional(),
   createdAt: z.string().datetime(),
@@ -2702,6 +2984,92 @@ export const AgentDefinitionSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
+
+export const agentRunnerFailureCodeValues = [
+  "validation_failure",
+  "permission_denied",
+  "dependency_failure",
+  "timeout",
+  "unsafe_output",
+  "unsupported_agent"
+] as const;
+export const AgentRunnerFailureCodeSchema = z.enum(agentRunnerFailureCodeValues);
+
+export const AgentRunnerPermissionsSchema = z
+  .object({
+    allowedCapabilities: z.array(CapabilitySchema).default([]),
+    blockedCapabilities: z.array(CapabilitySchema).default([]),
+    maxRiskClass: RiskClassSchema.default("R2"),
+    sideEffectCapabilities: z.array(CapabilitySchema).default([])
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const blocked = new Set(value.blockedCapabilities);
+
+    for (const capability of value.allowedCapabilities) {
+      if (blocked.has(capability)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Capability "${capability}" cannot be both allowed and blocked.`,
+          path: ["blockedCapabilities"]
+        });
+      }
+    }
+
+    for (const capability of value.sideEffectCapabilities) {
+      if (!value.allowedCapabilities.includes(capability)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Side-effect capability "${capability}" must also be explicitly allowed.`,
+          path: ["sideEffectCapabilities"]
+        });
+      }
+    }
+  });
+
+export const AgentRunnerTelemetrySchema = z
+  .object({
+    runnerId: z.string().min(1).max(120),
+    executionId: z.string().min(1).max(160),
+    traceId: z.string().min(1).max(160).nullable().default(null),
+    startedAt: z.string().datetime()
+  })
+  .strict();
+
+export const AgentRunnerInputSchema = z
+  .object({
+    task: TaskSchema,
+    scenario: z.string().min(1).max(20_000),
+    requestContext: z.string().min(1).max(20_000),
+    agentDefinition: AgentDefinitionSchema.nullable().default(null),
+    permissions: AgentRunnerPermissionsSchema,
+    timeoutMs: z.number().int().min(100).max(300_000).default(30_000),
+    telemetry: AgentRunnerTelemetrySchema
+  })
+  .strict();
+
+export const AgentRunnerOutputSchema = z
+  .object({
+    result: AgentResultSchema,
+    telemetry: AgentRunnerTelemetrySchema.extend({
+      completedAt: z.string().datetime(),
+      durationMs: z.number().int().min(0)
+    })
+  })
+  .strict();
+
+export const AgentRunnerContractSchema = z
+  .object({
+    id: z.string().min(1).max(120),
+    version: z.string().regex(/^v\d+$/u, "Agent runner contract versions must use v<integer> format."),
+    agentNames: z.array(AgentNameSchema).min(1),
+    declaredCapabilities: z.array(CapabilitySchema).default([]),
+    outputModes: z.array(AgentExecutionModeSchema).min(1),
+    timeoutMs: z.number().int().min(100).max(300_000),
+    telemetryEvents: z.array(z.enum(["agent.started", "agent.completed", "agent.failed"])).min(2),
+    failureCodes: z.array(AgentRunnerFailureCodeSchema).min(1)
+  })
+  .strict();
 
 /**
  * Agent metrics for performance tracking
@@ -3072,6 +3440,9 @@ export type SendMessageActionIntent = z.infer<typeof SendMessageActionIntentSche
 export type ScheduleEventActionIntent = z.infer<typeof ScheduleEventActionIntentSchema>;
 export type CreateNoteActionIntent = z.infer<typeof CreateNoteActionIntentSchema>;
 export type ManualReviewActionIntent = z.infer<typeof ManualReviewActionIntentSchema>;
+export type UpdateRecordActionIntent = z.infer<typeof UpdateRecordActionIntentSchema>;
+export type DeleteRecordActionIntent = z.infer<typeof DeleteRecordActionIntentSchema>;
+export type MonitorSignalActionIntent = z.infer<typeof MonitorSignalActionIntentSchema>;
 export type ActionIntent = z.infer<typeof ActionIntentSchema>;
 export type ActionAdapterKey = z.infer<typeof ActionAdapterKeySchema>;
 export type ActionExecutionOperation = z.infer<typeof ActionExecutionOperationSchema>;
@@ -3157,7 +3528,16 @@ export type JobRecoveryStrategy = z.infer<typeof JobRecoveryStrategySchema>;
 export type JobRecoveryState = z.infer<typeof JobRecoveryStateSchema>;
 export type JobExecutionJournal = z.infer<typeof JobExecutionJournalSchema>;
 export type JobRecord = z.infer<typeof JobRecordSchema>;
+export type WorkflowDag = z.infer<typeof WorkflowDagSchema>;
+export type WorkflowDagNode = z.infer<typeof WorkflowDagNodeSchema>;
+export type WorkflowDagInstance = z.infer<typeof WorkflowDagInstanceSchema>;
+export type WorkflowDagNodeExecution = z.infer<typeof WorkflowDagNodeExecutionSchema>;
+export type WorkflowDagStatus = z.infer<typeof WorkflowDagStatusSchema>;
+export type WorkflowDagNodeStatus = z.infer<typeof WorkflowDagNodeStatusSchema>;
 export type WatcherFrequency = z.infer<typeof WatcherFrequencySchema>;
+export type WatcherSchedule = z.infer<typeof WatcherScheduleSchema>;
+export type WatcherDryRunResult = z.infer<typeof WatcherDryRunResultSchema>;
+export type WatcherEscalationPolicy = z.infer<typeof WatcherEscalationPolicySchema>;
 export type Watcher = z.infer<typeof WatcherSchema>;
 export type ActionLog = z.infer<typeof ActionLogSchema>;
 export type EvidenceRecord = z.infer<typeof EvidenceRecordSchema>;
@@ -3184,6 +3564,12 @@ export type AgentMemoryPermission = z.infer<typeof AgentMemoryPermissionSchema>;
 export type PromptVariable = z.infer<typeof PromptVariableSchema>;
 export type AgentBehaviorConfig = z.infer<typeof AgentBehaviorConfigSchema>;
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
+export type AgentRunnerFailureCode = z.infer<typeof AgentRunnerFailureCodeSchema>;
+export type AgentRunnerPermissions = z.infer<typeof AgentRunnerPermissionsSchema>;
+export type AgentRunnerTelemetry = z.infer<typeof AgentRunnerTelemetrySchema>;
+export type AgentRunnerInput = z.infer<typeof AgentRunnerInputSchema>;
+export type AgentRunnerOutput = z.infer<typeof AgentRunnerOutputSchema>;
+export type AgentRunnerContract = z.infer<typeof AgentRunnerContractSchema>;
 export type AgentMetrics = z.infer<typeof AgentMetricsSchema>;
 export type OperatorProductStatus = z.infer<typeof OperatorProductStatusSchema>;
 export type OperatorProductReadiness = z.infer<typeof OperatorProductReadinessSchema>;

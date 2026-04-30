@@ -1,0 +1,93 @@
+{
+  "profile": "enterprise",
+  "classification": [
+    {
+      "key": "approvalMode",
+      "default": "always_review",
+      "dataExposure": "none",
+      "autonomy": "all tasks require explicit review",
+      "operationalBlastRadius": "low",
+      "override": "workspace governance update"
+    },
+    {
+      "key": "maxAutoRunRiskClass",
+      "default": "R1",
+      "dataExposure": "none",
+      "autonomy": "read and search only",
+      "operationalBlastRadius": "low",
+      "override": "workspace governance update"
+    },
+    {
+      "key": "publicSharingEnabled",
+      "default": false,
+      "dataExposure": "external public link",
+      "autonomy": "disabled unless explicitly enabled",
+      "operationalBlastRadius": "high",
+      "override": "workspace owner enables public sharing"
+    },
+    {
+      "key": "requireAuditExports",
+      "default": true,
+      "dataExposure": "governance evidence",
+      "autonomy": "review evidence remains available",
+      "operationalBlastRadius": "medium",
+      "override": "workspace governance update"
+    },
+    {
+      "key": "providerAccessRequiresApproval",
+      "default": true,
+      "dataExposure": "tenant connector data",
+      "autonomy": "provider-backed side effects remain approval-gated",
+      "operationalBlastRadius": "high",
+      "override": "workspace governance update"
+    },
+    {
+      "key": "escalationRequiresApproval",
+      "default": true,
+      "dataExposure": "operator routing and ownership",
+      "autonomy": "escalation remains an explicit operator decision",
+      "operationalBlastRadius": "medium",
+      "override": "workspace governance update"
+    },
+    {
+      "key": "externalSendRequiresApproval",
+      "default": true,
+      "dataExposure": "external communication",
+      "autonomy": "outbound sends remain approval-gated",
+      "operationalBlastRadius": "high",
+      "override": "workspace governance update"
+    },
+    {
+      "key": "calendarWriteRequiresApproval",
+      "default": true,
+      "dataExposure": "external commitments and attendee metadata",
+      "autonomy": "calendar writes remain approval-gated",
+      "operationalBlastRadius": "high",
+      "override": "workspace governance update"
+    },
+    {
+      "key": "retentionDays",
+      "default": 90,
+      "dataExposure": "workspace records and evidence",
+      "autonomy": "bounded evidence retention",
+      "operationalBlastRadius": "medium",
+      "override": "workspace governance update"
+    },
+    {
+      "key": "shadowReplayPolicy.promotionMode",
+      "default": "shadow_only",
+      "dataExposure": "learning evidence",
+      "autonomy": "learning cannot widen live autonomy by default",
+      "operationalBlastRadius": "high",
+      "override": "workspace governance update"
+    },
+    {
+      "key": "shadowReplayPolicy.rollbackOutcome",
+      "default": "downgrade_to_draft",
+      "dataExposure": "learning evidence",
+      "autonomy": "unsafe learned paths fall back to draft behavior",
+      "operationalBlastRadius": "high",
+      "override": "workspace governance update"
+    }
+  ]
+}

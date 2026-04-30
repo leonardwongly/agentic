@@ -59,6 +59,10 @@ export async function POST(request: Request, context: RouteContext) {
 
     if (job.kind === "approval_follow_up" && job.payload.type === "approval_follow_up") {
       const followUpPayload = ApprovalFollowUpJobPayloadSchema.parse(job.payload);
+      const bundleForActionIntent = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
+      const currentApproval = bundleForActionIntent?.approvals.find(
+        (approval) => approval.id === followUpPayload.approvalId && approval.taskId === followUpPayload.taskId
+      );
       const replayedJob = await enqueueApprovalFollowUpJob({
         repository,
         userId: principal.userId,
@@ -68,20 +72,21 @@ export async function POST(request: Request, context: RouteContext) {
         decision: followUpPayload.decision,
         workspaceId: followUpPayload.workspaceId,
         actorContext,
+        actionId: followUpPayload.metadata.actionId,
+        actionIntent: followUpPayload.metadata.actionId ? null : currentApproval?.actionIntent ?? null,
         replayedFromJobId: job.id
       });
+      const bundleForReplayLog = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
 
-      const bundle = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
-
-      if (bundle) {
+      if (bundleForReplayLog) {
         const failedAtMs = Date.parse(job.updatedAt);
         const replayedAtMs = Date.parse(replayedJob.createdAt);
 
-        bundle.actionLogs.push(
+        bundleForReplayLog.actionLogs.push(
           createActionLog({
-            goalId: bundle.goal.id,
+            goalId: bundleForReplayLog.goal.id,
             taskId: followUpPayload.taskId,
-            workflowId: bundle.workflow.id,
+            workflowId: bundleForReplayLog.workflow.id,
             actor: actorContext.executor.label,
             kind: "approval_follow_up.replayed",
             message: `Replayed approval follow-up job ${job.id} after dead-letter recovery.`,
@@ -96,11 +101,11 @@ export async function POST(request: Request, context: RouteContext) {
                   ? Math.max(0, replayedAtMs - failedAtMs)
                   : null
             },
-            prevLog: bundle.actionLogs.at(-1) ?? null
+            prevLog: bundleForReplayLog.actionLogs.at(-1) ?? null
           })
         );
 
-        await repository.saveGoalBundle(bundle);
+        await repository.saveGoalBundle(bundleForReplayLog);
       }
 
       return authenticatedJson(
@@ -114,6 +119,7 @@ export async function POST(request: Request, context: RouteContext) {
             approvalId: replayedJob.payload.approvalId,
             taskId: replayedJob.payload.taskId,
             decision: replayedJob.payload.decision,
+            actionId: replayedJob.payload.metadata.actionId,
             attemptCount: replayedJob.attemptCount,
             maxAttempts: replayedJob.maxAttempts,
             createdAt: replayedJob.createdAt,

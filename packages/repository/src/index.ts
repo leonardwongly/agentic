@@ -57,7 +57,6 @@ import {
   ProviderCredentialSecretRecordSchema,
   RiskClassSchema,
   SYSTEM_USER_ID,
-  defaultWorkspaceShadowReplayPolicy,
   TaskSchema,
   WatcherSchema,
   WatcherPageSchema,
@@ -125,11 +124,12 @@ import {
 } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord, getMemoryFreshness } from "@agentic/memory";
-import { respondToApproval as applyApprovalResponse } from "@agentic/orchestrator";
+import { assertApprovalFollowUpJobOwner, buildApprovalResponseMutation } from "./approval-response-helpers";
 import {
   buildFallbackApprovalActionIntent,
   buildFallbackApprovalPreview
 } from "./approval-fallbacks";
+import { assertWorkspaceGovernanceStartupConfig, resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults"; export { resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults";
 import { deriveAgentMetricsFromGoals } from "./agent-metrics";
 import {
   buildPendingAutopilotEvent,
@@ -154,16 +154,14 @@ import {
   sortCommitments,
   CommitmentInboxQueryError
 } from "./commitment-helpers";
+import { claimWatcherLeaseInRuntimeStore, claimWatcherLeaseWithPostgresClient, type WatcherLeaseClaimParams } from "./watcher-lease-helpers";
 import { assembleDashboardData } from "./dashboard-data";
 import {
   buildBriefingHistory,
   buildDashboardControlPlane,
   buildNowQueue
 } from "./dashboard-control-plane";
-import {
-  buildDashboardOperationsTower,
-  type DashboardOperationsTower
-} from "./dashboard-operations";
+import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 import {
   assertRunningJobOwner,
@@ -189,6 +187,7 @@ import {
   type DashboardControlPlane,
   type DashboardControlPlaneSection,
   type DashboardData,
+  type DashboardDiagnostic,
   type DashboardDiagnostics,
   type GoalPageParams,
   type GoalShareListFilters,
@@ -199,7 +198,7 @@ import {
   type WorkspaceDeleteParams,
   type WorkspaceRetentionParams
 } from "./repository-types";
-
+import { buildWorkspaceAuditExport } from "./workspace-audit-export";
 const UserRecordSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -255,27 +254,7 @@ const RuntimeStoreSchema = z.object({
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 
 export { CommitmentInboxQueryError, CollectionPageQueryError };
-export {
-  ApprovalMutationError,
-  JobMutationError,
-  type AgenticRepository,
-  type AutopilotEventClaim,
-  type CollectionPageParams,
-  type DashboardControlPlane,
-  type DashboardControlPlaneSection,
-  type DashboardData,
-  type DashboardDiagnostic,
-  type DashboardDiagnosticTarget,
-  type DashboardDiagnostics,
-  type GoalPageParams,
-  type GoalShareListFilters,
-  type PrivacyOperationListFilters,
-  type WatcherListFilters,
-  type WatcherPageParams,
-  type WorkspaceAuditExport,
-  type WorkspaceDeleteParams,
-  type WorkspaceRetentionParams
-} from "./repository-types";
+export { ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters, type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
 
 const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
@@ -751,13 +730,7 @@ function defaultWorkspaceGovernance(workspaceId: string, updatedBy: string): Wor
 
   return WorkspaceGovernanceSchema.parse({
     workspaceId,
-    approvalMode: "risk_based",
-    requireAuditExports: false,
-    maxAutoRunRiskClass: "R1",
-    externalSendRequiresApproval: true,
-    calendarWriteRequiresApproval: true,
-    shadowReplayPolicy: defaultWorkspaceShadowReplayPolicy,
-    retentionDays: 365,
+    ...resolveWorkspaceGovernanceDefaultsFromEnv(),
     updatedBy,
     createdAt: timestamp,
     updatedAt: timestamp
@@ -1031,122 +1004,6 @@ function listWorkspaceMembersForWorkspaceFromStore(store: RuntimeStore, workspac
     .filter((member) => member.workspaceId === workspaceId)
     .sort((left, right) => left.joinedAt.localeCompare(right.joinedAt))
     .map((member) => WorkspaceMemberSchema.parse(clone(member)));
-}
-
-function buildWorkspaceAuditExport(params: {
-  workspace: Workspace;
-  governance: WorkspaceGovernance | null;
-  members: WorkspaceMember[];
-  goals: GoalBundle[];
-  goalShares: GoalShareRecord[];
-  privacyOperations: PrivacyOperation[];
-}): WorkspaceAuditExport {
-  const generatedAt = nowIso();
-  const payload = {
-    generatedAt,
-    workspace: params.workspace,
-    governance: params.governance,
-    members: params.members,
-    goalShares: params.goalShares,
-    privacyOperations: params.privacyOperations,
-    goals: params.goals.map((bundle) => ({
-      goal: bundle.goal,
-      workflow: bundle.workflow,
-      tasks: bundle.tasks,
-      approvals: bundle.approvals,
-      watchers: bundle.watchers,
-      artifacts: bundle.artifacts,
-      actionLogs: bundle.actionLogs
-    }))
-  };
-  const digest = crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-  const content = JSON.stringify(
-    {
-      ...payload,
-      integrity: {
-        version: "agentic-workspace-audit-integrity-v1",
-        algorithm: "sha256",
-        canonicalization: "json-stringify-v1",
-        digest,
-        recordCounts: {
-          members: params.members.length,
-          goalShares: params.goalShares.length,
-          privacyOperations: params.privacyOperations.length,
-          goals: params.goals.length
-        }
-      }
-    },
-    null,
-    2
-  );
-
-  return {
-    workspaceId: params.workspace.id,
-    fileName: `${params.workspace.slug}-audit-${generatedAt.slice(0, 10)}.json`,
-    contentType: "application/json",
-    generatedAt,
-    content
-  };
-}
-
-function buildApprovalEvidenceRecord(params: {
-  actor: ActorContext;
-  previousBundle: GoalBundle;
-  updatedBundle: GoalBundle;
-  originalApproval: ApprovalRequest;
-}): EvidenceRecord {
-  const updatedApproval = params.updatedBundle.approvals.find(
-    (candidate) => candidate.id === params.originalApproval.id
-  );
-  const updatedTask = params.updatedBundle.tasks.find(
-    (candidate) => candidate.id === params.originalApproval.taskId
-  );
-
-  if (!updatedApproval) {
-    throw new Error(`Approval ${params.originalApproval.id} is missing after response processing.`);
-  }
-
-  if (!updatedTask) {
-    throw new Error(`Task ${params.originalApproval.taskId} is missing after response processing.`);
-  }
-
-  if (updatedApproval.decision === "pending" || !updatedApproval.respondedAt || !updatedApproval.decisionScope) {
-    throw new Error(`Approval ${params.originalApproval.id} did not persist a complete response state.`);
-  }
-
-  const previousLogIds = new Set(params.previousBundle.actionLogs.map((log) => log.id));
-  const actionLogIds = params.updatedBundle.actionLogs
-    .filter((log) => !previousLogIds.has(log.id))
-    .map((log) => log.id);
-  const artifactIds =
-    updatedApproval.actionIntent?.type === "manual_review" ? updatedApproval.actionIntent.artifactIds : [];
-
-  return EvidenceRecordSchema.parse({
-    id: crypto.randomUUID(),
-    userId: subjectUserIdForActor(params.actor),
-    goalId: params.updatedBundle.goal.id,
-    taskId: params.originalApproval.taskId,
-    approvalId: params.originalApproval.id,
-    sourceKind: "approval_response",
-    sourceId: params.originalApproval.id,
-    sourceSummary: `${updatedApproval.decision === "approved" ? "Approved" : "Rejected"} "${params.originalApproval.title}".`,
-    riskClass: params.originalApproval.riskClass,
-    requestedAction: params.originalApproval.requestedAction,
-    requestRationale: params.originalApproval.rationale,
-    requiresApproval: true,
-    decision: updatedApproval.decision,
-    decisionScope: updatedApproval.decisionScope,
-    decisionRationale: updatedApproval.decisionRationale,
-    respondedAt: updatedApproval.respondedAt,
-    resultingTaskState: updatedTask.state,
-    resultingGoalStatus: params.updatedBundle.goal.status,
-    actionLogIds,
-    artifactIds,
-    memoryIds: [],
-    actorContext: parseActorContext(params.actor),
-    createdAt: updatedApproval.respondedAt,
-    updatedAt: updatedApproval.respondedAt
-  });
 }
 
 class FileRepository implements AgenticRepository {
@@ -1728,10 +1585,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async saveWorkspaceGovernance(
-    governance: WorkspaceGovernance,
-    actor: ActorContext
-  ): Promise<WorkspaceGovernance> {
+  async saveWorkspaceGovernance(governance: WorkspaceGovernance, actor: ActorContext): Promise<WorkspaceGovernance> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const validated = WorkspaceGovernanceSchema.parse(governance);
@@ -1839,15 +1693,8 @@ class FileRepository implements AgenticRepository {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
 
-      const originalApproval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
-
-      if (!originalApproval) {
-        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
-      }
-
       assertSharedApprovalResponder(store, bundle.goal, userId, params.approvalId);
-
-      const updatedBundle = applyApprovalResponse({
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
         bundle,
         approvalId: params.approvalId,
         decision: params.decision,
@@ -1855,17 +1702,83 @@ class FileRepository implements AgenticRepository {
         scope: params.scope,
         rationale: params.rationale
       });
-      const evidenceRecord = buildApprovalEvidenceRecord({
-        actor,
-        previousBundle: bundle,
-        updatedBundle,
-        originalApproval
-      });
 
       mergeGoalBundleIntoStore(store, updatedBundle);
       store.evidenceRecords = upsertById(store.evidenceRecords, evidenceRecord);
       await this.writeStore(store);
-      return GoalBundleSchema.parse(clone(updatedBundle));
+      return parsedBundle;
+    });
+  }
+
+  async respondToApprovalAndEnqueueJob(params: {
+    approvalId: string;
+    decision: Exclude<ApprovalDecision, "pending">;
+    actor: ActorContext;
+    scope?: ApprovalDecisionScope;
+    rationale?: string | null;
+    buildJob: (bundle: GoalBundle) => JobRecord;
+  }): Promise<{ bundle: GoalBundle; job: JobRecord }> {
+    return this.withMutationLock(async () => {
+      const actor = parseActorContext(params.actor);
+      const userId = subjectUserIdForActor(actor);
+      const store = await this.readStore();
+      const goalIds = goalIdsForUser(store, userId);
+      const approval = store.approvals.find(
+        (candidate) => candidate.id === params.approvalId && goalIds.has(candidate.goalId)
+      );
+
+      if (!approval) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      if (approval.decision !== "pending") {
+        throw new ApprovalMutationError("already_handled", `Approval ${params.approvalId} has already been handled.`);
+      }
+
+      if (Date.parse(approval.expiryAt) <= Date.now()) {
+        throw new ApprovalMutationError("expired", `Approval ${params.approvalId} has expired and can no longer be actioned.`);
+      }
+
+      const bundle = bundleFromStore(store, approval.goalId);
+
+      if (!bundle) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      assertSharedApprovalResponder(store, bundle.goal, userId, params.approvalId);
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
+        bundle,
+        approvalId: params.approvalId,
+        decision: params.decision,
+        actor,
+        scope: params.scope,
+        rationale: params.rationale
+      });
+      const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      assertApprovalFollowUpJobOwner(validatedJob, userId);
+      const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
+      const existingJob = trimmedKey
+        ? store.jobs.find((candidate) => candidate.userId === validatedJob.userId && candidate.idempotencyKey === trimmedKey)
+        : null;
+      const savedJob = existingJob
+        ? JobRecordSchema.parse(clone(existingJob))
+        : JobRecordSchema.parse({
+            ...validatedJob,
+            idempotencyKey: trimmedKey
+          });
+
+      mergeGoalBundleIntoStore(store, updatedBundle);
+      store.evidenceRecords = upsertById(store.evidenceRecords, evidenceRecord);
+
+      if (!existingJob) {
+        store.jobs = upsertById(store.jobs, savedJob);
+      }
+
+      await this.writeStore(store);
+      return {
+        bundle: parsedBundle,
+        job: JobRecordSchema.parse(clone(savedJob))
+      };
     });
   }
 
@@ -2609,6 +2522,20 @@ class FileRepository implements AgenticRepository {
         id: watcher.id
       }),
       parsePage: (page) => WatcherPageSchema.parse(page)
+    });
+  }
+
+  async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const leased = claimWatcherLeaseInRuntimeStore({ watchers: store.watchers, visibleGoalIds: goalIdsForUser(store, params.userId ?? SYSTEM_USER_ID), lease: params, normalizeWatcher: (watcher) => {
+        const goal = goalByIdFromStore(store, watcher.goalId);
+        return goal ? normalizeWatcherForGoal(goal, watcher) : WatcherSchema.parse(clone(watcher));
+      } });
+      if (leased) {
+        await this.writeStore(store);
+      }
+      return leased;
     });
   }
 
@@ -3985,6 +3912,9 @@ class PostgresRepository implements AgenticRepository {
       sourceSystems: row.source_systems ?? [],
       status: row.status,
       expiryAt: row.expiry_at ? new Date(row.expiry_at as string | number | Date).toISOString() : null,
+      schedule: row.schedule ?? undefined,
+      lastEvaluation: row.last_evaluation ?? null,
+      escalationPolicy: row.escalation_policy ?? undefined,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       responsibility: row.team_responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
@@ -4100,12 +4030,12 @@ class PostgresRepository implements AgenticRepository {
       approvalMode: row.approval_mode,
       requireAuditExports: Boolean(row.require_audit_exports),
       maxAutoRunRiskClass: row.max_auto_run_risk_class,
+      publicSharingEnabled: Boolean(row.public_sharing_enabled),
+      providerAccessRequiresApproval: row.provider_access_requires_approval == null ? true : Boolean(row.provider_access_requires_approval),
+      escalationRequiresApproval: row.escalation_requires_approval == null ? true : Boolean(row.escalation_requires_approval),
       externalSendRequiresApproval: Boolean(row.external_send_requires_approval),
       calendarWriteRequiresApproval: Boolean(row.calendar_write_requires_approval),
-      shadowReplayPolicy:
-        row.shadow_replay_policy && typeof row.shadow_replay_policy === "object"
-          ? row.shadow_replay_policy
-          : defaultWorkspaceShadowReplayPolicy,
+      shadowReplayPolicy: row.shadow_replay_policy && typeof row.shadow_replay_policy === "object" ? row.shadow_replay_policy : undefined,
       retentionDays: Number(row.retention_days),
       updatedBy: row.updated_by,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
@@ -4196,14 +4126,18 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into workspace_governance (
-          workspace_id, approval_mode, require_audit_exports, max_auto_run_risk_class, external_send_requires_approval,
+          workspace_id, approval_mode, require_audit_exports, max_auto_run_risk_class, public_sharing_enabled,
+          provider_access_requires_approval, escalation_requires_approval, external_send_requires_approval,
           calendar_write_requires_approval, shadow_replay_policy, retention_days, updated_by, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         on conflict (workspace_id) do update
         set approval_mode = excluded.approval_mode,
             require_audit_exports = excluded.require_audit_exports,
             max_auto_run_risk_class = excluded.max_auto_run_risk_class,
+            public_sharing_enabled = excluded.public_sharing_enabled,
+            provider_access_requires_approval = excluded.provider_access_requires_approval,
+            escalation_requires_approval = excluded.escalation_requires_approval,
             external_send_requires_approval = excluded.external_send_requires_approval,
             calendar_write_requires_approval = excluded.calendar_write_requires_approval,
             shadow_replay_policy = excluded.shadow_replay_policy,
@@ -4216,6 +4150,9 @@ class PostgresRepository implements AgenticRepository {
         validated.approvalMode,
         validated.requireAuditExports,
         validated.maxAutoRunRiskClass,
+        validated.publicSharingEnabled,
+        validated.providerAccessRequiresApproval,
+        validated.escalationRequiresApproval,
         validated.externalSendRequiresApproval,
         validated.calendarWriteRequiresApproval,
         JSON.stringify(validated.shadowReplayPolicy),
@@ -5075,9 +5012,9 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, team_responsibility, sort_order, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, schedule, last_evaluation, escalation_policy, actor_context, team_responsibility, sort_order, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, $17)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -5087,6 +5024,9 @@ class PostgresRepository implements AgenticRepository {
               source_systems = excluded.source_systems,
               status = excluded.status,
               expiry_at = excluded.expiry_at,
+              schedule = excluded.schedule,
+              last_evaluation = excluded.last_evaluation,
+              escalation_policy = excluded.escalation_policy,
               actor_context = excluded.actor_context,
               team_responsibility = excluded.team_responsibility,
               sort_order = excluded.sort_order,
@@ -5102,6 +5042,9 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(watcher.sourceSystems),
           watcher.status,
           watcher.expiryAt,
+          JSON.stringify(watcher.schedule),
+          JSON.stringify(watcher.lastEvaluation),
+          JSON.stringify(watcher.escalationPolicy),
           JSON.stringify(watcher.actorContext),
           JSON.stringify(watcher.responsibility),
           sortOrder,
@@ -6053,9 +5996,71 @@ class PostgresRepository implements AgenticRepository {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
 
-      const originalApproval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
+      this.assertSharedApprovalResponderWithRow({
+        approvalId: params.approvalId,
+        workspaceId: approvalRow.workspace_id ?? null,
+        workspaceRole: approvalRow.workspace_role ?? null
+      });
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
+        bundle,
+        approvalId: params.approvalId,
+        decision: params.decision,
+        actor,
+        scope: params.scope,
+        rationale: params.rationale
+      });
 
-      if (!originalApproval) {
+      await this.upsertGoalBundle(client, updatedBundle);
+      await this.saveEvidenceRecordWithClient(client, evidenceRecord);
+      return parsedBundle;
+    });
+  }
+
+  async respondToApprovalAndEnqueueJob(params: {
+    approvalId: string;
+    decision: Exclude<ApprovalDecision, "pending">;
+    actor: ActorContext;
+    scope?: ApprovalDecisionScope;
+    rationale?: string | null;
+    buildJob: (bundle: GoalBundle) => JobRecord;
+  }): Promise<{ bundle: GoalBundle; job: JobRecord }> {
+    const actor = parseActorContext(params.actor);
+    const userId = subjectUserIdForActor(actor);
+
+    return this.withTransaction(async (client) => {
+      const approvalResult = await client.query(
+        `
+          select a.id, a.goal_id, a.decision, a.expiry_at, g.workspace_id, wm.role as workspace_role
+          from approval_requests a
+          join goals g on g.id = a.goal_id
+          left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $2
+          where a.id = $1
+            and (
+              (g.workspace_id is null and g.user_id = $2)
+              or wm.user_id is not null
+            )
+          for update of a
+        `,
+        [params.approvalId, userId]
+      );
+
+      if (Number(approvalResult.rowCount ?? 0) === 0) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      const approvalRow = approvalResult.rows[0];
+
+      if (approvalRow.decision !== "pending") {
+        throw new ApprovalMutationError("already_handled", `Approval ${params.approvalId} has already been handled.`);
+      }
+
+      if (new Date(approvalRow.expiry_at).getTime() <= Date.now()) {
+        throw new ApprovalMutationError("expired", `Approval ${params.approvalId} has expired and can no longer be actioned.`);
+      }
+
+      const bundle = await this.mapGoalBundleWithClient(client, approvalRow.goal_id);
+
+      if (!bundle) {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
 
@@ -6064,8 +6069,7 @@ class PostgresRepository implements AgenticRepository {
         workspaceId: approvalRow.workspace_id ?? null,
         workspaceRole: approvalRow.workspace_role ?? null
       });
-
-      const updatedBundle = applyApprovalResponse({
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
         bundle,
         approvalId: params.approvalId,
         decision: params.decision,
@@ -6073,16 +6077,40 @@ class PostgresRepository implements AgenticRepository {
         scope: params.scope,
         rationale: params.rationale
       });
-      const evidenceRecord = buildApprovalEvidenceRecord({
-        actor,
-        previousBundle: bundle,
-        updatedBundle,
-        originalApproval
-      });
+      const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      assertApprovalFollowUpJobOwner(validatedJob, userId);
+      const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
+      let savedJob = JobRecordSchema.parse({ ...validatedJob, idempotencyKey: trimmedKey });
+      let shouldSaveJob = true;
+
+      if (trimmedKey) {
+        await client.query("select pg_advisory_xact_lock(hashtext($1))", [`job:${validatedJob.userId}:${trimmedKey}`]);
+        const existing = await client.query(
+          `
+            select *
+            from jobs
+            where user_id = $1 and idempotency_key = $2
+            limit 1
+          `,
+          [validatedJob.userId, trimmedKey]
+        );
+
+        if (existing.rows[0]) {
+          savedJob = this.mapJobRow(existing.rows[0]);
+          shouldSaveJob = false;
+        }
+      }
 
       await this.upsertGoalBundle(client, updatedBundle);
       await this.saveEvidenceRecordWithClient(client, evidenceRecord);
-      return GoalBundleSchema.parse(clone(updatedBundle));
+
+      if (shouldSaveJob) {
+        await this.saveJobWithClient(client, savedJob);
+      }
+      return {
+        bundle: parsedBundle,
+        job: JobRecordSchema.parse(clone(savedJob))
+      };
     });
   }
 
@@ -7180,22 +7208,7 @@ class PostgresRepository implements AgenticRepository {
       values
     );
 
-    return result.rows.map((row) =>
-      WatcherSchema.parse({
-        id: row.id,
-        goalId: row.goal_id,
-        targetEntity: row.target_entity,
-        condition: row.condition,
-        frequency: row.frequency,
-        triggerAction: row.trigger_action,
-        sourceSystems: row.source_systems ?? [],
-        status: row.status,
-        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-        createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
-      })
-    );
+    return result.rows.map((row) => this.mapWatcherRow(row));
   }
 
   async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
@@ -7254,6 +7267,11 @@ class PostgresRepository implements AgenticRepository {
     });
   }
 
+  async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
+    await this.ready;
+    return this.withTransaction((client) => claimWatcherLeaseWithPostgresClient({ client, userId: params.userId ?? SYSTEM_USER_ID, lease: params, mapWatcherRow: (row) => this.mapWatcherRow(row) }));
+  }
+
   async saveWatcher(watcher: Watcher): Promise<Watcher> {
     const validated = WatcherSchema.parse(watcher);
 
@@ -7269,9 +7287,9 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, team_responsibility, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, schedule, last_evaluation, escalation_policy, actor_context, team_responsibility, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -7281,6 +7299,9 @@ class PostgresRepository implements AgenticRepository {
               source_systems = excluded.source_systems,
               status = excluded.status,
               expiry_at = excluded.expiry_at,
+              schedule = excluded.schedule,
+              last_evaluation = excluded.last_evaluation,
+              escalation_policy = excluded.escalation_policy,
               actor_context = excluded.actor_context,
               team_responsibility = excluded.team_responsibility,
               updated_at = excluded.updated_at
@@ -7295,6 +7316,9 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(normalized.sourceSystems),
           normalized.status,
           normalized.expiryAt,
+          JSON.stringify(normalized.schedule),
+          JSON.stringify(normalized.lastEvaluation),
+          JSON.stringify(normalized.escalationPolicy),
           JSON.stringify(normalized.actorContext),
           JSON.stringify(normalized.responsibility),
           normalized.createdAt,
@@ -7854,6 +7878,8 @@ class PostgresRepository implements AgenticRepository {
 }
 
 export function createRepository(options?: { storePath?: string; databaseUrl?: string }): AgenticRepository {
+  assertWorkspaceGovernanceStartupConfig();
+
   // Explicit file-backed test stores must win over an ambient DATABASE_URL so
   // unrelated Postgres-backed suites do not leak pools and state into file mode.
   const databaseUrl =

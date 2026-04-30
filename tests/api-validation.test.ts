@@ -5,6 +5,7 @@ import { POST as approvalResponseRoute } from "../apps/web/app/api/approvals/[id
 import { POST as autopilotEventsRoute } from "../apps/web/app/api/autopilot/events/route";
 import { POST as autopilotSettingsRoute } from "../apps/web/app/api/autopilot/settings/route";
 import { POST as goalsRoute } from "../apps/web/app/api/goals/route";
+import { POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/route";
 import { POST as governanceRoute } from "../apps/web/app/api/governance/route";
 import { POST as integrationsRoute } from "../apps/web/app/api/integrations/route";
 import { POST as localNotesRoute } from "../apps/web/app/api/integrations/local-notes/route";
@@ -641,6 +642,65 @@ describe("api request validation", () => {
 
     expect(response.status).toBe(400);
     expect(payload.error).toContain("Unrecognized key");
+    expectNoStoreHeaders(response);
+  });
+
+  it.each([
+    [
+      "approval response",
+      () =>
+        approvalResponseRoute(
+          new Request("http://localhost/api/approvals/appr-1/respond", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-agentic-access-key": "test-access-key",
+              "x-idempotency-key": "bad key"
+            },
+            body: JSON.stringify({
+              decision: "approved"
+            })
+          }),
+          { params: Promise.resolve({ id: "appr-1" }) }
+        )
+    ],
+    [
+      "governance",
+      () =>
+        governanceRoute(
+          new Request("http://localhost/api/governance", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-agentic-access-key": "test-access-key",
+              "x-idempotency-key": "bad key"
+            },
+            body: JSON.stringify({
+              approvalMode: "always_review"
+            })
+          })
+        )
+    ],
+    [
+      "goal share",
+      () =>
+        goalShareRoute(
+          new Request("http://localhost/api/goals/goal-1/share", {
+            method: "POST",
+            headers: {
+              "x-agentic-access-key": "test-access-key",
+              "x-idempotency-key": "bad key"
+            }
+          }),
+          { params: Promise.resolve({ id: "goal-1" }) }
+        )
+    ]
+  ])("rejects malformed idempotency keys for governed %s mutations", async (_label, invokeRoute) => {
+    const response = await invokeRoute();
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("x-idempotency-key");
     expectNoStoreHeaders(response);
   });
 });

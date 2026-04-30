@@ -570,6 +570,48 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
           <label className="checkbox-row">
             <input
               type="checkbox"
+              checked={governanceDraft.publicSharingEnabled}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  publicSharingEnabled: event.target.checked
+                }))
+              }
+            />
+            Enable public goal share links
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={governanceDraft.providerAccessRequiresApproval}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  providerAccessRequiresApproval: event.target.checked
+                }))
+              }
+            />
+            Provider-backed actions require approval
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={governanceDraft.escalationRequiresApproval}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  escalationRequiresApproval: event.target.checked
+                }))
+              }
+            />
+            Escalation actions require approval
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
               checked={governanceDraft.externalSendRequiresApproval}
               disabled={isPending || !canEditGovernance}
               onChange={(event) =>

@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./auth-runtime-schema": "./src/auth-runtime-schema.ts",
+    "./migration-discipline": "./src/migration-discipline.ts",
     "./migration-runtime": "./src/migration-runtime.ts",
     "./schema-status": "./src/schema-status.ts"
   }

@@ -2,6 +2,7 @@ import { createRepository, type AgenticRepository } from "@agentic/repository";
 import { expect } from "vitest";
 import { AGENTIC_ACCESS_KEY_HEADER, AGENTIC_SESSION_COOKIE, buildSessionToken } from "../apps/web/lib/auth";
 import { AUTHENTICATED_API_CACHE_CONTROL, OPERATIONAL_API_CACHE_CONTROL } from "../apps/web/lib/api-response";
+import { BASE_SECURITY_HEADERS } from "../apps/web/lib/security-headers";
 
 export function createRouteTestRepository(): AgenticRepository {
   return createRepository({
@@ -66,6 +67,12 @@ export function expectNoStoreHeaders(response: Response) {
   expect(response.headers.get("expires")).toBe("0");
   expect(response.headers.get("vary")).toContain("Cookie");
   expect(response.headers.get("vary")).toContain("X-Agentic-Access-Key");
+}
+
+export function expectBaseSecurityHeaders(response: Response) {
+  for (const { key, value } of BASE_SECURITY_HEADERS) {
+    expect(response.headers.get(key)).toBe(value);
+  }
 }
 
 export function expectOperationalNoStoreHeaders(response: Response) {

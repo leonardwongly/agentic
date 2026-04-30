@@ -1,5 +1,5 @@
-import { AgentDefinitionSchema, TaskSchema, nowIso } from "@agentic/contracts";
-import { runAgent } from "@agentic/agents";
+import { AgentDefinitionSchema, AgentRunnerContractSchema, TaskSchema, nowIso } from "@agentic/contracts";
+import { AgentRunnerExecutionError, runAgent, validateAgentRunnerRegistration, type AgentRunner } from "@agentic/agents";
 
 function buildTask(
   assignedAgent: "calendar" | "communications" | "travel" | "workflow",
@@ -158,6 +158,45 @@ describe("runAgent", () => {
     expect(result.artifacts[0]?.content).toMatch(/no model-backed specialist runner is active/i);
   });
 
+  it("rejects custom runner execution when the task asks for undeclared capabilities", () => {
+    const agentDefinition = AgentDefinitionSchema.parse({
+      id: "agent-custom-locked",
+      userId: "user-1",
+      name: "locked-deal-desk",
+      displayName: "Locked Deal Desk",
+      description: "Prepares commercial delivery artifacts without outbound actions.",
+      systemPrompt: "Produce concise deal desk execution plans with clear checkpoints and risks.",
+      artifactType: "draft",
+      allowedCapabilities: ["read", "search"],
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+
+    expect(() =>
+      runAgent(
+        buildTask("communications", ["read", "search", "draft"]),
+        "Prepare a reply draft.",
+        {
+          agentDefinition
+        }
+      )
+    ).toThrow(AgentRunnerExecutionError);
+
+    try {
+      runAgent(
+        buildTask("communications", ["read", "search", "draft"]),
+        "Prepare a reply draft.",
+        {
+          agentDefinition
+        }
+      );
+    } catch (error) {
+      expect(error).toBeInstanceOf(AgentRunnerExecutionError);
+      expect((error as AgentRunnerExecutionError).code).toBe("permission_denied");
+      expect((error as Error).message).toContain('undeclared capability "draft"');
+    }
+  });
+
   it("flags unsupported built-ins for manual review instead of claiming specialist execution", () => {
     const result = runAgent(buildTask("travel"), "Prepare next week's itinerary.");
 
@@ -173,5 +212,28 @@ describe("runAgent", () => {
       requiresManualReview: true
     });
     expect(result.artifacts[0]?.content).toMatch(/planning material only/i);
+  });
+
+  it("validates runner registration contracts and rejects unsupported capability claims", () => {
+    const runner: AgentRunner = {
+      contract: AgentRunnerContractSchema.parse({
+        id: "agentic.test.invalid-runner",
+        version: "v1",
+        agentNames: ["communications"],
+        declaredCapabilities: ["delete"],
+        outputModes: ["governed_specialist"],
+        timeoutMs: 1000,
+        telemetryEvents: ["agent.started", "agent.completed"],
+        failureCodes: ["validation_failure", "permission_denied"]
+      }),
+      run(input) {
+        throw new AgentRunnerExecutionError(
+          "unsupported_agent",
+          `Unexpected test runner invocation for ${input.task.assignedAgent}.`
+        );
+      }
+    };
+
+    expect(() => validateAgentRunnerRegistration(runner)).toThrow(/outside its allowlist/i);
   });
 });

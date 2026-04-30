@@ -238,7 +238,8 @@ async function approveAllR2(userId: string, actor: ActorContext): Promise<Intent
         taskId: approval.taskId,
         decision: "approved",
         workspaceId: updatedBundle.goal.workspaceId,
-        actorContext: actor
+        actorContext: actor,
+        actionIntent: approval.actionIntent
       });
 
       approvedCount += 1;

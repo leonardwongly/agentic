@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { WorkspaceGovernanceSchema, WorkspaceMemberSchema, WorkspaceSchema, WorkspaceSelectionSchema, WorkspaceRoleSchema, nowIso } from "@agentic/contracts";
+import {
+  WorkspaceGovernanceSchema,
+  WorkspaceMemberSchema,
+  WorkspaceSchema,
+  WorkspaceSelectionSchema,
+  WorkspaceRoleSchema,
+  nowIso
+} from "@agentic/contracts";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
@@ -125,12 +133,7 @@ export async function POST(request: Request) {
       });
       const governance = WorkspaceGovernanceSchema.parse({
         workspaceId: workspace.id,
-        approvalMode: "risk_based",
-        requireAuditExports: false,
-        maxAutoRunRiskClass: "R1",
-        externalSendRequiresApproval: true,
-        calendarWriteRequiresApproval: true,
-        retentionDays: 365,
+        ...resolveWorkspaceGovernanceDefaultsFromEnv(),
         updatedBy: principal.userId,
         createdAt: timestamp,
         updatedAt: timestamp

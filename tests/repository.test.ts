@@ -346,6 +346,175 @@ describe("repository", () => {
     });
   }, 15_000);
 
+  it("records approval decisions and follow-up jobs as one durable mutation", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    const actionId = "approval-action:test";
+    const result = await repository.respondToApprovalAndEnqueueJob!({
+      approvalId: approval!.id,
+      decision: "approved",
+      actor: systemActor,
+      scope: "once",
+      rationale: "Approved for this exact reply.",
+      buildJob: (updatedBundle) =>
+        createJobRecord({
+          userId: SYSTEM_USER_ID,
+          kind: "approval_follow_up",
+          actorContext: systemActor,
+          maxAttempts: 1,
+          idempotencyKey: `approval-follow-up:${approval!.id}:${actionId}:approved`,
+          payload: {
+            type: "approval_follow_up",
+            approvalId: approval!.id,
+            goalId: updatedBundle.goal.id,
+            taskId: approval!.taskId,
+            decision: "approved",
+            workspaceId: updatedBundle.goal.workspaceId,
+            metadata: {
+              replayedFromJobId: null,
+              actionId
+            }
+          }
+        })
+    });
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+
+    expect(result.bundle.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("approved");
+    expect(result.job).toMatchObject({
+      kind: "approval_follow_up",
+      status: "queued",
+      idempotencyKey: `approval-follow-up:${approval!.id}:${actionId}:approved`,
+      payload: {
+        type: "approval_follow_up",
+        approvalId: approval!.id,
+        goalId: bundle.goal.id,
+        taskId: approval!.taskId,
+        decision: "approved",
+        metadata: {
+          actionId
+        }
+      }
+    });
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("approved");
+    expect(jobs.map((job) => job.id)).toEqual([result.job.id]);
+    expect(evidenceRecords).toHaveLength(1);
+  }, 15_000);
+
+  it("rejects atomic approval follow-up jobs owned by a different user", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const mismatchedUserId = "user-approval-job-owner-mismatch";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(mismatchedUserId);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    await expect(
+      repository.respondToApprovalAndEnqueueJob!({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: systemActor,
+        scope: "once",
+        rationale: "Approved for this exact reply.",
+        buildJob: (updatedBundle) =>
+          createJobRecord({
+            userId: mismatchedUserId,
+            kind: "approval_follow_up",
+            actorContext: systemActor,
+            maxAttempts: 1,
+            idempotencyKey: `approval-follow-up:${approval!.id}:owner-mismatch:approved`,
+            payload: {
+              type: "approval_follow_up",
+              approvalId: approval!.id,
+              goalId: updatedBundle.goal.id,
+              taskId: approval!.taskId,
+              decision: "approved",
+              workspaceId: updatedBundle.goal.workspaceId,
+              metadata: {
+                replayedFromJobId: null,
+                actionId: "owner-mismatch"
+              }
+            }
+          })
+      })
+    ).rejects.toThrow(/job owner must match/i);
+
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const ownerJobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const mismatchedJobs = await repository.listJobs({ userId: mismatchedUserId, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("pending");
+    expect(ownerJobs).toEqual([]);
+    expect(mismatchedJobs).toEqual([]);
+    expect(evidenceRecords).toEqual([]);
+  }, 15_000);
+
+  it("keeps approval decisions pending when atomic follow-up job construction fails", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    await expect(
+      repository.respondToApprovalAndEnqueueJob!({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: systemActor,
+        scope: "once",
+        rationale: "Approved for this exact reply.",
+        buildJob: () => {
+          throw new Error("simulated follow-up job construction failure");
+        }
+      })
+    ).rejects.toThrow("simulated follow-up job construction failure");
+
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("pending");
+    expect(jobs).toEqual([]);
+    expect(evidenceRecords).toEqual([]);
+  }, 15_000);
+
   it("hides approval responses from other users and keeps the approval pending", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -1309,6 +1478,70 @@ describe("repository", () => {
     await expectApprovalEvidenceCapture(repository, "rejected");
   });
 
+  postgresIt("rejects atomic approval follow-up jobs owned by a different user in Postgres when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+    const ownerUserId = `approval-owner-postgres-${Date.now()}`;
+    const mismatchedUserId = `approval-owner-mismatch-postgres-${Date.now()}`;
+    const ownerActor = createSystemActorContext(ownerUserId);
+
+    await repository.seedDefaults(ownerUserId);
+    await repository.seedDefaults(mismatchedUserId);
+
+    const bundle = await createGoalForUser(
+      repository,
+      ownerUserId,
+      `Review my inbox and send one external reply for Postgres ownership ${Date.now()}.`
+    );
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    await expect(
+      repository.respondToApprovalAndEnqueueJob!({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: ownerActor,
+        scope: "once",
+        rationale: "Approved for this exact reply.",
+        buildJob: (updatedBundle) =>
+          createJobRecord({
+            userId: mismatchedUserId,
+            kind: "approval_follow_up",
+            actorContext: ownerActor,
+            maxAttempts: 1,
+            idempotencyKey: `approval-follow-up:${approval!.id}:owner-mismatch:approved`,
+            payload: {
+              type: "approval_follow_up",
+              approvalId: approval!.id,
+              goalId: updatedBundle.goal.id,
+              taskId: approval!.taskId,
+              decision: "approved",
+              workspaceId: updatedBundle.goal.workspaceId,
+              metadata: {
+                replayedFromJobId: null,
+                actionId: "owner-mismatch"
+              }
+            }
+          })
+      })
+    ).rejects.toThrow(/job owner must match/i);
+
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, ownerUserId);
+    const ownerJobs = await repository.listJobs({ userId: ownerUserId, kinds: ["approval_follow_up"] });
+    const mismatchedJobs = await repository.listJobs({ userId: mismatchedUserId, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: ownerUserId,
+      approvalId: approval!.id
+    });
+
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("pending");
+    expect(ownerJobs).toEqual([]);
+    expect(mismatchedJobs).toEqual([]);
+    expect(evidenceRecords).toEqual([]);
+  });
+
   postgresIt("persists agent actor attribution and enforces user scoping in Postgres when DATABASE_URL is configured", async () => {
     const repository = createRepository({
       databaseUrl
@@ -2086,7 +2319,19 @@ describe("repository", () => {
     );
     expect(dashboard.workspaceGovernance).toMatchObject({
       workspaceId: workspaces[0]?.id,
-      approvalMode: "risk_based"
+      approvalMode: "always_review",
+      requireAuditExports: true,
+      publicSharingEnabled: false,
+      providerAccessRequiresApproval: true,
+      escalationRequiresApproval: true,
+      maxAutoRunRiskClass: "R1",
+      externalSendRequiresApproval: true,
+      calendarWriteRequiresApproval: true,
+      retentionDays: 90,
+      shadowReplayPolicy: expect.objectContaining({
+        promotionMode: "shadow_only",
+        rollbackOutcome: "downgrade_to_draft"
+      })
     });
   });
 
@@ -3376,8 +3621,9 @@ describe("repository", () => {
     expect(dashboard.operations?.autonomyPosture.stats).toEqual(
       expect.arrayContaining([
         "Mode notify only",
-        "Approval risk based",
+        "Approval always review",
         "Max auto R1",
+        "Shadow replay staged",
         "1 pending approval",
         "0 failed events"
       ])
@@ -3482,7 +3728,7 @@ describe("repository", () => {
     expect(dashboard.controlPlane.sections.find((section) => section.key === "workspace")).toMatchObject({
       status: "healthy",
       targetSection: "workspaces",
-      stats: expect.arrayContaining(["1 member", "1 ready integration", "Approval risk based"])
+      stats: expect.arrayContaining(["1 member", "1 ready integration", "Approval always review"])
     });
     expect(dashboard.controlPlane.sections.find((section) => section.key === "commitments")).toMatchObject({
       status: "critical",
@@ -3620,13 +3866,13 @@ describe("repository", () => {
       ])
     );
     expect(dashboard.operatingSections.teamWorkflow.auditCoverage).toMatchObject({
-      required: false,
-      status: "healthy",
+      required: true,
+      status: "attention",
       latestStatus: null,
       latestCompletedAt: null
     });
     expect(dashboard.operatingSections.teamWorkflow.auditCoverage.summary).toContain(
-      "Audit exports are optional right now"
+      "Audit exports are required for this workspace"
     );
     expect(dashboard.operatingSections.teamWorkflow.slaSummary).toContain("exceeded the shared-team response window");
     expect(dashboard.operatingSections.teamWorkflow.handoffGuidance).toEqual(

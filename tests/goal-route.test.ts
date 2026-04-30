@@ -224,7 +224,7 @@ describe("goal route", () => {
     expect(completedStatusPayload.job.status).toBe("completed");
     expect(completedStatusPayload.result.goalId).toBe(createPayload.job.goalId);
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
-    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
     expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
   });

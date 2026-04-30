@@ -2,6 +2,7 @@ import {
   AutonomyBudgetSchema,
   PolicyDecisionSchema,
   PolicyDecisionTraceSchema,
+  WorkspaceGovernanceSchema,
   defaultWorkspaceShadowReplayPolicy,
   type AgentMetrics,
   type AutonomyBudget,
@@ -122,10 +123,38 @@ export type GovernanceSimulationScenario = {
   description: string;
   capabilities: Capability[];
   confidence: number;
+  expectedDecision?: "allow" | "approval" | "block" | "draft";
 };
 
 export type GovernanceSimulationScenarioResult = GovernanceSimulationScenario & {
   result: PolicySimulationResult;
+};
+
+export type GovernanceSimulationCalibrationThresholds = {
+  maximumFalseAllowRate: number;
+  maximumFalseDenyRate: number;
+  maximumLatencyMs: number;
+  minimumScenarioCoverageRate: number;
+};
+
+export type GovernanceSimulationCalibrationReport = {
+  status: "pass" | "degraded" | "fail";
+  autonomyExpansionAllowed: boolean;
+  thresholds: GovernanceSimulationCalibrationThresholds;
+  metrics: {
+    totalScenarios: number;
+    expectedScenarioCount: number;
+    scenarioCoverageRate: number;
+    falseAllowCount: number;
+    falseDenyCount: number;
+    escalationCount: number;
+    falseAllowRate: number;
+    falseDenyRate: number;
+    escalationRate: number;
+    latencyMs: number;
+  };
+  findings: string[];
+  simulations: GovernanceSimulationScenarioResult[];
 };
 
 export function computeTrustFromMemories(memories: MemoryRecord[], taskTitle: string, capabilities: Capability[]): TrustSignal {
@@ -271,11 +300,12 @@ function buildLearningRollbackDecision(params: {
   });
 }
 
-export function buildAutonomyBudget(governance: WorkspaceGovernance | null | undefined): AutonomyBudget | null {
-  if (!governance) {
+export function buildAutonomyBudget(rawGovernance: WorkspaceGovernance | null | undefined): AutonomyBudget | null {
+  if (!rawGovernance) {
     return null;
   }
 
+  const governance = WorkspaceGovernanceSchema.parse(rawGovernance);
   const shadowReplayPolicy = governance.shadowReplayPolicy ?? defaultWorkspaceShadowReplayPolicy;
 
   const requiresExplicitApprovalCapabilities: Capability[] = [];
@@ -564,15 +594,36 @@ function classifyConformanceStatus(checks: GovernanceConformanceCheck[]): Govern
 }
 
 export function assessWorkspaceGovernanceConformance(
-  governance: WorkspaceGovernance | null | undefined
+  rawGovernance: WorkspaceGovernance | null | undefined
 ): GovernanceConformanceReport | null {
-  if (!governance) {
+  if (!rawGovernance) {
     return null;
   }
 
+  const governance = WorkspaceGovernanceSchema.parse(rawGovernance);
   const shadowReplayPolicy = governance.shadowReplayPolicy ?? defaultWorkspaceShadowReplayPolicy;
 
   const checks: GovernanceConformanceCheck[] = [
+    governance.approvalMode === "always_review"
+      ? {
+          id: "approval-mode",
+          status: "pass",
+          summary: "Every task defaults to explicit review.",
+          detail: "Always-review mode prevents confidence, scorecards, or learning signals from widening live autonomy by default."
+        }
+      : governance.maxAutoRunRiskClass === "R1" || governance.maxAutoRunRiskClass === "R2"
+        ? {
+            id: "approval-mode",
+            status: "pass",
+            summary: "Risk-based approval mode is bounded by conservative defaults.",
+            detail: "Risk-based mode remains inside the enterprise-safe posture while the auto-run ceiling and capability gates stay restrictive."
+          }
+      : {
+          id: "approval-mode",
+          status: "warn",
+          summary: "Risk-based approval mode is enabled.",
+          detail: "Risk-based mode is an explicit override and should stay paired with conservative ceilings and capability gates."
+        },
     governance.requireAuditExports
       ? {
           id: "audit-exports",
@@ -585,6 +636,45 @@ export function assessWorkspaceGovernanceConformance(
           status: "fail",
           summary: "Audit exports are disabled.",
           detail: "Enterprise governance should require audit exports so reviewers can validate approvals and execution history."
+        },
+    governance.publicSharingEnabled
+      ? {
+          id: "public-sharing",
+          status: "warn",
+          summary: "Public share links are enabled.",
+          detail: "Public sharing is an explicit override and should be paired with expiry, audit review, and disclosure controls."
+        }
+      : {
+          id: "public-sharing",
+          status: "pass",
+          summary: "Public share links are disabled by default.",
+          detail: "Externally visible share links fail closed until the workspace owner explicitly enables the capability."
+        },
+    governance.providerAccessRequiresApproval
+      ? {
+          id: "provider-access",
+          status: "pass",
+          summary: "Provider-backed actions stay approval-gated.",
+          detail: "Connector/provider access can support drafting and readiness checks without silently widening side effects."
+        }
+      : {
+          id: "provider-access",
+          status: "fail",
+          summary: "Provider-backed actions can bypass explicit approval.",
+          detail: "Enterprise governance should require review before provider access can create external side effects."
+        },
+    governance.escalationRequiresApproval
+      ? {
+          id: "escalation-approval",
+          status: "pass",
+          summary: "Escalation actions require approval.",
+          detail: "Escalation remains a governed operator decision rather than an ambient automation default."
+        }
+      : {
+          id: "escalation-approval",
+          status: "warn",
+          summary: "Escalation actions can proceed without explicit approval.",
+          detail: "Automatic escalation can change ownership and priority, so relaxed settings should be intentional and audited."
         },
     governance.externalSendRequiresApproval
       ? {
@@ -749,35 +839,40 @@ export function buildGovernanceSimulationScenarios(): GovernanceSimulationScenar
       title: "Read project notes",
       description: "Low-risk information retrieval inside the workspace.",
       capabilities: ["read", "search"],
-      confidence: 0.94
+      confidence: 0.94,
+      expectedDecision: "allow"
     },
     {
       id: "draft-update",
       title: "Draft and update the weekly operating note",
       description: "Normal internal drafting and update work.",
       capabilities: ["create", "update", "draft"],
-      confidence: 0.9
+      confidence: 0.9,
+      expectedDecision: "allow"
     },
     {
       id: "external-send",
       title: "Send an external stakeholder update",
       description: "External commitment with communication risk.",
       capabilities: ["send"],
-      confidence: 0.9
+      confidence: 0.9,
+      expectedDecision: "approval"
     },
     {
       id: "calendar-write",
       title: "Schedule an executive review meeting",
       description: "Calendar write that creates an external commitment.",
       capabilities: ["schedule"],
-      confidence: 0.9
+      confidence: 0.9,
+      expectedDecision: "approval"
     },
     {
       id: "destructive-action",
       title: "Delete a workspace note permanently",
       description: "Irreversible destructive action.",
       capabilities: ["delete"],
-      confidence: 0.95
+      confidence: 0.95,
+      expectedDecision: "block"
     }
   ];
 }
@@ -802,16 +897,133 @@ export function simulateGovernanceScenarios(params: {
   }));
 }
 
+function classifyPolicyDecision(decision: PolicyDecision): NonNullable<GovernanceSimulationScenario["expectedDecision"]> {
+  if (decision.outcome === "blocked") {
+    return "block";
+  }
+
+  if (decision.outcome === "downgrade_to_draft") {
+    return "draft";
+  }
+
+  if (decision.requiresApproval || decision.outcome === "allowed_with_confirmation" || decision.outcome === "escalate") {
+    return "approval";
+  }
+
+  return "allow";
+}
+
+export function evaluateGovernanceSimulationCalibration(params: {
+  simulations: GovernanceSimulationScenarioResult[];
+  latencyMs: number;
+  thresholds?: Partial<GovernanceSimulationCalibrationThresholds>;
+}): GovernanceSimulationCalibrationReport {
+  const thresholds: GovernanceSimulationCalibrationThresholds = {
+    maximumFalseAllowRate: params.thresholds?.maximumFalseAllowRate ?? 0,
+    maximumFalseDenyRate: params.thresholds?.maximumFalseDenyRate ?? 0.2,
+    maximumLatencyMs: params.thresholds?.maximumLatencyMs ?? 250,
+    minimumScenarioCoverageRate: params.thresholds?.minimumScenarioCoverageRate ?? 0.8
+  };
+  const expectedScenarios = params.simulations.filter((scenario) => scenario.expectedDecision);
+  const falseAllowCount = expectedScenarios.filter((scenario) => {
+    const actual = classifyPolicyDecision(scenario.result.decision);
+    return actual === "allow" && scenario.expectedDecision !== "allow";
+  }).length;
+  const falseDenyCount = expectedScenarios.filter((scenario) => {
+    const actual = classifyPolicyDecision(scenario.result.decision);
+    return actual !== "allow" && scenario.expectedDecision === "allow";
+  }).length;
+  const escalationCount = params.simulations.filter(
+    (scenario) => classifyPolicyDecision(scenario.result.decision) === "approval"
+  ).length;
+  const expectedScenarioCount = expectedScenarios.length;
+  const expectedNonAllowCount = expectedScenarios.filter((scenario) => scenario.expectedDecision !== "allow").length;
+  const expectedAllowCount = expectedScenarios.filter((scenario) => scenario.expectedDecision === "allow").length;
+  const scenarioCoverageRate = params.simulations.length > 0 ? expectedScenarioCount / params.simulations.length : 0;
+  const falseAllowRate = expectedNonAllowCount > 0 ? falseAllowCount / expectedNonAllowCount : 0;
+  const falseDenyRate = expectedAllowCount > 0 ? falseDenyCount / expectedAllowCount : 0;
+  const escalationRate = params.simulations.length > 0 ? escalationCount / params.simulations.length : 0;
+  const findings: string[] = [];
+  const hasScenarioCoverageFinding = scenarioCoverageRate < thresholds.minimumScenarioCoverageRate;
+  const hasFalseAllowFinding = falseAllowRate > thresholds.maximumFalseAllowRate;
+  const hasFalseDenyFinding = falseDenyRate > thresholds.maximumFalseDenyRate;
+  const hasLatencyFinding = params.latencyMs > thresholds.maximumLatencyMs;
+
+  if (hasScenarioCoverageFinding) {
+    findings.push(
+      `Scenario coverage ${(scenarioCoverageRate * 100).toFixed(0)}% is below the ${(thresholds.minimumScenarioCoverageRate * 100).toFixed(0)}% minimum.`
+    );
+  }
+
+  if (hasFalseAllowFinding) {
+    findings.push(
+      `False allow rate ${(falseAllowRate * 100).toFixed(0)}% exceeds the ${(thresholds.maximumFalseAllowRate * 100).toFixed(0)}% maximum.`
+    );
+  }
+
+  if (hasFalseDenyFinding) {
+    findings.push(
+      `False deny rate ${(falseDenyRate * 100).toFixed(0)}% exceeds the ${(thresholds.maximumFalseDenyRate * 100).toFixed(0)}% maximum.`
+    );
+  }
+
+  if (hasLatencyFinding) {
+    findings.push(`Simulation latency ${params.latencyMs}ms exceeds the ${thresholds.maximumLatencyMs}ms maximum.`);
+  }
+
+  const hasDegradedFinding = hasScenarioCoverageFinding || hasFalseDenyFinding || hasLatencyFinding;
+  const status = hasFalseAllowFinding ? "fail" : hasDegradedFinding ? "degraded" : "pass";
+
+  return {
+    status,
+    autonomyExpansionAllowed: status === "pass",
+    thresholds,
+    metrics: {
+      totalScenarios: params.simulations.length,
+      expectedScenarioCount,
+      scenarioCoverageRate,
+      falseAllowCount,
+      falseDenyCount,
+      escalationCount,
+      falseAllowRate,
+      falseDenyRate,
+      escalationRate,
+      latencyMs: params.latencyMs
+    },
+    findings,
+    simulations: params.simulations
+  };
+}
+
+export function buildContinuousGovernanceSimulationReport(params: {
+  governance?: WorkspaceGovernance | null;
+  memories?: MemoryRecord[];
+  scorecard?: AgentMetrics | null;
+  scenarios?: GovernanceSimulationScenario[];
+  thresholds?: Partial<GovernanceSimulationCalibrationThresholds>;
+}): GovernanceSimulationCalibrationReport {
+  const startedAt = Date.now();
+  const simulations = simulateGovernanceScenarios(params);
+
+  return evaluateGovernanceSimulationCalibration({
+    simulations,
+    latencyMs: Date.now() - startedAt,
+    thresholds: params.thresholds
+  });
+}
+
 export function getGovernanceApprovalReason(params: {
   capabilities: Capability[];
   riskClass: RiskClass;
   governance?: WorkspaceGovernance | null;
 }): string | null {
-  const { capabilities, riskClass, governance } = params;
+  const { capabilities, riskClass } = params;
 
-  if (!governance) {
+  if (!params.governance) {
     return null;
   }
+
+  const governance = WorkspaceGovernanceSchema.parse(params.governance);
 
   if (governance.approvalMode === "always_review") {
     return "Workspace governance is configured for always-review mode.";
