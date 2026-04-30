@@ -172,7 +172,9 @@ type DashboardProps = {
   initialCommitmentInbox: CommitmentInboxPage;
 };
 
-function resolveClientGovernanceDefaults(): typeof enterpriseWorkspaceGovernanceDefaults {
+type WorkspaceGovernanceDraft = Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt">;
+
+function resolveClientGovernanceDefaults(): WorkspaceGovernanceDraft {
   const profile =
     process.env.NEXT_PUBLIC_AGENTIC_GOVERNANCE_DEFAULT_PROFILE ?? process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
   if (profile?.trim().toLowerCase() !== "demo") {
@@ -193,7 +195,7 @@ function resolveClientGovernanceDefaults(): typeof enterpriseWorkspaceGovernance
   };
 }
 
-function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt"> {
+function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): WorkspaceGovernanceDraft {
   const defaults = resolveClientGovernanceDefaults();
   return {
     approvalMode: governance?.approvalMode ?? defaults.approvalMode,
