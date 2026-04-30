@@ -122,6 +122,7 @@ function splitYamlFlowFields(value: string): string[] {
   const fields: string[] = [];
   let quote: "\"" | "'" | null = null;
   let braceDepth = 0;
+  let bracketDepth = 0;
   let current = "";
 
   for (let index = 0; index < value.length; index += 1) {
@@ -139,7 +140,11 @@ function splitYamlFlowFields(value: string): string[] {
         braceDepth += 1;
       } else if (character === "}") {
         braceDepth = Math.max(0, braceDepth - 1);
-      } else if (character === "," && braceDepth === 0) {
+      } else if (character === "[") {
+        bracketDepth += 1;
+      } else if (character === "]") {
+        bracketDepth = Math.max(0, bracketDepth - 1);
+      } else if (character === "," && braceDepth === 0 && bracketDepth === 0) {
         fields.push(current.trim());
         current = "";
         continue;
@@ -154,6 +159,27 @@ function splitYamlFlowFields(value: string): string[] {
   }
 
   return fields;
+}
+
+function parseYamlExplicitUsesKeyLine(line: string): { indent: number } | null {
+  const match = line.match(/^(\s*)(?:-\s*)?\?\s+(?:"uses"|'uses'|uses)\s*(?:#.*)?$/u);
+  if (!match) {
+    return null;
+  }
+
+  return { indent: match[1].length };
+}
+
+function parseYamlExplicitValueLine(line: string): { indent: number; value: string } | null {
+  const match = line.match(/^(\s*):(?:\s+(.+)|\s*)$/u);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    indent: match[1].length,
+    value: match[2] ?? ""
+  };
 }
 
 function parseYamlFlowField(field: string): { key: string; value: string } | null {
@@ -221,6 +247,42 @@ function extractYamlFlowMappings(line: string): Array<{ indent: number; body: st
   return mappings;
 }
 
+function extractYamlFlowSequences(value: string, indent: number): Array<{ indent: number; body: string }> {
+  const sequences: Array<{ indent: number; body: string }> = [];
+  let quote: "\"" | "'" | null = null;
+  let depth = 0;
+  let start = -1;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    const previous = value[index - 1];
+
+    if ((character === "\"" || character === "'") && previous !== "\\") {
+      quote = quote === character ? null : quote ?? character;
+      continue;
+    }
+
+    if (quote !== null) {
+      continue;
+    }
+
+    if (character === "[") {
+      if (depth === 0) {
+        start = index + 1;
+      }
+      depth += 1;
+    } else if (character === "]" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        sequences.push({ indent, body: value.slice(start, index) });
+        start = -1;
+      }
+    }
+  }
+
+  return sequences;
+}
+
 function parseYamlFlowUsesMappings(line: string): Array<{ indent: number; value: string }> {
   const uses: Array<{ indent: number; value: string }> = [];
 
@@ -230,6 +292,28 @@ function parseYamlFlowUsesMappings(line: string): Array<{ indent: number; value:
       if (parsed?.key === "uses") {
         uses.push({
           indent: mapping.indent,
+          value: parsed.value
+        });
+      }
+    }
+  }
+
+  return uses;
+}
+
+function parseYamlFlowSequenceUses(value: string, indent: number): Array<{ indent: number; value: string }> {
+  const uses: Array<{ indent: number; value: string }> = [];
+
+  for (const sequence of extractYamlFlowSequences(value, indent)) {
+    for (const field of splitYamlFlowFields(sequence.body)) {
+      if (field.startsWith("{") && field.endsWith("}")) {
+        continue;
+      }
+
+      const parsed = parseYamlFlowField(field);
+      if (parsed?.key === "uses") {
+        uses.push({
+          indent: sequence.indent,
           value: parsed.value
         });
       }
@@ -259,6 +343,7 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
   const lines = content.split(/\r?\n/u);
   const yamlAnchors = new Map<string, string>();
   let blockScalarIndent: number | null = null;
+  let explicitUsesKeyIndent: number | null = null;
 
   lines.forEach((lineContent, index) => {
     const lineIndent = getIndent(lineContent);
@@ -267,6 +352,32 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
         return;
       }
       blockScalarIndent = null;
+    }
+
+    if (explicitUsesKeyIndent !== null) {
+      const parsedExplicitValue = parseYamlExplicitValueLine(lineContent);
+      if (parsedExplicitValue && parsedExplicitValue.indent >= explicitUsesKeyIndent) {
+        const value = resolveYamlUseValue(parsedExplicitValue.value, yamlAnchors);
+        const refSeparator = value.lastIndexOf("@");
+        uses.push({
+          filePath,
+          line: index + 1,
+          value,
+          ref: refSeparator >= 0 ? value.slice(refSeparator + 1) : null
+        });
+        explicitUsesKeyIndent = null;
+        return;
+      }
+
+      if (lineContent.trim() !== "") {
+        explicitUsesKeyIndent = null;
+      }
+    }
+
+    const parsedExplicitUsesKey = parseYamlExplicitUsesKeyLine(lineContent);
+    if (parsedExplicitUsesKey) {
+      explicitUsesKeyIndent = parsedExplicitUsesKey.indent;
+      return;
     }
 
     recordYamlFlowAnchors(lineContent, yamlAnchors);
@@ -282,7 +393,6 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
           ref: refSeparator >= 0 ? value.slice(refSeparator + 1) : null
         });
       }
-      return;
     }
 
     const parsedLine = parseYamlKeyValueLine(lineContent);
@@ -294,6 +404,21 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
       blockScalarIndent = parsedLine.indent;
     }
     recordYamlAnchor(parsedLine.value, yamlAnchors);
+
+    const parsedFlowSequenceUses = parseYamlFlowSequenceUses(parsedLine.value, parsedLine.indent);
+    if (parsedFlowSequenceUses.length > 0) {
+      for (const parsedFlowUse of parsedFlowSequenceUses) {
+        const value = resolveYamlUseValue(parsedFlowUse.value, yamlAnchors);
+        const refSeparator = value.lastIndexOf("@");
+        uses.push({
+          filePath,
+          line: index + 1,
+          value,
+          ref: refSeparator >= 0 ? value.slice(refSeparator + 1) : null
+        });
+      }
+      return;
+    }
 
     if (parsedLine.key !== "uses") {
       return;

@@ -225,6 +225,58 @@ jobs:
     ]);
   });
 
+  it("rejects explicit-key YAML uses entries with mutable refs", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - ? uses
+        : actions/checkout@v6
+      - ? "uses"
+        : actions/setup-node
+`
+    );
+
+    expect(validateWorkflowActionPins(uses)).toEqual([
+      expect.objectContaining({
+        line: 6,
+        value: "actions/checkout@v6",
+        reason: "External GitHub Action reference must be pinned to a 40-character lowercase commit SHA."
+      }),
+      expect.objectContaining({
+        line: 8,
+        value: "actions/setup-node",
+        reason: "External GitHub Action reference must include an immutable commit SHA."
+      })
+    ]);
+  });
+
+  it("rejects single-pair flow sequence uses entries without braces", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps: [uses: actions/checkout@v6, { name: Setup, uses: actions/setup-node@v6 }]
+`
+    );
+
+    expect(validateWorkflowActionPins(uses)).toEqual([
+      expect.objectContaining({
+        line: 4,
+        value: "actions/setup-node@v6",
+        reason: "External GitHub Action reference must be pinned to a 40-character lowercase commit SHA."
+      }),
+      expect.objectContaining({
+        line: 4,
+        value: "actions/checkout@v6",
+        reason: "External GitHub Action reference must be pinned to a 40-character lowercase commit SHA."
+      })
+    ]);
+  });
+
   it("allows local and docker action references", () => {
     const uses: WorkflowActionUse[] = [
       {
