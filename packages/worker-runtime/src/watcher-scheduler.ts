@@ -75,6 +75,21 @@ function buildSuppressedDecision(watcherId: string, reason: string): WatcherSche
   };
 }
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function clearWatcherLease(watcher: Watcher, evaluatedAt: string): Watcher {
+  return WatcherSchema.parse({
+    ...watcher,
+    schedule: {
+      ...watcher.schedule,
+      lease: null
+    },
+    updatedAt: evaluatedAt
+  });
+}
+
 async function defaultEvaluateWatcher(watcher: Watcher) {
   return {
     wouldTrigger: false,
@@ -141,23 +156,34 @@ export async function runWatcherSchedulerOnce(params: {
     }
 
     let evaluation: WatcherSignalEvaluation;
+    let leaseReleased = false;
+    const releaseLease = async () => {
+      if (leaseReleased) {
+        return;
+      }
+
+      await params.repository.saveWatcher(clearWatcherLease(leasedWatcher, evaluatedAt));
+      leaseReleased = true;
+    };
+    const tryReleaseLease = async (): Promise<string | null> => {
+      try {
+        await releaseLease();
+        return null;
+      } catch (error) {
+        return getErrorMessage(error, "Watcher lease release failed.");
+      }
+    };
+
     try {
       evaluation = await evaluator(leasedWatcher);
     } catch (error) {
-      await params.repository.saveWatcher(
-        WatcherSchema.parse({
-          ...leasedWatcher,
-          schedule: {
-            ...leasedWatcher.schedule,
-            lease: null
-          },
-          updatedAt: evaluatedAt
-        })
-      );
+      const releaseError = await tryReleaseLease();
       decisions.push({
         watcherId: watcher.id,
         action: "skipped",
-        reason: error instanceof Error ? error.message : "Watcher evaluator failed.",
+        reason: releaseError
+          ? `${getErrorMessage(error, "Watcher evaluator failed.")} Lease release failed: ${releaseError}`
+          : getErrorMessage(error, "Watcher evaluator failed."),
         idempotencyKey: null
       });
       continue;
@@ -172,6 +198,67 @@ export async function runWatcherSchedulerOnce(params: {
     });
 
     if (leasedWatcher.schedule.dryRun || !evaluation.wouldTrigger) {
+      try {
+        await params.repository.saveWatcher(
+          WatcherSchema.parse({
+            ...leasedWatcher,
+            schedule: {
+              ...leasedWatcher.schedule,
+              cursor: evaluation.cursor ?? leasedWatcher.schedule.cursor,
+              lastRunAt: evaluatedAt,
+              nextRunAt: computeNextRunAt(leasedWatcher, evaluatedAt),
+              lease: null
+            },
+            lastEvaluation,
+            updatedAt: evaluatedAt
+          })
+        );
+        leaseReleased = true;
+      } catch (error) {
+        const releaseError = await tryReleaseLease();
+        decisions.push({
+          watcherId: watcher.id,
+          action: "skipped",
+          reason: releaseError
+            ? `${getErrorMessage(error, "Watcher persistence failed.")} Lease release failed: ${releaseError}`
+            : getErrorMessage(error, "Watcher persistence failed."),
+          idempotencyKey
+        });
+        continue;
+      }
+
+      decisions.push({
+        watcherId: watcher.id,
+        action: leasedWatcher.schedule.dryRun ? "dry_run_recorded" : "skipped",
+        reason: evaluation.reason,
+        idempotencyKey
+      });
+      continue;
+    }
+
+    try {
+      const claim = await params.repository.claimAutopilotEvent({
+        userId: params.userId,
+        kind: "watcher_triggered",
+        sourceId: watcher.id,
+        idempotencyKey,
+        mode: params.mode ?? "draft_goal",
+        summary: `Watcher triggered: ${watcher.targetEntity}`,
+        details: {
+          condition: watcher.condition,
+          triggerAction: watcher.triggerAction,
+          schedulerRunnerId: params.runnerId,
+          budget: {
+            key: `watcher:${watcher.id}:hourly`,
+            windowMinutes: 60,
+            maxEvents: watcher.escalationPolicy.maxTriggersPerHour,
+            scope: "source"
+          }
+        },
+        actorContext: watcher.actorContext,
+        debounceMinutes: Math.ceil(watcher.escalationPolicy.minSuppressionMs / 60_000)
+      });
+
       await params.repository.saveWatcher(
         WatcherSchema.parse({
           ...leasedWatcher,
@@ -186,60 +273,26 @@ export async function runWatcherSchedulerOnce(params: {
           updatedAt: evaluatedAt
         })
       );
+      leaseReleased = true;
       decisions.push({
         watcherId: watcher.id,
-        action: leasedWatcher.schedule.dryRun ? "dry_run_recorded" : "skipped",
-        reason: evaluation.reason,
+        action: claim.outcome === "claimed" ? "trigger_claimed" : "trigger_suppressed",
+        reason:
+          claim.event.details.suppression?.reason ??
+          (claim.event.details.reason && typeof claim.event.details.reason === "string" ? claim.event.details.reason : evaluation.reason),
         idempotencyKey
       });
-      continue;
+    } catch (error) {
+      const releaseError = await tryReleaseLease();
+      decisions.push({
+        watcherId: watcher.id,
+        action: "skipped",
+        reason: releaseError
+          ? `${getErrorMessage(error, "Watcher trigger persistence failed.")} Lease release failed: ${releaseError}`
+          : getErrorMessage(error, "Watcher trigger persistence failed."),
+        idempotencyKey
+      });
     }
-
-    const claim = await params.repository.claimAutopilotEvent({
-      userId: params.userId,
-      kind: "watcher_triggered",
-      sourceId: watcher.id,
-      idempotencyKey,
-      mode: params.mode ?? "draft_goal",
-      summary: `Watcher triggered: ${watcher.targetEntity}`,
-      details: {
-        condition: watcher.condition,
-        triggerAction: watcher.triggerAction,
-        schedulerRunnerId: params.runnerId,
-        budget: {
-          key: `watcher:${watcher.id}:hourly`,
-          windowMinutes: 60,
-          maxEvents: watcher.escalationPolicy.maxTriggersPerHour,
-          scope: "source"
-        }
-      },
-      actorContext: watcher.actorContext,
-      debounceMinutes: Math.ceil(watcher.escalationPolicy.minSuppressionMs / 60_000)
-    });
-
-    await params.repository.saveWatcher(
-      WatcherSchema.parse({
-        ...leasedWatcher,
-        schedule: {
-          ...leasedWatcher.schedule,
-          cursor: evaluation.cursor ?? leasedWatcher.schedule.cursor,
-          lastRunAt: evaluatedAt,
-          nextRunAt: computeNextRunAt(leasedWatcher, evaluatedAt),
-          lease: null
-        },
-        lastEvaluation,
-        updatedAt: evaluatedAt
-      })
-    );
-
-    decisions.push({
-      watcherId: watcher.id,
-      action: claim.outcome === "claimed" ? "trigger_claimed" : "trigger_suppressed",
-      reason:
-        claim.event.details.suppression?.reason ??
-        (claim.event.details.reason && typeof claim.event.details.reason === "string" ? claim.event.details.reason : evaluation.reason),
-      idempotencyKey
-    });
   }
 
   return {

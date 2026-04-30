@@ -32,6 +32,30 @@ function isWatcherLeaseHeldByAnotherRunner(watcher: Watcher, runnerId: string, e
   return Boolean(lease && lease.ownerId !== runnerId && leaseExpiresAt !== null && leaseExpiresAt > Date.parse(evaluatedAt));
 }
 
+function isWatcherDue(watcher: Watcher, evaluatedAt: string): boolean {
+  const nextRunAt = parseOptionalTime(watcher.schedule.nextRunAt);
+
+  return nextRunAt === null || nextRunAt <= Date.parse(evaluatedAt);
+}
+
+function isWatcherLeaseClaimEligible(watcher: Watcher, params: WatcherLeaseClaimParams): boolean {
+  if (watcher.status !== "active" || !watcher.schedule.enabled) {
+    return false;
+  }
+
+  const expiryAt = parseOptionalTime(watcher.expiryAt);
+
+  if (expiryAt !== null && expiryAt <= Date.parse(params.acquiredAt)) {
+    return false;
+  }
+
+  if (isWatcherLeaseHeldByAnotherRunner(watcher, params.runnerId, params.acquiredAt)) {
+    return false;
+  }
+
+  return isWatcherDue(watcher, params.acquiredAt);
+}
+
 function buildLeasedWatcher(watcher: Watcher, params: WatcherLeaseClaimParams): Watcher {
   return WatcherSchema.parse({
     ...watcher,
@@ -62,7 +86,7 @@ export function claimWatcherLeaseInRuntimeStore(params: {
 
   const normalized = params.normalizeWatcher(watcher);
 
-  if (isWatcherLeaseHeldByAnotherRunner(normalized, params.lease.runnerId, params.lease.acquiredAt)) {
+  if (!isWatcherLeaseClaimEligible(normalized, params.lease)) {
     return null;
   }
 
@@ -100,7 +124,7 @@ export async function claimWatcherLeaseWithPostgresClient(params: {
 
   const watcher = params.mapWatcherRow(result.rows[0]);
 
-  if (isWatcherLeaseHeldByAnotherRunner(watcher, params.lease.runnerId, params.lease.acquiredAt)) {
+  if (!isWatcherLeaseClaimEligible(watcher, params.lease)) {
     return null;
   }
 

@@ -308,6 +308,124 @@ describe("watcher scheduler", () => {
     expect(updatedWatcher?.schedule.lease).toBeNull();
   });
 
+  it("releases the watcher lease and continues when autopilot event claiming fails", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const firstWatcher = await repository.saveWatcher(
+      buildWatcher(bundle.goal.id, {
+        id: "watcher-scheduler-claim-fails",
+        createdAt: "2026-04-20T00:00:02.000Z",
+        updatedAt: "2026-04-20T00:00:02.000Z",
+        schedule: {
+          enabled: true,
+          dryRun: false,
+          cursor: null,
+          lastRunAt: null,
+          nextRunAt: null,
+          lease: null
+        }
+      })
+    );
+    const secondWatcher = await repository.saveWatcher(
+      buildWatcher(bundle.goal.id, {
+        id: "watcher-scheduler-continues-after-claim",
+        createdAt: "2026-04-20T00:00:01.000Z",
+        updatedAt: "2026-04-20T00:00:01.000Z"
+      })
+    );
+    vi.spyOn(repository, "claimAutopilotEvent").mockRejectedValueOnce(new Error("Autopilot store unavailable."));
+
+    const result = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      evaluator: async () => ({
+        wouldTrigger: true,
+        reason: "VIP thread triggered.",
+        cursor: "gmail-cursor-1"
+      })
+    });
+    const persisted = await repository.listWatchers({ userId: SYSTEM_USER_ID });
+
+    expect(result.decisions).toEqual([
+      {
+        watcherId: firstWatcher.id,
+        action: "skipped",
+        reason: "Autopilot store unavailable.",
+        idempotencyKey: "watcher:watcher-scheduler-claim-fails:2026-04-20T00:00:00.000Z"
+      },
+      {
+        watcherId: secondWatcher.id,
+        action: "dry_run_recorded",
+        reason: "VIP thread triggered.",
+        idempotencyKey: "watcher:watcher-scheduler-continues-after-claim:2026-04-20T00:00:00.000Z"
+      }
+    ]);
+    expect(persisted.find((candidate) => candidate.id === firstWatcher.id)?.schedule.lease).toBeNull();
+    expect(persisted.find((candidate) => candidate.id === secondWatcher.id)?.schedule.lease).toBeNull();
+  });
+
+  it("releases the watcher lease and continues when watcher persistence fails after a claim", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const firstWatcher = await repository.saveWatcher(
+      buildWatcher(bundle.goal.id, {
+        id: "watcher-scheduler-save-fails",
+        createdAt: "2026-04-20T00:00:02.000Z",
+        updatedAt: "2026-04-20T00:00:02.000Z",
+        schedule: {
+          enabled: true,
+          dryRun: false,
+          cursor: null,
+          lastRunAt: null,
+          nextRunAt: null,
+          lease: null
+        }
+      })
+    );
+    const secondWatcher = await repository.saveWatcher(
+      buildWatcher(bundle.goal.id, {
+        id: "watcher-scheduler-continues-after-save",
+        createdAt: "2026-04-20T00:00:01.000Z",
+        updatedAt: "2026-04-20T00:00:01.000Z"
+      })
+    );
+    const saveWatcher = repository.saveWatcher.bind(repository);
+    const saveSpy = vi.spyOn(repository, "saveWatcher").mockImplementation((watcher) => saveWatcher(watcher));
+    saveSpy.mockImplementationOnce(async () => {
+      throw new Error("Watcher store write failed.");
+    });
+
+    const result = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      evaluator: async () => ({
+        wouldTrigger: true,
+        reason: "VIP thread triggered.",
+        cursor: "gmail-cursor-1"
+      })
+    });
+    const persisted = await repository.listWatchers({ userId: SYSTEM_USER_ID });
+
+    expect(result.decisions).toEqual([
+      {
+        watcherId: firstWatcher.id,
+        action: "skipped",
+        reason: "Watcher store write failed.",
+        idempotencyKey: "watcher:watcher-scheduler-save-fails:2026-04-20T00:00:00.000Z"
+      },
+      {
+        watcherId: secondWatcher.id,
+        action: "dry_run_recorded",
+        reason: "VIP thread triggered.",
+        idempotencyKey: "watcher:watcher-scheduler-continues-after-save:2026-04-20T00:00:00.000Z"
+      }
+    ]);
+    expect(persisted.find((candidate) => candidate.id === firstWatcher.id)?.schedule.lease).toBeNull();
+    expect(persisted.find((candidate) => candidate.id === secondWatcher.id)?.schedule.lease).toBeNull();
+  });
+
   it("passes watcher hourly trigger caps into autopilot event budgets", async () => {
     const { repository, bundle } = await createSchedulerFixture();
     const watcher = await repository.saveWatcher(
