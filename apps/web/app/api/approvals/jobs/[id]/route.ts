@@ -35,6 +35,7 @@ export async function GET(request: Request, context: RouteContext) {
         goalId: job.payload.goalId,
         approvalId: job.payload.approvalId,
         taskId: job.payload.taskId,
+        actionId: job.payload.metadata.actionId,
         decision: job.payload.decision,
         attemptCount: job.attemptCount,
         maxAttempts: job.maxAttempts,

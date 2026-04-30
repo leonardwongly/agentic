@@ -744,6 +744,92 @@ describe("worker runtime", () => {
     );
   });
 
+  it("keys approval follow-up jobs by approval id and stable action id", async () => {
+    const { repository } = await createTestRuntime();
+    const bundle = buildApprovalFollowUpBundle("goal-approval-action-id-runtime", "workflow-approval-action-id-runtime");
+    const approval = bundle.approvals[0]!;
+
+    await repository.saveGoalBundle(bundle);
+
+    const firstJob = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: approval.id,
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      decision: "approved",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actionIntent: approval.actionIntent
+    });
+    const duplicateJob = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: approval.id,
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      decision: "approved",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actionIntent: approval.actionIntent
+    });
+    const actionId = firstJob.payload.metadata.actionId;
+
+    expect(actionId).toMatch(/^approval-action:[a-f0-9]{16}$/u);
+    expect(firstJob.idempotencyKey).toBe(`approval-follow-up:${approval.id}:${actionId}:approved`);
+    expect(duplicateJob.id).toBe(firstJob.id);
+  });
+
+  it("keeps approval action ids deterministic for unsupported JSON values", async () => {
+    const { repository } = await createTestRuntime();
+    const bundle = buildApprovalFollowUpBundle(
+      "goal-approval-unsupported-action-id-runtime",
+      "workflow-approval-unsupported-action-id-runtime"
+    );
+    const approval = bundle.approvals[0]!;
+
+    await repository.saveGoalBundle(bundle);
+
+    const withUndefinedEntry = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: approval.id,
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      decision: "approved",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actionIntent: {
+        type: "manual_review",
+        actionType: "send",
+        summary: "Review unsupported action intent values.",
+        reason: "Regression coverage for stable action identity.",
+        artifactIds: [undefined]
+      } as unknown as typeof approval.actionIntent
+    });
+    const withEmptyArtifacts = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: approval.id,
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      decision: "approved",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actionIntent: {
+        type: "manual_review",
+        actionType: "send",
+        summary: "Review unsupported action intent values.",
+        reason: "Regression coverage for stable action identity.",
+        artifactIds: []
+      }
+    });
+
+    expect(withUndefinedEntry.payload.metadata.actionId).toMatch(/^approval-action:[a-f0-9]{16}$/u);
+    expect(withEmptyArtifacts.payload.metadata.actionId).toMatch(/^approval-action:[a-f0-9]{16}$/u);
+    expect(withUndefinedEntry.payload.metadata.actionId).not.toBe(withEmptyArtifacts.payload.metadata.actionId);
+  });
+
   it("moves approval Slack delivery onto a separate durable notification job without repeating the governed side effect", async () => {
     const { repository, selfImprovementRepository } = await createTestRuntime();
     const bundle = buildApprovalFollowUpBundle(

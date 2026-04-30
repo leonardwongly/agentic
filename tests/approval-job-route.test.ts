@@ -10,9 +10,11 @@ import {
   nowIso
 } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
+import { createJobRecord } from "@agentic/execution";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import {
+  enqueueApprovalFollowUpJob,
   enqueueApprovalNotificationJob,
   enqueueAutopilotProcessJob,
   runWorkerRuntime
@@ -205,6 +207,7 @@ describe("approval job route", () => {
         goalId: string;
         approvalId: string;
         taskId: string;
+        actionId: string | null;
         decision: string;
       };
       statusUrl: string;
@@ -216,6 +219,7 @@ describe("approval job route", () => {
     expect(payload.job.goalId).toBe(bundle.goal.id);
     expect(payload.job.approvalId).toBe(approval.id);
     expect(payload.job.taskId).toBe(approval.taskId);
+    expect(payload.job.actionId).toMatch(/^approval-action:[a-f0-9]{16}$/u);
     expect(payload.job.decision).toBe("rejected");
     expect(payload.statusUrl).toBe(`/api/approvals/jobs/${payload.job.id}`);
     expectNoStoreHeaders(response);
@@ -425,6 +429,7 @@ describe("approval job route", () => {
         approvalId: string;
         taskId: string;
         decision: string;
+        actionId: string;
       };
       statusUrl: string;
     };
@@ -438,6 +443,7 @@ describe("approval job route", () => {
     expect(replayPayload.job.approvalId).toBe(approval.id);
     expect(replayPayload.job.taskId).toBe(approval.taskId);
     expect(replayPayload.job.decision).toBe("rejected");
+    expect(replayPayload.job.actionId).toMatch(/^approval-action:[a-f0-9]{16}$/u);
     expect(replayPayload.statusUrl).toBe(`/api/approvals/jobs/${replayPayload.job.id}`);
     expect(replayedJob).toMatchObject({
       id: replayPayload.job.id,
@@ -456,7 +462,8 @@ describe("approval job route", () => {
         taskId: approval.taskId,
         decision: "rejected",
         metadata: {
-          replayedFromJobId: payload.job.id
+          replayedFromJobId: payload.job.id,
+          actionId: replayPayload.job.actionId
         }
       }
     });
@@ -478,6 +485,90 @@ describe("approval job route", () => {
         decision: "rejected",
         statusUrl: `/api/approvals/jobs/${replayPayload.job.id}`,
         recoveryLatencyMs: expect.any(Number)
+      }
+    });
+    expectNoStoreHeaders(replayResponse);
+  });
+
+  it("replays legacy approval follow-up jobs with a current approval action id fallback", async () => {
+    const repository = await buildRepository();
+    const bundle = await createApprovalBundle(repository);
+    const approval = bundle.approvals[0]!;
+
+    expect(approval.actionIntent).not.toBeNull();
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const legacyJob = await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "approval_follow_up",
+        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        maxAttempts: 1,
+        idempotencyKey: `legacy-approval-follow-up:${approval.id}:rejected`,
+        payload: {
+          type: "approval_follow_up",
+          approvalId: approval.id,
+          goalId: bundle.goal.id,
+          taskId: approval.taskId,
+          decision: "rejected",
+          workspaceId: bundle.goal.workspaceId,
+          metadata: {
+            replayedFromJobId: null
+          }
+        }
+      })
+    );
+    const claimedJob = await repository.claimNextJob({
+      userId: SYSTEM_USER_ID,
+      kinds: ["approval_follow_up"],
+      runnerId: "worker-legacy-approval-job-replay-test",
+      leaseMs: 30_000,
+      now: "2099-04-19T00:00:00.000Z"
+    });
+
+    expect(claimedJob?.id).toBe(legacyJob.id);
+
+    await repository.deadLetterJob({
+      jobId: legacyJob.id,
+      runnerId: "worker-legacy-approval-job-replay-test",
+      deadLetteredAt: "2026-04-19T00:01:00.000Z",
+      error: "legacy approval replay test induced failure"
+    });
+
+    const replayResponse = await replayJobRoute(
+      buildAuthorizedJsonRequest(`http://localhost/api/jobs/${legacyJob.id}/replay`, {}),
+      {
+        params: Promise.resolve({ id: legacyJob.id })
+      }
+    );
+    const replayPayload = (await replayResponse.json()) as {
+      job: {
+        id: string;
+        actionId: string;
+      };
+    };
+    const replayedJob = await repository.getJob(replayPayload.job.id, SYSTEM_USER_ID);
+    const withoutCurrentActionIntent = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: approval.id,
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      decision: "rejected",
+      workspaceId: bundle.goal.workspaceId,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actionIntent: null,
+      replayedFromJobId: "legacy-fallback-control"
+    });
+
+    expect(replayResponse.status).toBe(202);
+    expect(replayPayload.job.actionId).toMatch(/^approval-action:[a-f0-9]{16}$/u);
+    expect(replayPayload.job.actionId).not.toBe(withoutCurrentActionIntent.payload.metadata.actionId);
+    expect(replayedJob?.payload).toMatchObject({
+      type: "approval_follow_up",
+      metadata: {
+        replayedFromJobId: legacyJob.id,
+        actionId: replayPayload.job.actionId
       }
     });
     expectNoStoreHeaders(replayResponse);

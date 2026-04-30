@@ -1794,11 +1794,13 @@ export const ApprovalFollowUpJobPayloadSchema = z
     workspaceId: z.string().min(1).nullable().default(null),
     metadata: z
       .object({
-        replayedFromJobId: z.string().min(1).nullable().default(null)
+        replayedFromJobId: z.string().min(1).nullable().default(null),
+        actionId: z.string().min(1).max(200).nullable().default(null)
       })
       .catchall(z.unknown())
       .default({
-        replayedFromJobId: null
+        replayedFromJobId: null,
+        actionId: null
       })
   })
   .strict();

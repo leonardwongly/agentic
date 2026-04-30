@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ApprovalMutationError } from "@agentic/repository";
-import { enqueueApprovalFollowUpJob } from "@agentic/worker-runtime";
+import { respondToApprovalAndEnqueueFollowUpJob } from "@agentic/worker-runtime";
 import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
 import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { getSeededRepository } from "../../../../../lib/server";
@@ -32,12 +32,14 @@ export const POST = createGovernedMutationRoute<z.infer<typeof ApprovalResponseS
     const { id } = await routeContext.params;
     const approvalId = ApprovalIdSchema.parse(id);
     const repository = await getSeededRepository();
-    const updatedBundle = await (async () => {
+    const { bundle: updatedBundle, job: queuedJob } = await (async () => {
       try {
-        return await repository.respondToApproval({
+        return await respondToApprovalAndEnqueueFollowUpJob({
+          repository,
+          userId: principal.userId,
           approvalId,
           decision: body.decision,
-          actor,
+          actorContext: actor,
           scope: body.scope,
           rationale: body.rationale ?? null
         });
@@ -62,18 +64,6 @@ export const POST = createGovernedMutationRoute<z.infer<typeof ApprovalResponseS
     if (!approval) {
       throw new Error(`Approval ${approvalId} is missing after response mutation.`);
     }
-
-    const queuedJob = await enqueueApprovalFollowUpJob({
-      repository,
-      userId: principal.userId,
-      approvalId: approval.id,
-      goalId: updatedBundle.goal.id,
-      taskId: approval.taskId,
-      decision: body.decision,
-      workspaceId: updatedBundle.goal.workspaceId,
-      actorContext: actor
-    });
-
     return authenticatedJson(
       {
         bundle: updatedBundle,
@@ -85,6 +75,7 @@ export const POST = createGovernedMutationRoute<z.infer<typeof ApprovalResponseS
           goalId: queuedJob.payload.goalId,
           approvalId: queuedJob.payload.approvalId,
           taskId: queuedJob.payload.taskId,
+          actionId: queuedJob.payload.metadata.actionId,
           decision: queuedJob.payload.decision,
           attemptCount: queuedJob.attemptCount,
           maxAttempts: queuedJob.maxAttempts,

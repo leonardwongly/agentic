@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import {
   buildApprovalNotificationDeliveryTarget,
   type ActorContext,
+  type ActionIntent,
+  type ApprovalDecisionScope,
   type ApprovalFollowUpJobPayload,
   type ApprovalNotificationJobPayload,
   type AutopilotEvent,
@@ -34,12 +37,72 @@ import {
   buildTemplateRunPayload
 } from "./job-payloads";
 
+function stableSerialize(value: unknown, seen = new WeakSet<object>()): string {
+  if (value === null) {
+    return "null";
+  }
+
+  switch (typeof value) {
+    case "string":
+    case "number":
+    case "boolean":
+      return JSON.stringify(value);
+    case "undefined":
+      return "{\"$unsupported\":\"undefined\"}";
+    case "bigint":
+      return `{"$unsupported":"bigint","value":${JSON.stringify(value.toString())}}`;
+    case "symbol":
+      return `{"$unsupported":"symbol","value":${JSON.stringify(value.toString())}}`;
+    case "function":
+      return "{\"$unsupported\":\"function\"}";
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item, seen)).join(",")}]`;
+  }
+
+  if (value instanceof Date) {
+    return JSON.stringify(value.toISOString());
+  }
+
+  if (seen.has(value)) {
+    return "{\"$unsupported\":\"circular\"}";
+  }
+
+  seen.add(value);
+  try {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableSerialize(entry, seen)}`)
+      .join(",")}}`;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function buildApprovalFollowUpActionId(params: {
+  approvalId: string;
+  taskId: string;
+  actionIntent?: ActionIntent | null;
+}): string {
+  const digest = createHash("sha256")
+    .update(stableSerialize({
+      approvalId: params.approvalId,
+      taskId: params.taskId,
+      actionIntent: params.actionIntent ?? null
+    }))
+    .digest("hex")
+    .slice(0, 16);
+  return `approval-action:${digest}`;
+}
+
 function buildApprovalFollowUpPayload(params: {
   approvalId: string;
   goalId: string;
   taskId: string;
   decision: ApprovalFollowUpJobPayload["decision"];
   workspaceId: string | null;
+  actionId: string;
   replayedFromJobId?: string | null;
 }): ApprovalFollowUpJobPayload {
   return {
@@ -50,7 +113,8 @@ function buildApprovalFollowUpPayload(params: {
     decision: params.decision,
     workspaceId: params.workspaceId,
     metadata: {
-      replayedFromJobId: params.replayedFromJobId ?? null
+      replayedFromJobId: params.replayedFromJobId ?? null,
+      actionId: params.actionId
     }
   };
 }
@@ -114,10 +178,11 @@ function buildApprovalNotificationPayload(params: {
 
 function buildApprovalFollowUpJobIdempotencyKey(params: {
   approvalId: string;
+  actionId: string;
   decision: ApprovalFollowUpJobPayload["decision"];
   replayedFromJobId?: string | null;
 }): string {
-  const baseKey = `approval-follow-up:${params.approvalId}:${params.decision}`;
+  const baseKey = `approval-follow-up:${params.approvalId}:${params.actionId}:${params.decision}`;
   return params.replayedFromJobId ? `${baseKey}:replay:${params.replayedFromJobId}` : baseKey;
 }
 
@@ -127,6 +192,18 @@ function buildApprovalNotificationJobIdempotencyKey(params: {
 }): string {
   const baseKey = `approval-notification:${params.payload.decision}:${buildApprovalNotificationDeliveryTarget(params.payload)}`;
   return params.replayedFromJobId ? `${baseKey}:replay:${params.replayedFromJobId}` : baseKey;
+}
+
+function logEnqueuedJob(job: JobRecord, context: Record<string, unknown>) {
+  logInfo("worker.job.enqueued", {
+    jobId: job.id,
+    jobKind: job.kind,
+    userId: job.userId,
+    ...context
+  });
+  recordCounter("worker.job.enqueued.total", 1, {
+    jobKind: job.kind
+  });
 }
 
 export async function enqueueGoalCreateJob(params: {
@@ -416,15 +493,25 @@ export async function enqueueApprovalFollowUpJob(params: {
   decision: ApprovalFollowUpJobPayload["decision"];
   workspaceId: string | null;
   actorContext: ActorContext | null;
+  actionIntent?: ActionIntent | null;
+  actionId?: string | null;
   idempotencyKey?: string | null;
   replayedFromJobId?: string | null;
 }): Promise<JobRecord & { payload: ApprovalFollowUpJobPayload }> {
+  const actionId =
+    params.actionId?.trim() ||
+    buildApprovalFollowUpActionId({
+      approvalId: params.approvalId,
+      taskId: params.taskId,
+      actionIntent: params.actionIntent ?? null
+    });
   const payload = buildApprovalFollowUpPayload({
     approvalId: params.approvalId,
     goalId: params.goalId,
     taskId: params.taskId,
     decision: params.decision,
     workspaceId: params.workspaceId,
+    actionId,
     replayedFromJobId: params.replayedFromJobId
   });
 
@@ -446,6 +533,7 @@ export async function enqueueApprovalFollowUpJob(params: {
           params.idempotencyKey ??
           buildApprovalFollowUpJobIdempotencyKey({
             approvalId: params.approvalId,
+            actionId,
             decision: params.decision,
             replayedFromJobId: params.replayedFromJobId
           }),
@@ -463,6 +551,96 @@ export async function enqueueApprovalFollowUpJob(params: {
         jobKind: job.kind
       });
       return job;
+    }
+  );
+}
+
+export async function respondToApprovalAndEnqueueFollowUpJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  approvalId: string;
+  decision: ApprovalFollowUpJobPayload["decision"];
+  actorContext: ActorContext;
+  scope?: ApprovalDecisionScope;
+  rationale?: string | null;
+}): Promise<{
+  bundle: Awaited<ReturnType<AgenticRepository["respondToApproval"]>>;
+  job: JobRecord & { payload: ApprovalFollowUpJobPayload };
+}> {
+  return withSpan(
+    "worker.job.enqueue.approval_follow_up.after_decision",
+    {
+      jobKind: "approval_follow_up",
+      userId: params.userId,
+      approvalId: params.approvalId
+    },
+    async () => {
+      const buildJob = (bundle: Awaited<ReturnType<AgenticRepository["respondToApproval"]>>) => {
+        const approval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
+
+        if (!approval) {
+          throw new Error(`Approval ${params.approvalId} is missing after response mutation.`);
+        }
+
+        const actionId = buildApprovalFollowUpActionId({
+          approvalId: approval.id,
+          taskId: approval.taskId,
+          actionIntent: approval.actionIntent
+        });
+
+        return createJobRecord({
+          userId: params.userId,
+          kind: "approval_follow_up",
+          payload: buildApprovalFollowUpPayload({
+            approvalId: approval.id,
+            goalId: bundle.goal.id,
+            taskId: approval.taskId,
+            decision: params.decision,
+            workspaceId: bundle.goal.workspaceId,
+            actionId,
+            replayedFromJobId: null
+          }),
+          actorContext: params.actorContext,
+          idempotencyKey: buildApprovalFollowUpJobIdempotencyKey({
+            approvalId: approval.id,
+            actionId,
+            decision: params.decision,
+            replayedFromJobId: null
+          }),
+          maxAttempts: 1
+        }) as JobRecord & { payload: ApprovalFollowUpJobPayload };
+      };
+
+      const result = params.repository.respondToApprovalAndEnqueueJob
+        ? await params.repository.respondToApprovalAndEnqueueJob({
+            approvalId: params.approvalId,
+            decision: params.decision,
+            actor: params.actorContext,
+            scope: params.scope,
+            rationale: params.rationale,
+            buildJob
+          })
+        : await (async () => {
+            const bundle = await params.repository.respondToApproval({
+              approvalId: params.approvalId,
+              decision: params.decision,
+              actor: params.actorContext,
+              scope: params.scope,
+              rationale: params.rationale
+            });
+            const job = await params.repository.enqueueJob(buildJob(bundle));
+            return { bundle, job };
+          })();
+      const job = result.job as JobRecord & { payload: ApprovalFollowUpJobPayload };
+
+      logEnqueuedJob(job, {
+        goalId: job.payload.goalId,
+        approvalId: job.payload.approvalId
+      });
+      return {
+        bundle: result.bundle,
+        job
+      };
     }
   );
 }
