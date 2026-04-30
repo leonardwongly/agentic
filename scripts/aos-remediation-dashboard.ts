@@ -472,10 +472,17 @@ export function formatAosTrackerOutput(tracker: unknown, errors: string[], optio
     );
   }
 
-  return renderAosDashboard(tracker as AosTracker, {
+  const rendered = renderAosDashboard(tracker as AosTracker, {
     includeGitSnapshot: options.includeGitSnapshot,
     cwd: options.cwd
   });
+  const missingErrors = errors.filter((error) => !rendered.includes(error));
+
+  if (missingErrors.length === 0) {
+    return rendered;
+  }
+
+  return `${rendered}\n## Verification Errors\n\n${missingErrors.map((error) => `- ${error}`).join("\n")}\n`;
 }
 
 export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repository): string[] {

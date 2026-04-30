@@ -156,6 +156,15 @@ describe("AOS remediation tracker", () => {
     });
   });
 
+  it("surfaces live verification failures in markdown output for valid manifests", () => {
+    const tracker = loadAosTracker();
+    const output = formatAosTrackerOutput(tracker, ["Live issue #12 is missing."], { format: "markdown" });
+
+    expect(output).toContain("- Manifest validation: pass");
+    expect(output).toContain("## Verification Errors");
+    expect(output).toContain("- Live issue #12 is missing.");
+  });
+
   it("verifies live issue coverage across open and closed tracker issues", () => {
     const tracker = loadAosTracker();
     spawnSyncMock.mockReturnValue({
