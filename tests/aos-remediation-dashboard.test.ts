@@ -91,12 +91,20 @@ describe("AOS remediation tracker", () => {
   it("rejects malformed tracker fields before they corrupt summaries", () => {
     const tracker = loadAosTracker();
     const malformedTracker = structuredClone(tracker);
+    malformedTracker.sourceOfTruth[0].path = null as unknown as string;
+    malformedTracker.sourceOfTruth[0].authority = "   ";
+    malformedTracker.baselineCommands[0].command = 42 as unknown as string;
+    malformedTracker.baselineCommands[0].purpose = "";
     malformedTracker.lanes[0].label = null as unknown as string;
     malformedTracker.lanes[0].owner = 42 as unknown as string;
     malformedTracker.items[0].priority = "critcal" as unknown as (typeof malformedTracker.items)[number]["priority"];
 
     expect(validateAosTracker(malformedTracker)).toEqual(
       expect.arrayContaining([
+        "sourceOfTruth[0].path must be a string.",
+        "sourceOfTruth[0].authority must not be empty.",
+        "baselineCommands[0].command must be a string.",
+        "baselineCommands[0].purpose must not be empty.",
         "trust-spine.label must be a string.",
         "trust-spine.owner must be a string.",
         "AOS-00 uses unknown priority critcal."

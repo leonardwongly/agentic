@@ -169,6 +169,12 @@ export function validateAosTracker(tracker: AosTracker): string[] {
     if (id) {
       sourceIds.push(id);
     }
+    for (const field of ["path", "authority", "rule"] as const) {
+      const value = readString(source[field], `sourceOfTruth[${index}].${field}`, errors);
+      if (value !== null && !value.trim()) {
+        errors.push(`sourceOfTruth[${index}].${field} must not be empty.`);
+      }
+    }
   }
   sourceIds.sort();
   for (const requiredSourceId of REQUIRED_SOURCE_IDS) {
@@ -203,6 +209,12 @@ export function validateAosTracker(tracker: AosTracker): string[] {
     const id = readString(command.id, `baselineCommands[${index}].id`, errors);
     if (id) {
       commandIds.add(id);
+    }
+    for (const field of ["command", "purpose"] as const) {
+      const value = readString(command[field], `baselineCommands[${index}].${field}`, errors);
+      if (value !== null && !value.trim()) {
+        errors.push(`baselineCommands[${index}].${field} must not be empty.`);
+      }
     }
   }
   for (const requiredCommandId of REQUIRED_BASELINE_COMMAND_IDS) {
