@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -89,6 +89,15 @@ describe("AOS remediation tracker", () => {
     expect(dashboard).toContain("- Manifest validation: pass");
   });
 
+  it("keeps CI evidence upload opt-in to avoid pull request artifact quota failures", () => {
+    const workflow = readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+
+    expect(workflow).toMatch(
+      /name:\s*Upload supply-chain evidence\s+if:\s*github\.event_name\s*!=\s*['"]pull_request['"]\s*&&\s*vars\.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD\s*==\s*['"]true['"]/u
+    );
+    expect(workflow).toContain("retention-days: 7");
+  });
+
   it("rejects malformed tracker fields before they corrupt summaries", () => {
     const tracker = loadAosTracker();
     const malformedTracker = structuredClone(tracker);
@@ -124,6 +133,25 @@ describe("AOS remediation tracker", () => {
       low: summarizeAosTracker(tracker).byPriority.low
     });
     expect(renderAosDashboard(malformedTracker)).toContain("- Manifest validation: fail");
+  });
+
+  it("reports malformed manifest array entries instead of dereferencing them", () => {
+    const tracker = loadAosTracker();
+    const malformedTracker = structuredClone(tracker);
+    malformedTracker.sourceOfTruth.splice(1, 0, null as unknown as (typeof malformedTracker.sourceOfTruth)[number]);
+    malformedTracker.lanes.splice(1, 0, null as unknown as (typeof malformedTracker.lanes)[number]);
+    malformedTracker.baselineCommands.splice(1, 0, null as unknown as (typeof malformedTracker.baselineCommands)[number]);
+    malformedTracker.items.splice(1, 0, null as unknown as (typeof malformedTracker.items)[number]);
+
+    expect(validateAosTracker(malformedTracker)).toEqual(
+      expect.arrayContaining([
+        "sourceOfTruth[1] must be an object.",
+        "lanes[1] must be an object.",
+        "baselineCommands[1] must be an object.",
+        "items[1] must be an object."
+      ])
+    );
+    expect(() => renderAosDashboard(malformedTracker)).not.toThrow();
   });
 
   it("formats invalid non-object manifests without dereferencing dashboard fields", () => {

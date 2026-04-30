@@ -124,10 +124,10 @@ export function summarizeAosTracker(tracker: AosTracker): AosTrackerSummary {
   };
 
   for (const item of items) {
-    if (typeof item.lane === "string") {
+    if (isRecord(item) && typeof item.lane === "string") {
       byLane[item.lane] = (byLane[item.lane] ?? 0) + 1;
     }
-    if (isPriority(item.priority)) {
+    if (isRecord(item) && isPriority(item.priority)) {
       byPriority[item.priority] += 1;
     }
   }
@@ -137,7 +137,7 @@ export function summarizeAosTracker(tracker: AosTracker): AosTrackerSummary {
     byLane,
     byPriority,
     blockedByBaseline: items
-      .filter((item) => Array.isArray(item.dependencies) && item.dependencies.includes("AOS-00"))
+      .filter((item) => isRecord(item) && Array.isArray(item.dependencies) && item.dependencies.includes("AOS-00"))
       .map((item) => item.id)
       .filter((id): id is string => typeof id === "string")
       .sort()
@@ -170,7 +170,10 @@ export function validateAosTracker(tracker: AosTracker): string[] {
 
   const sourceIds: string[] = [];
   for (let index = 0; index < sourceOfTruth.length; index += 1) {
-    const source = sourceOfTruth[index];
+    const source = readRecord(sourceOfTruth[index], `sourceOfTruth[${index}]`, errors);
+    if (!source) {
+      continue;
+    }
     const id = readString(source.id, `sourceOfTruth[${index}].id`, errors);
     if (id) {
       sourceIds.push(id);
@@ -190,7 +193,10 @@ export function validateAosTracker(tracker: AosTracker): string[] {
   }
 
   for (let index = 0; index < lanes.length; index += 1) {
-    const lane = lanes[index];
+    const lane = readRecord(lanes[index], `lanes[${index}]`, errors);
+    if (!lane) {
+      continue;
+    }
     const id = readString(lane.id, `lanes[${index}].id`, errors);
     if (id) {
       if (laneIds.has(id)) {
@@ -211,7 +217,10 @@ export function validateAosTracker(tracker: AosTracker): string[] {
 
   const commandIds = new Set<string>();
   for (let index = 0; index < baselineCommands.length; index += 1) {
-    const command = baselineCommands[index];
+    const command = readRecord(baselineCommands[index], `baselineCommands[${index}]`, errors);
+    if (!command) {
+      continue;
+    }
     const id = readString(command.id, `baselineCommands[${index}].id`, errors);
     if (id) {
       commandIds.add(id);
@@ -230,7 +239,10 @@ export function validateAosTracker(tracker: AosTracker): string[] {
   }
 
   for (let index = 0; index < items.length; index += 1) {
-    const item = items[index];
+    const item = readRecord(items[index], `items[${index}]`, errors);
+    if (!item) {
+      continue;
+    }
     const id = readString(item.id, `items[${index}].id`, errors);
     if (id) {
       itemIds.push(id);
@@ -248,7 +260,10 @@ export function validateAosTracker(tracker: AosTracker): string[] {
   const issueNumbers = new Set<number>();
   const cycleCandidates: AosTrackerItem[] = [];
   for (let index = 0; index < items.length; index += 1) {
-    const item = items[index];
+    const item = readRecord(items[index], `items[${index}]`, errors);
+    if (!item) {
+      continue;
+    }
     const id = readString(item.id, `items[${index}].id`, errors);
     const itemName = id ?? `items[${index}]`;
     const issue = readIssueNumber(item.issue, `${itemName}.issue`, errors);
@@ -374,6 +389,9 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push("| Source | Authority | Rule |");
   lines.push("| --- | --- | --- |");
   for (const source of sourceOfTruth) {
+    if (!isRecord(source)) {
+      continue;
+    }
     lines.push(`| ${source.id} | ${source.authority} | ${source.rule} |`);
   }
 
@@ -383,7 +401,11 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push("| Lane | Label | Owner | Items | Scope |");
   lines.push("| --- | --- | --- | ---: | --- |");
   for (const lane of lanes) {
-    lines.push(`| ${lane.id} | ${lane.label} | ${lane.owner} | ${summary.byLane[lane.id] ?? 0} | ${lane.scope} |`);
+    if (!isRecord(lane)) {
+      continue;
+    }
+    const laneId = String(lane.id);
+    lines.push(`| ${laneId} | ${lane.label} | ${lane.owner} | ${summary.byLane[laneId] ?? 0} | ${lane.scope} |`);
   }
 
   lines.push("");
@@ -392,6 +414,9 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push("| Gate | Command | Purpose |");
   lines.push("| --- | --- | --- |");
   for (const command of baselineCommands) {
+    if (!isRecord(command)) {
+      continue;
+    }
     lines.push(`| ${command.id} | \`${command.command}\` | ${command.purpose} |`);
   }
 
@@ -400,7 +425,9 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push("");
   lines.push("| ID | Issue | Lane | Priority | Dependencies | First validation gate |");
   lines.push("| --- | ---: | --- | --- | --- | --- |");
-  for (const item of [...items].sort((left, right) => String(left.id).localeCompare(String(right.id)))) {
+  for (const item of items
+    .filter(isRecord)
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)))) {
     const dependencies = Array.isArray(item.dependencies) ? item.dependencies.join(", ") : "invalid";
     const firstValidationGate = Array.isArray(item.validationGates) ? item.validationGates[0] ?? "none" : "invalid";
     lines.push(
@@ -567,6 +594,15 @@ function runGit(args: string[], cwd: string): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readRecord(value: unknown, field: string, errors: string[]): Record<string, unknown> | null {
+  if (!isRecord(value)) {
+    errors.push(`${field} must be an object.`);
+    return null;
+  }
+
+  return value;
 }
 
 function readArray<T>(value: unknown, field: string, errors: string[]): T[] {
