@@ -810,7 +810,7 @@ export const MemoryRecordSchema = z.object({
 export const ContextPacketSourceSchema = z
   .object({
     kind: z.enum(["memory", "user_input", "system", "integration", "job", "derived"]),
-    id: z.string().min(1).max(200),
+    id: z.string().min(1),
     summary: z.string().min(1).max(280)
   })
   .strict();
@@ -840,11 +840,11 @@ export const ContextPacketFreshnessSchema = z
 
 export const ContextPacketTransformationSchema = z
   .object({
-    id: z.string().min(1).max(120),
+    id: z.string().min(1),
     kind: z.enum(["derived_from_memory", "summarized", "redacted", "normalized"]),
     at: z.string().datetime(),
-    inputIds: z.array(z.string().min(1).max(200)).max(20).default([]),
-    outputId: z.string().min(1).max(200),
+    inputIds: z.array(z.string().min(1)).max(20).default([]),
+    outputId: z.string().min(1),
     summary: z.string().min(1).max(280)
   })
   .strict();
@@ -859,15 +859,15 @@ export const ContextPacketUsageSchema = z
 
 export const ContextPacketLineageSchema = z
   .object({
-    parentPacketIds: z.array(z.string().min(1).max(200)).max(20).default([]),
-    sourceMemoryIds: z.array(z.string().min(1).max(200)).max(20).default([]),
-    transformationIds: z.array(z.string().min(1).max(120)).max(20).default([])
+    parentPacketIds: z.array(z.string().min(1)).max(20).default([]),
+    sourceMemoryIds: z.array(z.string().min(1)).max(20).default([]),
+    transformationIds: z.array(z.string().min(1)).max(20).default([])
   })
   .strict();
 
 export const ContextPacketSchema = z
   .object({
-    id: z.string().min(1).max(200),
+    id: z.string().min(1),
     userId: z.string().min(1),
     source: ContextPacketSourceSchema,
     category: z.string().min(1).max(120),
@@ -917,7 +917,7 @@ export const ExecutionProvenanceEdgeTypeSchema = z.enum(executionProvenanceEdgeT
 
 export const ExecutionProvenanceNodeSchema = z
   .object({
-    id: z.string().min(1).max(240),
+    id: z.string().min(1),
     type: ExecutionProvenanceNodeTypeSchema,
     ownerUserId: z.string().min(1),
     label: z.string().min(1).max(160),
@@ -930,10 +930,10 @@ export const ExecutionProvenanceNodeSchema = z
 
 export const ExecutionProvenanceEdgeSchema = z
   .object({
-    id: z.string().min(1).max(260),
+    id: z.string().min(1),
     type: ExecutionProvenanceEdgeTypeSchema,
-    from: z.string().min(1).max(240),
-    to: z.string().min(1).max(240),
+    from: z.string().min(1),
+    to: z.string().min(1),
     label: z.string().min(1).max(160),
     createdAt: z.string().datetime().nullable().default(null),
     metadata: z.record(z.string(), z.unknown()).default({})
@@ -942,8 +942,8 @@ export const ExecutionProvenanceEdgeSchema = z
 
 export const ExecutionProvenanceTimelineEntrySchema = z
   .object({
-    id: z.string().min(1).max(260),
-    nodeId: z.string().min(1).max(240),
+    id: z.string().min(1),
+    nodeId: z.string().min(1),
     at: z.string().datetime(),
     type: ExecutionProvenanceNodeTypeSchema,
     label: z.string().min(1).max(160),

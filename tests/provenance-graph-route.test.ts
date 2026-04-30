@@ -6,6 +6,7 @@ import { createJobRecord } from "@agentic/execution";
 import { createMemoryRecord } from "@agentic/memory";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
+import { vi } from "vitest";
 import { buildAuthorizedGetRequest, expectNoStoreHeaders } from "./route-test-helpers";
 import { GET as graphRoute } from "../apps/web/app/api/provenance/graph/route";
 
@@ -174,6 +175,21 @@ describe("provenance graph route", () => {
         })
       ])
     );
+  });
+
+  it("bounds non-root provenance memory reads with the requested limit", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const listMemoryPageSpy = vi.spyOn(repository, "listMemoryPage");
+    const listMemorySpy = vi.spyOn(repository, "listMemory");
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await graphRoute(buildAuthorizedGetRequest("http://localhost/api/provenance/graph?limit=10"));
+
+    expect(response.status).toBe(200);
+    expect(listMemoryPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 10 }));
+    expect(listMemorySpy).not.toHaveBeenCalled();
   });
 
   it("projects more than 200 memory-derived nodes when the provenance limit allows it", async () => {

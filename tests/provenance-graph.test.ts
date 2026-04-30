@@ -165,6 +165,42 @@ describe("execution provenance graph", () => {
     );
   });
 
+  it("accepts long upstream record ids in derived provenance node and edge ids", () => {
+    const longMemoryId = `memory-${"a".repeat(260)}`;
+    const memory = createMemoryRecord({
+      id: longMemoryId,
+      userId: SYSTEM_USER_ID,
+      category: "long-id",
+      memoryType: "observed",
+      content: "Memory with a valid long upstream identifier.",
+      confidence: 0.8,
+      source: "test"
+    });
+
+    const graph = buildExecutionProvenanceGraph({
+      userId: SYSTEM_USER_ID,
+      goals: [],
+      jobs: [],
+      memories: [memory],
+      limit: 10
+    });
+
+    expect(graph.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: `memory:${longMemoryId}` }),
+        expect.objectContaining({ id: `context_packet:ctx_${longMemoryId}` })
+      ])
+    );
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: `memory:${longMemoryId}`,
+          to: `context_packet:ctx_${longMemoryId}`
+        })
+      ])
+    );
+  });
+
   it("keeps large graph projections bounded for traversal performance", async () => {
     const bundle = await processUserRequest({
       userId: SYSTEM_USER_ID,

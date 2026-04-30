@@ -28,6 +28,31 @@ function rootIdParts(rootId: string | null): { type: string; id: string } | null
   };
 }
 
+async function listRawMemoriesForProvenance(
+  repository: Awaited<ReturnType<typeof getSeededRepository>>,
+  userId: string,
+  limit: number
+) {
+  const memories: Awaited<ReturnType<typeof repository.listMemoryPage>>["items"] = [];
+  let cursor: string | null | undefined = null;
+
+  while (memories.length < limit) {
+    const page = await repository.listMemoryPage({
+      userId,
+      limit: Math.min(limit - memories.length, 100),
+      cursor
+    });
+    memories.push(...page.items);
+
+    if (!page.nextCursor) {
+      break;
+    }
+    cursor = page.nextCursor;
+  }
+
+  return memories;
+}
+
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
@@ -45,11 +70,10 @@ export async function GET(request: Request) {
       : repository.listGoalsPage({ userId: principal.userId, limit: query.limit }).then((page) => page.items);
     const rootJobPromise =
       root?.type === "job" || root?.type === "failure" ? repository.getJob(root.id, principal.userId) : Promise.resolve(null);
-    const allMemoriesPromise = repository.listMemory(principal.userId);
-    const memoriesPromise = allMemoriesPromise.then((memories) => memories.slice(0, query.limit));
+    const memoriesPromise = listRawMemoriesForProvenance(repository, principal.userId, query.limit);
     const rootMemoryPromise =
       root?.type === "memory" || root?.type === "context_packet"
-        ? allMemoriesPromise.then(
+        ? repository.listMemory(principal.userId).then(
             (memories) => memories.find((memory) => memory.id === root.id || `ctx_${memory.id}` === root.id) ?? null
           )
         : Promise.resolve(null);
