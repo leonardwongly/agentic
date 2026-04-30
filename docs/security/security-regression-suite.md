@@ -33,6 +33,7 @@ owner can quickly answer which defensive boundary regressed:
 High-signal files in the suite include:
 
 - `tests/api-validation.test.ts`
+- `tests/governed-route.test.ts`
 - `tests/auth.test.ts`
 - `tests/google-provider-routes.test.ts`
 - `tests/route-user-scope.test.ts`

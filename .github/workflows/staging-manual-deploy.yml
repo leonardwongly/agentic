@@ -161,7 +161,7 @@ jobs:
           retention-days: 7
 
       - name: Upload staging supply-chain evidence
-        if: always() && (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test')
+        if: always() && (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agentic-staging-supply-chain
