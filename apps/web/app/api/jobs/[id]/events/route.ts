@@ -94,16 +94,18 @@ export async function GET(request: Request, context: RouteContext) {
           const wait = (ms: number) =>
             new Promise<void>((resolve) => {
               let timeout: ReturnType<typeof setTimeout>;
-              function finish() {
-                request.signal.removeEventListener("abort", abort);
-                resolve();
-              }
-              function abort() {
+
+              const onAbort = () => {
                 clearTimeout(timeout);
-                finish();
-              }
-              timeout = setTimeout(finish, ms);
-              request.signal.addEventListener("abort", abort, { once: true });
+                resolve();
+              };
+
+              request.signal.addEventListener("abort", onAbort, { once: true });
+
+              timeout = setTimeout(() => {
+                request.signal.removeEventListener("abort", onAbort);
+                resolve();
+              }, ms);
             });
 
           void (async () => {

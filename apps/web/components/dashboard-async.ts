@@ -296,17 +296,12 @@ function parseJobEventSnapshot(event: Event): { job: { status: QueuedJobStatus }
   try {
     const payload = JSON.parse(event.data) as { job?: { status?: unknown } };
     const status = payload.job?.status;
+    const validStatuses: QueuedJobStatus[] = ["queued", "running", "retrying", "completed", "dead_letter"];
 
-    if (
-      status === "queued" ||
-      status === "running" ||
-      status === "retrying" ||
-      status === "completed" ||
-      status === "dead_letter"
-    ) {
+    if (typeof status === "string" && validStatuses.includes(status as QueuedJobStatus)) {
       return {
         job: {
-          status
+          status: status as QueuedJobStatus
         }
       };
     }

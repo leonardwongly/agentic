@@ -127,12 +127,12 @@ export function getDashboardOsSurface(id: string | null | undefined): DashboardO
   return dashboardOsSurfaces.find((surface) => surface.id === id) ?? null;
 }
 
-export function getDashboardOsSurfaceForSection(section: string | null | undefined): DashboardOsSurface | null {
+export function getDashboardOsSurfaceForSection(section: string | null | undefined): DashboardOsSurface[] {
   if (!section) {
-    return null;
+    return [];
   }
 
-  return dashboardOsSurfaces.find((surface) => (surface.sections as readonly string[]).includes(section)) ?? null;
+  return dashboardOsSurfaces.filter((surface) => (surface.sections as readonly string[]).includes(section));
 }
 
 export { advancedDashboardSections as ADVANCED_DASHBOARD_SECTIONS };

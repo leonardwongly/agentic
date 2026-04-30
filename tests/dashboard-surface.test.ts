@@ -48,9 +48,9 @@ describe("dashboard surface helpers", () => {
 
   it("maps advanced sections to their owning OS surfaces", () => {
     expect(getDashboardOsSurface("governance")?.sections).toEqual(expect.arrayContaining(["governance", "autopilot"]));
-    expect(getDashboardOsSurfaceForSection("templates")?.id).toBe("operations");
-    expect(getDashboardOsSurfaceForSection("integrations")?.id).toBe("agents");
-    expect(getDashboardOsSurfaceForSection("notes")?.id).toBe("memory");
-    expect(getDashboardOsSurfaceForSection("unknown")).toBeNull();
+    expect(getDashboardOsSurfaceForSection("templates").map((surface) => surface.id)).toEqual(["operations"]);
+    expect(getDashboardOsSurfaceForSection("integrations").map((surface) => surface.id)).toEqual(["agents"]);
+    expect(getDashboardOsSurfaceForSection("notes").map((surface) => surface.id)).toEqual(["memory", "provenance"]);
+    expect(getDashboardOsSurfaceForSection("unknown")).toEqual([]);
   });
 });

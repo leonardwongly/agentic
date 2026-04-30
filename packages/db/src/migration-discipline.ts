@@ -6,7 +6,10 @@ import { type DatabaseMigrationFile, listMigrationFiles } from "./migration-runt
 const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const DEFAULT_ROLLBACK_NOTES_PATH = path.join(DEFAULT_MIGRATIONS_DIR, "ROLLBACK.md");
 const MIGRATION_NAME_PATTERN = /^\d{4}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/u;
-const LEGACY_DUPLICATE_PREFIXES = new Set(["0004", "0005"]);
+const LEGACY_DUPLICATE_PREFIX_SETS = [
+  new Set(["0004_team_responsibility.sql", "0004_workspace_shadow_replay_policy.sql"]),
+  new Set(["0005_bundle_child_sort_order.sql", "0005_governance_default_deny.sql"])
+];
 
 export type MigrationDisciplineIssue = {
   code: "invalid_name" | "out_of_order" | "duplicate_prefix" | "missing_rollback_note" | "destructive_sql";
@@ -32,6 +35,16 @@ function classifyStatus(issues: MigrationDisciplineIssue[]): MigrationDiscipline
   }
 
   return issues.length > 0 ? "warn" : "pass";
+}
+
+function isLegacyDuplicatePrefixSet(names: string[]): boolean {
+  return LEGACY_DUPLICATE_PREFIX_SETS.some((legacyNames) => {
+    if (legacyNames.size !== names.length) {
+      return false;
+    }
+
+    return names.every((name) => legacyNames.has(name));
+  });
 }
 
 export function analyzeMigrationDiscipline(params: {
@@ -94,7 +107,7 @@ export function analyzeMigrationDiscipline(params: {
       continue;
     }
 
-    const legacyDuplicate = LEGACY_DUPLICATE_PREFIXES.has(prefix);
+    const legacyDuplicate = isLegacyDuplicatePrefixSet(duplicateNames);
     for (const name of duplicateNames) {
       issues.push({
         code: "duplicate_prefix",

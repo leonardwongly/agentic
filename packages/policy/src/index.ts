@@ -933,37 +933,46 @@ export function evaluateGovernanceSimulationCalibration(params: {
     const actual = classifyPolicyDecision(scenario.result.decision);
     return actual !== "allow" && scenario.expectedDecision === "allow";
   }).length;
-  const escalationCount = params.simulations.filter((scenario) => scenario.result.decision.requiresApproval).length;
+  const escalationCount = params.simulations.filter(
+    (scenario) => classifyPolicyDecision(scenario.result.decision) === "approval"
+  ).length;
   const expectedScenarioCount = expectedScenarios.length;
+  const expectedNonAllowCount = expectedScenarios.filter((scenario) => scenario.expectedDecision !== "allow").length;
+  const expectedAllowCount = expectedScenarios.filter((scenario) => scenario.expectedDecision === "allow").length;
   const scenarioCoverageRate = params.simulations.length > 0 ? expectedScenarioCount / params.simulations.length : 0;
-  const falseAllowRate = expectedScenarioCount > 0 ? falseAllowCount / expectedScenarioCount : 0;
-  const falseDenyRate = expectedScenarioCount > 0 ? falseDenyCount / expectedScenarioCount : 0;
+  const falseAllowRate = expectedNonAllowCount > 0 ? falseAllowCount / expectedNonAllowCount : 0;
+  const falseDenyRate = expectedAllowCount > 0 ? falseDenyCount / expectedAllowCount : 0;
   const escalationRate = params.simulations.length > 0 ? escalationCount / params.simulations.length : 0;
   const findings: string[] = [];
+  const hasScenarioCoverageFinding = scenarioCoverageRate < thresholds.minimumScenarioCoverageRate;
+  const hasFalseAllowFinding = falseAllowRate > thresholds.maximumFalseAllowRate;
+  const hasFalseDenyFinding = falseDenyRate > thresholds.maximumFalseDenyRate;
+  const hasLatencyFinding = params.latencyMs > thresholds.maximumLatencyMs;
 
-  if (scenarioCoverageRate < thresholds.minimumScenarioCoverageRate) {
+  if (hasScenarioCoverageFinding) {
     findings.push(
       `Scenario coverage ${(scenarioCoverageRate * 100).toFixed(0)}% is below the ${(thresholds.minimumScenarioCoverageRate * 100).toFixed(0)}% minimum.`
     );
   }
 
-  if (falseAllowRate > thresholds.maximumFalseAllowRate) {
+  if (hasFalseAllowFinding) {
     findings.push(
       `False allow rate ${(falseAllowRate * 100).toFixed(0)}% exceeds the ${(thresholds.maximumFalseAllowRate * 100).toFixed(0)}% maximum.`
     );
   }
 
-  if (falseDenyRate > thresholds.maximumFalseDenyRate) {
+  if (hasFalseDenyFinding) {
     findings.push(
       `False deny rate ${(falseDenyRate * 100).toFixed(0)}% exceeds the ${(thresholds.maximumFalseDenyRate * 100).toFixed(0)}% maximum.`
     );
   }
 
-  if (params.latencyMs > thresholds.maximumLatencyMs) {
+  if (hasLatencyFinding) {
     findings.push(`Simulation latency ${params.latencyMs}ms exceeds the ${thresholds.maximumLatencyMs}ms maximum.`);
   }
 
-  const status = findings.some((finding) => finding.includes("False allow")) ? "fail" : findings.length > 0 ? "degraded" : "pass";
+  const hasDegradedFinding = hasScenarioCoverageFinding || hasFalseDenyFinding || hasLatencyFinding;
+  const status = hasFalseAllowFinding ? "fail" : hasDegradedFinding ? "degraded" : "pass";
 
   return {
     status,

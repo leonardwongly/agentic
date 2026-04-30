@@ -8,6 +8,7 @@ import {
   comparePolicyWithAndWithoutLearning,
   evaluateGovernanceSimulationCalibration,
   evaluateTaskPolicy,
+  type GovernanceSimulationScenarioResult,
   riskFromCapabilities,
   simulateGovernanceScenarios,
   simulateTaskPolicy
@@ -773,6 +774,76 @@ describe("policy", () => {
       falseAllowRate: 1
     });
     expect(report.findings.join(" ")).toContain("False allow rate");
+  });
+
+  it("uses class-specific calibration denominators and classifier-consistent escalation counts", () => {
+    const simulations: GovernanceSimulationScenarioResult[] = [
+      {
+        id: "expected-allow",
+        title: "Allowed read",
+        description: "A baseline read path should be allowed.",
+        capabilities: ["read"],
+        confidence: 0.95,
+        expectedDecision: "allow",
+        result: {
+          decision: {
+            outcome: "blocked",
+            requiresApproval: true,
+            riskClass: "R1",
+            confidence: 0.95,
+            rationale: "Synthetic false deny."
+          },
+          checks: [],
+          trust: { approvedCount: 0, rejectedCount: 0, trustScore: 0 },
+          scorecardTrust: { strong: false, weak: false },
+          autonomyBudget: null,
+          conformance: null,
+          learningValidation: null
+        }
+      },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `expected-block-${index}`,
+        title: `Blocked write ${index}`,
+        description: "A high-risk path should remain blocked.",
+        capabilities: ["delete"],
+        confidence: 0.95,
+        expectedDecision: "block",
+        result: {
+          decision: {
+            outcome: "blocked",
+            requiresApproval: true,
+            riskClass: "R4",
+            confidence: 0.95,
+            rationale: "Synthetic block."
+          },
+          checks: [],
+          trust: { approvedCount: 0, rejectedCount: 0, trustScore: 0 },
+          scorecardTrust: { strong: false, weak: false },
+          autonomyBudget: null,
+          conformance: null,
+          learningValidation: null
+        }
+      }))
+    ];
+    const report = evaluateGovernanceSimulationCalibration({
+      simulations,
+      latencyMs: 1,
+      thresholds: {
+        minimumScenarioCoverageRate: 1,
+        maximumFalseDenyRate: 0.2
+      }
+    });
+
+    expect(report.status).toBe("degraded");
+    expect(report.metrics).toMatchObject({
+      falseAllowCount: 0,
+      falseDenyCount: 1,
+      falseAllowRate: 0,
+      falseDenyRate: 1,
+      escalationCount: 0,
+      escalationRate: 0
+    });
+    expect(report.findings.join(" ")).toContain("False deny rate");
   });
 
   it("returns full simulation detail when low confidence downgrades the task to draft mode", () => {

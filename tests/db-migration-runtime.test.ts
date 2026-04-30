@@ -209,6 +209,28 @@ describe("runDatabaseMigrations", () => {
       ])
     );
   });
+
+  it("fails new duplicate migrations even when they reuse a legacy duplicate prefix", () => {
+    const report = analyzeMigrationDiscipline({
+      rollbackNotes: [
+        "- `0005_bundle_child_sort_order.sql`: restore from backup.",
+        "- `0005_governance_default_deny.sql`: restore from backup.",
+        "- `0005_new_change.sql`: restore from backup."
+      ].join("\n"),
+      migrations: [
+        { name: "0005_bundle_child_sort_order.sql", sql: "select 1;" },
+        { name: "0005_governance_default_deny.sql", sql: "select 2;" },
+        { name: "0005_new_change.sql", sql: "select 3;" }
+      ]
+    });
+
+    expect(report.status).toBe("fail");
+    expect(report.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "duplicate_prefix", migration: "0005_new_change.sql", severity: "fail" })
+      ])
+    );
+  });
 });
 
 async function writeMigrationFixtures(names: string[]): Promise<string> {
