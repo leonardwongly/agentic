@@ -146,4 +146,14 @@ describe("context packets route", () => {
     expect(response.status).toBe(400);
     expect(payload.error).toContain("Unrecognized key");
   });
+
+  it("rejects invalid packet query limits", async () => {
+    const response = await listContextPackets(
+      buildAuthorizedGetRequest("http://localhost/api/context/packets?limit=abc")
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("limit");
+  });
 });

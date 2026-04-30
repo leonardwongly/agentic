@@ -12,6 +12,10 @@ const GraphQuerySchema = z
   })
   .strict();
 
+function goalIdFromRoot(rootId: string | null): string | null {
+  return rootId?.startsWith("goal:") ? rootId.slice("goal:".length) : null;
+}
+
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
@@ -22,17 +26,21 @@ export async function GET(request: Request) {
       limit: url.searchParams.get("limit") ?? undefined
     });
     const repository = await getSeededRepository();
-    const [dashboard, jobs, memories, evidenceRecords] = await Promise.all([
-      repository.getDashboardData(principal.userId),
-      repository.listJobs({ userId: principal.userId }),
-      repository.listMemory(principal.userId),
-      repository.listEvidenceRecords({ userId: principal.userId })
+    const rootGoalId = goalIdFromRoot(query.rootId);
+    const goalsPromise = rootGoalId
+      ? repository.getGoalBundleForUser(rootGoalId, principal.userId).then((goal) => (goal ? [goal] : []))
+      : repository.listGoalsPage({ userId: principal.userId, limit: query.limit }).then((page) => page.items);
+    const [goals, jobs, memories, evidenceRecords] = await Promise.all([
+      goalsPromise,
+      repository.listJobs({ userId: principal.userId, limit: query.limit }),
+      repository.listContextPacketMemory({ userId: principal.userId, limit: query.limit }),
+      repository.listEvidenceRecords({ userId: principal.userId, goalId: rootGoalId ?? undefined, limit: query.limit })
     ]);
 
     return authenticatedJson({
       graph: buildExecutionProvenanceGraph({
         userId: principal.userId,
-        goals: dashboard.goals,
+        goals,
         jobs,
         memories,
         evidenceRecords,

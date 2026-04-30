@@ -1,6 +1,7 @@
 import type {
   ActionLog,
   AgentDefinition,
+  AgentName,
   AgentMetrics,
   ActorContext,
   ApprovalDecision,
@@ -48,14 +49,11 @@ import type {
   WorkspaceMember,
   WorkspaceSelection
 } from "@agentic/contracts";
+import type { JobConcurrencyLimits as ExecutionJobConcurrencyLimits } from "@agentic/execution";
 import type { GovernanceConformanceReport } from "@agentic/policy";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
-export type JobConcurrencyLimits = {
-  maxRunningPerKind?: number;
-  maxRunningPerUser?: number;
-  maxRunningPerConcurrencyKey?: number;
-};
+export type JobConcurrencyLimits = ExecutionJobConcurrencyLimits;
 
 export type DashboardData = {
   workspaces: Workspace[];
@@ -282,6 +280,7 @@ export type AgenticRepository = {
     userId?: string;
     goalId?: string;
     approvalId?: string;
+    limit?: number;
   }): Promise<EvidenceRecord[]>;
   listCommitments(userId?: string): Promise<Commitment[]>;
   listCommitmentInbox(params?: {
@@ -316,6 +315,7 @@ export type AgenticRepository = {
     userId?: string;
     kinds?: JobKind[];
     statuses?: JobStatus[];
+    limit?: number;
   }): Promise<JobRecord[]>;
   getJob(jobId: string, userId?: string): Promise<JobRecord | null>;
   enqueueJob(job: JobRecord): Promise<JobRecord>;
@@ -345,6 +345,14 @@ export type AgenticRepository = {
     error: string;
   }): Promise<JobRecord>;
   listMemory(userId?: string): Promise<MemoryRecord[]>;
+  listContextPacketMemory(params: {
+    userId: string;
+    agent?: AgentName;
+    includeExpired?: boolean;
+    allowedSensitivities?: string[];
+    limit?: number;
+    now?: number;
+  }): Promise<MemoryRecord[]>;
   listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage>;
   saveMemory(record: MemoryRecord): Promise<MemoryRecord>;
   saveEvidenceRecord(record: EvidenceRecord): Promise<EvidenceRecord>;

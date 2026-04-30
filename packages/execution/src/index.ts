@@ -113,7 +113,11 @@ export type JobConcurrencyLimits = {
   maxRunningPerConcurrencyKey?: number;
 };
 
-export type JobHandler = (job: JobRecord) => Promise<void>;
+export type JobHandlerContext = {
+  signal: AbortSignal;
+};
+
+export type JobHandler = (job: JobRecord, context?: JobHandlerContext) => Promise<void>;
 
 export type JobHandlerMap = Partial<Record<JobKind, JobHandler>>;
 
@@ -250,7 +254,10 @@ export function createJobRecord(params: {
     status: "queued",
     priority: params.priority ?? "normal",
     queue: params.queue?.trim() || "default",
-    concurrencyKey: params.concurrencyKey?.trim() || deriveJobConcurrencyKey(params.userId, params.kind, params.payload),
+    concurrencyKey:
+      params.concurrencyKey === null
+        ? null
+        : params.concurrencyKey?.trim() || deriveJobConcurrencyKey(params.userId, params.kind, params.payload),
     timeoutMs: params.timeoutMs ?? null,
     idempotencyKey: params.idempotencyKey?.trim() || null,
     payload: params.payload,
@@ -542,18 +549,21 @@ export async function processNextDurableJob(params: {
 
 async function runJobHandlerWithOptionalTimeout(job: JobRecord, handler: JobHandler): Promise<void> {
   if (!job.timeoutMs) {
-    await handler(job);
+    await handler(job, { signal: new AbortController().signal });
     return;
   }
 
   let timeout: NodeJS.Timeout | null = null;
+  const controller = new AbortController();
+  const timeoutError = new Error(`Durable job ${job.id} timed out after ${job.timeoutMs}ms.`);
 
   try {
     await Promise.race([
-      handler(job),
+      handler(job, { signal: controller.signal }),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
-          reject(new Error(`Durable job ${job.id} timed out after ${job.timeoutMs}ms.`));
+          controller.abort(timeoutError);
+          reject(timeoutError);
         }, job.timeoutMs ?? 0);
       })
     ]);

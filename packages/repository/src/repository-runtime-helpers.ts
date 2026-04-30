@@ -17,13 +17,9 @@ import {
   type JobStatus,
   type Workspace
 } from "@agentic/contracts";
-import { JobMutationError } from "./repository-types";
+import { JobMutationError, type JobConcurrencyLimits } from "./repository-types";
 
-export type JobConcurrencyLimits = {
-  maxRunningPerKind?: number;
-  maxRunningPerUser?: number;
-  maxRunningPerConcurrencyKey?: number;
-};
+export type { JobConcurrencyLimits } from "./repository-types";
 
 type GoalStoreView = {
   goals: GoalBundle["goal"][];
@@ -221,7 +217,7 @@ function isActiveRunningJob(job: JobRecord, now: number): boolean {
   }
 
   const leaseExpiresAt = Date.parse(job.leaseExpiresAt);
-  return !Number.isFinite(leaseExpiresAt) || leaseExpiresAt > now;
+  return Number.isFinite(leaseExpiresAt) && leaseExpiresAt > now;
 }
 
 export function isJobBlockedByConcurrency(

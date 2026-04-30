@@ -131,6 +131,88 @@ describe("execution", () => {
     expect(computeJobRetryDelayMs(4, { baseDelayMs: 500, maxDelayMs: 2_000 })).toBe(2_000);
   });
 
+  it("preserves explicit null concurrency keys", () => {
+    const job = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      concurrencyKey: null,
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Create a job without per-key concurrency.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      }
+    });
+
+    expect(job.concurrencyKey).toBeNull();
+  });
+
+  it("passes an abort signal to timed durable job handlers", async () => {
+    const baseJob = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      timeoutMs: 100,
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Exercise timeout cancellation.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      }
+    });
+    const runningJob = JobRecordSchema.parse({
+      ...baseJob,
+      status: "running",
+      attemptCount: 1,
+      claimedBy: "worker-1",
+      claimedAt: "2026-04-16T00:00:00.000Z",
+      lastAttemptAt: "2026-04-16T00:00:00.000Z",
+      leaseExpiresAt: "2026-04-16T00:00:30.000Z"
+    });
+    let observedSignal: AbortSignal | undefined;
+    const queue = createDurableJobQueue(
+      {
+        enqueueJob: async (job) => job,
+        claimNextJob: async () => runningJob,
+        completeJob: async () => {
+          throw new Error("Timed out job should not be acknowledged.");
+        },
+        retryJob: async (params) =>
+          JobRecordSchema.parse({
+            ...runningJob,
+            status: "retrying",
+            claimedBy: null,
+            claimedAt: null,
+            leaseExpiresAt: null,
+            availableAt: params.availableAt,
+            lastError: params.error
+          }),
+        deadLetterJob: async () => runningJob
+      },
+      { runnerId: "worker-1" }
+    );
+
+    const result = await processNextDurableJob({
+      queue,
+      handlers: {
+        goal_create: async (_job, context) => {
+          observedSignal = context?.signal;
+          await new Promise((resolve) => setTimeout(resolve, 125));
+        }
+      }
+    });
+
+    expect(observedSignal).toBeDefined();
+    expect(observedSignal?.aborted).toBe(true);
+    expect(result.finalJob?.status).toBe("retrying");
+    expect(result.finalJob?.lastError).toContain("timed out");
+  });
+
   it("routes failures into retry and dead-letter transitions through the durable queue contract", async () => {
     const baseJob = createJobRecord({
       userId: "user-1",

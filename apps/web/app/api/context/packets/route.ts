@@ -13,6 +13,15 @@ import { getSeededRepository } from "../../../../lib/server";
 
 const QueryAgentSchema = z.enum(agentNameValues);
 
+const ContextPacketQuerySchema = z
+  .object({
+    agent: QueryAgentSchema.optional(),
+    includeExpired: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+    sensitivity: z.string().trim().min(1).max(240).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional()
+  })
+  .strict();
+
 const CreateContextPacketSchema = z
   .object({
     category: z.string().trim().min(1).max(64),
@@ -41,15 +50,27 @@ export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
     const url = new URL(request.url);
-    const agent = url.searchParams.get("agent");
-    const includeExpired = url.searchParams.get("includeExpired") === "true";
-    const limit = url.searchParams.get("limit");
-    const packets = queryContextPackets(await (await getSeededRepository()).listMemory(principal.userId), {
+    const query = ContextPacketQuerySchema.parse({
+      agent: url.searchParams.get("agent") ?? undefined,
+      includeExpired: url.searchParams.get("includeExpired") ?? undefined,
+      sensitivity: url.searchParams.get("sensitivity") ?? undefined,
+      limit: url.searchParams.get("limit") ?? undefined
+    });
+    const repository = await getSeededRepository();
+    const allowedSensitivities = parseCsv(query.sensitivity ?? null);
+    const memories = await repository.listContextPacketMemory({
       userId: principal.userId,
-      agent: agent ? QueryAgentSchema.parse(agent) : undefined,
-      includeExpired,
-      allowedSensitivities: parseCsv(url.searchParams.get("sensitivity")),
-      limit: limit ? Number.parseInt(limit, 10) : undefined
+      agent: query.agent,
+      includeExpired: query.includeExpired,
+      allowedSensitivities,
+      limit: query.limit
+    });
+    const packets = queryContextPackets(memories, {
+      userId: principal.userId,
+      agent: query.agent,
+      includeExpired: query.includeExpired,
+      allowedSensitivities,
+      limit: query.limit
     });
 
     return authenticatedJson({

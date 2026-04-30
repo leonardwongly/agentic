@@ -71,11 +71,17 @@ async function main() {
   const runnerId = process.env.AGENTIC_WORKER_RUNNER_ID?.trim() || `worker-${process.pid}`;
   const pollIntervalMs = parsePositiveIntEnv("AGENTIC_WORKER_POLL_INTERVAL_MS", 1_000);
   const leaseMs = parsePositiveIntEnv("AGENTIC_WORKER_LEASE_MS", 30_000);
-  const concurrencyLimits = {
-    maxRunningPerKind: parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_KIND"),
-    maxRunningPerUser: parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_USER"),
-    maxRunningPerConcurrencyKey: parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY")
-  };
+  const maxRunningPerKind = parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_KIND");
+  const maxRunningPerUser = parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_USER");
+  const maxRunningPerConcurrencyKey = parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY");
+  const concurrencyLimits =
+    maxRunningPerKind === undefined && maxRunningPerUser === undefined && maxRunningPerConcurrencyKey === undefined
+      ? undefined
+      : {
+          maxRunningPerKind,
+          maxRunningPerUser,
+          maxRunningPerConcurrencyKey
+        };
   const retryJitterRatio = parseRatioEnv("AGENTIC_WORKER_RETRY_JITTER_RATIO", 0.1);
 
   const shutdown = (signal: string) => {
