@@ -143,6 +143,47 @@ describe("watcher scheduler", () => {
     expect(claimSpy.mock.calls.length).toBeGreaterThan(1);
   });
 
+  it("contains lease renewal failures and reports a watcher decision", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const watcher = await repository.saveWatcher(buildWatcher(bundle.goal.id));
+    const originalClaimWatcherLease = repository.claimWatcherLease.bind(repository);
+    let claimCount = 0;
+
+    vi.spyOn(repository, "claimWatcherLease").mockImplementation(async (params) => {
+      claimCount += 1;
+      if (claimCount > 1) {
+        throw new Error("transient lease store failure");
+      }
+      return originalClaimWatcherLease(params);
+    });
+
+    const result = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      leaseMs: 10,
+      evaluator: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return {
+          wouldTrigger: false,
+          reason: "Slow evaluation after renewal failure."
+        };
+      }
+    });
+    const persisted = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find((candidate) => candidate.id === watcher.id);
+
+    expect(result.decisions).toEqual([
+      {
+        watcherId: watcher.id,
+        action: "skipped",
+        reason: "transient lease store failure",
+        idempotencyKey: null
+      }
+    ]);
+    expect(persisted?.schedule.lease).toBeNull();
+  });
+
   it("claims a trigger once when dry-run is disabled", async () => {
     const { repository, bundle } = await createSchedulerFixture();
     const watcher = await repository.saveWatcher(
@@ -190,6 +231,54 @@ describe("watcher scheduler", () => {
         }
       }
     });
+  });
+
+  it("persists watcher progress without emitting triggers when notifications are disabled", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const watcher = await repository.saveWatcher(
+      buildWatcher(bundle.goal.id, {
+        schedule: {
+          enabled: true,
+          dryRun: false,
+          cursor: null,
+          lastRunAt: null,
+          nextRunAt: null,
+          lease: null
+        },
+        escalationPolicy: {
+          notify: false,
+          minSuppressionMs: 0,
+          maxTriggersPerHour: 4
+        }
+      })
+    );
+    const claimSpy = vi.spyOn(repository, "claimAutopilotEvent");
+
+    const result = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      evaluator: async () => ({
+        wouldTrigger: true,
+        reason: "VIP thread triggered.",
+        cursor: "gmail-cursor-2"
+      })
+    });
+    const persisted = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find((candidate) => candidate.id === watcher.id);
+
+    expect(result.decisions).toEqual([
+      {
+        watcherId: watcher.id,
+        action: "skipped",
+        reason: "Watcher notification policy disabled trigger emission.",
+        idempotencyKey: "watcher:watcher-scheduler-1:2026-04-20T00:00:00.000Z"
+      }
+    ]);
+    expect(claimSpy).not.toHaveBeenCalled();
+    expect(await repository.listAutopilotEvents(SYSTEM_USER_ID)).toHaveLength(0);
+    expect(persisted?.schedule.cursor).toBe("gmail-cursor-2");
+    expect(persisted?.lastEvaluation?.sideEffectsSuppressed).toBe(true);
   });
 
   it("suppresses duplicate scheduler instances while a lease is active", async () => {

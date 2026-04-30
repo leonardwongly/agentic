@@ -178,6 +178,8 @@ export async function runWatcherSchedulerOnce(params: {
     let currentLeasedWatcher = leasedWatcher;
     let evaluation: WatcherSignalEvaluation;
     let leaseReleased = false;
+    let leaseRenewalError: string | null = null;
+    const renewalAttempts: Array<Promise<void>> = [];
     const releaseLease = async (replacement?: Watcher) => {
       if (leaseReleased) {
         return;
@@ -211,7 +213,11 @@ export async function runWatcherSchedulerOnce(params: {
     };
     const renewalIntervalMs = Math.max(1, Math.floor(leaseMs / 2));
     const renewalTimer = setInterval(() => {
-      void renewLease();
+      const renewalAttempt = renewLease().catch((error) => {
+        leaseRenewalError ??= getErrorMessage(error, "Watcher lease renewal failed.");
+      });
+      renewalAttempts.push(renewalAttempt);
+      void renewalAttempt;
     }, renewalIntervalMs);
 
     try {
@@ -231,17 +237,29 @@ export async function runWatcherSchedulerOnce(params: {
       }
     } finally {
       clearInterval(renewalTimer);
+      await Promise.allSettled(renewalAttempts);
+    }
+    if (leaseRenewalError) {
+      const releaseError = await tryReleaseLease();
+      decisions.push({
+        watcherId: watcher.id,
+        action: "skipped",
+        reason: releaseError ? `${leaseRenewalError} Lease release failed: ${releaseError}` : leaseRenewalError,
+        idempotencyKey: null
+      });
+      continue;
     }
     const idempotencyKey = buildWatcherIdempotencyKey(currentLeasedWatcher, evaluatedAt);
+    const notificationsDisabled = !currentLeasedWatcher.escalationPolicy.notify;
     const lastEvaluation = WatcherDryRunResultSchema.parse({
       evaluatedAt,
       wouldTrigger: evaluation.wouldTrigger,
       reason: evaluation.reason,
       idempotencyKey,
-      sideEffectsSuppressed: currentLeasedWatcher.schedule.dryRun
+      sideEffectsSuppressed: currentLeasedWatcher.schedule.dryRun || notificationsDisabled
     });
 
-    if (currentLeasedWatcher.schedule.dryRun || !evaluation.wouldTrigger) {
+    if (currentLeasedWatcher.schedule.dryRun || notificationsDisabled || !evaluation.wouldTrigger) {
       const progressedWatcher = applyWatcherEvaluationProgress({
         watcher: currentLeasedWatcher,
         evaluation,
@@ -268,7 +286,10 @@ export async function runWatcherSchedulerOnce(params: {
       decisions.push({
         watcherId: watcher.id,
         action: currentLeasedWatcher.schedule.dryRun ? "dry_run_recorded" : "skipped",
-        reason: evaluation.reason,
+        reason:
+          notificationsDisabled && evaluation.wouldTrigger
+            ? "Watcher notification policy disabled trigger emission."
+            : evaluation.reason,
         idempotencyKey
       });
       continue;
