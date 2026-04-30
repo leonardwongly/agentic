@@ -130,7 +130,6 @@ jobs:
         run: npm run security:collect-evidence -- --require-artifacts --output-dir artifacts/compliance
 
       - name: Upload supply-chain evidence
-        if: github.event_name != 'pull_request' && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: agentic-supply-chain-evidence
@@ -139,7 +138,7 @@ jobs:
             artifacts/build
             artifacts/compliance
           if-no-files-found: error
-          retention-days: 7
+          retention-days: ${{ github.event_name == 'pull_request' && 1 || 7 }}
 
       - name: Attest security evidence
         if: github.event_name != 'pull_request'

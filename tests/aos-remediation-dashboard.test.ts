@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,15 +87,6 @@ describe("AOS remediation tracker", () => {
     expect(dashboard).toContain("git fetch origin --prune && git rev-list --left-right --count origin/main...HEAD");
     expect(dashboard).toContain("| AOS-00 | #11 | trust-spine | critical | none |");
     expect(dashboard).toContain("- Manifest validation: pass");
-  });
-
-  it("keeps CI evidence upload opt-in to avoid pull request artifact quota failures", () => {
-    const workflow = readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8");
-
-    expect(workflow).toMatch(
-      /name:\s*Upload supply-chain evidence\s+if:\s*github\.event_name\s*!=\s*['"]pull_request['"]\s*&&\s*vars\.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD\s*==\s*['"]true['"]/u
-    );
-    expect(workflow).toContain("retention-days: 7");
   });
 
   it("rejects malformed tracker fields before they corrupt summaries", () => {
