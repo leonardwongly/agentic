@@ -78,7 +78,7 @@ function getIndent(line: string): number {
 }
 
 function parseYamlKeyValueLine(line: string): { indent: number; key: string; value: string } | null {
-  const match = line.match(/^(\s*)(?:-\s*)?([A-Za-z_][\w-]*):(?:\s+(.+)|\s*)$/u);
+  const match = line.match(/^(\s*)(?:-\s*)?([A-Za-z_][\w-]*)\s*:(?:\s+(.+)|\s*)$/u);
   if (!match) {
     return null;
   }
@@ -91,7 +91,7 @@ function parseYamlKeyValueLine(line: string): { indent: number; key: string; val
 }
 
 function isBlockScalarValue(value: string): boolean {
-  return /^[>|](?:(?:[+-]?[1-9])|(?:[1-9][+-]?))?(?:\s+#.*)?$/u.test(value.trim());
+  return /^[>|](?:(?:[+-]?[1-9])|(?:[1-9][+-]?)|[+-])?(?:\s+#.*)?$/u.test(value.trim());
 }
 
 export function collectWorkflowActionUses(filePath: string, content: string): WorkflowActionUse[] {

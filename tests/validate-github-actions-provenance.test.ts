@@ -27,7 +27,7 @@ jobs:
 jobs:
   validate:
     steps:
-      - uses: actions/checkout@v6
+      - uses : actions/checkout@v6
       - uses: actions/setup-node
 `
     );
@@ -139,6 +139,30 @@ jobs:
       }),
       expect.objectContaining({
         line: 11,
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      })
+    ]);
+  });
+
+  it("does not treat uses text inside chomping-only block scalars as action references", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - run: |-
+          echo "uses: actions/checkout@v6"
+      - name: summary
+        run: >+
+          echo "uses: actions/setup-node@v5"
+      - uses : actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        line: 10,
         value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
       })
     ]);
