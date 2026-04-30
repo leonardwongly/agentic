@@ -494,6 +494,7 @@ export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repo
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo)) {
     return [`Invalid GitHub repository identifier: ${repo}`];
   }
+  const expectedIssueNumbers = new Set(tracker.items.map((item) => item.issue));
 
   const result = spawnSync(
     "gh",
@@ -516,7 +517,12 @@ export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repo
     const pages = JSON.parse(result.stdout) as GitHubIssueApiRecord[][];
     liveIssues = pages
       .flat()
-      .filter((issue) => !issue.pull_request && issue.title.includes("AOS-"))
+      .filter(
+        (issue) =>
+          !issue.pull_request &&
+          issue.title.includes("AOS-") &&
+          (expectedIssueNumbers.has(issue.number) || issue.labels?.some((label) => label.name === "aos-remediation"))
+      )
       .map((issue) => ({
         number: issue.number,
         title: issue.title,

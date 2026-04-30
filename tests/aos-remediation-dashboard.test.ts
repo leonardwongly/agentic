@@ -203,12 +203,17 @@ describe("AOS remediation tracker", () => {
       labels: [{ name: "aos-remediation" }],
       pull_request: {}
     };
+    const unrelatedIssue = {
+      number: 1001,
+      title: "Postmortem for AOS-05 rollout",
+      labels: []
+    };
 
     spawnSyncMock.mockReturnValue({
       error: undefined,
       status: 0,
       stdout: JSON.stringify([
-        [nonIssuePullRequest, ...tracker.items.slice(0, 10).map(liveIssue)],
+        [nonIssuePullRequest, unrelatedIssue, ...tracker.items.slice(0, 10).map(liveIssue)],
         tracker.items.slice(10).map(liveIssue)
       ]),
       stderr: ""
