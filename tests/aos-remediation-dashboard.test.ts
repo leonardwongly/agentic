@@ -9,6 +9,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 import {
+  formatAosTrackerOutput,
   loadAosTracker,
   renderAosDashboard,
   summarizeAosTracker,
@@ -108,6 +109,17 @@ describe("AOS remediation tracker", () => {
       low: summarizeAosTracker(tracker).byPriority.low
     });
     expect(renderAosDashboard(malformedTracker)).toContain("- Manifest validation: fail");
+  });
+
+  it("formats invalid non-object manifests without dereferencing dashboard fields", () => {
+    const errors = validateAosTracker(null as never);
+
+    expect(formatAosTrackerOutput(null, errors, { format: "markdown" })).toContain("Tracker manifest must be an object.");
+    expect(JSON.parse(formatAosTrackerOutput(null, errors, { format: "json" }))).toEqual({
+      tracker: null,
+      summary: null,
+      errors: ["Tracker manifest must be an object."]
+    });
   });
 
   it("verifies live issue coverage across open and closed tracker issues", () => {

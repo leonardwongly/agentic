@@ -84,6 +84,12 @@ interface ParsedArgs {
   includeGitSnapshot: boolean;
 }
 
+interface FormatOutputOptions {
+  format: "markdown" | "json";
+  includeGitSnapshot?: boolean;
+  cwd?: string;
+}
+
 const DEFAULT_CONFIG_PATH = "config/remediation/aos-tracker.json";
 const EXPECTED_AOS_IDS = Array.from({ length: 19 }, (_, index) => `AOS-${String(index).padStart(2, "0")}`);
 const VALID_PRIORITIES: Priority[] = ["critical", "high", "medium", "low"];
@@ -402,6 +408,31 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   return `${lines.join("\n")}\n`;
 }
 
+export function formatAosTrackerOutput(tracker: unknown, errors: string[], options: FormatOutputOptions): string {
+  if (options.format === "json") {
+    return `${JSON.stringify(
+      {
+        tracker,
+        summary: isRecord(tracker) ? summarizeAosTracker(tracker as AosTracker) : null,
+        errors
+      },
+      null,
+      2
+    )}\n`;
+  }
+
+  if (!isRecord(tracker)) {
+    return ["# Agentic OS remediation Dashboard", "", "- Manifest validation: fail", ...errors.map((error) => `  - ${error}`), ""].join(
+      "\n"
+    );
+  }
+
+  return renderAosDashboard(tracker as AosTracker, {
+    includeGitSnapshot: options.includeGitSnapshot,
+    cwd: options.cwd
+  });
+}
+
 export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repository): string[] {
   const result = spawnSync(
     "gh",
@@ -626,10 +657,11 @@ function main() {
   const manifestErrors = validateAosTracker(tracker);
   const liveErrors = args.verifyIssueQuery && manifestErrors.length === 0 ? verifyLiveIssueCoverage(tracker) : [];
   const errors = [...manifestErrors, ...liveErrors];
-  const output =
-    args.format === "json"
-      ? `${JSON.stringify({ tracker, summary: summarizeAosTracker(tracker), errors }, null, 2)}\n`
-      : renderAosDashboard(tracker, { includeGitSnapshot: args.includeGitSnapshot, cwd: process.cwd() });
+  const output = formatAosTrackerOutput(tracker, errors, {
+    format: args.format,
+    includeGitSnapshot: args.includeGitSnapshot,
+    cwd: process.cwd()
+  });
 
   if (args.outputPath) {
     writeFileSync(resolveRepoPath(process.cwd(), args.outputPath), output, "utf8");
