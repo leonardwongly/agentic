@@ -140,6 +140,28 @@ jobs:
     expect(validateWorkflowActionPins(uses)).toEqual([]);
   });
 
+  it("detects uses entries in inline flow sequence steps", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps: [{ name: Checkout, uses: actions/checkout@v6 }, { uses: actions/setup-node@v6 }]
+`
+    );
+
+    expect(validateWorkflowActionPins(uses)).toEqual([
+      expect.objectContaining({
+        line: 4,
+        value: "actions/checkout@v6"
+      }),
+      expect.objectContaining({
+        line: 4,
+        value: "actions/setup-node@v6"
+      })
+    ]);
+  });
+
   it("allows local and docker action references", () => {
     const uses: WorkflowActionUse[] = [
       {

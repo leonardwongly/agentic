@@ -160,23 +160,59 @@ function parseYamlFlowField(field: string): { key: string; value: string } | nul
   return null;
 }
 
-function parseYamlFlowUsesLine(line: string): { indent: number; value: string } | null {
-  const mapping = line.match(/^(\s*)-\s*\{(.*)\}\s*(?:#.*)?$/u);
-  if (!mapping) {
-    return null;
-  }
+function extractYamlFlowMappings(line: string): Array<{ indent: number; body: string }> {
+  const mappings: Array<{ indent: number; body: string }> = [];
+  let quote: "\"" | "'" | null = null;
+  let depth = 0;
+  let start = -1;
+  const indent = getIndent(line);
 
-  for (const field of splitYamlFlowFields(mapping[2])) {
-    const parsed = parseYamlFlowField(field);
-    if (parsed?.key === "uses") {
-      return {
-        indent: mapping[1].length,
-        value: parsed.value
-      };
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const previous = line[index - 1];
+
+    if ((character === "\"" || character === "'") && previous !== "\\") {
+      quote = quote === character ? null : quote ?? character;
+      continue;
+    }
+
+    if (quote !== null) {
+      continue;
+    }
+
+    if (character === "{") {
+      if (depth === 0) {
+        start = index + 1;
+      }
+      depth += 1;
+    } else if (character === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        mappings.push({ indent, body: line.slice(start, index) });
+        start = -1;
+      }
     }
   }
 
-  return null;
+  return mappings;
+}
+
+function parseYamlFlowUsesMappings(line: string): Array<{ indent: number; value: string }> {
+  const uses: Array<{ indent: number; value: string }> = [];
+
+  for (const mapping of extractYamlFlowMappings(line)) {
+    for (const field of splitYamlFlowFields(mapping.body)) {
+      const parsed = parseYamlFlowField(field);
+      if (parsed?.key === "uses") {
+        uses.push({
+          indent: mapping.indent,
+          value: parsed.value
+        });
+      }
+    }
+  }
+
+  return uses;
 }
 
 function isBlockScalarValue(value: string): boolean {
@@ -197,16 +233,18 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
       blockScalarIndent = null;
     }
 
-    const parsedFlowUses = parseYamlFlowUsesLine(lineContent);
-    if (parsedFlowUses) {
-      const value = trimYamlScalar(parsedFlowUses.value);
-      const refSeparator = value.lastIndexOf("@");
-      uses.push({
-        filePath,
-        line: index + 1,
-        value,
-        ref: refSeparator >= 0 ? value.slice(refSeparator + 1) : null
-      });
+    const parsedFlowUses = parseYamlFlowUsesMappings(lineContent);
+    if (parsedFlowUses.length > 0) {
+      for (const parsedFlowUse of parsedFlowUses) {
+        const value = trimYamlScalar(parsedFlowUse.value);
+        const refSeparator = value.lastIndexOf("@");
+        uses.push({
+          filePath,
+          line: index + 1,
+          value,
+          ref: refSeparator >= 0 ? value.slice(refSeparator + 1) : null
+        });
+      }
       return;
     }
 
