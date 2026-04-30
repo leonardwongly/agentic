@@ -270,6 +270,33 @@ describe("workflow DAG process model", () => {
     ).toThrow("exhausted retry attempts (1/1)");
   });
 
+  it("does not count paused node resumes as new attempts", () => {
+    const instance = createWorkflowDagInstance({
+      dag: buildDag(),
+      now: "2026-04-20T00:00:00.000Z"
+    });
+    const started = transitionWorkflowDagNode({
+      execution: instance.nodeExecutions[0]!,
+      status: "running",
+      runnerId: "runner-1",
+      now: "2026-04-20T00:01:00.000Z"
+    });
+    const paused = transitionWorkflowDagNode({
+      execution: started,
+      status: "paused",
+      now: "2026-04-20T00:02:00.000Z"
+    });
+    const resumed = transitionWorkflowDagNode({
+      execution: paused,
+      status: "running",
+      runnerId: "runner-1",
+      now: "2026-04-20T00:03:00.000Z"
+    });
+
+    expect(started.attemptCount).toBe(1);
+    expect(resumed.attemptCount).toBe(1);
+  });
+
   it("keeps generated node execution ids inside the schema limit", () => {
     const longInstanceId = "instance-" + "a".repeat(151);
     const longNodeId = "node-" + "b".repeat(155);

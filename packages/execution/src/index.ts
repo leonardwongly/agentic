@@ -524,7 +524,7 @@ export function transitionWorkflowDagNode(params: {
     ...current,
     status: nextStatus,
     runnerId: params.runnerId ?? current.runnerId,
-    attemptCount: nextStatus === "running" ? current.attemptCount + 1 : current.attemptCount,
+    attemptCount: nextStatus === "running" && current.status === "queued" ? current.attemptCount + 1 : current.attemptCount,
     lastError: params.error ?? (nextStatus === "running" || nextStatus === "completed" ? null : current.lastError),
     startedAt: nextStatus === "running" ? timestamp : current.startedAt,
     completedAt: nextStatus === "completed" || nextStatus === "skipped" || nextStatus === "cancelled" ? timestamp : current.completedAt,

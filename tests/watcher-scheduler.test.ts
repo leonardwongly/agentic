@@ -89,6 +89,37 @@ describe("watcher scheduler", () => {
     });
   });
 
+  it("allows evaluators to clear stored watcher cursors", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const watcher = await repository.saveWatcher(
+      buildWatcher(bundle.goal.id, {
+        schedule: {
+          enabled: true,
+          dryRun: true,
+          cursor: "stale-cursor",
+          lastRunAt: null,
+          nextRunAt: null,
+          lease: null
+        }
+      })
+    );
+
+    await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      evaluator: async () => ({
+        wouldTrigger: false,
+        reason: "Reset watcher cursor.",
+        cursor: null
+      })
+    });
+    const persisted = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find((candidate) => candidate.id === watcher.id);
+
+    expect(persisted?.schedule.cursor).toBeNull();
+  });
+
   it("claims a trigger once when dry-run is disabled", async () => {
     const { repository, bundle } = await createSchedulerFixture();
     const watcher = await repository.saveWatcher(

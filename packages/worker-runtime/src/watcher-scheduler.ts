@@ -100,7 +100,7 @@ function applyWatcherEvaluationProgress(params: {
     ...params.watcher,
     schedule: {
       ...params.watcher.schedule,
-      cursor: params.evaluation.cursor ?? params.watcher.schedule.cursor,
+      cursor: params.evaluation.cursor === undefined ? params.watcher.schedule.cursor : params.evaluation.cursor,
       lastRunAt: params.evaluatedAt,
       nextRunAt: computeNextRunAt(params.watcher, params.evaluatedAt),
       lease: null
