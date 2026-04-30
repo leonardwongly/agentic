@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   collectWorkflowActionUses,
   validateWorkflowActionPins,
@@ -55,6 +56,32 @@ jobs:
     steps:
       - { uses: actions/checkout@v6, with: { fetch-depth: 0 } }
       - { "uses": "actions/setup-node@v6" }
+`
+    );
+
+    expect(validateWorkflowActionPins(uses)).toEqual([
+      expect.objectContaining({
+        line: 5,
+        value: "actions/checkout@v6",
+        reason: "External GitHub Action reference must be pinned to a 40-character lowercase commit SHA."
+      }),
+      expect.objectContaining({
+        line: 6,
+        value: "actions/setup-node@v6",
+        reason: "External GitHub Action reference must be pinned to a 40-character lowercase commit SHA."
+      })
+    ]);
+  });
+
+  it("detects flow-style uses mappings even when uses is not the first key", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - { name: Checkout, uses: actions/checkout@v6, with: { fetch-depth: 0 } }
+      - { name: Setup, "uses": "actions/setup-node@v6" }
 `
     );
 
@@ -214,5 +241,19 @@ jobs:
         value: "example/action@0123456789012345678901234567890123456789#quoted"
       })
     ]);
+  });
+
+  it("runs CI provenance validation in a gate before mutable validation steps", () => {
+    const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+    const gateIndex = workflow.indexOf("  provenance-gate:");
+    const validateIndex = workflow.indexOf("  validate:");
+    const gateBlock = workflow.slice(gateIndex, validateIndex);
+
+    expect(gateIndex).toBeGreaterThanOrEqual(0);
+    expect(validateIndex).toBeGreaterThan(gateIndex);
+    expect(workflow).toMatch(/validate:\n\s+needs:\s+provenance-gate/u);
+    expect(gateBlock).toContain("Validate GitHub Actions provenance pins");
+    expect(gateBlock).toContain("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6");
+    expect(gateBlock).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6");
   });
 });

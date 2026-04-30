@@ -91,14 +91,19 @@ function parseYamlKeyValueLine(line: string): { indent: number; key: string; val
 }
 
 function parseYamlFlowUsesLine(line: string): { indent: number; value: string } | null {
-  const match = line.match(/^(\s*)-\s*\{\s*(?:"uses"|'uses'|uses)\s*:\s*([^,}]+)(?:[,}].*)$/u);
-  if (!match) {
+  const mapping = line.match(/^(\s*)-\s*\{(.*)\}\s*(?:#.*)?$/u);
+  if (!mapping) {
+    return null;
+  }
+
+  const uses = mapping[2].match(/(?:^|,)\s*(?:"uses"|'uses'|uses)\s*:\s*([^,}]+)/u);
+  if (!uses) {
     return null;
   }
 
   return {
-    indent: match[1].length,
-    value: match[2].trim()
+    indent: mapping[1].length,
+    value: uses[1].trim()
   };
 }
 
