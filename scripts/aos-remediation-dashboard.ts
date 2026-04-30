@@ -455,7 +455,7 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
     }
   }
   lines.push(
-    "- Live coverage query: `gh api --paginate --slurp repos/leonardwongly/agentic/issues?state=all&per_page=100`"
+    `- Live coverage query: \`gh api --paginate --slurp repos/${tracker.repository}/issues?state=all&per_page=100\``
   );
 
   return `${lines.join("\n")}\n`;
