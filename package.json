@@ -46,7 +46,7 @@
     "worktree:cleanup": "tsx scripts/cleanup-parallel-worktrees.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.82.0",
+    "@anthropic-ai/sdk": "0.91.1",
     "drizzle-orm": "^0.45.2",
     "googleapis": "^171.4.0",
     "jszip": "^3.10.1",
