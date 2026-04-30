@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { z } from "zod";
-import { PrivacyOperationKindSchema, PrivacyOperationSchema } from "@agentic/contracts";
+import { PrivacyOperationKindSchema, PrivacyOperationSchema, enterpriseWorkspaceGovernanceDefaults } from "@agentic/contracts";
 import { buildPrivacyControlSummary } from "@agentic/policy";
 import { enqueuePrivacyOperationJob } from "@agentic/worker-runtime";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
@@ -113,7 +113,13 @@ export async function POST(request: Request) {
       requestedBy: principal.userId,
       actorContext,
       jobId: null,
-      details: body.kind === "retention_enforcement" ? { retentionDays: dashboard.workspaceGovernance?.retentionDays ?? 90 } : {},
+      details:
+        body.kind === "retention_enforcement"
+          ? {
+              retentionDays:
+                dashboard.workspaceGovernance?.retentionDays ?? enterpriseWorkspaceGovernanceDefaults.retentionDays
+            }
+          : {},
       result: {},
       startedAt: null,
       completedAt: null,
