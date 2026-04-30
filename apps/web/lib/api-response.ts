@@ -78,7 +78,7 @@ export function authenticatedRedirect(url: string | URL, init?: ResponseInit & {
 }
 
 export function authenticatedResponse(body: BodyInit | null, init?: ResponseInit) {
-  return new Response(body, {
+  return new NextResponse(body, {
     ...init,
     headers: appendCorrelationHeaders(applyBaseSecurityHeaders(mergeHeaders(init, {
       "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
@@ -90,7 +90,7 @@ export function authenticatedResponse(body: BodyInit | null, init?: ResponseInit
 }
 
 export function operationalResponse(body: BodyInit | null, init?: ResponseInit) {
-  return new Response(body, {
+  return new NextResponse(body, {
     ...init,
     headers: appendCorrelationHeaders(applyBaseSecurityHeaders(mergeHeaders(init, {
       "Cache-Control": OPERATIONAL_API_CACHE_CONTROL,

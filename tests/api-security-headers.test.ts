@@ -17,7 +17,7 @@ const RAW_RESPONSE_EXCEPTION_FILES = new Set(["apps/web/app/api/agents/activity/
 
 function listRouteFiles(directory: string): string[] {
   return readdirSync(path.resolve(process.cwd(), directory), { withFileTypes: true }).flatMap((entry) => {
-    const relativePath = path.join(directory, entry.name);
+    const relativePath = path.posix.join(directory, entry.name);
 
     if (entry.isDirectory()) {
       return listRouteFiles(relativePath);
@@ -99,7 +99,8 @@ describe("api security headers", () => {
       const forbiddenPatterns = [
         { name: "NextResponse.json", pattern: /\bNextResponse\.json\s*\(/u },
         { name: "Response.json", pattern: /\bResponse\.json\s*\(/u },
-        { name: "new Response", pattern: /\bnew\s+Response\s*\(/u }
+        { name: "new Response", pattern: /\bnew\s+Response\s*\(/u },
+        { name: "new NextResponse", pattern: /\bnew\s+NextResponse\s*\(/u }
       ];
 
       return forbiddenPatterns
