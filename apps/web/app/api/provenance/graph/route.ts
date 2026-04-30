@@ -30,6 +30,12 @@ function rootIdParts(rootId: string | null): { type: string; id: string } | null
   };
 }
 
+function goalIdFromJobPayload(payload: unknown): string | null {
+  return typeof payload === "object" && payload !== null && "goalId" in payload && typeof payload.goalId === "string"
+    ? payload.goalId
+    : null;
+}
+
 async function listRawMemoriesForProvenance(
   repository: Awaited<ReturnType<typeof getSeededRepository>>,
   userId: string,
@@ -89,11 +95,17 @@ export async function GET(request: Request) {
     const repository = await getSeededRepository();
     const rootGoalId = goalIdFromRoot(query.rootId);
     const root = rootIdParts(query.rootId);
-    const goalsPromise = rootGoalId
-      ? repository.getGoalBundleForUser(rootGoalId, principal.userId).then((goal) => (goal ? [goal] : []))
-      : repository.listGoalsPage({ userId: principal.userId, limit: query.limit }).then((page) => page.items);
     const rootJobPromise =
       root?.type === "job" || root?.type === "failure" ? repository.getJob(root.id, principal.userId) : Promise.resolve(null);
+    const goalsPromise = rootJobPromise.then(async (rootJob) => {
+      const rootJobGoalId = rootJob ? goalIdFromJobPayload(rootJob.payload) : null;
+      if (rootGoalId || rootJobGoalId) {
+        const rootGoal = await repository.getGoalBundleForUser(rootGoalId ?? rootJobGoalId!, principal.userId);
+        const page = await repository.listGoalsPage({ userId: principal.userId, limit: query.limit });
+        return rootGoal ? [rootGoal, ...page.items.filter((goal) => goal.goal.id !== rootGoal.goal.id)] : page.items;
+      }
+      return repository.listGoalsPage({ userId: principal.userId, limit: query.limit }).then((page) => page.items);
+    });
     const memoriesPromise = listRawMemoriesForProvenance(repository, principal.userId, query.limit);
     const rootMemoryPromise = findRootMemoryForProvenance(repository, principal.userId, root);
     const [goals, jobs, memories, evidenceRecords, rootJob, rootMemory] = await Promise.all([

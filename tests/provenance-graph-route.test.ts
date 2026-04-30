@@ -98,6 +98,15 @@ describe("provenance graph route", () => {
       integrations: []
     });
     await repository.saveGoalBundle(bundle);
+    for (let index = 0; index < 3; index += 1) {
+      const newerBundle = await processUserRequest({
+        userId: SYSTEM_USER_ID,
+        request: `Prepare newer goal ${index}.`,
+        memories: [],
+        integrations: []
+      });
+      await repository.saveGoalBundle(newerBundle);
+    }
     const rootJob = await repository.enqueueJob(
       createJobRecord({
         id: "older-root-job",
@@ -136,12 +145,13 @@ describe("provenance graph route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await graphRoute(
-      buildAuthorizedGetRequest(`http://localhost/api/provenance/graph?rootId=job:${rootJob.id}&limit=1`)
+      buildAuthorizedGetRequest(`http://localhost/api/provenance/graph?rootId=job:${rootJob.id}&limit=2`)
     );
     const payload = (await response.json()) as { graph: { nodes: Array<{ id: string }> } };
 
     expect(response.status).toBe(200);
     expect(payload.graph.nodes.some((node) => node.id === `job:${rootJob.id}`)).toBe(true);
+    expect(payload.graph.nodes.some((node) => node.id === `goal:${bundle.goal.id}`)).toBe(true);
   });
 
   it("resolves long memory roots with bounded pages instead of unbounded scans", async () => {
