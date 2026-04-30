@@ -2,13 +2,14 @@ import { createHumanActorContext } from "@agentic/contracts";
 import {
   verifySlackSignature
 } from "@agentic/integrations";
+import { logError } from "@agentic/observability";
 import { ApprovalMutationError } from "@agentic/repository";
 import {
   enqueueApprovalNotificationJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
-import { resolveSlackActorUserId, verifySlackApprovalToken } from "../../../../lib/slack-approvals";
 import { operationalJson } from "../../../../lib/api-response";
+import { resolveSlackActorUserId, verifySlackApprovalToken } from "../../../../lib/slack-approvals";
 import { getSeededRepository } from "../../../../lib/server";
 
 /**
@@ -162,7 +163,7 @@ export async function POST(request: Request) {
     // Return 200 to Slack so it stops retrying
     return operationalJson({ ok: true });
   } catch (error) {
-    console.error("[slack-webhook] Unhandled error:", error);
+    logError("slack.webhook.unhandled_error", error);
     return operationalJson({ error: "Internal server error." }, { status: 500 });
   }
 }

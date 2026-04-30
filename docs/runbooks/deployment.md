@@ -64,6 +64,8 @@ npm run db:migrate
 npm run db:status -- --require-ready
 ```
 
+`db:status` also verifies the shared auth runtime tables and indexes required by session rate limiting, session revocation, and unlock throttling. A `required_schema_missing` status means the database has migration metadata but is missing one or more required auth runtime objects; treat it as a release blocker and run the additive migrations before process startup.
+
 5. Run the automated test suite before rollout.
 
 ```bash
@@ -265,3 +267,5 @@ npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.age
 5. Investigate the failed release before attempting another deploy.
 
 Do not attempt to roll schema backward automatically during incident response unless you have a separately tested backward migration plan. Agentic rollbacks should restore the previous application version while keeping schema changes explicit and operator-reviewed.
+
+The shared auth runtime migration is additive and idempotent. Roll back a failed application release by restoring the previous application image while keeping those auth/session tables and indexes in place; dropping them can clear revocation and throttling state and should require a separate operator-approved data plan.

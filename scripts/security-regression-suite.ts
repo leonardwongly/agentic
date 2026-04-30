@@ -32,6 +32,7 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
     id: "authorization-governance-and-tenant-isolation",
     description: "Preserve tenant isolation, scoped access, and governed route behavior.",
     files: [
+      "tests/governed-route.test.ts",
       "tests/route-user-scope.test.ts",
       "tests/governance-privacy-route.test.ts",
       "tests/governance-audit-route.test.ts"
@@ -41,6 +42,7 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
     id: "idempotency-replay-and-duplicate-submission",
     description: "Prevent duplicate submissions, replayed events, and retried mutations from corrupting state.",
     files: [
+      "tests/governed-route.test.ts",
       "tests/goal-route.test.ts",
       "tests/briefing-route.test.ts",
       "tests/docs-render-route.test.ts",
@@ -88,7 +90,7 @@ function printSuiteSummary(categories: SecurityRegressionCategory[]) {
 }
 
 function runVitest(files: string[]): number {
-  const result = spawnSync("npm", ["exec", "--", "vitest", "run", ...files], {
+  const result = spawnSync("npm", ["exec", "--", "vitest", "run", "--no-file-parallelism", ...files], {
     stdio: "inherit",
     env: process.env
   });

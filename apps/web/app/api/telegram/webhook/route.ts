@@ -4,17 +4,18 @@ import {
   answerTelegramCallbackQuery,
   verifyTelegramWebhookSecret
 } from "@agentic/integrations";
+import { logError } from "@agentic/observability";
 import { ApprovalMutationError } from "@agentic/repository";
 import {
   enqueueApprovalNotificationJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
+import { operationalJson } from "../../../../lib/api-response";
 import {
   consumeTelegramApprovalActions,
   getTelegramApprovalAction,
   resolveTelegramActorUserId
 } from "../../../../lib/telegram-approvals";
-import { operationalJson } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
 
 const TelegramIdentifierSchema = z.union([z.string().trim().min(1), z.number().int()]).transform((value) => String(value).trim());
@@ -53,7 +54,7 @@ async function acknowledgeTelegramCallback(callbackQueryId: string, text: string
       showAlert
     });
   } catch (error) {
-    console.error("[telegram-webhook] Failed to answer callback query:", error);
+    logError("telegram.webhook.callback_ack_failed", error);
   }
 }
 
@@ -196,7 +197,7 @@ export async function POST(request: Request) {
 
     return operationalJson({ ok: true });
   } catch (error) {
-    console.error("[telegram-webhook] Unhandled error:", error);
+    logError("telegram.webhook.unhandled_error", error);
     return operationalJson({ error: "Internal server error." }, { status: 500 });
   }
 }

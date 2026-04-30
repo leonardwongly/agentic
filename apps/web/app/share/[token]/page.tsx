@@ -1,11 +1,10 @@
 import { notFound } from "next/navigation";
 import {
   buildSharedGoalView,
-  createGoalShareExpiredLog,
-  createGoalShareFailedAccessLog,
   fingerprintGoalShareToken,
   inspectGoalShareToken
 } from "../../../lib/share";
+import { auditBlockedShareAccess } from "../../../lib/share-audit";
 import { PublicShareViewTracker } from "../../../components/public-share-view-tracker";
 import { getSeededRepository } from "../../../lib/server";
 
@@ -16,35 +15,6 @@ type SharePageProps = {
     token: string;
   }>;
 };
-
-async function auditBlockedShareAccess(params: {
-  repository: Awaited<ReturnType<typeof getSeededRepository>>;
-  goalId: string;
-  shareId: string;
-  tokenFingerprint: string;
-  reason: "expired" | "revoked" | "not_found";
-}) {
-  const bundle = await params.repository.getGoalBundle(params.goalId);
-
-  if (!bundle) {
-    return;
-  }
-
-  const now = Date.now();
-  const logs = [
-    ...(params.reason === "expired"
-      ? [createGoalShareExpiredLog(bundle, params.shareId, params.tokenFingerprint, now)]
-      : []),
-    createGoalShareFailedAccessLog(bundle, params.shareId, params.tokenFingerprint, params.reason, now)
-  ].filter((log) => log !== null);
-
-  if (logs.length > 0) {
-    await params.repository.saveGoalBundle({
-      ...bundle,
-      actionLogs: [...bundle.actionLogs, ...logs]
-    });
-  }
-}
 
 export default async function ShareGoalPage({ params }: SharePageProps) {
   const { token } = await params;
@@ -114,7 +84,9 @@ export default async function ShareGoalPage({ params }: SharePageProps) {
           <p className="lede">{sharedGoal.explanation}</p>
           <p className="public-share-disclosure">
             This read-only page shows a reviewed public projection. Internal requests, approvals, watcher details,
-            action logs, memory context, workflow checkpoints, artifact bodies, and artifact metadata stay hidden.
+            action logs, memory context, workflow checkpoints, artifact bodies, and internal artifact metadata stay
+            hidden. Basic artifact listing details, such as titles, types, and timestamps included in the public
+            projection, may still be shown.
           </p>
         </div>
         <div className="hero-actions">

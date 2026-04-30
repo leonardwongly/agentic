@@ -3,6 +3,12 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
+import {
+  getRequiredAuthRuntimeSchemaObjectStatus,
+  REQUIRED_AUTH_RUNTIME_INDEXES,
+  REQUIRED_AUTH_RUNTIME_TABLES,
+  type AuthRuntimeSchemaObjectStatus
+} from "./auth-runtime-schema";
 
 const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const SCHEMA_MIGRATIONS_TABLE = "agentic_schema_migrations";
@@ -50,11 +56,18 @@ export type DatabaseMigrationFile = {
 export type DatabaseSchemaStatus = {
   reachable: boolean;
   ready: boolean;
-  failureReason: "unreachable" | "metadata_missing" | "pending_migrations" | "migration_drift" | null;
+  failureReason:
+    | "unreachable"
+    | "metadata_missing"
+    | "pending_migrations"
+    | "migration_drift"
+    | "required_schema_missing"
+    | null;
   missingMetadataTable: boolean;
   appliedMigrations: string[];
   pendingMigrations: string[];
   driftedMigrations: string[];
+  requiredSchemaObjects: AuthRuntimeSchemaObjectStatus;
   lastAppliedAt: string | null;
 };
 
@@ -96,6 +109,12 @@ function createEmptySchemaStatus(overrides?: Partial<DatabaseSchemaStatus>): Dat
     appliedMigrations: [],
     pendingMigrations: [],
     driftedMigrations: [],
+    requiredSchemaObjects: {
+      tables: [...REQUIRED_AUTH_RUNTIME_TABLES],
+      indexes: [...REQUIRED_AUTH_RUNTIME_INDEXES],
+      missingTables: [],
+      missingIndexes: []
+    },
     lastAppliedAt: null,
     ...overrides
   };
@@ -164,6 +183,7 @@ function summarizeDatabaseSchemaStatus(params: {
   missingMetadataTable: boolean;
   pendingMigrations: string[];
   driftedMigrations: string[];
+  requiredSchemaObjects?: DatabaseSchemaStatus["requiredSchemaObjects"];
 }): Pick<DatabaseSchemaStatus, "ready" | "failureReason"> {
   if (params.driftedMigrations.length > 0) {
     return {
@@ -176,6 +196,16 @@ function summarizeDatabaseSchemaStatus(params: {
     return {
       ready: false,
       failureReason: params.missingMetadataTable ? "metadata_missing" : "pending_migrations"
+    };
+  }
+
+  if (
+    params.requiredSchemaObjects &&
+    (params.requiredSchemaObjects.missingTables.length > 0 || params.requiredSchemaObjects.missingIndexes.length > 0)
+  ) {
+    return {
+      ready: false,
+      failureReason: "required_schema_missing"
     };
   }
 
@@ -194,6 +224,8 @@ function buildSchemaNotReadyMessage(status: DatabaseSchemaStatus): string {
       return "Database schema is not ready. Run database migrations before starting the application.";
     case "migration_drift":
       return "Database migration metadata does not match the checked-in migration files.";
+    case "required_schema_missing":
+      return "Database schema is missing required runtime tables or indexes. Run database migrations before starting the application.";
     default:
       return "Database schema is not ready.";
   }
@@ -244,9 +276,9 @@ export async function getDatabaseSchemaStatus(options?: {
         });
       }
 
-      const metadataTableResult = await queryable.query<{ exists: string | null }>(
-        `select to_regclass('public.${SCHEMA_MIGRATIONS_TABLE}') as exists`
-      );
+      const metadataTableResult = await queryable.query<{ exists: string | null }>("select to_regclass($1) as exists", [
+        SCHEMA_MIGRATIONS_TABLE
+      ]);
       const metadataTableExists = Boolean(metadataTableResult.rows[0]?.exists);
 
       if (!metadataTableExists) {
@@ -265,6 +297,7 @@ export async function getDatabaseSchemaStatus(options?: {
       }
 
       const appliedRows = await loadAppliedMigrationRows(queryable);
+      const requiredSchemaObjects = await getRequiredAuthRuntimeSchemaObjectStatus(queryable);
       const appliedByName = new Map(appliedRows.map((row) => [row.name, row]));
       const migrationNames = new Set(migrationFiles.map((migration) => migration.name));
       const pendingMigrations: string[] = [];
@@ -292,7 +325,8 @@ export async function getDatabaseSchemaStatus(options?: {
       const summary = summarizeDatabaseSchemaStatus({
         missingMetadataTable: false,
         pendingMigrations,
-        driftedMigrations
+        driftedMigrations,
+        requiredSchemaObjects
       });
 
       return createEmptySchemaStatus({
@@ -300,6 +334,7 @@ export async function getDatabaseSchemaStatus(options?: {
         appliedMigrations: appliedRows.map((row) => row.name),
         pendingMigrations,
         driftedMigrations: Array.from(new Set(driftedMigrations)).sort((left, right) => left.localeCompare(right)),
+        requiredSchemaObjects,
         lastAppliedAt: appliedRows.length > 0 ? appliedRows[appliedRows.length - 1]!.appliedAt : null
       });
     }

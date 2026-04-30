@@ -25,12 +25,14 @@ export const BASE_SECURITY_HEADERS = [
   }
 ] as const;
 
-export function applyBaseSecurityHeaders(headers?: HeadersInit): Headers {
-  const merged = new Headers(headers);
-
+export function applyBaseSecurityHeaders(headers: Headers): Headers {
   for (const { key, value } of BASE_SECURITY_HEADERS) {
-    merged.set(key, value);
+    headers.set(key, value);
   }
 
-  return merged;
+  return headers;
+}
+
+export function withBaseSecurityHeaders(init?: HeadersInit): Headers {
+  return applyBaseSecurityHeaders(new Headers(init));
 }

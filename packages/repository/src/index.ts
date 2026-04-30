@@ -124,12 +124,12 @@ import {
 } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord, getMemoryFreshness } from "@agentic/memory";
-import { buildApprovalResponseMutation } from "./approval-response-helpers";
+import { assertApprovalFollowUpJobOwner, buildApprovalResponseMutation } from "./approval-response-helpers";
 import {
   buildFallbackApprovalActionIntent,
   buildFallbackApprovalPreview
 } from "./approval-fallbacks";
-import { assertWorkspaceGovernanceStartupConfig, resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults";
+import { assertWorkspaceGovernanceStartupConfig, resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults"; export { resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults";
 import { deriveAgentMetricsFromGoals } from "./agent-metrics";
 import {
   buildPendingAutopilotEvent,
@@ -154,12 +154,10 @@ import {
   sortCommitments,
   CommitmentInboxQueryError
 } from "./commitment-helpers";
+import { claimWatcherLeaseInRuntimeStore, claimWatcherLeaseWithPostgresClient, type WatcherLeaseClaimParams } from "./watcher-lease-helpers";
 import { assembleDashboardData } from "./dashboard-data";
-import {
-  buildBriefingHistory,
-  buildDashboardControlPlane,
-  buildNowQueue
-} from "./dashboard-control-plane";
+import { appendGoalActionLogsToStore, appendGoalActionLogsWithClient } from "./action-log-append";
+import { buildBriefingHistory, buildDashboardControlPlane, buildNowQueue } from "./dashboard-control-plane";
 import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 import {
@@ -186,6 +184,7 @@ import {
   type DashboardControlPlane,
   type DashboardControlPlaneSection,
   type DashboardData,
+  type DashboardDiagnostic,
   type DashboardDiagnostics,
   type GoalPageParams,
   type GoalShareListFilters,
@@ -197,7 +196,6 @@ import {
   type WorkspaceRetentionParams
 } from "./repository-types";
 import { buildWorkspaceAuditExport } from "./workspace-audit-export";
-
 const UserRecordSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -253,27 +251,7 @@ const RuntimeStoreSchema = z.object({
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 
 export { CommitmentInboxQueryError, CollectionPageQueryError };
-export {
-  ApprovalMutationError,
-  JobMutationError,
-  type AgenticRepository,
-  type AutopilotEventClaim,
-  type CollectionPageParams,
-  type DashboardControlPlane,
-  type DashboardControlPlaneSection,
-  type DashboardData,
-  type DashboardDiagnostic,
-  type DashboardDiagnosticTarget,
-  type DashboardDiagnostics,
-  type GoalPageParams,
-  type GoalShareListFilters,
-  type PrivacyOperationListFilters,
-  type WatcherListFilters,
-  type WatcherPageParams,
-  type WorkspaceAuditExport,
-  type WorkspaceDeleteParams,
-  type WorkspaceRetentionParams
-} from "./repository-types";
+export { ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters, type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
 
 const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
@@ -700,12 +678,6 @@ function mergeGoalBundleIntoStore(store: RuntimeStore, bundle: GoalBundle): Goal
 
   store.actionLogs = uniqueById([...store.actionLogs, ...validated.actionLogs]);
   return validated;
-}
-
-function assertGoalExistsInStore(store: RuntimeStore, goalId: string): void {
-  if (!store.goals.some((goal) => goal.id === goalId)) {
-    throw new Error(`Goal ${goalId} was not found.`);
-  }
 }
 
 function personalWorkspaceIdForUser(userId: string): string {
@@ -1678,6 +1650,11 @@ class FileRepository implements AgenticRepository {
     });
   }
 
+  async appendGoalActionLogs(goalId: string, logs: ActionLog[]): Promise<ActionLog[]> {
+    return this.withMutationLock(async () =>
+      appendGoalActionLogsToStore(await this.readStore(), goalId, logs, (store) => this.writeStore(store)));
+  }
+
   async respondToApproval(params: {
     approvalId: string;
     decision: Exclude<ApprovalDecision, "pending">;
@@ -1774,6 +1751,7 @@ class FileRepository implements AgenticRepository {
         rationale: params.rationale
       });
       const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      assertApprovalFollowUpJobOwner(validatedJob, userId);
       const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
       const existingJob = trimmedKey
         ? store.jobs.find((candidate) => candidate.userId === validatedJob.userId && candidate.idempotencyKey === trimmedKey)
@@ -2540,6 +2518,20 @@ class FileRepository implements AgenticRepository {
         id: watcher.id
       }),
       parsePage: (page) => WatcherPageSchema.parse(page)
+    });
+  }
+
+  async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const leased = claimWatcherLeaseInRuntimeStore({ watchers: store.watchers, visibleGoalIds: goalIdsForUser(store, params.userId ?? SYSTEM_USER_ID), lease: params, normalizeWatcher: (watcher) => {
+        const goal = goalByIdFromStore(store, watcher.goalId);
+        return goal ? normalizeWatcherForGoal(goal, watcher) : WatcherSchema.parse(clone(watcher));
+      } });
+      if (leased) {
+        await this.writeStore(store);
+      }
+      return leased;
     });
   }
 
@@ -3916,6 +3908,9 @@ class PostgresRepository implements AgenticRepository {
       sourceSystems: row.source_systems ?? [],
       status: row.status,
       expiryAt: row.expiry_at ? new Date(row.expiry_at as string | number | Date).toISOString() : null,
+      schedule: row.schedule ?? undefined,
+      lastEvaluation: row.last_evaluation ?? null,
+      escalationPolicy: row.escalation_policy ?? undefined,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       responsibility: row.team_responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
@@ -5013,9 +5008,9 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, team_responsibility, sort_order, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, schedule, last_evaluation, escalation_policy, actor_context, team_responsibility, sort_order, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, $17)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -5025,6 +5020,9 @@ class PostgresRepository implements AgenticRepository {
               source_systems = excluded.source_systems,
               status = excluded.status,
               expiry_at = excluded.expiry_at,
+              schedule = excluded.schedule,
+              last_evaluation = excluded.last_evaluation,
+              escalation_policy = excluded.escalation_policy,
               actor_context = excluded.actor_context,
               team_responsibility = excluded.team_responsibility,
               sort_order = excluded.sort_order,
@@ -5040,6 +5038,9 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(watcher.sourceSystems),
           watcher.status,
           watcher.expiryAt,
+          JSON.stringify(watcher.schedule),
+          JSON.stringify(watcher.lastEvaluation),
+          JSON.stringify(watcher.escalationPolicy),
           JSON.stringify(watcher.actorContext),
           JSON.stringify(watcher.responsibility),
           sortOrder,
@@ -5944,6 +5945,10 @@ class PostgresRepository implements AgenticRepository {
     return GoalBundleSchema.parse(clone(validated));
   }
 
+  async appendGoalActionLogs(goalId: string, logs: ActionLog[]): Promise<ActionLog[]> {
+    return this.withTransaction((client) => appendGoalActionLogsWithClient(client, goalId, logs));
+  }
+
   async respondToApproval(params: {
     approvalId: string;
     decision: Exclude<ApprovalDecision, "pending">;
@@ -6073,11 +6078,10 @@ class PostgresRepository implements AgenticRepository {
         rationale: params.rationale
       });
       const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      assertApprovalFollowUpJobOwner(validatedJob, userId);
       const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
-      let savedJob = JobRecordSchema.parse({
-        ...validatedJob,
-        idempotencyKey: trimmedKey
-      });
+      let savedJob = JobRecordSchema.parse({ ...validatedJob, idempotencyKey: trimmedKey });
+      let shouldSaveJob = true;
 
       if (trimmedKey) {
         await client.query("select pg_advisory_xact_lock(hashtext($1))", [`job:${validatedJob.userId}:${trimmedKey}`]);
@@ -6093,16 +6097,16 @@ class PostgresRepository implements AgenticRepository {
 
         if (existing.rows[0]) {
           savedJob = this.mapJobRow(existing.rows[0]);
+          shouldSaveJob = false;
         }
       }
 
       await this.upsertGoalBundle(client, updatedBundle);
       await this.saveEvidenceRecordWithClient(client, evidenceRecord);
 
-      if (savedJob.id === validatedJob.id) {
+      if (shouldSaveJob) {
         await this.saveJobWithClient(client, savedJob);
       }
-
       return {
         bundle: parsedBundle,
         job: JobRecordSchema.parse(clone(savedJob))
@@ -7204,22 +7208,7 @@ class PostgresRepository implements AgenticRepository {
       values
     );
 
-    return result.rows.map((row) =>
-      WatcherSchema.parse({
-        id: row.id,
-        goalId: row.goal_id,
-        targetEntity: row.target_entity,
-        condition: row.condition,
-        frequency: row.frequency,
-        triggerAction: row.trigger_action,
-        sourceSystems: row.source_systems ?? [],
-        status: row.status,
-        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-        createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
-      })
-    );
+    return result.rows.map((row) => this.mapWatcherRow(row));
   }
 
   async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
@@ -7278,6 +7267,11 @@ class PostgresRepository implements AgenticRepository {
     });
   }
 
+  async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
+    await this.ready;
+    return this.withTransaction((client) => claimWatcherLeaseWithPostgresClient({ client, userId: params.userId ?? SYSTEM_USER_ID, lease: params, mapWatcherRow: (row) => this.mapWatcherRow(row) }));
+  }
+
   async saveWatcher(watcher: Watcher): Promise<Watcher> {
     const validated = WatcherSchema.parse(watcher);
 
@@ -7293,9 +7287,9 @@ class PostgresRepository implements AgenticRepository {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, team_responsibility, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, schedule, last_evaluation, escalation_policy, actor_context, team_responsibility, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -7305,6 +7299,9 @@ class PostgresRepository implements AgenticRepository {
               source_systems = excluded.source_systems,
               status = excluded.status,
               expiry_at = excluded.expiry_at,
+              schedule = excluded.schedule,
+              last_evaluation = excluded.last_evaluation,
+              escalation_policy = excluded.escalation_policy,
               actor_context = excluded.actor_context,
               team_responsibility = excluded.team_responsibility,
               updated_at = excluded.updated_at
@@ -7319,6 +7316,9 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(normalized.sourceSystems),
           normalized.status,
           normalized.expiryAt,
+          JSON.stringify(normalized.schedule),
+          JSON.stringify(normalized.lastEvaluation),
+          JSON.stringify(normalized.escalationPolicy),
           JSON.stringify(normalized.actorContext),
           JSON.stringify(normalized.responsibility),
           normalized.createdAt,

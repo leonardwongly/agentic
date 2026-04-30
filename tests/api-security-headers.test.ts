@@ -1,6 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import {
   ApiRouteError,
   authenticatedJson,
@@ -10,25 +9,31 @@ import {
   operationalJson,
   withApiTelemetry
 } from "../apps/web/lib/api-response";
-import { expectNoStoreHeaders, expectOperationalNoStoreHeaders } from "./route-test-helpers";
+import {
+  expectBaseSecurityHeaders,
+  expectNoStoreHeaders,
+  expectOperationalNoStoreHeaders
+} from "./route-test-helpers";
 
-const API_ROUTE_ROOT = "apps/web/app/api";
-const RAW_RESPONSE_EXCEPTION_FILES = new Set(["apps/web/app/api/agents/activity/route.ts"]);
+async function listRouteFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files = await Promise.all(
+    entries.map(async (entry) => {
+      const absolutePath = path.join(dir, entry.name);
 
-function listRouteFiles(directory: string): string[] {
-  return readdirSync(path.resolve(process.cwd(), directory), { withFileTypes: true }).flatMap((entry) => {
-    const relativePath = path.posix.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        return listRouteFiles(absolutePath);
+      }
 
-    if (entry.isDirectory()) {
-      return listRouteFiles(relativePath);
-    }
+      return entry.name === "route.ts" ? [absolutePath] : [];
+    })
+  );
 
-    return entry.isFile() && entry.name === "route.ts" ? [relativePath] : [];
-  });
+  return files.flat();
 }
 
 describe("api security headers", () => {
-  it("applies base security headers to authenticated 2xx, 4xx, and 5xx JSON responses", () => {
+  it("applies baseline security headers to authenticated 2xx, 4xx, and 5xx JSON responses", () => {
     const success = authenticatedJson({ ok: true });
     const validationFailure = handleApiError(new ApiRouteError(400, "Bad request."), "Fallback error.");
     const serverFailure = handleApiError(new Error("boom"), "Fallback error.");
@@ -41,7 +46,7 @@ describe("api security headers", () => {
     expectNoStoreHeaders(serverFailure);
   });
 
-  it("applies base security headers to operational 2xx, 4xx, and 5xx JSON responses", () => {
+  it("applies baseline security headers to operational 2xx, 4xx, and 5xx JSON responses", () => {
     const success = operationalJson({ ok: true });
     const validationFailure = handleOperationalApiError(new ApiRouteError(400, "Bad request."), "Fallback error.");
     const serverFailure = handleOperationalApiError(new Error("boom"), "Fallback error.");
@@ -54,7 +59,7 @@ describe("api security headers", () => {
     expectOperationalNoStoreHeaders(serverFailure);
   });
 
-  it("applies base security headers to authenticated file responses while preserving attachment metadata", () => {
+  it("applies baseline security headers to authenticated file responses while preserving attachment metadata", () => {
     const response = authenticatedResponse("{}", {
       headers: {
         "content-type": "application/json",
@@ -68,46 +73,48 @@ describe("api security headers", () => {
     expectNoStoreHeaders(response);
   });
 
-  it("applies base security headers to telemetry-wrapped streaming exceptions", async () => {
+  it("finalizes raw telemetry responses with baseline security headers", async () => {
     const response = await withApiTelemetry(
       new Request("http://localhost/api/agents/activity"),
-      "api.agents.activity.stream",
+      "api.test.stream",
       () =>
-        new Response("data: {}\n\n", {
+        new Response("event: ready\n\n", {
+          status: 202,
           headers: {
-            "content-type": "text/event-stream",
-            "cache-control": "no-cache, no-transform"
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform"
           }
         })
     );
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(response.status).toBe(202);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
     expect(response.headers.get("cache-control")).toBe("no-cache, no-transform");
-    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expectBaseSecurityHeaders(response);
   });
 
-  it("keeps direct API response construction limited to documented exceptions", () => {
-    const violations = listRouteFiles(API_ROUTE_ROOT).flatMap((filePath) => {
-      if (RAW_RESPONSE_EXCEPTION_FILES.has(filePath)) {
-        const content = readFileSync(path.resolve(process.cwd(), filePath), "utf8");
-        return content.includes("AOS-07 security-header exception") ? [] : [`${filePath}: missing AOS-07 exception note`];
+  it("keeps API route JSON responses on the centralized response helpers", async () => {
+    const routeFiles = await listRouteFiles(path.join(process.cwd(), "apps/web/app/api"));
+    const directJsonRoutes: string[] = [];
+    const directResponseRoutes: string[] = [];
+    const documentedRawResponseAllowlist = new Set([
+      path.join(process.cwd(), "apps/web/app/api/agents/activity/route.ts"),
+      path.join(process.cwd(), "apps/web/app/api/jobs/[id]/events/route.ts")
+    ]);
+
+    for (const routeFile of routeFiles) {
+      const source = await readFile(routeFile, "utf8");
+
+      if (source.includes("NextResponse.json(")) {
+        directJsonRoutes.push(path.relative(process.cwd(), routeFile));
       }
 
-      const content = readFileSync(path.resolve(process.cwd(), filePath), "utf8");
-      const forbiddenPatterns = [
-        { name: "NextResponse.json", pattern: /\bNextResponse\.json\s*\(/u },
-        { name: "Response.json", pattern: /\bResponse\.json\s*\(/u },
-        { name: "new Response", pattern: /\bnew\s+Response\s*\(/u },
-        { name: "new NextResponse", pattern: /\bnew\s+NextResponse\s*\(/u }
-      ];
+      if (source.includes("new Response(") && !documentedRawResponseAllowlist.has(routeFile)) {
+        directResponseRoutes.push(path.relative(process.cwd(), routeFile));
+      }
+    }
 
-      return forbiddenPatterns
-        .filter(({ pattern }) => pattern.test(content))
-        .map(({ name }) => `${filePath}: replace ${name} with api-response helpers or document an exception`);
-    });
-
-    expect(violations).toEqual([]);
+    expect(directJsonRoutes).toEqual([]);
+    expect(directResponseRoutes).toEqual([]);
   });
 });

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { GoalBundle } from "@agentic/contracts";
 
 export const GOAL_SHARE_DEFAULT_EXPIRY_DAYS = 7;
@@ -31,6 +32,43 @@ export type GoalShareDisclosureReview = {
   summary: string;
 };
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+export function buildGoalShareDisclosureReviewFingerprint(params: {
+  publicProjection: unknown;
+  disclosureReview: GoalShareDisclosureReview;
+}): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      stableJson({
+        publicProjection: params.publicProjection,
+        disclosureReview: {
+          expiryDays: params.disclosureReview.expiryDays,
+          dataClasses: params.disclosureReview.dataClasses,
+          sensitiveFindings: params.disclosureReview.sensitiveFindings,
+          redactedFields: params.disclosureReview.redactedFields,
+          confirmationRequired: params.disclosureReview.confirmationRequired,
+          summary: params.disclosureReview.summary
+        }
+      })
+    )
+    .digest("hex");
+}
+
 const SENSITIVE_FIELD_DETECTORS: Array<{
   detector: GoalShareSensitiveFinding["detector"];
   label: string;
@@ -47,7 +85,7 @@ const SENSITIVE_FIELD_DETECTORS: Array<{
     detector: "phone_number",
     label: "Phone number",
     severity: "medium",
-    pattern: /(?:\+?\d[\d\s().-]{7,}\d)/
+    pattern: /(?:\+?\d{1,3}[-.\s]?)?(?:\(\d{2,4}\)|\d{2,4})[-.\s]?\d{3,4}[-.\s]?\d{3,9}/
   },
   {
     detector: "secret_keyword",
@@ -142,9 +180,9 @@ export function buildGoalShareDisclosureReview(
       {
         id: "artifact_metadata",
         label: "Artifact metadata",
-        disposition: "redacted",
+        disposition: "included",
         fields: ["artifacts.title", "artifacts.artifactType", "artifacts.createdAt"],
-        reason: "Artifact bodies and metadata are replaced with a fixed public placeholder."
+        reason: "Allowlisted artifact summary fields are shared, while artifact bodies and internal metadata fields remain redacted."
       },
       {
         id: "operator_context",

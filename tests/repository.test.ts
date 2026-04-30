@@ -250,6 +250,82 @@ describe("repository", () => {
     });
   }
 
+  it("appends goal action logs without rewriting the full bundle", async () => {
+    const repository = createRepository({
+      storePath: path.join(await mkdtemp(path.join(os.tmpdir(), "agentic-repository-append-logs-")), "runtime-store.json")
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Record public-share audit logs append-only.");
+    const firstLog = {
+      id: "share-audit-append-1",
+      goalId: bundle.goal.id,
+      taskId: null,
+      workflowId: bundle.workflow.id,
+      actor: "public-share",
+      kind: "share.access_failed",
+      message: "Blocked public share access.",
+      details: {
+        shareId: "share-append",
+        tokenFingerprint: "abc123def456",
+        reason: "expired"
+      },
+      createdAt: "2026-04-30T00:00:00.000Z"
+    };
+    const secondLog = {
+      ...firstLog,
+      id: "share-audit-append-2",
+      details: {
+        shareId: "share-append",
+        tokenFingerprint: "abc123def456",
+        reason: "revoked"
+      },
+      createdAt: "2026-04-30T00:00:01.000Z"
+    };
+
+    await repository.appendGoalActionLogs(bundle.goal.id, [firstLog]);
+    await repository.appendGoalActionLogs(bundle.goal.id, [secondLog, firstLog]);
+
+    const reloaded = await repository.getGoalBundle(bundle.goal.id);
+    const appendedLogs = reloaded?.actionLogs.filter((log) => log.id.startsWith("share-audit-append-")) ?? [];
+
+    expect(appendedLogs.map((log) => log.id)).toEqual(["share-audit-append-1", "share-audit-append-2"]);
+    expect(appendedLogs[0]?.message).toBe("Blocked public share access.");
+
+    await repository.appendGoalActionLogs(bundle.goal.id, [
+      {
+        ...firstLog,
+        message: "Mutated duplicate audit entry."
+      }
+    ]);
+
+    const reloadedAfterDuplicate = await repository.getGoalBundle(bundle.goal.id);
+    const duplicateLogs =
+      reloadedAfterDuplicate?.actionLogs.filter((log) => log.id === "share-audit-append-1") ?? [];
+
+    expect(duplicateLogs).toHaveLength(1);
+    expect(duplicateLogs[0]?.message).toBe("Blocked public share access.");
+    expect(reloaded?.tasks.map((task) => task.id)).toEqual(bundle.tasks.map((task) => task.id));
+    await expect(
+      repository.appendGoalActionLogs("missing-goal", [
+        {
+          ...firstLog,
+          id: "share-audit-missing-goal",
+          goalId: "missing-goal"
+        }
+      ])
+    ).rejects.toThrow("Goal missing-goal was not found.");
+    await expect(
+      repository.appendGoalActionLogs(bundle.goal.id, [
+        {
+          ...firstLog,
+          id: "share-audit-wrong-goal",
+          goalId: "another-goal"
+        }
+      ])
+    ).rejects.toThrow(`Action log share-audit-wrong-goal belongs to goal another-goal, not ${bundle.goal.id}.`);
+  });
+
   it("persists a goal bundle to the file-backed store", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");
@@ -414,6 +490,66 @@ describe("repository", () => {
     expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("approved");
     expect(jobs.map((job) => job.id)).toEqual([result.job.id]);
     expect(evidenceRecords).toHaveLength(1);
+  }, 15_000);
+
+  it("rejects atomic approval follow-up jobs owned by a different user", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const storePath = path.join(tempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath
+    });
+    const mismatchedUserId = "user-approval-job-owner-mismatch";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(mismatchedUserId);
+
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    await expect(
+      repository.respondToApprovalAndEnqueueJob!({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: systemActor,
+        scope: "once",
+        rationale: "Approved for this exact reply.",
+        buildJob: (updatedBundle) =>
+          createJobRecord({
+            userId: mismatchedUserId,
+            kind: "approval_follow_up",
+            actorContext: systemActor,
+            maxAttempts: 1,
+            idempotencyKey: `approval-follow-up:${approval!.id}:owner-mismatch:approved`,
+            payload: {
+              type: "approval_follow_up",
+              approvalId: approval!.id,
+              goalId: updatedBundle.goal.id,
+              taskId: approval!.taskId,
+              decision: "approved",
+              workspaceId: updatedBundle.goal.workspaceId,
+              metadata: {
+                replayedFromJobId: null,
+                actionId: "owner-mismatch"
+              }
+            }
+          })
+      })
+    ).rejects.toThrow(/job owner must match/i);
+
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const ownerJobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const mismatchedJobs = await repository.listJobs({ userId: mismatchedUserId, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: approval!.id
+    });
+
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("pending");
+    expect(ownerJobs).toEqual([]);
+    expect(mismatchedJobs).toEqual([]);
+    expect(evidenceRecords).toEqual([]);
   }, 15_000);
 
   it("keeps approval decisions pending when atomic follow-up job construction fails", async () => {
@@ -1416,6 +1552,70 @@ describe("repository", () => {
 
     await expectApprovalEvidenceCapture(repository, "approved");
     await expectApprovalEvidenceCapture(repository, "rejected");
+  });
+
+  postgresIt("rejects atomic approval follow-up jobs owned by a different user in Postgres when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+    const ownerUserId = `approval-owner-postgres-${Date.now()}`;
+    const mismatchedUserId = `approval-owner-mismatch-postgres-${Date.now()}`;
+    const ownerActor = createSystemActorContext(ownerUserId);
+
+    await repository.seedDefaults(ownerUserId);
+    await repository.seedDefaults(mismatchedUserId);
+
+    const bundle = await createGoalForUser(
+      repository,
+      ownerUserId,
+      `Review my inbox and send one external reply for Postgres ownership ${Date.now()}.`
+    );
+    const approval = bundle.approvals[0];
+
+    expect(approval).toBeDefined();
+
+    await expect(
+      repository.respondToApprovalAndEnqueueJob!({
+        approvalId: approval!.id,
+        decision: "approved",
+        actor: ownerActor,
+        scope: "once",
+        rationale: "Approved for this exact reply.",
+        buildJob: (updatedBundle) =>
+          createJobRecord({
+            userId: mismatchedUserId,
+            kind: "approval_follow_up",
+            actorContext: ownerActor,
+            maxAttempts: 1,
+            idempotencyKey: `approval-follow-up:${approval!.id}:owner-mismatch:approved`,
+            payload: {
+              type: "approval_follow_up",
+              approvalId: approval!.id,
+              goalId: updatedBundle.goal.id,
+              taskId: approval!.taskId,
+              decision: "approved",
+              workspaceId: updatedBundle.goal.workspaceId,
+              metadata: {
+                replayedFromJobId: null,
+                actionId: "owner-mismatch"
+              }
+            }
+          })
+      })
+    ).rejects.toThrow(/job owner must match/i);
+
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, ownerUserId);
+    const ownerJobs = await repository.listJobs({ userId: ownerUserId, kinds: ["approval_follow_up"] });
+    const mismatchedJobs = await repository.listJobs({ userId: mismatchedUserId, kinds: ["approval_follow_up"] });
+    const evidenceRecords = await repository.listEvidenceRecords({
+      userId: ownerUserId,
+      approvalId: approval!.id
+    });
+
+    expect(persistedBundle?.approvals.find((candidate) => candidate.id === approval!.id)?.decision).toBe("pending");
+    expect(ownerJobs).toEqual([]);
+    expect(mismatchedJobs).toEqual([]);
+    expect(evidenceRecords).toEqual([]);
   });
 
   postgresIt("persists agent actor attribution and enforces user scoping in Postgres when DATABASE_URL is configured", async () => {

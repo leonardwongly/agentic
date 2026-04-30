@@ -85,6 +85,16 @@ function buildDatabaseStatus(
     appliedMigrations: ["0001_init.sql"],
     pendingMigrations: [],
     driftedMigrations: [],
+    requiredSchemaObjects: {
+      tables: ["auth_session_rate_limits", "auth_revoked_sessions", "session_unlock_attempts"],
+      indexes: [
+        "auth_session_rate_limits_updated_at_idx",
+        "auth_revoked_sessions_expires_at_idx",
+        "session_unlock_attempts_last_seen_at_idx"
+      ],
+      missingTables: [],
+      missingIndexes: []
+    },
     lastAppliedAt: "2026-04-17T00:00:00.000Z",
     ...overrides
   };
@@ -307,6 +317,62 @@ describe("runtime readiness", () => {
         status: "fail",
         details: expect.objectContaining({
           pendingMigrations: 1
+        })
+      })
+    );
+  });
+
+  it("fails readiness when shared auth runtime schema objects are missing", () => {
+    const report = buildWebReadinessReport({
+      nodeEnv: "production",
+      databaseConfigured: true,
+      authMode: {
+        requiresConfiguredKey: false,
+        usesDevelopmentFallback: false,
+        configured: true
+      },
+      authRuntimeState: buildAuthRuntimeState({
+        production: true,
+        sessionStateScope: "shared",
+        unlockStateScope: "shared",
+        sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        identitySource: "trusted-ip",
+        warnings: []
+      }),
+      asyncExecution: buildAsyncExecutionCheck(),
+      connectorHealth: buildConnectorHealthCheck(),
+      databaseStatus: buildDatabaseStatus({
+        ready: false,
+        failureReason: "required_schema_missing",
+        requiredSchemaObjects: {
+          tables: ["auth_session_rate_limits", "auth_revoked_sessions", "session_unlock_attempts"],
+          indexes: [
+            "auth_session_rate_limits_updated_at_idx",
+            "auth_revoked_sessions_expires_at_idx",
+            "session_unlock_attempts_last_seen_at_idx"
+          ],
+          missingTables: ["auth_revoked_sessions"],
+          missingIndexes: ["auth_revoked_sessions_expires_at_idx"]
+        }
+      }),
+      generatedAt: "2026-04-17T00:00:00.000Z"
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.status).toBe("not_ready");
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "database",
+        status: "fail",
+        details: expect.objectContaining({
+          missingAuthRuntimeTables: 1,
+          missingAuthRuntimeIndexes: 1
         })
       })
     );

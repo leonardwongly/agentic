@@ -70,16 +70,16 @@ export function expectNoStoreHeaders(response: Response) {
   expect(response.headers.get("vary")).toContain("X-Agentic-Access-Key");
 }
 
+export function expectBaseSecurityHeaders(response: Response) {
+  for (const { key, value } of BASE_SECURITY_HEADERS) {
+    expect(response.headers.get(key)).toBe(value);
+  }
+}
+
 export function expectOperationalNoStoreHeaders(response: Response) {
   expectBaseSecurityHeaders(response);
   expect(response.headers.get("cache-control")).toBe(OPERATIONAL_API_CACHE_CONTROL);
   expect(response.headers.get("pragma")).toBe("no-cache");
   expect(response.headers.get("expires")).toBe("0");
   expect(response.headers.get("vary")).toBeNull();
-}
-
-export function expectBaseSecurityHeaders(response: Response) {
-  for (const { key, value } of BASE_SECURITY_HEADERS) {
-    expect(response.headers.get(key)).toBe(value);
-  }
 }
