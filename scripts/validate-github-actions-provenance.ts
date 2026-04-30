@@ -77,6 +77,23 @@ function trimYamlScalar(value: string): string {
   return stripped;
 }
 
+function resolveYamlUseValue(value: string, anchors: Map<string, string>): string {
+  const trimmed = trimYamlScalar(value);
+  const alias = trimmed.match(/^\*([A-Za-z0-9_-]+)$/u);
+  if (alias) {
+    return anchors.get(alias[1]) ?? trimmed;
+  }
+
+  const anchor = trimmed.match(/^&([A-Za-z0-9_-]+)\s+(.+)$/u);
+  if (!anchor) {
+    return trimmed;
+  }
+
+  const resolved = trimYamlScalar(anchor[2]);
+  anchors.set(anchor[1], resolved);
+  return resolved;
+}
+
 function getIndent(line: string): number {
   return line.length - line.trimStart().length;
 }
@@ -222,6 +239,7 @@ function isBlockScalarValue(value: string): boolean {
 export function collectWorkflowActionUses(filePath: string, content: string): WorkflowActionUse[] {
   const uses: WorkflowActionUse[] = [];
   const lines = content.split(/\r?\n/u);
+  const yamlAnchors = new Map<string, string>();
   let blockScalarIndent: number | null = null;
 
   lines.forEach((lineContent, index) => {
@@ -236,7 +254,7 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
     const parsedFlowUses = parseYamlFlowUsesMappings(lineContent);
     if (parsedFlowUses.length > 0) {
       for (const parsedFlowUse of parsedFlowUses) {
-        const value = trimYamlScalar(parsedFlowUse.value);
+        const value = resolveYamlUseValue(parsedFlowUse.value, yamlAnchors);
         const refSeparator = value.lastIndexOf("@");
         uses.push({
           filePath,
@@ -261,7 +279,7 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
       return;
     }
 
-    const value = trimYamlScalar(parsedLine.value);
+    const value = resolveYamlUseValue(parsedLine.value, yamlAnchors);
     const refSeparator = value.lastIndexOf("@");
     uses.push({
       filePath,

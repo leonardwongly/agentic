@@ -21,6 +21,41 @@ jobs:
     expect(validateWorkflowActionPins(uses)).toEqual([]);
   });
 
+  it("resolves YAML anchors and aliases before validating action pins", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - uses: &checkout actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: *checkout
+      - { name: Setup, uses: &setup-node actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e }
+      - { name: Reuse setup, uses: *setup-node }
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        line: 5,
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      }),
+      expect.objectContaining({
+        line: 6,
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      }),
+      expect.objectContaining({
+        line: 7,
+        value: "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+      }),
+      expect.objectContaining({
+        line: 8,
+        value: "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"
+      })
+    ]);
+    expect(validateWorkflowActionPins(uses)).toEqual([]);
+  });
+
   it("rejects mutable tag references and unpinned external actions", () => {
     const uses = collectWorkflowActionUses(
       ".github/workflows/ci.yml",
