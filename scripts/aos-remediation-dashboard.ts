@@ -505,7 +505,7 @@ function findDependencyCycles(items: AosTrackerItem[]): string[][] {
 }
 
 function extractAosId(title: string): string | null {
-  return title.match(/AOS-\d{2}/u)?.[0] ?? null;
+  return title.match(/\bAOS-\d+\b/u)?.[0] ?? null;
 }
 
 function runGit(args: string[], cwd: string): string | null {

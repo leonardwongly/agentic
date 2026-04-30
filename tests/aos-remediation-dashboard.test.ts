@@ -153,6 +153,42 @@ describe("AOS remediation tracker", () => {
     expect(verifyLiveIssueCoverage(tracker)).toContain("Live issue #12 claims to be AOS-02, but manifest says AOS-02 is #13.");
   });
 
+  it("does not truncate longer AOS identifiers in live issue titles", () => {
+    const tracker = loadAosTracker();
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      status: 0,
+      stdout: JSON.stringify([
+        ...tracker.items.map((item) => ({
+          number: item.issue,
+          title: `[${item.id}] ${item.title}`,
+          labels: [{ name: "aos-remediation" }, { name: tracker.lanes.find((lane) => lane.id === item.lane)?.label }],
+          url: `https://github.com/leonardwongly/agentic/issues/${item.issue}`
+        })),
+        {
+          number: 999,
+          title: "[AOS-010] Duplicate padded remediation issue",
+          labels: [{ name: "aos-remediation" }],
+          url: "https://github.com/leonardwongly/agentic/issues/999"
+        },
+        {
+          number: 1000,
+          title: "[AOS-100] Future remediation issue",
+          labels: [{ name: "aos-remediation" }],
+          url: "https://github.com/leonardwongly/agentic/issues/1000"
+        }
+      ]),
+      stderr: ""
+    });
+
+    expect(verifyLiveIssueCoverage(tracker)).toEqual(
+      expect.arrayContaining([
+        "Unexpected live AOS issue id AOS-010 on #999.",
+        "Unexpected live AOS issue id AOS-100 on #1000."
+      ])
+    );
+  });
+
   it("references repo files that exist for local baseline evidence", () => {
     const tracker = loadAosTracker();
 
