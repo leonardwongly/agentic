@@ -99,6 +99,47 @@ jobs:
     ]);
   });
 
+  it("ignores quoted uses text in flow-style mappings", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - { name: "lint, uses: docs", run: echo ok }
+      - { name: Checkout, uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd }
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        line: 6,
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      })
+    ]);
+  });
+
+  it("strips flow-mapping separators from uses values before pin validation", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd,
+        with: { fetch-depth: 0 }
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+        ref: "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      })
+    ]);
+    expect(validateWorkflowActionPins(uses)).toEqual([]);
+  });
+
   it("allows local and docker action references", () => {
     const uses: WorkflowActionUse[] = [
       {

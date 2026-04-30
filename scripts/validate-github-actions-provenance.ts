@@ -62,7 +62,11 @@ function stripInlineComment(value: string): string {
 }
 
 function trimYamlScalar(value: string): string {
-  const stripped = stripInlineComment(value);
+  let stripped = stripInlineComment(value);
+  if (stripped.endsWith(",")) {
+    stripped = stripped.slice(0, -1).trimEnd();
+  }
+
   if (
     (stripped.startsWith("\"") && stripped.endsWith("\"")) ||
     (stripped.startsWith("'") && stripped.endsWith("'"))
@@ -90,21 +94,89 @@ function parseYamlKeyValueLine(line: string): { indent: number; key: string; val
   };
 }
 
+function splitYamlFlowFields(value: string): string[] {
+  const fields: string[] = [];
+  let quote: "\"" | "'" | null = null;
+  let braceDepth = 0;
+  let current = "";
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    const previous = value[index - 1];
+
+    if ((character === "\"" || character === "'") && previous !== "\\") {
+      quote = quote === character ? null : quote ?? character;
+      current += character;
+      continue;
+    }
+
+    if (quote === null) {
+      if (character === "{") {
+        braceDepth += 1;
+      } else if (character === "}") {
+        braceDepth = Math.max(0, braceDepth - 1);
+      } else if (character === "," && braceDepth === 0) {
+        fields.push(current.trim());
+        current = "";
+        continue;
+      }
+    }
+
+    current += character;
+  }
+
+  if (current.trim()) {
+    fields.push(current.trim());
+  }
+
+  return fields;
+}
+
+function parseYamlFlowField(field: string): { key: string; value: string } | null {
+  let quote: "\"" | "'" | null = null;
+
+  for (let index = 0; index < field.length; index += 1) {
+    const character = field[index];
+    const previous = field[index - 1];
+
+    if ((character === "\"" || character === "'") && previous !== "\\") {
+      quote = quote === character ? null : quote ?? character;
+      continue;
+    }
+
+    if (character === ":" && quote === null) {
+      const key = trimYamlScalar(field.slice(0, index));
+      if (!/^[A-Za-z_][\w-]*$/u.test(key)) {
+        return null;
+      }
+
+      return {
+        key,
+        value: field.slice(index + 1).trim()
+      };
+    }
+  }
+
+  return null;
+}
+
 function parseYamlFlowUsesLine(line: string): { indent: number; value: string } | null {
   const mapping = line.match(/^(\s*)-\s*\{(.*)\}\s*(?:#.*)?$/u);
   if (!mapping) {
     return null;
   }
 
-  const uses = mapping[2].match(/(?:^|,)\s*(?:"uses"|'uses'|uses)\s*:\s*([^,}]+)/u);
-  if (!uses) {
-    return null;
+  for (const field of splitYamlFlowFields(mapping[2])) {
+    const parsed = parseYamlFlowField(field);
+    if (parsed?.key === "uses") {
+      return {
+        indent: mapping[1].length,
+        value: parsed.value
+      };
+    }
   }
 
-  return {
-    indent: mapping[1].length,
-    value: uses[1].trim()
-  };
+  return null;
 }
 
 function isBlockScalarValue(value: string): boolean {
