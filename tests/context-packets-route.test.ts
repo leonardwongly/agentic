@@ -133,6 +133,47 @@ describe("context packets route", () => {
     expect(payload.packet.lineage.sourceMemoryIds).toEqual([payload.memoryId]);
   });
 
+  it("persists submitted consent basis across later packet reads", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const createResponse = await createContextPacket(
+      buildAuthorizedJsonRequest("http://localhost/api/context/packets", {
+        category: "preferences",
+        content: "Can use implied consent for internal routing hints.",
+        sensitivity: "internal",
+        permissions: ["knowledge"],
+        consentBasis: "implied"
+      })
+    );
+    const createPayload = (await createResponse.json()) as {
+      packet: {
+        id: string;
+        consent: { basis: string; grantedBy: string; grantedAt: string };
+      };
+    };
+
+    const listResponse = await listContextPackets(
+      buildAuthorizedGetRequest("http://localhost/api/context/packets?agent=knowledge&sensitivity=internal")
+    );
+    const listPayload = (await listResponse.json()) as {
+      packets: Array<{ id: string; consent: { basis: string; grantedBy: string; grantedAt: string } }>;
+    };
+
+    expect(createResponse.status).toBe(201);
+    expect(listResponse.status).toBe(200);
+    expect(listPayload.packets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: createPayload.packet.id,
+        consent: createPayload.packet.consent
+      })
+    ]));
+    expect(listPayload.packets[0]?.consent.basis).toBe("implied");
+  });
+
   it("rejects unknown fields at the packet creation boundary", async () => {
     const response = await createContextPacket(
       buildAuthorizedJsonRequest("http://localhost/api/context/packets", {

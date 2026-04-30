@@ -2408,7 +2408,6 @@ class FileRepository implements AgenticRepository {
       return JobRecordSchema.parse(clone(deadLettered));
     });
   }
-
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
     const store = await this.readStore();
     return sortByCreatedDesc(store.memories.filter((memory) => memory.userId === userId)).map((memory) =>
@@ -2959,9 +2958,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into memory_records (
-          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, review_at, expiry_at, created_at, updated_at
+          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, context_packet_consent, review_at, expiry_at, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
         on conflict (id) do update
         set category = excluded.category,
             memory_type = excluded.memory_type,
@@ -2971,6 +2970,7 @@ class PostgresRepository implements AgenticRepository {
             sensitivity = excluded.sensitivity,
             permissions = excluded.permissions,
             actor_context = excluded.actor_context,
+            context_packet_consent = excluded.context_packet_consent,
             review_at = excluded.review_at,
             expiry_at = excluded.expiry_at,
             updated_at = excluded.updated_at
@@ -2986,6 +2986,7 @@ class PostgresRepository implements AgenticRepository {
         memory.sensitivity,
         JSON.stringify(memory.permissions),
         JSON.stringify(memory.actorContext),
+        JSON.stringify(memory.contextPacketConsent),
         memory.reviewAt,
         memory.expiryAt,
         memory.createdAt,
@@ -2993,7 +2994,6 @@ class PostgresRepository implements AgenticRepository {
       ]
     );
   }
-
   private async saveEvidenceRecordWithClient(client: PoolClient, record: EvidenceRecord): Promise<void> {
     const evidence = EvidenceRecordSchema.parse(record);
     await client.query(
@@ -7050,7 +7050,6 @@ class PostgresRepository implements AgenticRepository {
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
     await this.ready;
     const result = await this.pool.query("select * from memory_records where user_id = $1 order by created_at desc, id desc", [userId]);
-
     return result.rows.map((row) =>
       MemoryRecordSchema.parse({
         id: row.id,
@@ -7063,6 +7062,7 @@ class PostgresRepository implements AgenticRepository {
         sensitivity: row.sensitivity,
         permissions: row.permissions ?? [],
         actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        contextPacketConsent: row.context_packet_consent ?? null,
         reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
         createdAt: new Date(row.created_at).toISOString(),
@@ -7122,6 +7122,7 @@ class PostgresRepository implements AgenticRepository {
         sensitivity: row.sensitivity,
         permissions: row.permissions ?? [],
         actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        contextPacketConsent: row.context_packet_consent ?? null,
         reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
         createdAt: new Date(row.created_at).toISOString(),
@@ -7129,7 +7130,6 @@ class PostgresRepository implements AgenticRepository {
       })
     );
     const last = items.at(-1);
-
     return MemoryRecordPageSchema.parse({
       items,
       limit,

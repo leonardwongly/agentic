@@ -89,6 +89,7 @@ export async function POST(request: Request) {
     const body = await parseJsonBody(request, CreateContextPacketSchema);
     const repository = await getSeededRepository();
     const actorContext = createActorContextFromPrincipal(principal);
+    const createdAt = new Date().toISOString();
     const record = createMemoryRecord({
       userId: principal.userId,
       category: body.category,
@@ -99,8 +100,15 @@ export async function POST(request: Request) {
       sensitivity: body.sensitivity,
       permissions: body.permissions,
       actorContext,
+      contextPacketConsent: {
+        basis: body.consentBasis,
+        grantedBy: principal.userId,
+        grantedAt: createdAt
+      },
       reviewAt: body.reviewAt ?? null,
-      expiryAt: body.expiryAt ?? null
+      expiryAt: body.expiryAt ?? null,
+      createdAt,
+      updatedAt: createdAt
     });
 
     await repository.saveMemory(record);
@@ -108,11 +116,7 @@ export async function POST(request: Request) {
     return authenticatedJson(
       {
         packet: buildContextPacketFromMemory(record, {
-          consent: {
-            basis: body.consentBasis,
-            grantedBy: principal.userId,
-            grantedAt: record.createdAt
-          }
+          consent: record.contextPacketConsent ?? undefined
         }),
         memoryId: record.id
       },

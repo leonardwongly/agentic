@@ -54,6 +54,7 @@ function mapMemoryRow(row: Record<string, unknown>): MemoryRecord {
     sensitivity: row.sensitivity,
     permissions: row.permissions ?? [],
     actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+    contextPacketConsent: row.context_packet_consent ?? null,
     reviewAt: row.review_at ? new Date(row.review_at as string | number | Date).toISOString() : null,
     expiryAt: row.expiry_at ? new Date(row.expiry_at as string | number | Date).toISOString() : null,
     createdAt: new Date(row.created_at as string | number | Date).toISOString(),

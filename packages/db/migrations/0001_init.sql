@@ -112,6 +112,7 @@ create table if not exists memory_records (
   sensitivity text not null,
   permissions jsonb not null default '[]'::jsonb,
   actor_context jsonb,
+  context_packet_consent jsonb,
   review_at timestamptz,
   expiry_at timestamptz,
   created_at timestamptz not null,
@@ -457,6 +458,7 @@ alter table watchers add column if not exists actor_context jsonb;
 alter table watchers add column if not exists team_responsibility jsonb;
 alter table workspace_selections add column if not exists actor_context jsonb;
 alter table memory_records add column if not exists actor_context jsonb;
+alter table memory_records add column if not exists context_packet_consent jsonb;
 alter table commitments add column if not exists actor_context jsonb;
 alter table briefing_preferences add column if not exists actor_context jsonb;
 alter table agent_definitions add column if not exists actor_context jsonb;

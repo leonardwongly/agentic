@@ -208,6 +208,7 @@ export function createMemoryRecord(params: {
   sensitivity?: string;
   permissions?: AgentName[];
   actorContext?: ActorContext | null;
+  contextPacketConsent?: MemoryRecord["contextPacketConsent"];
   agentId?: string | null;
   agentScope?: "global" | "agent-only" | "agent-preferred";
   reviewAt?: string | null;
@@ -229,6 +230,7 @@ export function createMemoryRecord(params: {
     sensitivity: params.sensitivity ?? "internal",
     permissions: params.permissions ?? ["orchestrator", "workflow", "knowledge"],
     actorContext: params.actorContext ?? null,
+    contextPacketConsent: params.contextPacketConsent ?? null,
     agentId: params.agentId ?? null,
     agentScope: params.agentScope ?? "global",
     reviewAt: params.reviewAt ?? null,
@@ -271,6 +273,10 @@ function inferStaleAt(record: MemoryRecord): string | null {
 }
 
 function defaultContextPacketConsent(record: MemoryRecord) {
+  if (record.contextPacketConsent) {
+    return record.contextPacketConsent;
+  }
+
   if (record.actorContext?.initiator.kind === "human") {
     return {
       basis: "explicit" as const,

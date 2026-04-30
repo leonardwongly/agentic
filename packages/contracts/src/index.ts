@@ -798,6 +798,11 @@ export const MemoryRecordSchema = z.object({
   sensitivity: z.string().min(1),
   permissions: z.array(AgentNameSchema).default([]),
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
+  contextPacketConsent: z.object({
+    basis: z.enum(["explicit", "implied", "system", "derived"]),
+    grantedBy: z.string().min(1).max(120).nullable().default(null),
+    grantedAt: z.string().datetime().nullable().default(null)
+  }).strict().nullable().default(null),
   // Agent-scoped memories
   agentId: z.string().nullable().default(null),
   agentScope: z.enum(["global", "agent-only", "agent-preferred"]).default("global"),
