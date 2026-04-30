@@ -81,7 +81,7 @@ describe("AOS remediation tracker", () => {
     const dashboard = renderAosDashboard(tracker);
 
     expect(dashboard).toContain("# Agentic OS remediation Dashboard");
-    expect(dashboard).toContain("gh issue list --repo leonardwongly/agentic --search 'AOS- in:title'");
+    expect(dashboard).toContain("gh api --paginate --slurp repos/leonardwongly/agentic/issues?state=all&per_page=100");
     expect(dashboard).toContain("--state all");
     expect(dashboard).not.toContain("--state open");
     expect(dashboard).toContain("git fetch origin --prune && git rev-list --left-right --count origin/main...HEAD");
@@ -170,23 +170,51 @@ describe("AOS remediation tracker", () => {
     spawnSyncMock.mockReturnValue({
       error: undefined,
       status: 0,
-      stdout: JSON.stringify(
+      stdout: JSON.stringify([
         tracker.items.map((item) => ({
           number: item.issue,
           title: `[${item.id}] ${item.title}`,
           labels: [{ name: "aos-remediation" }, { name: tracker.lanes.find((lane) => lane.id === item.lane)?.label }],
           url: `https://github.com/leonardwongly/agentic/issues/${item.issue}`
         }))
-      ),
+      ]),
       stderr: ""
     });
 
     expect(verifyLiveIssueCoverage(tracker)).toEqual([]);
     expect(spawnSyncMock).toHaveBeenCalledWith(
       "gh",
-      expect.arrayContaining(["issue", "list", "--state", "all"]),
+      expect.arrayContaining(["api", "--paginate", "--slurp", "repos/leonardwongly/agentic/issues?state=all&per_page=100"]),
       expect.objectContaining({ encoding: "utf8" })
     );
+  });
+
+  it("paginates live issue coverage instead of truncating AOS issue history", () => {
+    const tracker = loadAosTracker();
+    const liveIssue = (item: (typeof tracker.items)[number]) => ({
+      number: item.issue,
+      title: `[${item.id}] ${item.title}`,
+      labels: [{ name: "aos-remediation" }, { name: tracker.lanes.find((lane) => lane.id === item.lane)?.label }],
+      html_url: `https://github.com/leonardwongly/agentic/issues/${item.issue}`
+    });
+    const nonIssuePullRequest = {
+      number: 1000,
+      title: "[AOS-99] Pull request should not count as a live remediation issue",
+      labels: [{ name: "aos-remediation" }],
+      pull_request: {}
+    };
+
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      status: 0,
+      stdout: JSON.stringify([
+        [nonIssuePullRequest, ...tracker.items.slice(0, 10).map(liveIssue)],
+        tracker.items.slice(10).map(liveIssue)
+      ]),
+      stderr: ""
+    });
+
+    expect(verifyLiveIssueCoverage(tracker)).toEqual([]);
   });
 
   it("rejects live issues that claim the wrong AOS identifier", () => {
@@ -194,14 +222,14 @@ describe("AOS remediation tracker", () => {
     spawnSyncMock.mockReturnValue({
       error: undefined,
       status: 0,
-      stdout: JSON.stringify(
+      stdout: JSON.stringify([
         tracker.items.map((item) => ({
           number: item.issue,
           title: `[${item.id === "AOS-01" ? "AOS-02" : item.id}] ${item.title}`,
           labels: [{ name: "aos-remediation" }, { name: tracker.lanes.find((lane) => lane.id === item.lane)?.label }],
           url: `https://github.com/leonardwongly/agentic/issues/${item.issue}`
         }))
-      ),
+      ]),
       stderr: ""
     });
 
@@ -214,24 +242,26 @@ describe("AOS remediation tracker", () => {
       error: undefined,
       status: 0,
       stdout: JSON.stringify([
-        ...tracker.items.map((item) => ({
-          number: item.issue,
-          title: `[${item.id}] ${item.title}`,
-          labels: [{ name: "aos-remediation" }, { name: tracker.lanes.find((lane) => lane.id === item.lane)?.label }],
-          url: `https://github.com/leonardwongly/agentic/issues/${item.issue}`
-        })),
-        {
-          number: 999,
-          title: "[AOS-010] Duplicate padded remediation issue",
-          labels: [{ name: "aos-remediation" }],
-          url: "https://github.com/leonardwongly/agentic/issues/999"
-        },
-        {
-          number: 1000,
-          title: "[AOS-100] Future remediation issue",
-          labels: [{ name: "aos-remediation" }],
-          url: "https://github.com/leonardwongly/agentic/issues/1000"
-        }
+        [
+          ...tracker.items.map((item) => ({
+            number: item.issue,
+            title: `[${item.id}] ${item.title}`,
+            labels: [{ name: "aos-remediation" }, { name: tracker.lanes.find((lane) => lane.id === item.lane)?.label }],
+            url: `https://github.com/leonardwongly/agentic/issues/${item.issue}`
+          })),
+          {
+            number: 999,
+            title: "[AOS-010] Duplicate padded remediation issue",
+            labels: [{ name: "aos-remediation" }],
+            url: "https://github.com/leonardwongly/agentic/issues/999"
+          },
+          {
+            number: 1000,
+            title: "[AOS-100] Future remediation issue",
+            labels: [{ name: "aos-remediation" }],
+            url: "https://github.com/leonardwongly/agentic/issues/1000"
+          }
+        ]
       ]),
       stderr: ""
     });

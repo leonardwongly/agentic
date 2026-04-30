@@ -76,6 +76,11 @@ interface LiveIssue {
   url?: string;
 }
 
+interface GitHubIssueApiRecord extends LiveIssue {
+  html_url?: string;
+  pull_request?: unknown;
+}
+
 interface ParsedArgs {
   configPath: string;
   format: "markdown" | "json";
@@ -447,7 +452,7 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
     }
   }
   lines.push(
-    "- Live coverage query: `gh issue list --repo leonardwongly/agentic --search 'AOS- in:title' --state all --limit 100`"
+    "- Live coverage query: `gh api --paginate --slurp repos/leonardwongly/agentic/issues?state=all&per_page=100`"
   );
 
   return `${lines.join("\n")}\n`;
@@ -486,9 +491,13 @@ export function formatAosTrackerOutput(tracker: unknown, errors: string[], optio
 }
 
 export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repository): string[] {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo)) {
+    return [`Invalid GitHub repository identifier: ${repo}`];
+  }
+
   const result = spawnSync(
     "gh",
-    ["issue", "list", "--repo", repo, "--search", "AOS- in:title", "--state", "all", "--limit", "100", "--json", "number,title,labels,url"],
+    ["api", "--paginate", "--slurp", `repos/${repo}/issues?state=all&per_page=100`],
     {
       encoding: "utf8"
     }
@@ -499,14 +508,23 @@ export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repo
   }
 
   if (result.status !== 0) {
-    return [`gh issue list failed: ${result.stderr.trim() || "unknown error"}`];
+    return [`gh issue pagination failed: ${result.stderr.trim() || "unknown error"}`];
   }
 
   let liveIssues: LiveIssue[];
   try {
-    liveIssues = JSON.parse(result.stdout) as LiveIssue[];
+    const pages = JSON.parse(result.stdout) as GitHubIssueApiRecord[][];
+    liveIssues = pages
+      .flat()
+      .filter((issue) => !issue.pull_request && issue.title.includes("AOS-"))
+      .map((issue) => ({
+        number: issue.number,
+        title: issue.title,
+        labels: issue.labels,
+        url: issue.html_url ?? issue.url
+      }));
   } catch (error) {
-    return [`Failed to parse gh issue JSON: ${error instanceof Error ? error.message : String(error)}`];
+    return [`Failed to parse gh issue pagination JSON: ${error instanceof Error ? error.message : String(error)}`];
   }
 
   const expected = new Map(tracker.items.map((item) => [item.issue, item]));
