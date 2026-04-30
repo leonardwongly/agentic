@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -222,5 +223,25 @@ describe("AOS remediation tracker", () => {
 
   it("rejects tracker config paths outside the repository", () => {
     expect(() => loadAosTracker("../aos-tracker.json")).toThrow("Path must stay inside the repository");
+  });
+
+  it("rejects repo-local symlinks that resolve outside the repository", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "agentic-aos-tracker-"));
+    const outsideManifest = path.join(tempDir, "outside-tracker.json");
+    const symlinkPath = path.join(repoRoot, "config", "remediation", "outside-tracker-link.json");
+    writeFileSync(outsideManifest, "{}", "utf8");
+    symlinkSync(outsideManifest, symlinkPath);
+
+    try {
+      expect(() => loadAosTracker("config/remediation/outside-tracker-link.json")).toThrow(
+        "Path must stay inside the repository"
+      );
+    } finally {
+      try {
+        unlinkSync(symlinkPath);
+      } catch {
+        // Best effort cleanup for platforms that restrict symlink writes in tests.
+      }
+    }
   });
 });

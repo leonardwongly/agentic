@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -592,12 +592,15 @@ function isPriority(value: unknown): value is Priority {
 }
 
 function resolveRepoPath(cwd: string, targetPath: string): string {
-  const repoRoot = path.resolve(cwd);
+  const repoRoot = realpathSync(path.resolve(cwd));
   const resolvedPath = path.resolve(repoRoot, targetPath);
-  const relativePath = path.relative(repoRoot, resolvedPath);
+  const canonicalPath = existsSync(resolvedPath)
+    ? realpathSync(resolvedPath)
+    : path.join(realpathSync(path.dirname(resolvedPath)), path.basename(resolvedPath));
+  const relativePath = path.relative(repoRoot, canonicalPath);
 
   if (relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))) {
-    return resolvedPath;
+    return canonicalPath;
   }
 
   throw new Error(`Path must stay inside the repository: ${targetPath}`);
