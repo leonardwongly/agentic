@@ -514,6 +514,73 @@ describe("execution", () => {
     expect(result.finalJob?.lastError).toContain("timed out");
   });
 
+  it("settles timed-out durable jobs without waiting for non-cooperative handlers", async () => {
+    const job = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Run a worker task whose handler ignores cancellation.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      },
+      timeoutMs: 100,
+      maxAttempts: 1
+    });
+    const running = JobRecordSchema.parse({
+      ...job,
+      status: "running",
+      attemptCount: 1,
+      claimedBy: "worker-1",
+      claimedAt: "2026-04-16T00:00:00.000Z",
+      lastAttemptAt: "2026-04-16T00:00:00.000Z",
+      leaseExpiresAt: "2026-04-16T00:00:30.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+    const transitions: string[] = [];
+    const queue = createDurableJobQueue(
+      {
+        enqueueJob: async (candidate) => candidate,
+        claimNextJob: async () => running,
+        completeJob: async () => {
+          transitions.push("complete");
+          throw new Error("completeJob should not be called for a timed-out handler");
+        },
+        retryJob: async () => {
+          transitions.push("retry");
+          throw new Error("retryJob should not be called when maxAttempts is exhausted");
+        },
+        deadLetterJob: async (params) => {
+          transitions.push("dead_letter");
+          return JobRecordSchema.parse({
+            ...running,
+            status: "dead_letter",
+            deadLetteredAt: params.deadLetteredAt,
+            lastError: params.error,
+            updatedAt: params.deadLetteredAt
+          });
+        }
+      },
+      { runnerId: "worker-1" }
+    );
+
+    const startedAt = Date.now();
+    const result = await processNextDurableJob({
+      queue,
+      handlers: {
+        goal_create: async () => new Promise<void>(() => {})
+      }
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(250);
+    expect(transitions).toEqual(["dead_letter"]);
+    expect(result.finalJob?.status).toBe("dead_letter");
+    expect(result.finalJob?.lastError).toContain("timed out");
+  });
+
   it("processes the next claimed durable job through the registered handler and acknowledges it", async () => {
     const job = createJobRecord({
       userId: "user-1",

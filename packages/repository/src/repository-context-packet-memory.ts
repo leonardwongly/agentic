@@ -85,7 +85,7 @@ export async function listContextPacketMemoryWithPool(pool: Pool, params: Contex
 
   if (params.agent) {
     values.push(params.agent);
-    predicates.push(`$${values.length} = any(permissions)`);
+    predicates.push(`permissions @> jsonb_build_array($${values.length}::text)`);
   }
 
   if (params.allowedSensitivities) {

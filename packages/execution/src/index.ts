@@ -559,27 +559,23 @@ async function runJobHandlerWithOptionalTimeout(job: JobRecord, handler: JobHand
   let timeout: NodeJS.Timeout | null = null;
   const controller = new AbortController();
   const timeoutError = new Error(`Durable job ${job.id} timed out after ${job.timeoutMs}ms.`);
-  const handlerPromise = handler(job, { signal: controller.signal });
+  const handlerPromise = Promise.resolve().then(() => handler(job, { signal: controller.signal }));
+  handlerPromise.catch(() => {
+    // The worker settles the durable job on the first failure result. Late handler
+    // failures after a timeout must not create unhandled rejections or a second
+    // queue transition.
+  });
 
   try {
-    const result = await Promise.race([
-      handlerPromise.then(() => "completed" as const),
-      new Promise<"timed_out">((resolve) => {
+    await Promise.race([
+      handlerPromise,
+      new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
           controller.abort(timeoutError);
-          resolve("timed_out");
+          reject(timeoutError);
         }, job.timeoutMs ?? 0);
       })
     ]);
-
-    if (result === "timed_out") {
-      try {
-        await handlerPromise;
-      } catch {
-        // The timeout remains the externally visible failure reason.
-      }
-      throw timeoutError;
-    }
   } finally {
     if (timeout) {
       clearTimeout(timeout);
