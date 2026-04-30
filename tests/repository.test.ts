@@ -2319,7 +2319,19 @@ describe("repository", () => {
     );
     expect(dashboard.workspaceGovernance).toMatchObject({
       workspaceId: workspaces[0]?.id,
-      approvalMode: "risk_based"
+      approvalMode: "always_review",
+      requireAuditExports: true,
+      publicSharingEnabled: false,
+      providerAccessRequiresApproval: true,
+      escalationRequiresApproval: true,
+      maxAutoRunRiskClass: "R1",
+      externalSendRequiresApproval: true,
+      calendarWriteRequiresApproval: true,
+      retentionDays: 90,
+      shadowReplayPolicy: expect.objectContaining({
+        promotionMode: "shadow_only",
+        rollbackOutcome: "downgrade_to_draft"
+      })
     });
   });
 
@@ -3609,8 +3621,9 @@ describe("repository", () => {
     expect(dashboard.operations?.autonomyPosture.stats).toEqual(
       expect.arrayContaining([
         "Mode notify only",
-        "Approval risk based",
+        "Approval always review",
         "Max auto R1",
+        "Shadow replay staged",
         "1 pending approval",
         "0 failed events"
       ])
@@ -3715,7 +3728,7 @@ describe("repository", () => {
     expect(dashboard.controlPlane.sections.find((section) => section.key === "workspace")).toMatchObject({
       status: "healthy",
       targetSection: "workspaces",
-      stats: expect.arrayContaining(["1 member", "1 ready integration", "Approval risk based"])
+      stats: expect.arrayContaining(["1 member", "1 ready integration", "Approval always review"])
     });
     expect(dashboard.controlPlane.sections.find((section) => section.key === "commitments")).toMatchObject({
       status: "critical",
@@ -3853,13 +3866,13 @@ describe("repository", () => {
       ])
     );
     expect(dashboard.operatingSections.teamWorkflow.auditCoverage).toMatchObject({
-      required: false,
-      status: "healthy",
+      required: true,
+      status: "attention",
       latestStatus: null,
       latestCompletedAt: null
     });
     expect(dashboard.operatingSections.teamWorkflow.auditCoverage.summary).toContain(
-      "Audit exports are optional right now"
+      "Audit exports are required for this workspace"
     );
     expect(dashboard.operatingSections.teamWorkflow.slaSummary).toContain("exceeded the shared-team response window");
     expect(dashboard.operatingSections.teamWorkflow.handoffGuidance).toEqual(

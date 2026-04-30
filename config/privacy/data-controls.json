@@ -53,7 +53,7 @@
       "tokenizationStrategy": "not_applicable",
       "retention": {
         "mode": "workspace_governance",
-        "defaultDays": 365,
+        "defaultDays": 90,
         "deletionFlow": "Retention enforcement expires aged collaboration records according to workspace policy."
       },
       "accessRules": [
@@ -94,7 +94,7 @@
       "tokenizationStrategy": "opaque_identifier",
       "retention": {
         "mode": "workspace_governance",
-        "defaultDays": 365,
+        "defaultDays": 90,
         "deletionFlow": "Retention enforcement revokes expired shares before removing aged share history."
       },
       "accessRules": [
@@ -136,7 +136,7 @@
       "tokenizationStrategy": "redacted_reference",
       "retention": {
         "mode": "workspace_governance",
-        "defaultDays": 365,
+        "defaultDays": 90,
         "deletionFlow": "Workspace export and deletion paths preserve only the owner audit trail after destructive cleanup."
       },
       "accessRules": [
@@ -177,7 +177,7 @@
       "tokenizationStrategy": "redacted_reference",
       "retention": {
         "mode": "fixed",
-        "defaultDays": 365,
+        "defaultDays": 90,
         "deletionFlow": "Operational telemetry follows the bounded evidence retention policy and is removed during workspace deletion."
       },
       "accessRules": [

@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { processUserRequest } from "@agentic/orchestrator";
 import type { AgenticRepository } from "@agentic/repository";
@@ -26,14 +26,30 @@ async function createGoalForUser(
   userId: string,
   request: string
 ) {
+  const workspaceId = (await repository.getDashboardData(userId)).activeWorkspace?.id ?? null;
   const bundle = await processUserRequest({
     userId,
     request,
+    workspaceId,
     memories: await repository.listMemory(userId),
     integrations: buildDefaultIntegrationAccounts(userId)
   });
 
   await repository.saveGoalBundle(bundle);
+  const governance = workspaceId ? await repository.getWorkspaceGovernance(workspaceId, userId) : null;
+
+  if (governance) {
+    await repository.saveWorkspaceGovernance(
+      {
+        ...governance,
+        publicSharingEnabled: true,
+        updatedBy: userId,
+        updatedAt: new Date().toISOString()
+      },
+      createSystemActorContext(userId)
+    );
+  }
+
   return bundle;
 }
 

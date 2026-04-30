@@ -157,7 +157,7 @@ describe("briefing route", () => {
     expect(completedStatusPayload.job.briefingType).toBe("midday");
     expect(completedStatusPayload.result.goalId).toBe(createPayload.job.goalId);
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
-    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
     expect(persistedBundle?.goal.intent).toBe("briefing:midday");
     expect(persistedBundle?.goal.title).toContain("Midday drift check");

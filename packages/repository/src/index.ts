@@ -57,7 +57,6 @@ import {
   ProviderCredentialSecretRecordSchema,
   RiskClassSchema,
   SYSTEM_USER_ID,
-  defaultWorkspaceShadowReplayPolicy,
   TaskSchema,
   WatcherSchema,
   WatcherPageSchema,
@@ -130,6 +129,7 @@ import {
   buildFallbackApprovalActionIntent,
   buildFallbackApprovalPreview
 } from "./approval-fallbacks";
+import { assertWorkspaceGovernanceStartupConfig, resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults"; export { resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults";
 import { deriveAgentMetricsFromGoals } from "./agent-metrics";
 import {
   buildPendingAutopilotEvent,
@@ -749,13 +749,7 @@ function defaultWorkspaceGovernance(workspaceId: string, updatedBy: string): Wor
 
   return WorkspaceGovernanceSchema.parse({
     workspaceId,
-    approvalMode: "risk_based",
-    requireAuditExports: false,
-    maxAutoRunRiskClass: "R1",
-    externalSendRequiresApproval: true,
-    calendarWriteRequiresApproval: true,
-    shadowReplayPolicy: defaultWorkspaceShadowReplayPolicy,
-    retentionDays: 365,
+    ...resolveWorkspaceGovernanceDefaultsFromEnv(),
     updatedBy,
     createdAt: timestamp,
     updatedAt: timestamp
@@ -1610,10 +1604,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async saveWorkspaceGovernance(
-    governance: WorkspaceGovernance,
-    actor: ActorContext
-  ): Promise<WorkspaceGovernance> {
+  async saveWorkspaceGovernance(governance: WorkspaceGovernance, actor: ActorContext): Promise<WorkspaceGovernance> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const validated = WorkspaceGovernanceSchema.parse(governance);
@@ -4041,12 +4032,12 @@ class PostgresRepository implements AgenticRepository {
       approvalMode: row.approval_mode,
       requireAuditExports: Boolean(row.require_audit_exports),
       maxAutoRunRiskClass: row.max_auto_run_risk_class,
+      publicSharingEnabled: Boolean(row.public_sharing_enabled),
+      providerAccessRequiresApproval: row.provider_access_requires_approval == null ? true : Boolean(row.provider_access_requires_approval),
+      escalationRequiresApproval: row.escalation_requires_approval == null ? true : Boolean(row.escalation_requires_approval),
       externalSendRequiresApproval: Boolean(row.external_send_requires_approval),
       calendarWriteRequiresApproval: Boolean(row.calendar_write_requires_approval),
-      shadowReplayPolicy:
-        row.shadow_replay_policy && typeof row.shadow_replay_policy === "object"
-          ? row.shadow_replay_policy
-          : defaultWorkspaceShadowReplayPolicy,
+      shadowReplayPolicy: row.shadow_replay_policy && typeof row.shadow_replay_policy === "object" ? row.shadow_replay_policy : undefined,
       retentionDays: Number(row.retention_days),
       updatedBy: row.updated_by,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
@@ -4137,14 +4128,18 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into workspace_governance (
-          workspace_id, approval_mode, require_audit_exports, max_auto_run_risk_class, external_send_requires_approval,
+          workspace_id, approval_mode, require_audit_exports, max_auto_run_risk_class, public_sharing_enabled,
+          provider_access_requires_approval, escalation_requires_approval, external_send_requires_approval,
           calendar_write_requires_approval, shadow_replay_policy, retention_days, updated_by, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         on conflict (workspace_id) do update
         set approval_mode = excluded.approval_mode,
             require_audit_exports = excluded.require_audit_exports,
             max_auto_run_risk_class = excluded.max_auto_run_risk_class,
+            public_sharing_enabled = excluded.public_sharing_enabled,
+            provider_access_requires_approval = excluded.provider_access_requires_approval,
+            escalation_requires_approval = excluded.escalation_requires_approval,
             external_send_requires_approval = excluded.external_send_requires_approval,
             calendar_write_requires_approval = excluded.calendar_write_requires_approval,
             shadow_replay_policy = excluded.shadow_replay_policy,
@@ -4157,6 +4152,9 @@ class PostgresRepository implements AgenticRepository {
         validated.approvalMode,
         validated.requireAuditExports,
         validated.maxAutoRunRiskClass,
+        validated.publicSharingEnabled,
+        validated.providerAccessRequiresApproval,
+        validated.escalationRequiresApproval,
         validated.externalSendRequiresApproval,
         validated.calendarWriteRequiresApproval,
         JSON.stringify(validated.shadowReplayPolicy),
@@ -7880,6 +7878,8 @@ class PostgresRepository implements AgenticRepository {
 }
 
 export function createRepository(options?: { storePath?: string; databaseUrl?: string }): AgenticRepository {
+  assertWorkspaceGovernanceStartupConfig();
+
   // Explicit file-backed test stores must win over an ambient DATABASE_URL so
   // unrelated Postgres-backed suites do not leak pools and state into file mode.
   const databaseUrl =

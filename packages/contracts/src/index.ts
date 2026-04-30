@@ -1342,12 +1342,25 @@ export const DashboardOperatingSectionsSchema = z.object({
 
 export const defaultWorkspaceShadowReplayPolicy = {
   enabled: true,
-  promotionMode: "validated_autonomy",
-  rollbackOutcome: "allowed_with_confirmation",
+  promotionMode: "shadow_only",
+  rollbackOutcome: "downgrade_to_draft",
   minimumMatchedEpisodes: 3,
   minimumPrecision: 0.8,
   maximumNegativeOutcomeRate: 0.15,
   maximumFailureCostRate: 0.2
+} as const;
+
+export const enterpriseWorkspaceGovernanceDefaults = {
+  approvalMode: "always_review",
+  requireAuditExports: true,
+  maxAutoRunRiskClass: "R1",
+  publicSharingEnabled: false,
+  providerAccessRequiresApproval: true,
+  escalationRequiresApproval: true,
+  externalSendRequiresApproval: true,
+  calendarWriteRequiresApproval: true,
+  shadowReplayPolicy: defaultWorkspaceShadowReplayPolicy,
+  retentionDays: 90
 } as const;
 
 export const WorkspaceShadowReplayPolicySchema = z
@@ -1392,13 +1405,16 @@ export const WorkspaceSelectionSchema = z.object({
 
 export const WorkspaceGovernanceSchema = z.object({
   workspaceId: z.string().min(1),
-  approvalMode: WorkspaceApprovalModeSchema,
-  requireAuditExports: z.boolean().default(false),
-  maxAutoRunRiskClass: RiskClassSchema.default("R1"),
-  externalSendRequiresApproval: z.boolean().default(true),
-  calendarWriteRequiresApproval: z.boolean().default(true),
-  shadowReplayPolicy: WorkspaceShadowReplayPolicySchema.default(defaultWorkspaceShadowReplayPolicy),
-  retentionDays: z.number().int().min(7).max(3650).default(365),
+  approvalMode: WorkspaceApprovalModeSchema.default(enterpriseWorkspaceGovernanceDefaults.approvalMode),
+  requireAuditExports: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.requireAuditExports),
+  maxAutoRunRiskClass: RiskClassSchema.default(enterpriseWorkspaceGovernanceDefaults.maxAutoRunRiskClass),
+  publicSharingEnabled: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.publicSharingEnabled),
+  providerAccessRequiresApproval: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.providerAccessRequiresApproval),
+  escalationRequiresApproval: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.escalationRequiresApproval),
+  externalSendRequiresApproval: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.externalSendRequiresApproval),
+  calendarWriteRequiresApproval: z.boolean().default(enterpriseWorkspaceGovernanceDefaults.calendarWriteRequiresApproval),
+  shadowReplayPolicy: WorkspaceShadowReplayPolicySchema.default(enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy),
+  retentionDays: z.number().int().min(7).max(3650).default(enterpriseWorkspaceGovernanceDefaults.retentionDays),
   updatedBy: z.string().min(1),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()

@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
+import { WorkspaceGovernanceSchema } from "@agentic/contracts";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
 import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { GOAL_SHARE_MUTATION_DENIED_REASON, canManageGoalSharesForRole } from "../../../../../lib/workspace-role-permissions";
@@ -46,6 +48,32 @@ async function assertCanManageGoalShares(
   }
 }
 
+async function assertPublicSharingEnabled(
+  repository: Awaited<ReturnType<typeof getSeededRepository>>,
+  workspaceId: string | null,
+  userId: string
+) {
+  const dashboard = workspaceId ? null : await repository.getDashboardData(userId);
+  const governanceWorkspaceId = workspaceId ?? dashboard?.activeWorkspace?.id ?? null;
+  if (!governanceWorkspaceId) {
+    throw new ApiRouteError(403, "Public sharing is disabled until workspace governance explicitly enables it.");
+  }
+  const governance =
+    (workspaceId ? null : dashboard?.workspaceGovernance) ??
+    (await repository.getWorkspaceGovernance(governanceWorkspaceId, userId)) ??
+    WorkspaceGovernanceSchema.parse({
+      workspaceId: governanceWorkspaceId,
+      ...resolveWorkspaceGovernanceDefaultsFromEnv(),
+      updatedBy: userId,
+      createdAt: dashboard?.activeWorkspace?.createdAt ?? new Date().toISOString(),
+      updatedAt: dashboard?.activeWorkspace?.updatedAt ?? new Date().toISOString()
+    });
+
+  if (!governance?.publicSharingEnabled) {
+    throw new ApiRouteError(403, "Public sharing is disabled until workspace governance explicitly enables it.");
+  }
+}
+
 export const POST = createGovernedMutationRoute<undefined, RouteContext>(
   {
     route: "api.goals.share.create",
@@ -67,6 +95,7 @@ export const POST = createGovernedMutationRoute<undefined, RouteContext>(
     }
 
     await assertCanManageGoalShares(repository, bundle.goal.workspaceId, bundle.goal.userId, principal.userId);
+    await assertPublicSharingEnabled(repository, bundle.goal.workspaceId, principal.userId);
 
     const expiresAt = getGoalShareExpiry();
     const createdAt = new Date().toISOString();

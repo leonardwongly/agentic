@@ -1,6 +1,12 @@
 import { createHmac } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
-import { expectShareLinkReady, openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
+import {
+  enablePublicSharingForE2E,
+  expectShareLinkReady,
+  openRequestComposer,
+  submitRequest,
+  unlockDashboard
+} from "./helpers";
 
 function createSignedShareToken(goalId: string, expiresAt: string): string {
   const payload = Buffer.from(
@@ -32,6 +38,7 @@ function isPublicShareViewRequest(url: string, method: string): boolean {
 
 test("creates a public goal share link and opens the shared page", async ({ page }) => {
   await unlockDashboard(page);
+  await enablePublicSharingForE2E(page);
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(
@@ -62,6 +69,7 @@ test("creates a public goal share link and opens the shared page", async ({ page
 
 test("keeps the share flow successful when clipboard access is blocked", async ({ page }) => {
   await unlockDashboard(page);
+  await enablePublicSharingForE2E(page);
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(
@@ -100,6 +108,7 @@ test("renders a valid public share page in a fresh unauthenticated context and d
   page
 }) => {
   await unlockDashboard(page);
+  await enablePublicSharingForE2E(page);
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(

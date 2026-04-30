@@ -1,11 +1,16 @@
 import { z } from "zod";
-import { CapabilitySchema, WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema } from "@agentic/contracts";
+import {
+  CapabilitySchema,
+  WorkspaceGovernanceSchema,
+  WorkspaceShadowReplayPolicySchema
+} from "@agentic/contracts";
 import {
   assessWorkspaceGovernanceConformance,
   buildAutonomyBudget,
   buildGovernanceSimulationScenarios,
   simulateGovernanceScenarios
 } from "@agentic/policy";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../../lib/auth";
 import {
@@ -35,6 +40,9 @@ const GovernanceSimulationRequestSchema = z
         approvalMode: WorkspaceGovernanceSchema.shape.approvalMode.optional(),
         requireAuditExports: z.boolean().optional(),
         maxAutoRunRiskClass: WorkspaceGovernanceSchema.shape.maxAutoRunRiskClass.optional(),
+        publicSharingEnabled: z.boolean().optional(),
+        providerAccessRequiresApproval: z.boolean().optional(),
+        escalationRequiresApproval: z.boolean().optional(),
         externalSendRequiresApproval: z.boolean().optional(),
         calendarWriteRequiresApproval: z.boolean().optional(),
         shadowReplayPolicy: WorkspaceShadowReplayPolicySchema.partial().strict().optional(),
@@ -60,13 +68,7 @@ async function resolveWorkspaceContext(userId: string) {
     (await repository.getWorkspaceGovernance(activeWorkspace.id, userId)) ??
     WorkspaceGovernanceSchema.parse({
       workspaceId: activeWorkspace.id,
-      approvalMode: "risk_based",
-      requireAuditExports: false,
-      maxAutoRunRiskClass: "R1",
-      externalSendRequiresApproval: true,
-      calendarWriteRequiresApproval: true,
-      shadowReplayPolicy: {},
-      retentionDays: 365,
+      ...resolveWorkspaceGovernanceDefaultsFromEnv(),
       updatedBy: userId,
       createdAt: activeWorkspace.createdAt,
       updatedAt: activeWorkspace.updatedAt

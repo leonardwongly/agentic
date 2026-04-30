@@ -2,6 +2,7 @@ import {
   AutonomyBudgetSchema,
   PolicyDecisionSchema,
   PolicyDecisionTraceSchema,
+  WorkspaceGovernanceSchema,
   defaultWorkspaceShadowReplayPolicy,
   type AgentMetrics,
   type AutonomyBudget,
@@ -271,11 +272,12 @@ function buildLearningRollbackDecision(params: {
   });
 }
 
-export function buildAutonomyBudget(governance: WorkspaceGovernance | null | undefined): AutonomyBudget | null {
-  if (!governance) {
+export function buildAutonomyBudget(rawGovernance: WorkspaceGovernance | null | undefined): AutonomyBudget | null {
+  if (!rawGovernance) {
     return null;
   }
 
+  const governance = WorkspaceGovernanceSchema.parse(rawGovernance);
   const shadowReplayPolicy = governance.shadowReplayPolicy ?? defaultWorkspaceShadowReplayPolicy;
 
   const requiresExplicitApprovalCapabilities: Capability[] = [];
@@ -564,15 +566,36 @@ function classifyConformanceStatus(checks: GovernanceConformanceCheck[]): Govern
 }
 
 export function assessWorkspaceGovernanceConformance(
-  governance: WorkspaceGovernance | null | undefined
+  rawGovernance: WorkspaceGovernance | null | undefined
 ): GovernanceConformanceReport | null {
-  if (!governance) {
+  if (!rawGovernance) {
     return null;
   }
 
+  const governance = WorkspaceGovernanceSchema.parse(rawGovernance);
   const shadowReplayPolicy = governance.shadowReplayPolicy ?? defaultWorkspaceShadowReplayPolicy;
 
   const checks: GovernanceConformanceCheck[] = [
+    governance.approvalMode === "always_review"
+      ? {
+          id: "approval-mode",
+          status: "pass",
+          summary: "Every task defaults to explicit review.",
+          detail: "Always-review mode prevents confidence, scorecards, or learning signals from widening live autonomy by default."
+        }
+      : governance.maxAutoRunRiskClass === "R1" || governance.maxAutoRunRiskClass === "R2"
+        ? {
+            id: "approval-mode",
+            status: "pass",
+            summary: "Risk-based approval mode is bounded by conservative defaults.",
+            detail: "Risk-based mode remains inside the enterprise-safe posture while the auto-run ceiling and capability gates stay restrictive."
+          }
+      : {
+          id: "approval-mode",
+          status: "warn",
+          summary: "Risk-based approval mode is enabled.",
+          detail: "Risk-based mode is an explicit override and should stay paired with conservative ceilings and capability gates."
+        },
     governance.requireAuditExports
       ? {
           id: "audit-exports",
@@ -585,6 +608,45 @@ export function assessWorkspaceGovernanceConformance(
           status: "fail",
           summary: "Audit exports are disabled.",
           detail: "Enterprise governance should require audit exports so reviewers can validate approvals and execution history."
+        },
+    governance.publicSharingEnabled
+      ? {
+          id: "public-sharing",
+          status: "warn",
+          summary: "Public share links are enabled.",
+          detail: "Public sharing is an explicit override and should be paired with expiry, audit review, and disclosure controls."
+        }
+      : {
+          id: "public-sharing",
+          status: "pass",
+          summary: "Public share links are disabled by default.",
+          detail: "Externally visible share links fail closed until the workspace owner explicitly enables the capability."
+        },
+    governance.providerAccessRequiresApproval
+      ? {
+          id: "provider-access",
+          status: "pass",
+          summary: "Provider-backed actions stay approval-gated.",
+          detail: "Connector/provider access can support drafting and readiness checks without silently widening side effects."
+        }
+      : {
+          id: "provider-access",
+          status: "fail",
+          summary: "Provider-backed actions can bypass explicit approval.",
+          detail: "Enterprise governance should require review before provider access can create external side effects."
+        },
+    governance.escalationRequiresApproval
+      ? {
+          id: "escalation-approval",
+          status: "pass",
+          summary: "Escalation actions require approval.",
+          detail: "Escalation remains a governed operator decision rather than an ambient automation default."
+        }
+      : {
+          id: "escalation-approval",
+          status: "warn",
+          summary: "Escalation actions can proceed without explicit approval.",
+          detail: "Automatic escalation can change ownership and priority, so relaxed settings should be intentional and audited."
         },
     governance.externalSendRequiresApproval
       ? {
@@ -807,11 +869,13 @@ export function getGovernanceApprovalReason(params: {
   riskClass: RiskClass;
   governance?: WorkspaceGovernance | null;
 }): string | null {
-  const { capabilities, riskClass, governance } = params;
+  const { capabilities, riskClass } = params;
 
-  if (!governance) {
+  if (!params.governance) {
     return null;
   }
+
+  const governance = WorkspaceGovernanceSchema.parse(params.governance);
 
   if (governance.approvalMode === "always_review") {
     return "Workspace governance is configured for always-review mode.";

@@ -172,7 +172,7 @@ describe("templates routes", () => {
     expect(completedStatusPayload.job.templateId).toBe(createPayload.template.id);
     expect(completedStatusPayload.result.goalId).toBe(runPayload.job.goalId);
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
-    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
 
     const persistedListResponse = await listTemplatesRoute(buildAuthorizedGetRequest("http://localhost/api/templates"));

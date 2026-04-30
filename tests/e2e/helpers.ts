@@ -19,6 +19,16 @@ export async function unlockDashboard(page: Page, accessKey = "playwright-e2e-ke
   });
 }
 
+export async function enablePublicSharingForE2E(page: Page) {
+  const response = await page.request.post("/api/governance", {
+    data: {
+      publicSharingEnabled: true
+    }
+  });
+
+  expect(response.status()).toBe(200);
+}
+
 export async function openRequestComposer(page: Page) {
   await page.getByRole("button", { name: "Request work" }).click();
   const requestCard = page.locator(".request-card");
