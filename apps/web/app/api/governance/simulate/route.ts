@@ -2,8 +2,7 @@ import { z } from "zod";
 import {
   CapabilitySchema,
   WorkspaceGovernanceSchema,
-  WorkspaceShadowReplayPolicySchema,
-  enterpriseWorkspaceGovernanceDefaults
+  WorkspaceShadowReplayPolicySchema
 } from "@agentic/contracts";
 import {
   assessWorkspaceGovernanceConformance,
@@ -11,6 +10,7 @@ import {
   buildGovernanceSimulationScenarios,
   simulateGovernanceScenarios
 } from "@agentic/policy";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../../lib/auth";
 import {
@@ -68,7 +68,7 @@ async function resolveWorkspaceContext(userId: string) {
     (await repository.getWorkspaceGovernance(activeWorkspace.id, userId)) ??
     WorkspaceGovernanceSchema.parse({
       workspaceId: activeWorkspace.id,
-      ...enterpriseWorkspaceGovernanceDefaults,
+      ...resolveWorkspaceGovernanceDefaultsFromEnv(),
       updatedBy: userId,
       createdAt: activeWorkspace.createdAt,
       updatedAt: activeWorkspace.updatedAt

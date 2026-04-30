@@ -51,11 +51,14 @@ async function assertPublicSharingEnabled(
   workspaceId: string | null,
   userId: string
 ) {
-  if (!workspaceId) {
+  const dashboard = workspaceId ? null : await repository.getDashboardData(userId);
+  const governanceWorkspaceId = workspaceId ?? dashboard?.activeWorkspace?.id ?? null;
+  if (!governanceWorkspaceId) {
     throw new ApiRouteError(403, "Public sharing is disabled until workspace governance explicitly enables it.");
   }
-
-  const governance = await repository.getWorkspaceGovernance(workspaceId, userId);
+  const governance =
+    (workspaceId ? null : dashboard?.workspaceGovernance) ??
+    (await repository.getWorkspaceGovernance(governanceWorkspaceId, userId));
 
   if (!governance?.publicSharingEnabled) {
     throw new ApiRouteError(403, "Public sharing is disabled until workspace governance explicitly enables it.");

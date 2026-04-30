@@ -12,6 +12,7 @@ import { buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-h
 describe("governance simulate route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
+  const originalGovernanceDefaultProfile = process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
 
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
@@ -25,6 +26,11 @@ describe("governance simulate route", () => {
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
+    if (originalGovernanceDefaultProfile === undefined) {
+      delete process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
+    } else {
+      process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE = originalGovernanceDefaultProfile;
+    }
     Reflect.set(globalThis, "__agenticRepository", undefined);
     resetAuthSessionStateStoreForTesting();
   });
@@ -135,6 +141,53 @@ describe("governance simulate route", () => {
       })
     ]);
     expectNoStoreHeaders(response);
+  });
+
+  it("resolves missing governance fallback from the runtime default profile", async () => {
+    process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE = "demo";
+    Reflect.set(globalThis, "__agenticRepository", {
+      seedDefaults: async () => {},
+      getDashboardData: async () => ({
+        activeWorkspace: {
+          id: "workspace-demo-fallback",
+          ownerUserId: "user-system",
+          slug: "demo-fallback",
+          name: "Demo Fallback",
+          description: null,
+          isPersonal: true,
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z"
+        },
+        workspaceGovernance: null
+      }),
+      getWorkspaceGovernance: async () => null
+    });
+
+    const response = await governanceSimulatePostRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/governance/simulate", {
+        scenarios: [
+          {
+            title: "Read current workspace docs",
+            capabilities: ["read"],
+            confidence: 0.95
+          }
+        ]
+      })
+    );
+    const payload = (await response.json()) as {
+      governance: {
+        approvalMode: string;
+        publicSharingEnabled: boolean;
+        retentionDays: number;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.governance).toMatchObject({
+      approvalMode: "risk_based",
+      publicSharingEnabled: true,
+      retentionDays: 365
+    });
   });
 
   it("rate limits repeated governance simulation requests before evaluating scenarios", async () => {

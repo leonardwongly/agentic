@@ -522,6 +522,53 @@ describe("goal share route", () => {
     expect(shares).toHaveLength(0);
   });
 
+  it("uses active workspace governance for legacy null-workspace goals", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const governance = dashboard.activeWorkspace
+      ? await repository.getWorkspaceGovernance(dashboard.activeWorkspace.id, SYSTEM_USER_ID)
+      : null;
+    if (!governance) {
+      throw new Error("Expected seeded personal workspace governance.");
+    }
+    await repository.saveWorkspaceGovernance(
+      {
+        ...governance,
+        publicSharingEnabled: true,
+        updatedBy: SYSTEM_USER_ID,
+        updatedAt: new Date().toISOString()
+      },
+      createSystemActorContext(SYSTEM_USER_ID)
+    );
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Share a legacy null-scoped goal after enabling personal workspace governance.",
+      null
+    );
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await goalShareRoute(
+      new Request(`http://localhost/api/goals/${bundle.goal.id}/share`, {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+
+    expect(response.status).toBe(200);
+    expect(shares).toHaveLength(1);
+    expect(shares[0]?.workspaceId).toBeNull();
+  });
+
   it("stamps session actor context onto share creation logs", async () => {
     const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
