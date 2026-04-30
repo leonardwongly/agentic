@@ -54,3 +54,4 @@ These outputs are intended to answer three questions quickly:
 - Update the control registry whenever a new trust boundary or release gate is introduced.
 - Review `config/compliance/controls.json` and `config/security/incident-severity.json` during any significant architecture or governance change.
 - Treat missing evidence as a release blocker in CI.
+- Pull request validation still builds and validates the evidence bundle, but never uploads transient supply-chain artifacts. Non-PR uploads require `ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD=true` so repository artifact quota pressure cannot turn otherwise valid reviews red.
