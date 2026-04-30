@@ -13,6 +13,7 @@ const GraphQuerySchema = z
   .strict();
 const ROOT_MEMORY_LOOKUP_PAGE_LIMIT = 100;
 const MAX_ROOT_MEMORY_LOOKUP_PAGES = 5;
+const PROVENANCE_COLLECTION_PAGE_LIMIT = 100;
 
 function goalIdFromRoot(rootId: string | null): string | null {
   return rootId?.startsWith("goal:") ? rootId.slice("goal:".length) : null;
@@ -61,6 +62,31 @@ async function listRawMemoriesForProvenance(
   return memories;
 }
 
+async function listGoalBundlesForProvenance(
+  repository: Awaited<ReturnType<typeof getSeededRepository>>,
+  userId: string,
+  limit: number
+) {
+  const goals: Awaited<ReturnType<typeof repository.listGoalsPage>>["items"] = [];
+  let cursor: string | null | undefined = null;
+
+  while (goals.length < limit) {
+    const page = await repository.listGoalsPage({
+      userId,
+      limit: Math.min(limit - goals.length, PROVENANCE_COLLECTION_PAGE_LIMIT),
+      cursor
+    });
+    goals.push(...page.items);
+
+    if (!page.nextCursor) {
+      break;
+    }
+    cursor = page.nextCursor;
+  }
+
+  return goals;
+}
+
 async function findRootMemoryForProvenance(
   repository: Awaited<ReturnType<typeof getSeededRepository>>,
   userId: string,
@@ -101,10 +127,10 @@ export async function GET(request: Request) {
       const rootJobGoalId = rootJob ? goalIdFromJobPayload(rootJob.payload) : null;
       if (rootGoalId || rootJobGoalId) {
         const rootGoal = await repository.getGoalBundleForUser(rootGoalId ?? rootJobGoalId!, principal.userId);
-        const page = await repository.listGoalsPage({ userId: principal.userId, limit: query.limit });
-        return rootGoal ? [rootGoal, ...page.items.filter((goal) => goal.goal.id !== rootGoal.goal.id)] : page.items;
+        const goals = await listGoalBundlesForProvenance(repository, principal.userId, query.limit);
+        return rootGoal ? [rootGoal, ...goals.filter((goal) => goal.goal.id !== rootGoal.goal.id)] : goals;
       }
-      return repository.listGoalsPage({ userId: principal.userId, limit: query.limit }).then((page) => page.items);
+      return listGoalBundlesForProvenance(repository, principal.userId, query.limit);
     });
     const memoriesPromise = listRawMemoriesForProvenance(repository, principal.userId, query.limit);
     const rootMemoryPromise = findRootMemoryForProvenance(repository, principal.userId, root);

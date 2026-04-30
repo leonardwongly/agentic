@@ -154,6 +154,32 @@ describe("provenance graph route", () => {
     expect(payload.graph.nodes.some((node) => node.id === `goal:${bundle.goal.id}`)).toBe(true);
   });
 
+  it("pages goals when the requested provenance limit exceeds the repository page cap", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    for (let index = 0; index < 125; index += 1) {
+      const bundle = await processUserRequest({
+        userId: SYSTEM_USER_ID,
+        request: `Prepare paged provenance goal ${index}.`,
+        memories: [],
+        integrations: []
+      });
+      await repository.saveGoalBundle(bundle);
+    }
+    const listGoalsPageSpy = vi.spyOn(repository, "listGoalsPage");
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await graphRoute(buildAuthorizedGetRequest("http://localhost/api/provenance/graph?limit=125"));
+
+    expect(response.status).toBe(200);
+    expect(listGoalsPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 100 }));
+    expect(listGoalsPageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 25, cursor: expect.any(String) })
+    );
+  });
+
   it("resolves long memory roots with bounded pages instead of unbounded scans", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
