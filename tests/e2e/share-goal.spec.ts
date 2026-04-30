@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   enablePublicSharingForE2E,
+  E2E_UI_TIMEOUT_MS,
   expectShareLinkReady,
   openRequestComposer,
   submitRequest,
@@ -42,8 +43,10 @@ async function reviewAndCreateShareLink(page: Page, createdGoal: Locator, goalTi
 
   await expect(reviewShareButton).toBeEnabled();
   await reviewShareButton.click();
-  await expect(page.getByRole("heading", { name: "Public Share Review" })).toBeVisible();
-  await expect(page.getByText("Hidden fields")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Public Share Review" })).toBeVisible({
+    timeout: E2E_UI_TIMEOUT_MS
+  });
+  await expect(page.getByText("Hidden fields")).toBeVisible({ timeout: E2E_UI_TIMEOUT_MS });
   await page.getByRole("button", { name: "Create public link" }).click();
   await expectShareLinkReady(page, goalTitle);
 }
