@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   buildApprovalNotificationDeliveryTarget,
   createJobExecutionJournal,
@@ -46,6 +47,16 @@ const legalTaskTransitions: Record<TaskState, readonly TaskState[]> = {
   failed: ["retrying", "blocked"],
   completed: []
 };
+
+function buildWorkflowNodeExecutionId(instanceId: string, nodeId: string): string {
+  const executionId = `${instanceId}:${nodeId}`;
+  if (executionId.length <= 160) {
+    return executionId;
+  }
+
+  const digest = crypto.createHash("sha256").update(executionId).digest("hex").slice(0, 16);
+  return `${executionId.slice(0, 143)}:${digest}`;
+}
 
 const legalJobTransitions: Record<JobStatus, readonly JobStatus[]> = {
   queued: ["running"],
@@ -445,7 +456,7 @@ export function createWorkflowDagInstance(params: {
     status: "queued",
     nodeExecutions: dag.nodes.map((node) =>
       WorkflowDagNodeExecutionSchema.parse({
-        id: `${instanceId}:${node.id}`,
+        id: buildWorkflowNodeExecutionId(instanceId, node.id),
         instanceId,
         nodeId: node.id,
         status: "queued",

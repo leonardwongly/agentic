@@ -229,6 +229,27 @@ describe("workflow DAG process model", () => {
     );
   });
 
+  it("keeps generated node execution ids inside the schema limit", () => {
+    const longInstanceId = "instance-" + "a".repeat(151);
+    const longNodeId = "node-" + "b".repeat(155);
+    const instance = createWorkflowDagInstance({
+      dag: buildDag({
+        nodes: [
+          {
+            ...buildDag().nodes[0]!,
+            id: longNodeId
+          }
+        ],
+        edges: []
+      }),
+      instanceId: longInstanceId,
+      now: "2026-04-20T00:00:00.000Z"
+    });
+
+    expect(instance.nodeExecutions[0]?.id.length).toBeLessThanOrEqual(160);
+    expect(instance.nodeExecutions[0]?.nodeId).toBe(longNodeId);
+  });
+
   it("rejects duplicate worker delivery by enforcing legal node transitions", () => {
     const instance = createWorkflowDagInstance({
       dag: buildDag(),

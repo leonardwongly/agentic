@@ -26,6 +26,8 @@ export type WatcherSignalEvaluator = (watcher: Watcher) => Promise<{
   cursor?: string | null;
 }>;
 
+type WatcherSignalEvaluation = Awaited<ReturnType<WatcherSignalEvaluator>>;
+
 const watcherFrequencyIntervalsMs: Record<Watcher["frequency"], number> = {
   realtime: 30_000,
   "5min": 5 * 60_000,
@@ -138,7 +140,28 @@ export async function runWatcherSchedulerOnce(params: {
       continue;
     }
 
-    const evaluation = await evaluator(leasedWatcher);
+    let evaluation: WatcherSignalEvaluation;
+    try {
+      evaluation = await evaluator(leasedWatcher);
+    } catch (error) {
+      await params.repository.saveWatcher(
+        WatcherSchema.parse({
+          ...leasedWatcher,
+          schedule: {
+            ...leasedWatcher.schedule,
+            lease: null
+          },
+          updatedAt: evaluatedAt
+        })
+      );
+      decisions.push({
+        watcherId: watcher.id,
+        action: "skipped",
+        reason: error instanceof Error ? error.message : "Watcher evaluator failed.",
+        idempotencyKey: null
+      });
+      continue;
+    }
     const idempotencyKey = buildWatcherIdempotencyKey(leasedWatcher, evaluatedAt);
     const lastEvaluation = WatcherDryRunResultSchema.parse({
       evaluatedAt,

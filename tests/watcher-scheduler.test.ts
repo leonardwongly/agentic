@@ -282,6 +282,32 @@ describe("watcher scheduler", () => {
     expect(evaluator).not.toHaveBeenCalled();
   });
 
+  it("releases the watcher lease and continues when evaluation fails", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const watcher = await repository.saveWatcher(buildWatcher(bundle.goal.id));
+
+    const result = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      evaluator: async () => {
+        throw new Error("Evaluator unavailable.");
+      }
+    });
+    const [updatedWatcher] = await repository.listWatchers({ userId: SYSTEM_USER_ID });
+
+    expect(result.decisions).toEqual([
+      {
+        watcherId: watcher.id,
+        action: "skipped",
+        reason: "Evaluator unavailable.",
+        idempotencyKey: null
+      }
+    ]);
+    expect(updatedWatcher?.schedule.lease).toBeNull();
+  });
+
   it("passes watcher hourly trigger caps into autopilot event budgets", async () => {
     const { repository, bundle } = await createSchedulerFixture();
     const watcher = await repository.saveWatcher(
