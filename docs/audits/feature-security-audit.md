@@ -80,7 +80,7 @@ Document note:
 
 | Surface | Inputs | Outputs | Trust boundary | Stateful side effects | Coverage after pass | Remaining gaps |
 | --- | --- | --- | --- | --- | --- | --- |
-| Session unlock/logout | JSON body, cookie jar, env access key, shared-state env | session cookie, JSON status | untrusted browser to auth boundary | sets, clears, and revokes session state plus unlock-throttle state | unit + route + e2e + readiness coverage | non-production still stays process-local by default unless `AGENTIC_SHARED_AUTH_STATE=true` or `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` is set |
+| Session unlock/logout | JSON body, cookie jar, env access key, shared-state env | session cookie, JSON status | untrusted browser to auth boundary | sets, clears, and revokes session state plus unlock-throttle state | unit + route + e2e + readiness coverage | non-production still stays process-local by default unless `AGENTIC_SHARED_AUTH_STATE=true` selects the shared store; `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true` makes readiness report the requirement |
 | Approvals respond | path param, JSON body | updated bundle | authenticated API caller | persists approval decision | route tests | no approval history endpoint yet |
 | Memory list/create | JSON body | memory list/record | authenticated API caller | persists memory record | route validation + header tests | no edit/delete flow |
 | Integrations list/update | JSON body | integration list/record | authenticated API caller | updates integration state | route scoping + validation tests | non-Google providers still rely on future provider-specific credential work |
@@ -123,7 +123,7 @@ Document note:
 
 ## Deferred Follow-Up
 
-1. Shared auth state is only guaranteed cross-instance when shared session and unlock stores are configured; production now fails closed by default, and non-production can opt into the same contract with `AGENTIC_REQUIRE_SHARED_AUTH_STATE=true`.
+1. Shared auth state is only guaranteed cross-instance when shared session and unlock stores are configured; production now fails closed by default, and non-production can select the same backing store with `AGENTIC_SHARED_AUTH_STATE=true` when `DATABASE_URL` is configured.
 2. Add optimistic concurrency or version checks for local note edits if concurrent writers become common.
 3. Public-share view tracking is now off the render path, but repository updates are still best-effort and last-write-win; add stronger concurrency control if public traffic grows.
 4. Docs rendering is still request-path process execution; if demand rises, move it behind the durable worker path instead of allowing user traffic to trigger build work directly.

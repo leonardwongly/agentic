@@ -146,6 +146,7 @@ export AGENTIC_SHARED_AUTH_STATE=true
 ```
 
 This lets development use the same shared auth-state backend that production expects when `DATABASE_URL` is present.
+Shared auth state depends on the checked-in auth runtime schema objects in `packages/db/migrations`; runtime request handling verifies those tables and indexes but does not create them.
 
 If you want development or test to fail closed the same way production does, also set:
 
@@ -406,6 +407,7 @@ npm run start:worker:prod
 ```
 
 The web startup wrapper fails closed if required production configuration is missing, if the database is unreachable, or if checked-in migrations have not been applied. The worker startup wrapper refuses to start until the schema is ready.
+Schema readiness also checks the shared auth runtime tables and indexes (`auth_session_rate_limits`, `auth_revoked_sessions`, and `session_unlock_attempts`). If an existing database has migration metadata but is missing those objects, run `npm run db:migrate` before starting the web or worker processes; do not rely on request traffic to bootstrap auth/session tables.
 
 ## Operational Endpoints
 
