@@ -102,6 +102,7 @@ describe("AOS remediation tracker", () => {
     malformedTracker.lanes[0].label = null as unknown as string;
     malformedTracker.lanes[0].owner = 42 as unknown as string;
     malformedTracker.items[0].priority = "critcal" as unknown as (typeof malformedTracker.items)[number]["priority"];
+    malformedTracker.items[0].validationGates = [""];
 
     expect(validateAosTracker(malformedTracker)).toEqual(
       expect.arrayContaining([
@@ -114,7 +115,8 @@ describe("AOS remediation tracker", () => {
         "baselineCommands[0].purpose must not be empty.",
         "trust-spine.label must be a string.",
         "trust-spine.owner must be a string.",
-        "AOS-00 uses unknown priority critcal."
+        "AOS-00 uses unknown priority critcal.",
+        "AOS-00.validationGates[0] must not be empty."
       ])
     );
     expect(summarizeAosTracker(malformedTracker).byPriority).toEqual({

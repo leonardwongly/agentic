@@ -305,7 +305,10 @@ export function validateAosTracker(tracker: AosTracker): string[] {
     }
 
     for (let gateIndex = 0; gateIndex < validationGates.length; gateIndex += 1) {
-      readString(validationGates[gateIndex], `${itemName}.validationGates[${gateIndex}]`, errors);
+      const gate = readString(validationGates[gateIndex], `${itemName}.validationGates[${gateIndex}]`, errors);
+      if (gate !== null && !gate.trim()) {
+        errors.push(`${itemName}.validationGates[${gateIndex}] must not be empty.`);
+      }
     }
 
     const dependencies = readArray<string>(item.dependencies, `${itemName}.dependencies`, errors);
