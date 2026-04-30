@@ -64,6 +64,12 @@ function actionTypeForApproval(task: Task, actionIntent: ActionIntent): Approval
       return "create";
     case "manual_review":
       return actionIntent.actionType;
+    case "update_record":
+      return "update";
+    case "delete_record":
+      return "delete";
+    case "monitor_signal":
+      return "artifact-only";
     default:
       return inferApprovalActionType(task);
   }
@@ -121,7 +127,13 @@ function buildApprovalPreview(task: Task, actionIntent: ActionIntent): ApprovalP
         ? `Schedule "${actionIntent.summary}" from ${actionIntent.start} to ${actionIntent.end}`
         : actionIntent.type === "create_note"
           ? `Create note "${actionIntent.title}"`
-          : actionIntent.summary;
+          : actionIntent.type === "update_record"
+            ? `Update ${actionIntent.targetType} ${actionIntent.targetId}: ${actionIntent.reason}`
+            : actionIntent.type === "delete_record"
+              ? `Delete ${actionIntent.targetType} ${actionIntent.targetId}: ${actionIntent.reason}`
+              : actionIntent.type === "monitor_signal"
+                ? `Monitor ${actionIntent.targetEntity}: ${actionIntent.condition}`
+                : actionIntent.summary;
   const changes =
     actionIntent.type === "send_message"
       ? [
@@ -152,6 +164,28 @@ function buildApprovalPreview(task: Task, actionIntent: ActionIntent): ApprovalP
                 after: actionIntent.title
               }
             ]
+          : actionIntent.type === "update_record"
+            ? Object.entries(actionIntent.patch).map(([field, value]) => ({
+                label: field,
+                before: "Current record value",
+                after: value === null ? "null" : String(value)
+              }))
+            : actionIntent.type === "delete_record"
+              ? [
+                  {
+                    label: "Delete target",
+                    before: `${actionIntent.targetType}:${actionIntent.targetId}`,
+                    after: "Deleted after explicit approval"
+                  }
+                ]
+              : actionIntent.type === "monitor_signal"
+                ? [
+                    {
+                      label: "Watcher condition",
+                      before: "No durable monitor",
+                      after: actionIntent.condition
+                    }
+                  ]
           : [
               {
                 label: "Requested action",
@@ -173,8 +207,23 @@ function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+    .join(",")}}`;
+}
+
 function buildStableIntentFingerprint(task: Task, actionIntent: ActionIntent): string {
-  return JSON.stringify({
+  return stableJson({
     taskId: task.id,
     assignedAgent: task.assignedAgent,
     toolCapabilities: task.toolCapabilities,
@@ -199,8 +248,13 @@ function buildSideEffectTarget(actionIntent: ActionIntent): string | null {
     case "create_note":
       return `notes:${shortHash(actionIntent.title)}`;
     case "manual_review":
+    case "monitor_signal":
     default:
       return null;
+    case "update_record":
+      return `workspace:update:${actionIntent.targetType}:${actionIntent.targetId}:${shortHash(stableJson(actionIntent.patch))}`;
+    case "delete_record":
+      return `workspace:delete:${actionIntent.targetType}:${actionIntent.targetId}`;
   }
 }
 
@@ -225,10 +279,16 @@ function buildPlanRecovery(actionIntent: ActionIntent) {
         compensationHints: []
       };
     case "manual_review":
+    case "update_record":
+    case "delete_record":
+    case "monitor_signal":
     default:
       return {
         strategy: "manual_review" as const,
-        note: actionIntent.reason,
+        note:
+          actionIntent.type === "manual_review"
+            ? actionIntent.reason
+            : "This intent is typed and validated, but the current driver is review-only until a concrete adapter is configured.",
         compensationHints: []
       };
   }
@@ -243,6 +303,13 @@ function buildOperation(actionIntent: ActionIntent): ActionExecutionPlan["operat
     case "create_note":
       return "create_note";
     case "manual_review":
+      return "manual_review";
+    case "update_record":
+      return "update_record";
+    case "delete_record":
+      return "delete_record";
+    case "monitor_signal":
+      return "monitor_signal";
     default:
       return "manual_review";
   }
@@ -257,6 +324,12 @@ function buildAdapterKey(actionIntent: ActionIntent): ActionExecutionPlan["adapt
     case "create_note":
       return "notes";
     case "manual_review":
+      return "manual_review";
+    case "update_record":
+    case "delete_record":
+      return "workspace";
+    case "monitor_signal":
+      return "watcher";
     default:
       return "manual_review";
   }
@@ -545,6 +618,17 @@ export async function executeTypedAction(params: {
         };
       }
     }
+
+    case "update_record":
+    case "delete_record":
+    case "monitor_signal":
+      return {
+        plan,
+        outcome: buildMissingAdapterOutcome({
+          plan,
+          detail: `Execution skipped: typed ${params.actionIntent.type} intents are recognized, but no enforcing driver is registered for adapter "${plan.adapter}".`
+        })
+      };
 
     case "manual_review":
     default:

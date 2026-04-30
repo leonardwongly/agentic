@@ -6,9 +6,9 @@ import {
   WorkspaceSchema,
   WorkspaceSelectionSchema,
   WorkspaceRoleSchema,
-  enterpriseWorkspaceGovernanceDefaults,
   nowIso
 } from "@agentic/contracts";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
@@ -133,7 +133,7 @@ export async function POST(request: Request) {
       });
       const governance = WorkspaceGovernanceSchema.parse({
         workspaceId: workspace.id,
-        ...enterpriseWorkspaceGovernanceDefaults,
+        ...resolveWorkspaceGovernanceDefaultsFromEnv(),
         updatedBy: principal.userId,
         createdAt: timestamp,
         updatedAt: timestamp

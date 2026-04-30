@@ -1,8 +1,8 @@
-import { ActionIntentSchema, TaskSchema, nowIso } from "@agentic/contracts";
+import { ActionIntentSchema, TaskSchema, nowIso, type Capability } from "@agentic/contracts";
 import { executeTypedAction, planActionExecution } from "@agentic/integrations";
 import { vi } from "vitest";
 
-function buildTask(capabilities: Array<"read" | "send" | "schedule" | "create" | "draft"> = ["read", "send"]) {
+function buildTask(capabilities: Capability[] = ["read", "send"]) {
   return TaskSchema.parse({
     id: "task-action",
     goalId: "goal-action",
@@ -180,5 +180,61 @@ describe("action execution contract", () => {
       }
     });
     expect(outcome.detail).toContain("disk full");
+  });
+
+  it("plans expanded typed intents but rejects unsupported drivers explicitly", async () => {
+    const task = buildTask(["read", "update"]);
+    const actionIntent = ActionIntentSchema.parse({
+      type: "update_record",
+      targetType: "goal",
+      targetId: "goal-action",
+      patch: { status: "running" },
+      reason: "Planner normalized a state update request."
+    });
+
+    const { plan, outcome } = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {}
+    });
+
+    expect(plan).toMatchObject({
+      actionType: "update_record",
+      adapter: "workspace",
+      operation: "update_record",
+      sideEffectTarget: "workspace:update:goal:goal-action:409443a6ee5aa296"
+    });
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      retryable: false,
+      recovery: {
+        strategy: "manual_review"
+      }
+    });
+    expect(outcome.detail).toContain("no enforcing driver is registered");
+  });
+
+  it("uses stable key ordering for update intent idempotency and side-effect targets", () => {
+    const task = buildTask(["read", "update"]);
+    const firstIntent = ActionIntentSchema.parse({
+      type: "update_record",
+      targetType: "goal",
+      targetId: "goal-action",
+      patch: { status: "running", priority: "high" },
+      reason: "Planner normalized a state update request."
+    });
+    const secondIntent = ActionIntentSchema.parse({
+      type: "update_record",
+      targetType: "goal",
+      targetId: "goal-action",
+      patch: { priority: "high", status: "running" },
+      reason: "Planner normalized a state update request."
+    });
+
+    const firstPlan = planActionExecution({ task, actionIntent: firstIntent });
+    const secondPlan = planActionExecution({ task, actionIntent: secondIntent });
+
+    expect(firstPlan.idempotencyKey).toBe(secondPlan.idempotencyKey);
+    expect(firstPlan.sideEffectTarget).toBe(secondPlan.sideEffectTarget);
   });
 });

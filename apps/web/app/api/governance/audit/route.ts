@@ -3,8 +3,8 @@ import { assessWorkspaceGovernanceConformance } from "@agentic/policy";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import {
   ApiRouteError,
-  authenticatedResponse,
   authenticatedRateLimitError,
+  authenticatedResponse,
   handleApiError
 } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";

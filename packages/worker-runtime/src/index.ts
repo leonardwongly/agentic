@@ -142,6 +142,7 @@ export {
 } from "./job-executors-core";
 export type { GoalJobResultSummary } from "./job-executors-core";
 export { executePrivacyOperationJob, executePublicShareViewJob } from "./privacy-share-executors";
+export { runWatcherSchedulerOnce, type WatcherSchedulerResult, type WatcherSchedulerDecision } from "./watcher-scheduler";
 
 export const workerJobKindValues = [
   "goal_create",

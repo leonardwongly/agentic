@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema, enterpriseWorkspaceGovernanceDefaults } from "@agentic/contracts";
+import { WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema } from "@agentic/contracts";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import {
   assessWorkspaceGovernanceConformance,
   buildAutonomyBudget,
@@ -7,9 +8,8 @@ import {
   simulateGovernanceScenarios
 } from "@agentic/policy";
 import { requireApiSession } from "../../../lib/auth";
-import { createActorContextFromPrincipal } from "../../../lib/actor-context";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
-import { requireJsonContentType } from "../../../lib/api-errors";
+import { ApiRouteError, authenticatedJson, handleApiError } from "../../../lib/api-response";
+import { createGovernedMutationRoute } from "../../../lib/governed-route";
 import { getSeededRepository } from "../../../lib/server";
 
 const GovernanceUpdateSchema = z
@@ -70,19 +70,25 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
-  try {
-    requireJsonContentType(request);
-    const principal = await requireApiSession(request);
-    const actor = createActorContextFromPrincipal(principal);
+export const POST = createGovernedMutationRoute(
+  {
+    route: "api.governance.update",
+    fallbackError: "Failed to update workspace governance.",
+    bodySchema: GovernanceUpdateSchema,
+    rateLimit: {
+      namespace: "governance-update",
+      error: "Too many governance update requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ principal, actorContext, body }) => {
     const { repository, activeWorkspace } = await resolveWorkspaceContext(principal.userId);
     assertOwnerCanEditGovernance(activeWorkspace, principal.userId);
-    const body = await parseJsonBody(request, GovernanceUpdateSchema);
     const current =
       (await repository.getWorkspaceGovernance(activeWorkspace.id, principal.userId)) ??
       WorkspaceGovernanceSchema.parse({
         workspaceId: activeWorkspace.id,
-        ...enterpriseWorkspaceGovernanceDefaults,
+        ...resolveWorkspaceGovernanceDefaultsFromEnv(),
         updatedBy: principal.userId,
         createdAt: activeWorkspace.createdAt,
         updatedAt: activeWorkspace.updatedAt
@@ -99,10 +105,8 @@ export async function POST(request: Request) {
       updatedAt: new Date().toISOString()
     });
 
-    await repository.saveWorkspaceGovernance(updated, actor);
+    await repository.saveWorkspaceGovernance(updated, actorContext);
 
     return authenticatedJson(buildGovernanceResponse(updated, await repository.getDashboardData(principal.userId)));
-  } catch (error) {
-    return handleApiError(error, "Failed to update workspace governance.");
   }
-}
+);

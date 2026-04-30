@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   buildApprovalNotificationDeliveryTarget,
   createJobExecutionJournal,
@@ -6,6 +7,9 @@ import {
   TaskSchema,
   TaskStateSchema,
   WorkflowStateSchema,
+  WorkflowDagInstanceSchema,
+  WorkflowDagNodeExecutionSchema,
+  WorkflowDagSchema,
   nowIso,
   type AgentName,
   type ActorContext,
@@ -21,6 +25,12 @@ import {
   type Task,
   type TaskState,
   type Watcher,
+  type WorkflowDag,
+  type WorkflowDagInstance,
+  type WorkflowDagNode,
+  type WorkflowDagNodeExecution,
+  type WorkflowDagNodeStatus,
+  type WorkflowDagStatus,
   type WorkflowState
 } from "@agentic/contracts";
 import {
@@ -39,12 +49,48 @@ const legalTaskTransitions: Record<TaskState, readonly TaskState[]> = {
   completed: []
 };
 
+function buildWorkflowNodeExecutionId(instanceId: string, nodeId: string): string {
+  const executionId = `${instanceId}:${nodeId}`;
+  if (executionId.length <= 160) {
+    return executionId;
+  }
+
+  const digest = crypto.createHash("sha256").update(executionId).digest("hex").slice(0, 16);
+  return `${executionId.slice(0, 143)}:${digest}`;
+}
+
 const legalJobTransitions: Record<JobStatus, readonly JobStatus[]> = {
   queued: ["running"],
   running: ["retrying", "completed", "dead_letter"],
   retrying: ["running"],
   completed: [],
   dead_letter: []
+};
+
+const legalWorkflowDagTransitions: Record<WorkflowDagStatus, readonly WorkflowDagStatus[]> = {
+  queued: ["running", "paused", "cancelled"],
+  running: ["paused", "completed", "failed", "cancelled"],
+  paused: ["running", "cancelled"],
+  completed: [],
+  failed: ["running", "cancelled"],
+  cancelled: []
+};
+
+const legalWorkflowDagNodeTransitions: Record<WorkflowDagNodeStatus, readonly WorkflowDagNodeStatus[]> = {
+  queued: ["running", "skipped", "cancelled"],
+  running: ["paused", "completed", "failed", "cancelled"],
+  paused: ["running", "cancelled"],
+  completed: [],
+  failed: ["queued", "running", "cancelled"],
+  skipped: [],
+  cancelled: []
+};
+
+const workflowRiskRank: Record<RiskClass, number> = {
+  R1: 1,
+  R2: 2,
+  R3: 3,
+  R4: 4
 };
 
 export type ClaimNextJobParams = {
@@ -295,6 +341,307 @@ export function createJobRecord(params: {
 
 export function canTransitionJobState(from: JobStatus, to: JobStatus): boolean {
   return legalJobTransitions[from].includes(to);
+}
+
+export class WorkflowDagValidationError extends Error {
+  constructor(
+    public readonly issues: string[],
+    message = `Workflow DAG validation failed: ${issues.join("; ")}`,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = "WorkflowDagValidationError";
+  }
+}
+
+function capabilityGrantSatisfiesWorkflowNode(node: WorkflowDagNode): boolean {
+  switch (node.actionIntent.type) {
+    case "send_message":
+      return node.actionIntent.mode === "send"
+        ? node.permissionGrant.capabilities.includes("send")
+        : node.permissionGrant.capabilities.includes("draft") || node.permissionGrant.capabilities.includes("send");
+    case "schedule_event":
+      return node.permissionGrant.capabilities.includes("schedule");
+    case "create_note":
+      return node.permissionGrant.capabilities.includes("create");
+    case "update_record":
+      return node.permissionGrant.capabilities.includes("update");
+    case "delete_record":
+      return node.permissionGrant.capabilities.includes("delete");
+    case "monitor_signal":
+      return node.permissionGrant.capabilities.includes("monitor");
+    case "manual_review":
+    default:
+      return true;
+  }
+}
+
+function buildWorkflowDagAdjacency(dag: WorkflowDag): Map<string, Set<string>> {
+  const adjacency = new Map<string, Set<string>>();
+
+  for (const node of dag.nodes) {
+    adjacency.set(node.id, new Set());
+  }
+
+  for (const node of dag.nodes) {
+    for (const dependency of node.dependsOn) {
+      adjacency.get(dependency)?.add(node.id);
+    }
+  }
+
+  for (const edge of dag.edges) {
+    adjacency.get(edge.from)?.add(edge.to);
+  }
+
+  return adjacency;
+}
+
+function findWorkflowDagCycle(dag: WorkflowDag): string[] | null {
+  const adjacency = buildWorkflowDagAdjacency(dag);
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const path: string[] = [];
+
+  const visit = (nodeId: string): string[] | null => {
+    if (visiting.has(nodeId)) {
+      return [...path.slice(path.indexOf(nodeId)), nodeId];
+    }
+
+    if (visited.has(nodeId)) {
+      return null;
+    }
+
+    visiting.add(nodeId);
+    path.push(nodeId);
+
+    for (const next of adjacency.get(nodeId) ?? []) {
+      const cycle = visit(next);
+
+      if (cycle) {
+        return cycle;
+      }
+    }
+
+    visiting.delete(nodeId);
+    visited.add(nodeId);
+    path.pop();
+    return null;
+  };
+
+  for (const node of dag.nodes) {
+    const cycle = visit(node.id);
+
+    if (cycle) {
+      return cycle;
+    }
+  }
+
+  return null;
+}
+
+export function validateWorkflowDag(input: WorkflowDag): WorkflowDag {
+  const dag = WorkflowDagSchema.parse(input);
+  const issues: string[] = [];
+  const cycle = findWorkflowDagCycle(dag);
+
+  if (cycle) {
+    issues.push(`cycle detected: ${cycle.join(" -> ")}`);
+  }
+
+  for (const node of dag.nodes) {
+    if (!capabilityGrantSatisfiesWorkflowNode(node)) {
+      issues.push(`node ${node.id} is missing required capabilities for ${node.actionIntent.type}`);
+    }
+
+    if (workflowRiskRank[node.actionIntent.riskClass] > workflowRiskRank[node.permissionGrant.maxRiskClass]) {
+      issues.push(
+        `node ${node.id} action risk ${node.actionIntent.riskClass} exceeds permission ceiling ${node.permissionGrant.maxRiskClass}`
+      );
+    }
+
+    if (node.compensation.required && !node.compensation.actionIntent) {
+      issues.push(`node ${node.id} requires compensation but has no compensation action intent`);
+    }
+  }
+
+  if (issues.length > 0) {
+    throw new WorkflowDagValidationError(issues);
+  }
+
+  return dag;
+}
+
+export function createWorkflowDagInstance(params: {
+  dag: WorkflowDag;
+  instanceId?: string;
+  now?: string;
+}): WorkflowDagInstance {
+  const dag = validateWorkflowDag(params.dag);
+  const timestamp = params.now ?? nowIso();
+  const instanceId = params.instanceId ?? crypto.randomUUID();
+
+  return WorkflowDagInstanceSchema.parse({
+    id: instanceId,
+    dagId: dag.id,
+    workflowId: dag.workflowId,
+    status: "queued",
+    nodeExecutions: dag.nodes.map((node) =>
+      WorkflowDagNodeExecutionSchema.parse({
+        id: buildWorkflowNodeExecutionId(instanceId, node.id),
+        instanceId,
+        nodeId: node.id,
+        status: "queued",
+        attemptCount: 0,
+        maxAttempts: node.retryPolicy.maxAttempts,
+        runnerId: null,
+        lastError: null,
+        startedAt: null,
+        completedAt: null,
+        updatedAt: timestamp
+      })
+    ),
+    auditLog: [`${timestamp} workflow DAG instance created from ${dag.id}`],
+    createdAt: timestamp,
+    updatedAt: timestamp
+  });
+}
+
+export function transitionWorkflowDagInstance(params: {
+  instance: WorkflowDagInstance;
+  status: WorkflowDagStatus;
+  reason?: string | null;
+  now?: string;
+}): WorkflowDagInstance {
+  const current = WorkflowDagInstanceSchema.parse(params.instance);
+  const nextStatus = params.status;
+
+  if (!legalWorkflowDagTransitions[current.status].includes(nextStatus)) {
+    throw new Error(`Illegal workflow DAG transition from "${current.status}" to "${nextStatus}" for instance ${current.id}.`);
+  }
+
+  const timestamp = params.now ?? nowIso();
+
+  return WorkflowDagInstanceSchema.parse({
+    ...current,
+    status: nextStatus,
+    pausedAt: nextStatus === "paused" ? timestamp : nextStatus === "running" ? null : current.pausedAt,
+    cancelledAt: nextStatus === "cancelled" ? timestamp : current.cancelledAt,
+    cancelReason: nextStatus === "cancelled" ? params.reason ?? "Workflow DAG cancelled." : current.cancelReason,
+    auditLog: [
+      ...current.auditLog,
+      `${timestamp} transitioned from ${current.status} to ${nextStatus}${params.reason ? `: ${params.reason}` : ""}`
+    ],
+    updatedAt: timestamp
+  });
+}
+
+export function transitionWorkflowDagNode(params: {
+  execution: WorkflowDagNodeExecution;
+  status: WorkflowDagNodeStatus;
+  runnerId?: string | null;
+  error?: string | null;
+  now?: string;
+}): WorkflowDagNodeExecution {
+  const current = WorkflowDagNodeExecutionSchema.parse(params.execution);
+  const nextStatus = params.status;
+
+  if (!legalWorkflowDagNodeTransitions[current.status].includes(nextStatus)) {
+    throw new Error(`Illegal workflow DAG node transition from "${current.status}" to "${nextStatus}" for node ${current.nodeId}.`);
+  }
+
+  const timestamp = params.now ?? nowIso();
+  const startsNewAttempt = nextStatus === "running" && (current.status === "queued" || current.status === "failed");
+
+  if (startsNewAttempt && current.attemptCount >= current.maxAttempts) {
+    throw new Error(
+      `Workflow DAG node ${current.nodeId} exhausted retry attempts (${current.attemptCount}/${current.maxAttempts}).`
+    );
+  }
+
+  return WorkflowDagNodeExecutionSchema.parse({
+    ...current,
+    status: nextStatus,
+    runnerId: params.runnerId ?? current.runnerId,
+    attemptCount: startsNewAttempt ? current.attemptCount + 1 : current.attemptCount,
+    lastError: params.error ?? (nextStatus === "running" || nextStatus === "completed" ? null : current.lastError),
+    startedAt: nextStatus === "running" ? timestamp : current.startedAt,
+    completedAt: nextStatus === "completed" || nextStatus === "skipped" || nextStatus === "cancelled" ? timestamp : current.completedAt,
+    updatedAt: timestamp
+  });
+}
+
+export function retryWorkflowDagNode(params: {
+  instance: WorkflowDagInstance;
+  nodeId: string;
+  now?: string;
+}): WorkflowDagInstance {
+  const current = WorkflowDagInstanceSchema.parse(params.instance);
+  const execution = current.nodeExecutions.find((candidate) => candidate.nodeId === params.nodeId);
+
+  if (!execution) {
+    throw new Error(`Workflow DAG node ${params.nodeId} was not found in instance ${current.id}.`);
+  }
+
+  if (execution.status !== "failed") {
+    throw new Error(`Workflow DAG node ${params.nodeId} must be failed before it can be retried.`);
+  }
+
+  if (execution.attemptCount >= execution.maxAttempts) {
+    throw new Error(
+      `Workflow DAG node ${params.nodeId} exhausted retry attempts (${execution.attemptCount}/${execution.maxAttempts}).`
+    );
+  }
+
+  const timestamp = params.now ?? nowIso();
+  const retried = WorkflowDagNodeExecutionSchema.parse({
+    ...execution,
+    status: "queued",
+    runnerId: null,
+    lastError: null,
+    updatedAt: timestamp
+  });
+
+  return WorkflowDagInstanceSchema.parse({
+    ...current,
+    status: current.status === "failed" ? "running" : current.status,
+    nodeExecutions: current.nodeExecutions.map((candidate) => (candidate.nodeId === params.nodeId ? retried : candidate)),
+    auditLog: [...current.auditLog, `${timestamp} queued retry for node ${params.nodeId}`],
+    updatedAt: timestamp
+  });
+}
+
+export function inspectWorkflowDagInstance(instance: WorkflowDagInstance) {
+  const parsed = WorkflowDagInstanceSchema.parse(instance);
+  const counts = parsed.nodeExecutions.reduce<Record<WorkflowDagNodeStatus, number>>(
+    (memo, execution) => {
+      memo[execution.status] += 1;
+      return memo;
+    },
+    {
+      queued: 0,
+      running: 0,
+      paused: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      cancelled: 0
+    }
+  );
+
+  return {
+    id: parsed.id,
+    dagId: parsed.dagId,
+    workflowId: parsed.workflowId,
+    status: parsed.status,
+    counts,
+    nodeExecutions: parsed.nodeExecutions.map((execution) => ({
+      nodeId: execution.nodeId,
+      status: execution.status,
+      attemptCount: execution.attemptCount,
+      runnerId: execution.runnerId,
+      lastError: execution.lastError
+    }))
+  };
 }
 
 export function isJobClaimable(job: JobRecord, now = Date.now()): boolean {

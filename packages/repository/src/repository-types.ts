@@ -52,6 +52,7 @@ import type {
 import type { JobConcurrencyLimits as ExecutionJobConcurrencyLimits } from "@agentic/execution";
 import type { GovernanceConformanceReport } from "@agentic/policy";
 import type { DashboardOperationsTower } from "./dashboard-operations";
+import type { WatcherLeaseClaimParams } from "./watcher-lease-helpers";
 
 export type JobConcurrencyLimits = ExecutionJobConcurrencyLimits;
 
@@ -256,6 +257,7 @@ export type AgenticRepository = {
   deleteWorkspaceData(params: WorkspaceDeleteParams): Promise<Record<string, unknown>>;
   exportWorkspaceAudit(workspaceId: string, userId?: string): Promise<WorkspaceAuditExport>;
   saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle>;
+  appendGoalActionLogs(goalId: string, logs: ActionLog[]): Promise<ActionLog[]>;
   respondToApproval(params: {
     approvalId: string;
     decision: Exclude<ApprovalDecision, "pending">;
@@ -359,6 +361,7 @@ export type AgenticRepository = {
   saveEvidenceRecord(record: EvidenceRecord): Promise<EvidenceRecord>;
   listWatchers(filters?: WatcherListFilters): Promise<Watcher[]>;
   listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage>;
+  claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null>;
   saveWatcher(watcher: Watcher): Promise<Watcher>;
   listIntegrations(userId?: string): Promise<IntegrationAccount[]>;
   listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage>;
