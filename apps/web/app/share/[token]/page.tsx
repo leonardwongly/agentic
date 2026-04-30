@@ -39,10 +39,7 @@ async function auditBlockedShareAccess(params: {
   ].filter((log) => log !== null);
 
   if (logs.length > 0) {
-    await params.repository.saveGoalBundle({
-      ...bundle,
-      actionLogs: [...bundle.actionLogs, ...logs]
-    });
+    await params.repository.appendGoalActionLogs(bundle.goal.id, logs);
   }
 }
 
@@ -114,7 +111,9 @@ export default async function ShareGoalPage({ params }: SharePageProps) {
           <p className="lede">{sharedGoal.explanation}</p>
           <p className="public-share-disclosure">
             This read-only page shows a reviewed public projection. Internal requests, approvals, watcher details,
-            action logs, memory context, workflow checkpoints, artifact bodies, and artifact metadata stay hidden.
+            action logs, memory context, workflow checkpoints, artifact bodies, and internal artifact metadata stay
+            hidden. Basic artifact listing details, such as titles, types, and timestamps included in the public
+            projection, may still be shown.
           </p>
         </div>
         <div className="hero-actions">

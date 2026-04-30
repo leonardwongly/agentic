@@ -197,6 +197,11 @@ describe("goal share helpers", () => {
           disposition: "redacted"
         }),
         expect.objectContaining({
+          id: "artifact_metadata",
+          disposition: "included",
+          fields: ["artifacts.title", "artifacts.artifactType", "artifacts.createdAt"]
+        }),
+        expect.objectContaining({
           id: "goal_summary",
           disposition: "requires_confirmation"
         })
@@ -219,6 +224,31 @@ describe("goal share helpers", () => {
       ])
     );
     expect(JSON.stringify(review)).not.toContain(bundle.goal.request);
+  });
+
+  it("does not flag ISO-style dates as phone numbers in disclosure review", async () => {
+    const bundle = await buildBundle();
+    const review = buildGoalShareDisclosureReview(
+      {
+        ...bundle,
+        goal: {
+          ...bundle.goal,
+          explanation: "Review the timeline on 2026-04-30 before publishing the update."
+        }
+      },
+      {
+        expiresAt: "2026-05-07T00:00:00.000Z",
+        expiryDays: 7
+      }
+    );
+
+    expect(review.sensitiveFindings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          detector: "phone_number"
+        })
+      ])
+    );
   });
 
   it("deduplicates repeated public share views within the cooldown window", async () => {

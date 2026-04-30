@@ -103,6 +103,10 @@ export async function POST(request: Request) {
         return acceptedNoOp();
       }
 
+      if (tokenInspection.expired) {
+        return acceptedNoOp();
+      }
+
       const tokenFingerprint = fingerprintGoalShareToken(token);
       const tokenRateLimit = await checkSessionRateLimit(buildPublicShareTokenRateLimitKey(tokenFingerprint));
 

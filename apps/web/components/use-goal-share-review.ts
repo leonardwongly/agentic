@@ -11,6 +11,7 @@ type PendingGoalShareReview = {
   goalId: string;
   goalTitle: string;
   review: GoalShareDisclosureReview;
+  reviewFingerprint: string;
 };
 
 type UseGoalShareReviewOptions = {
@@ -30,6 +31,7 @@ export function useGoalShareReview({ setData, setIsPending, setShareState }: Use
       const payload = await readJson<{
         reviewRequired: true;
         disclosureReview: GoalShareDisclosureReview;
+        reviewFingerprint: string;
         dashboard: DashboardData;
       }>(
         await fetch(`/api/goals/${encodeURIComponent(goalId)}/share`, {
@@ -49,7 +51,8 @@ export function useGoalShareReview({ setData, setIsPending, setShareState }: Use
         setPendingShareReview({
           goalId,
           goalTitle: title,
-          review: payload.disclosureReview
+          review: payload.disclosureReview,
+          reviewFingerprint: payload.reviewFingerprint
         });
         setShareState({
           kind: "success",
@@ -95,6 +98,7 @@ export function useGoalShareReview({ setData, setIsPending, setShareState }: Use
           },
           body: JSON.stringify({
             confirmed: true,
+            reviewFingerprint: pendingShareReview.reviewFingerprint,
             expiryDays: pendingShareReview.review.expiryDays
           })
         })

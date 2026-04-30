@@ -155,11 +155,8 @@ import {
   CommitmentInboxQueryError
 } from "./commitment-helpers";
 import { assembleDashboardData } from "./dashboard-data";
-import {
-  buildBriefingHistory,
-  buildDashboardControlPlane,
-  buildNowQueue
-} from "./dashboard-control-plane";
+import { appendGoalActionLogsToStore, appendGoalActionLogsWithClient } from "./action-log-append";
+import { buildBriefingHistory, buildDashboardControlPlane, buildNowQueue } from "./dashboard-control-plane";
 import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 import {
@@ -700,12 +697,6 @@ function mergeGoalBundleIntoStore(store: RuntimeStore, bundle: GoalBundle): Goal
 
   store.actionLogs = uniqueById([...store.actionLogs, ...validated.actionLogs]);
   return validated;
-}
-
-function assertGoalExistsInStore(store: RuntimeStore, goalId: string): void {
-  if (!store.goals.some((goal) => goal.id === goalId)) {
-    throw new Error(`Goal ${goalId} was not found.`);
-  }
 }
 
 function personalWorkspaceIdForUser(userId: string): string {
@@ -1676,6 +1667,11 @@ class FileRepository implements AgenticRepository {
       await this.writeStore(store);
       return GoalBundleSchema.parse(clone(validated));
     });
+  }
+
+  async appendGoalActionLogs(goalId: string, logs: ActionLog[]): Promise<ActionLog[]> {
+    return this.withMutationLock(async () =>
+      appendGoalActionLogsToStore(await this.readStore(), goalId, logs, (store) => this.writeStore(store)));
   }
 
   async respondToApproval(params: {
@@ -5942,6 +5938,10 @@ class PostgresRepository implements AgenticRepository {
       await this.upsertGoalBundle(client, validated);
     });
     return GoalBundleSchema.parse(clone(validated));
+  }
+
+  async appendGoalActionLogs(goalId: string, logs: ActionLog[]): Promise<ActionLog[]> {
+    return this.withTransaction((client) => appendGoalActionLogsWithClient(client, goalId, logs));
   }
 
   async respondToApproval(params: {

@@ -9,6 +9,7 @@ import {
   createGoalShareCreatedLog,
   createGoalShareRevokedLog,
   createGoalShareToken,
+  buildSharedGoalView,
   fingerprintGoalShareToken,
   getGoalShareExpiry
 } from "../../../../../lib/share";
@@ -16,7 +17,8 @@ import {
   GOAL_SHARE_DEFAULT_EXPIRY_DAYS,
   GOAL_SHARE_MAX_EXPIRY_DAYS,
   GOAL_SHARE_MIN_EXPIRY_DAYS,
-  buildGoalShareDisclosureReview
+  buildGoalShareDisclosureReview,
+  buildGoalShareDisclosureReviewFingerprint
 } from "../../../../../lib/share-disclosure";
 import { getSeededRepository } from "../../../../../lib/server";
 
@@ -25,6 +27,7 @@ const CreateGoalShareBodySchema = z
   .object({
     preview: z.boolean().optional(),
     confirmed: z.boolean().optional(),
+    reviewFingerprint: z.string().trim().regex(/^[0-9a-f]{64}$/).optional(),
     expiryDays: z.number().int().min(GOAL_SHARE_MIN_EXPIRY_DAYS).max(GOAL_SHARE_MAX_EXPIRY_DAYS).optional()
   })
   .strict();
@@ -84,7 +87,7 @@ function hasJsonRequestBody(request: Request): boolean {
     return false;
   }
 
-  return Boolean(contentType);
+  return Boolean(contentType) && request.body !== null;
 }
 
 async function parseCreateGoalShareBody(request: Request) {
@@ -101,6 +104,7 @@ async function parseCreateGoalShareBody(request: Request) {
   return {
     preview: body.preview ?? false,
     confirmed: body.confirmed ?? false,
+    reviewFingerprint: body.reviewFingerprint ?? null,
     expiryDays: body.expiryDays ?? GOAL_SHARE_DEFAULT_EXPIRY_DAYS
   };
 }
@@ -127,18 +131,27 @@ export async function POST(request: Request, context: RouteContext) {
       expiresAt,
       expiryDays: body.expiryDays
     });
+    const reviewFingerprint = buildGoalShareDisclosureReviewFingerprint({
+      publicProjection: buildSharedGoalView(bundle),
+      disclosureReview
+    });
 
     if (body.preview || !body.confirmed) {
       return authenticatedJson(
         {
           reviewRequired: true,
           disclosureReview,
+          reviewFingerprint,
           dashboard: await repository.getDashboardData(principal.userId)
         },
         {
           status: body.preview ? 200 : 409
         }
       );
+    }
+
+    if (body.reviewFingerprint !== reviewFingerprint) {
+      throw new ApiRouteError(409, "Public share confirmation must match the latest reviewed disclosure snapshot.");
     }
 
     const createdAt = new Date().toISOString();
