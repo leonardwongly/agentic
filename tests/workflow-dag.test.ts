@@ -297,6 +297,45 @@ describe("workflow DAG process model", () => {
     expect(resumed.attemptCount).toBe(1);
   });
 
+  it("enforces retry caps on direct failed to running transitions", () => {
+    const instance = createWorkflowDagInstance({
+      dag: buildDag({
+        nodes: [
+          {
+            ...buildDag().nodes[0]!,
+            retryPolicy: {
+              maxAttempts: 1,
+              backoffMs: 1000
+            }
+          }
+        ],
+        edges: []
+      }),
+      now: "2026-04-20T00:00:00.000Z"
+    });
+    const started = transitionWorkflowDagNode({
+      execution: instance.nodeExecutions[0]!,
+      status: "running",
+      runnerId: "runner-1",
+      now: "2026-04-20T00:01:00.000Z"
+    });
+    const failed = transitionWorkflowDagNode({
+      execution: started,
+      status: "failed",
+      error: "permanent failure",
+      now: "2026-04-20T00:02:00.000Z"
+    });
+
+    expect(() =>
+      transitionWorkflowDagNode({
+        execution: failed,
+        status: "running",
+        runnerId: "runner-1",
+        now: "2026-04-20T00:03:00.000Z"
+      })
+    ).toThrow("exhausted retry attempts (1/1)");
+  });
+
   it("keeps generated node execution ids inside the schema limit", () => {
     const longInstanceId = "instance-" + "a".repeat(151);
     const longNodeId = "node-" + "b".repeat(155);

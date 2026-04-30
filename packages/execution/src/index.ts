@@ -519,12 +519,19 @@ export function transitionWorkflowDagNode(params: {
   }
 
   const timestamp = params.now ?? nowIso();
+  const startsNewAttempt = nextStatus === "running" && (current.status === "queued" || current.status === "failed");
+
+  if (startsNewAttempt && current.attemptCount >= current.maxAttempts) {
+    throw new Error(
+      `Workflow DAG node ${current.nodeId} exhausted retry attempts (${current.attemptCount}/${current.maxAttempts}).`
+    );
+  }
 
   return WorkflowDagNodeExecutionSchema.parse({
     ...current,
     status: nextStatus,
     runnerId: params.runnerId ?? current.runnerId,
-    attemptCount: nextStatus === "running" && current.status === "queued" ? current.attemptCount + 1 : current.attemptCount,
+    attemptCount: startsNewAttempt ? current.attemptCount + 1 : current.attemptCount,
     lastError: params.error ?? (nextStatus === "running" || nextStatus === "completed" ? null : current.lastError),
     startedAt: nextStatus === "running" ? timestamp : current.startedAt,
     completedAt: nextStatus === "completed" || nextStatus === "skipped" || nextStatus === "cancelled" ? timestamp : current.completedAt,

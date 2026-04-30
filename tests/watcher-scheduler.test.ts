@@ -120,6 +120,29 @@ describe("watcher scheduler", () => {
     expect(persisted?.schedule.cursor).toBeNull();
   });
 
+  it("renews watcher leases during long evaluations", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    await repository.saveWatcher(buildWatcher(bundle.goal.id));
+    const claimSpy = vi.spyOn(repository, "claimWatcherLease");
+
+    await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      leaseMs: 10,
+      evaluator: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return {
+          wouldTrigger: false,
+          reason: "Slow but bounded evaluation."
+        };
+      }
+    });
+
+    expect(claimSpy.mock.calls.length).toBeGreaterThan(1);
+  });
+
   it("claims a trigger once when dry-run is disabled", async () => {
     const { repository, bundle } = await createSchedulerFixture();
     const watcher = await repository.saveWatcher(

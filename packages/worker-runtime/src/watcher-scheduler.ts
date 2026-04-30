@@ -175,6 +175,7 @@ export async function runWatcherSchedulerOnce(params: {
       continue;
     }
 
+    let currentLeasedWatcher = leasedWatcher;
     let evaluation: WatcherSignalEvaluation;
     let leaseReleased = false;
     const releaseLease = async (replacement?: Watcher) => {
@@ -182,7 +183,7 @@ export async function runWatcherSchedulerOnce(params: {
         return;
       }
 
-      await params.repository.saveWatcher(replacement ?? clearWatcherLease(leasedWatcher, evaluatedAt));
+      await params.repository.saveWatcher(replacement ?? clearWatcherLease(currentLeasedWatcher, evaluatedAt));
       leaseReleased = true;
     };
     const tryReleaseLease = async (replacement?: Watcher): Promise<string | null> => {
@@ -194,32 +195,55 @@ export async function runWatcherSchedulerOnce(params: {
       }
     };
 
-    try {
-      evaluation = await evaluator(leasedWatcher);
-    } catch (error) {
-      const releaseError = await tryReleaseLease();
-      decisions.push({
+    const renewLease = async () => {
+      const acquiredAt = nowIso();
+      const renewed = await params.repository.claimWatcherLease({
         watcherId: watcher.id,
-        action: "skipped",
-        reason: releaseError
-          ? `${getErrorMessage(error, "Watcher evaluator failed.")} Lease release failed: ${releaseError}`
-          : getErrorMessage(error, "Watcher evaluator failed."),
-        idempotencyKey: null
+        userId: params.userId,
+        runnerId: params.runnerId,
+        acquiredAt,
+        expiresAt: new Date(Date.parse(acquiredAt) + leaseMs).toISOString()
       });
-      continue;
+
+      if (renewed) {
+        currentLeasedWatcher = renewed;
+      }
+    };
+    const renewalIntervalMs = Math.max(1, Math.floor(leaseMs / 2));
+    const renewalTimer = setInterval(() => {
+      void renewLease();
+    }, renewalIntervalMs);
+
+    try {
+      try {
+        evaluation = await evaluator(currentLeasedWatcher);
+      } catch (error) {
+        const releaseError = await tryReleaseLease();
+        decisions.push({
+          watcherId: watcher.id,
+          action: "skipped",
+          reason: releaseError
+            ? `${getErrorMessage(error, "Watcher evaluator failed.")} Lease release failed: ${releaseError}`
+            : getErrorMessage(error, "Watcher evaluator failed."),
+          idempotencyKey: null
+        });
+        continue;
+      }
+    } finally {
+      clearInterval(renewalTimer);
     }
-    const idempotencyKey = buildWatcherIdempotencyKey(leasedWatcher, evaluatedAt);
+    const idempotencyKey = buildWatcherIdempotencyKey(currentLeasedWatcher, evaluatedAt);
     const lastEvaluation = WatcherDryRunResultSchema.parse({
       evaluatedAt,
       wouldTrigger: evaluation.wouldTrigger,
       reason: evaluation.reason,
       idempotencyKey,
-      sideEffectsSuppressed: leasedWatcher.schedule.dryRun
+      sideEffectsSuppressed: currentLeasedWatcher.schedule.dryRun
     });
 
-    if (leasedWatcher.schedule.dryRun || !evaluation.wouldTrigger) {
+    if (currentLeasedWatcher.schedule.dryRun || !evaluation.wouldTrigger) {
       const progressedWatcher = applyWatcherEvaluationProgress({
-        watcher: leasedWatcher,
+        watcher: currentLeasedWatcher,
         evaluation,
         lastEvaluation,
         evaluatedAt
@@ -243,7 +267,7 @@ export async function runWatcherSchedulerOnce(params: {
 
       decisions.push({
         watcherId: watcher.id,
-        action: leasedWatcher.schedule.dryRun ? "dry_run_recorded" : "skipped",
+        action: currentLeasedWatcher.schedule.dryRun ? "dry_run_recorded" : "skipped",
         reason: evaluation.reason,
         idempotencyKey
       });
@@ -251,7 +275,7 @@ export async function runWatcherSchedulerOnce(params: {
     }
 
     const progressedWatcher = applyWatcherEvaluationProgress({
-      watcher: leasedWatcher,
+      watcher: currentLeasedWatcher,
       evaluation,
       lastEvaluation,
       evaluatedAt
