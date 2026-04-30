@@ -124,7 +124,7 @@ import {
 } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord, getMemoryFreshness } from "@agentic/memory";
-import { buildApprovalResponseMutation } from "./approval-response-helpers";
+import { assertApprovalFollowUpJobOwner, buildApprovalResponseMutation } from "./approval-response-helpers";
 import {
   buildFallbackApprovalActionIntent,
   buildFallbackApprovalPreview
@@ -1774,6 +1774,7 @@ class FileRepository implements AgenticRepository {
         rationale: params.rationale
       });
       const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      assertApprovalFollowUpJobOwner(validatedJob, userId);
       const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
       const existingJob = trimmedKey
         ? store.jobs.find((candidate) => candidate.userId === validatedJob.userId && candidate.idempotencyKey === trimmedKey)
@@ -6073,11 +6074,10 @@ class PostgresRepository implements AgenticRepository {
         rationale: params.rationale
       });
       const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      assertApprovalFollowUpJobOwner(validatedJob, userId);
       const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
-      let savedJob = JobRecordSchema.parse({
-        ...validatedJob,
-        idempotencyKey: trimmedKey
-      });
+      let savedJob = JobRecordSchema.parse({ ...validatedJob, idempotencyKey: trimmedKey });
+      let shouldSaveJob = true;
 
       if (trimmedKey) {
         await client.query("select pg_advisory_xact_lock(hashtext($1))", [`job:${validatedJob.userId}:${trimmedKey}`]);
@@ -6093,16 +6093,16 @@ class PostgresRepository implements AgenticRepository {
 
         if (existing.rows[0]) {
           savedJob = this.mapJobRow(existing.rows[0]);
+          shouldSaveJob = false;
         }
       }
 
       await this.upsertGoalBundle(client, updatedBundle);
       await this.saveEvidenceRecordWithClient(client, evidenceRecord);
 
-      if (savedJob.id === validatedJob.id) {
+      if (shouldSaveJob) {
         await this.saveJobWithClient(client, savedJob);
       }
-
       return {
         bundle: parsedBundle,
         job: JobRecordSchema.parse(clone(savedJob))
