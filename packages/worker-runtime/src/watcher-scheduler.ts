@@ -61,7 +61,7 @@ function isWatcherDue(watcher: Watcher, evaluatedAt: string): boolean {
 }
 
 function buildWatcherIdempotencyKey(watcher: Watcher, evaluatedAt: string): string {
-  return `watcher:${watcher.id}:${evaluatedAt.slice(0, 16)}`;
+  return `watcher:${watcher.id}:${new Date(Date.parse(evaluatedAt)).toISOString()}`;
 }
 
 function buildSuppressedDecision(watcherId: string, reason: string): WatcherSchedulerDecision {
@@ -75,8 +75,8 @@ function buildSuppressedDecision(watcherId: string, reason: string): WatcherSche
 
 async function defaultEvaluateWatcher(watcher: Watcher) {
   return {
-    wouldTrigger: true,
-    reason: `Watcher condition evaluated for ${watcher.targetEntity}.`,
+    wouldTrigger: false,
+    reason: `Watcher evaluation skipped for ${watcher.targetEntity} because no evaluator was provided.`,
     cursor: watcher.schedule.cursor
   };
 }
@@ -124,21 +124,19 @@ export async function runWatcherSchedulerOnce(params: {
       continue;
     }
 
-    const lease = {
-      ownerId: params.runnerId,
+    const leaseExpiresAt = new Date(Date.parse(evaluatedAt) + leaseMs).toISOString();
+    const leasedWatcher = await params.repository.claimWatcherLease({
+      watcherId: watcher.id,
+      userId: params.userId,
+      runnerId: params.runnerId,
       acquiredAt: evaluatedAt,
-      expiresAt: new Date(Date.parse(evaluatedAt) + leaseMs).toISOString()
-    };
-    const leasedWatcher = WatcherSchema.parse({
-      ...watcher,
-      schedule: {
-        ...watcher.schedule,
-        lease
-      },
-      updatedAt: evaluatedAt
+      expiresAt: leaseExpiresAt
     });
 
-    await params.repository.saveWatcher(leasedWatcher);
+    if (!leasedWatcher) {
+      decisions.push(buildSuppressedDecision(watcher.id, `Watcher ${watcher.id} lease was claimed by another runner.`));
+      continue;
+    }
 
     const evaluation = await evaluator(leasedWatcher);
     const idempotencyKey = buildWatcherIdempotencyKey(leasedWatcher, evaluatedAt);
@@ -167,7 +165,7 @@ export async function runWatcherSchedulerOnce(params: {
       );
       decisions.push({
         watcherId: watcher.id,
-        action: "dry_run_recorded",
+        action: leasedWatcher.schedule.dryRun ? "dry_run_recorded" : "skipped",
         reason: evaluation.reason,
         idempotencyKey
       });
@@ -184,7 +182,13 @@ export async function runWatcherSchedulerOnce(params: {
       details: {
         condition: watcher.condition,
         triggerAction: watcher.triggerAction,
-        schedulerRunnerId: params.runnerId
+        schedulerRunnerId: params.runnerId,
+        budget: {
+          key: `watcher:${watcher.id}:hourly`,
+          windowMinutes: 60,
+          maxEvents: watcher.escalationPolicy.maxTriggersPerHour,
+          scope: "source"
+        }
       },
       actorContext: watcher.actorContext,
       debounceMinutes: Math.ceil(watcher.escalationPolicy.minSuppressionMs / 60_000)
@@ -208,7 +212,9 @@ export async function runWatcherSchedulerOnce(params: {
     decisions.push({
       watcherId: watcher.id,
       action: claim.outcome === "claimed" ? "trigger_claimed" : "trigger_suppressed",
-      reason: claim.event.details.reason && typeof claim.event.details.reason === "string" ? claim.event.details.reason : evaluation.reason,
+      reason:
+        claim.event.details.suppression?.reason ??
+        (claim.event.details.reason && typeof claim.event.details.reason === "string" ? claim.event.details.reason : evaluation.reason),
       idempotencyKey
     });
   }

@@ -72,7 +72,7 @@ describe("watcher scheduler", () => {
         watcherId: watcher.id,
         action: "dry_run_recorded",
         reason: "VIP thread would trigger.",
-        idempotencyKey: "watcher:watcher-scheduler-1:2026-04-20T00:00"
+        idempotencyKey: "watcher:watcher-scheduler-1:2026-04-20T00:00:00.000Z"
       }
     ]);
     expect(claimSpy).not.toHaveBeenCalled();
@@ -126,7 +126,15 @@ describe("watcher scheduler", () => {
     expect(events[0]).toMatchObject({
       kind: "watcher_triggered",
       sourceId: watcher.id,
-      status: "pending"
+      status: "pending",
+      details: {
+        budget: {
+          key: `watcher:${watcher.id}:hourly`,
+          windowMinutes: 60,
+          maxEvents: 4,
+          scope: "source"
+        }
+      }
     });
   });
 
@@ -164,5 +172,164 @@ describe("watcher scheduler", () => {
         idempotencyKey: null
       }
     ]);
+  });
+
+  it("does not trigger by default when no evaluator is wired", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const watcher = await repository.saveWatcher(
+      buildWatcher(bundle.goal.id, {
+        schedule: {
+          enabled: true,
+          dryRun: false,
+          cursor: null,
+          lastRunAt: null,
+          nextRunAt: null,
+          lease: null
+        }
+      })
+    );
+
+    const result = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:30.123Z"
+    });
+
+    expect(result.decisions).toEqual([
+      {
+        watcherId: watcher.id,
+        action: "skipped",
+        reason: "Watcher evaluation skipped for VIP inbox because no evaluator was provided.",
+        idempotencyKey: "watcher:watcher-scheduler-1:2026-04-20T00:00:30.123Z"
+      }
+    ]);
+    expect(await repository.listAutopilotEvents(SYSTEM_USER_ID)).toHaveLength(0);
+  });
+
+  it("uses sub-minute idempotency keys for realtime watcher evaluations", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const watcher = await repository.saveWatcher(
+      buildWatcher(bundle.goal.id, {
+        frequency: "realtime",
+        schedule: {
+          enabled: true,
+          dryRun: false,
+          cursor: null,
+          lastRunAt: null,
+          nextRunAt: null,
+          lease: null
+        },
+        escalationPolicy: {
+          notify: true,
+          minSuppressionMs: 0,
+          maxTriggersPerHour: 60
+        }
+      })
+    );
+
+    const first = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      evaluator: async () => ({
+        wouldTrigger: true,
+        reason: "VIP thread triggered.",
+        cursor: "gmail-cursor-1"
+      })
+    });
+    const second = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:30.000Z",
+      evaluator: async () => ({
+        wouldTrigger: true,
+        reason: "VIP thread triggered again.",
+        cursor: "gmail-cursor-2"
+      })
+    });
+
+    expect(first.decisions[0]?.idempotencyKey).toBe("watcher:watcher-scheduler-1:2026-04-20T00:00:00.000Z");
+    expect(second.decisions[0]?.idempotencyKey).toBe("watcher:watcher-scheduler-1:2026-04-20T00:00:30.000Z");
+    expect(watcher.frequency).toBe("realtime");
+  });
+
+  it("suppresses evaluation when another runner wins the atomic lease claim", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const watcher = await repository.saveWatcher(buildWatcher(bundle.goal.id));
+    const claimSpy = vi.spyOn(repository, "claimWatcherLease").mockResolvedValueOnce(null);
+    const evaluator = vi.fn();
+
+    const result = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-2",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      evaluator
+    });
+
+    expect(result.decisions).toEqual([
+      {
+        watcherId: watcher.id,
+        action: "skipped",
+        reason: "Watcher watcher-scheduler-1 lease was claimed by another runner.",
+        idempotencyKey: null
+      }
+    ]);
+    expect(claimSpy).toHaveBeenCalledTimes(1);
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
+  it("passes watcher hourly trigger caps into autopilot event budgets", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    const watcher = await repository.saveWatcher(
+      buildWatcher(bundle.goal.id, {
+        schedule: {
+          enabled: true,
+          dryRun: false,
+          cursor: null,
+          lastRunAt: null,
+          nextRunAt: null,
+          lease: null
+        },
+        escalationPolicy: {
+          notify: true,
+          minSuppressionMs: 0,
+          maxTriggersPerHour: 1
+        }
+      })
+    );
+
+    await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:00:00.000Z",
+      evaluator: async () => ({
+        wouldTrigger: true,
+        reason: "VIP thread triggered.",
+        cursor: "gmail-cursor-1"
+      })
+    });
+    const second = await runWatcherSchedulerOnce({
+      repository,
+      runnerId: "scheduler-1",
+      userId: SYSTEM_USER_ID,
+      now: "2026-04-20T00:05:00.000Z",
+      evaluator: async () => ({
+        wouldTrigger: true,
+        reason: "VIP thread triggered again.",
+        cursor: "gmail-cursor-2"
+      })
+    });
+
+    expect(second.decisions[0]).toMatchObject({
+      watcherId: watcher.id,
+      action: "trigger_suppressed",
+      reason: "Budget watcher:watcher-scheduler-1:hourly exhausted in the active window."
+    });
+    expect(await repository.listAutopilotEvents(SYSTEM_USER_ID)).toHaveLength(2);
   });
 });

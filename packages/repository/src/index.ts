@@ -154,6 +154,7 @@ import {
   sortCommitments,
   CommitmentInboxQueryError
 } from "./commitment-helpers";
+import { claimWatcherLeaseInRuntimeStore, claimWatcherLeaseWithPostgresClient, type WatcherLeaseClaimParams } from "./watcher-lease-helpers";
 import { assembleDashboardData } from "./dashboard-data";
 import {
   buildBriefingHistory,
@@ -253,27 +254,7 @@ const RuntimeStoreSchema = z.object({
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 
 export { CommitmentInboxQueryError, CollectionPageQueryError };
-export {
-  ApprovalMutationError,
-  JobMutationError,
-  type AgenticRepository,
-  type AutopilotEventClaim,
-  type CollectionPageParams,
-  type DashboardControlPlane,
-  type DashboardControlPlaneSection,
-  type DashboardData,
-  type DashboardDiagnostic,
-  type DashboardDiagnosticTarget,
-  type DashboardDiagnostics,
-  type GoalPageParams,
-  type GoalShareListFilters,
-  type PrivacyOperationListFilters,
-  type WatcherListFilters,
-  type WatcherPageParams,
-  type WorkspaceAuditExport,
-  type WorkspaceDeleteParams,
-  type WorkspaceRetentionParams
-} from "./repository-types";
+export { ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters, type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
 
 const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
@@ -2540,6 +2521,20 @@ class FileRepository implements AgenticRepository {
         id: watcher.id
       }),
       parsePage: (page) => WatcherPageSchema.parse(page)
+    });
+  }
+
+  async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const leased = claimWatcherLeaseInRuntimeStore({ watchers: store.watchers, visibleGoalIds: goalIdsForUser(store, params.userId ?? SYSTEM_USER_ID), lease: params, normalizeWatcher: (watcher) => {
+        const goal = goalByIdFromStore(store, watcher.goalId);
+        return goal ? normalizeWatcherForGoal(goal, watcher) : WatcherSchema.parse(clone(watcher));
+      } });
+      if (leased) {
+        await this.writeStore(store);
+      }
+      return leased;
     });
   }
 
@@ -7270,6 +7265,11 @@ class PostgresRepository implements AgenticRepository {
           : null,
       generatedAt: nowIso()
     });
+  }
+
+  async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
+    await this.ready;
+    return this.withTransaction((client) => claimWatcherLeaseWithPostgresClient({ client, userId: params.userId ?? SYSTEM_USER_ID, lease: params, mapWatcherRow: (row) => this.mapWatcherRow(row) }));
   }
 
   async saveWatcher(watcher: Watcher): Promise<Watcher> {

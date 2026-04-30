@@ -1,4 +1,4 @@
-import { WorkflowDagSchema, nowIso, type WorkflowDag } from "@agentic/contracts";
+import { WorkflowDagNodeSchema, WorkflowDagSchema, nowIso, type WorkflowDag } from "@agentic/contracts";
 import {
   createWorkflowDagInstance,
   inspectWorkflowDagInstance,
@@ -49,7 +49,8 @@ function buildDag(overrides: Partial<WorkflowDag> = {}): WorkflowDag {
     edges: [
       {
         from: "draft",
-        to: "monitor"
+        to: "monitor",
+        condition: "success"
       }
     ],
     createdAt: timestamp,
@@ -85,7 +86,8 @@ describe("workflow DAG process model", () => {
       edges: [
         {
           from: "draft",
-          to: "monitor"
+          to: "monitor",
+          condition: "success"
         }
       ]
     });
@@ -120,6 +122,42 @@ describe("workflow DAG process model", () => {
         })
       )
     ).toThrow(/missing required capabilities|exceeds permission ceiling/i);
+  });
+
+  it("accepts draft message nodes with either draft or send capability grants", () => {
+    const draftNode = WorkflowDagNodeSchema.parse({
+      id: "draft-message",
+      label: "Draft email",
+      actionIntent: {
+        type: "send_message" as const,
+        to: "client@example.com",
+        subject: "Follow-up",
+        body: "Draft body.",
+        mode: "draft" as const
+      },
+      permissionGrant: {
+        capabilities: ["draft" as const],
+        maxRiskClass: "R3" as const
+      }
+    });
+
+    expect(validateWorkflowDag(buildDag({ nodes: [draftNode], edges: [] })).nodes[0]?.id).toBe("draft-message");
+    expect(
+      validateWorkflowDag(
+        buildDag({
+          nodes: [
+            {
+              ...draftNode,
+              permissionGrant: {
+                capabilities: ["send"],
+                maxRiskClass: "R3"
+              }
+            }
+          ],
+          edges: []
+        })
+      ).nodes[0]?.permissionGrant.capabilities
+    ).toEqual(["send"]);
   });
 
   it("supports inspect, pause, resume, cancel, node failure, and retry transitions centrally", () => {

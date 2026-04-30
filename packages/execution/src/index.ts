@@ -304,30 +304,33 @@ export function canTransitionJobState(from: JobStatus, to: JobStatus): boolean {
 export class WorkflowDagValidationError extends Error {
   constructor(
     public readonly issues: string[],
-    message = `Workflow DAG validation failed: ${issues.join("; ")}`
+    message = `Workflow DAG validation failed: ${issues.join("; ")}`,
+    options?: ErrorOptions
   ) {
-    super(message);
+    super(message, options);
     this.name = "WorkflowDagValidationError";
   }
 }
 
-function requiredCapabilitiesForWorkflowNode(node: WorkflowDagNode): Capability[] {
+function capabilityGrantSatisfiesWorkflowNode(node: WorkflowDagNode): boolean {
   switch (node.actionIntent.type) {
     case "send_message":
-      return node.actionIntent.mode === "send" ? ["send"] : ["draft", "send"];
+      return node.actionIntent.mode === "send"
+        ? node.permissionGrant.capabilities.includes("send")
+        : node.permissionGrant.capabilities.includes("draft") || node.permissionGrant.capabilities.includes("send");
     case "schedule_event":
-      return ["schedule"];
+      return node.permissionGrant.capabilities.includes("schedule");
     case "create_note":
-      return ["create"];
+      return node.permissionGrant.capabilities.includes("create");
     case "update_record":
-      return ["update"];
+      return node.permissionGrant.capabilities.includes("update");
     case "delete_record":
-      return ["delete"];
+      return node.permissionGrant.capabilities.includes("delete");
     case "monitor_signal":
-      return ["monitor"];
+      return node.permissionGrant.capabilities.includes("monitor");
     case "manual_review":
     default:
-      return [];
+      return true;
   }
 }
 
@@ -404,12 +407,8 @@ export function validateWorkflowDag(input: WorkflowDag): WorkflowDag {
   }
 
   for (const node of dag.nodes) {
-    const missingCapabilities = requiredCapabilitiesForWorkflowNode(node).filter(
-      (capability) => !node.permissionGrant.capabilities.includes(capability)
-    );
-
-    if (missingCapabilities.length > 0) {
-      issues.push(`node ${node.id} is missing required capabilities [${missingCapabilities.join(", ")}]`);
+    if (!capabilityGrantSatisfiesWorkflowNode(node)) {
+      issues.push(`node ${node.id} is missing required capabilities for ${node.actionIntent.type}`);
     }
 
     if (workflowRiskRank[node.actionIntent.riskClass] > workflowRiskRank[node.permissionGrant.maxRiskClass]) {

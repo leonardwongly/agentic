@@ -207,8 +207,23 @@ function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+    .join(",")}}`;
+}
+
 function buildStableIntentFingerprint(task: Task, actionIntent: ActionIntent): string {
-  return JSON.stringify({
+  return stableJson({
     taskId: task.id,
     assignedAgent: task.assignedAgent,
     toolCapabilities: task.toolCapabilities,
@@ -237,7 +252,7 @@ function buildSideEffectTarget(actionIntent: ActionIntent): string | null {
     default:
       return null;
     case "update_record":
-      return `workspace:update:${actionIntent.targetType}:${actionIntent.targetId}:${shortHash(JSON.stringify(actionIntent.patch))}`;
+      return `workspace:update:${actionIntent.targetType}:${actionIntent.targetId}:${shortHash(stableJson(actionIntent.patch))}`;
     case "delete_record":
       return `workspace:delete:${actionIntent.targetType}:${actionIntent.targetId}`;
   }
