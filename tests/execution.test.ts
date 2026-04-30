@@ -491,13 +491,25 @@ describe("execution", () => {
       { runnerId: "worker-1" }
     );
 
+    const abortObserved: string[] = [];
     const result = await processNextDurableJob({
       queue,
       handlers: {
-        goal_create: async () => new Promise<void>(() => {})
+        goal_create: async (_claimedJob, context) =>
+          new Promise<void>((resolve) => {
+            context.signal.addEventListener(
+              "abort",
+              () => {
+                abortObserved.push("aborted");
+                resolve();
+              },
+              { once: true }
+            );
+          })
       }
     });
 
+    expect(abortObserved).toEqual(["aborted"]);
     expect(result.finalJob?.status).toBe("dead_letter");
     expect(result.finalJob?.lastError).toContain("timed out");
   });

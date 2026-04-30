@@ -167,6 +167,7 @@ describe("repository", () => {
     workflowId?: string;
     priority?: "critical" | "high" | "normal" | "low" | "maintenance";
     concurrencyKey?: string | null;
+    queue?: string;
   }) {
     return createJobRecord({
       userId: params.userId,
@@ -176,6 +177,7 @@ describe("repository", () => {
       maxAttempts: params.maxAttempts,
       priority: params.priority,
       concurrencyKey: params.concurrencyKey,
+      queue: params.queue,
       payload: {
         type: "goal_create",
         goalId: params.goalId ?? crypto.randomUUID(),
@@ -1116,6 +1118,31 @@ describe("repository", () => {
     expect(nextClaim).not.toBeNull();
     expect(nextClaim?.id).not.toBe(dueNow.id);
     expect(nextClaim?.attemptCount).toBe(1);
+  });
+
+  it("claims only jobs from the requested queue in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const repository = createRepository({
+      storePath: path.join(tempDir, "runtime-store.json")
+    });
+    const userId = `jobs-queue-affinity-${Date.now()}`;
+    await repository.enqueueJob(
+      createGoalCreateJob({ userId, queue: "maintenance", availableAt: "2026-04-16T02:00:00.000Z" })
+    );
+    const defaultJob = await repository.enqueueJob(
+      createGoalCreateJob({ userId, queue: "default", availableAt: "2026-04-16T02:00:00.000Z" })
+    );
+
+    const claimed = await repository.claimNextJob({
+      userId,
+      queue: "default",
+      runnerId: "worker-default",
+      leaseMs: 30_000,
+      now: "2026-04-16T02:00:00.000Z"
+    });
+
+    expect(claimed?.id).toBe(defaultJob.id);
+    expect(claimed?.queue).toBe("default");
   });
 
   it("replaces an existing goal bundle snapshot instead of retaining stale child records in the file-backed store", async () => {

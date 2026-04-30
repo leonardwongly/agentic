@@ -6,6 +6,7 @@ import type { JobConcurrencyLimits } from "./repository-types";
 export type ClaimNextJobParams = {
   userId?: string;
   kinds?: JobKind[];
+  queue?: string;
   runnerId: string;
   leaseMs: number;
   now?: string;
@@ -36,6 +37,10 @@ export function claimNextJobFromStore(store: JobStore, params: ClaimNextJobParam
       }
 
       if (kinds.length > 0 && !kinds.includes(job.kind)) {
+        return false;
+      }
+
+      if (params.queue && job.queue !== params.queue) {
         return false;
       }
 
@@ -70,6 +75,11 @@ export async function claimNextJobWithClient(
   if (kinds.length > 0) {
     values.push(kinds);
     predicates.push(`kind = any($${values.length}::text[])`);
+  }
+
+  if (params.queue) {
+    values.push(params.queue);
+    predicates.push(`queue_name = $${values.length}`);
   }
 
   if (maxRunningPerKind !== null || maxRunningPerUser !== null || maxRunningPerConcurrencyKey !== null) {

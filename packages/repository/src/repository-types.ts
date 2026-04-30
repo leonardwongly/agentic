@@ -322,6 +322,7 @@ export type AgenticRepository = {
   claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;

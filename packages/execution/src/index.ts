@@ -50,6 +50,7 @@ const legalJobTransitions: Record<JobStatus, readonly JobStatus[]> = {
 export type ClaimNextJobParams = {
   userId?: string;
   kinds?: JobKind[];
+  queue?: string;
   now?: string;
   concurrencyLimits?: JobConcurrencyLimits;
 };
@@ -70,6 +71,7 @@ export type JobQueueStore = {
   claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;
@@ -386,6 +388,7 @@ export function createDurableJobQueue(
           const claimed = await store.claimNextJob({
             userId: params?.userId,
             kinds: params?.kinds,
+            queue: params?.queue,
             runnerId: options.runnerId,
             leaseMs,
             now: params?.now,
@@ -556,17 +559,27 @@ async function runJobHandlerWithOptionalTimeout(job: JobRecord, handler: JobHand
   let timeout: NodeJS.Timeout | null = null;
   const controller = new AbortController();
   const timeoutError = new Error(`Durable job ${job.id} timed out after ${job.timeoutMs}ms.`);
+  const handlerPromise = handler(job, { signal: controller.signal });
 
   try {
-    await Promise.race([
-      handler(job, { signal: controller.signal }),
-      new Promise<never>((_, reject) => {
+    const result = await Promise.race([
+      handlerPromise.then(() => "completed" as const),
+      new Promise<"timed_out">((resolve) => {
         timeout = setTimeout(() => {
           controller.abort(timeoutError);
-          reject(timeoutError);
+          resolve("timed_out");
         }, job.timeoutMs ?? 0);
       })
     ]);
+
+    if (result === "timed_out") {
+      try {
+        await handlerPromise;
+      } catch {
+        // The timeout remains the externally visible failure reason.
+      }
+      throw timeoutError;
+    }
   } finally {
     if (timeout) {
       clearTimeout(timeout);

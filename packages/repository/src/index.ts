@@ -2274,6 +2274,7 @@ class FileRepository implements AgenticRepository {
   async claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;
@@ -6916,6 +6917,7 @@ class PostgresRepository implements AgenticRepository {
   async claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;
