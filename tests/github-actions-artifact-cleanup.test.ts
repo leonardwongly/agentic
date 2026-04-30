@@ -33,9 +33,14 @@ describe("GitHub Actions artifact cleanup", () => {
     const staging = readRepoFile(".github/workflows/staging-manual-deploy.yml");
 
     expect((ci.match(/uses: actions\/upload-artifact@v\d+/g) || []).length).toBe(1);
-    expect(ci).toContain("if: github.event_name != 'pull_request' && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true'");
+    expect(ci).toMatch(
+      /if:\s*github\.event_name\s*!=\s*['"]pull_request['"]\s*&&\s*vars\.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD\s*==\s*['"]true['"]/
+    );
     expect((ci.match(/retention-days:\s*7(?!\d)/g) || []).length).toBe(1);
     expect((staging.match(/uses: actions\/upload-artifact@v\d+/g) || []).length).toBe(2);
+    expect(staging).toMatch(
+      /if:\s*always\(\)\s*&&\s*\(steps\.inspect\.outputs\.mode\s*==\s*['"]external['"]\s*\|\|\s*steps\.inspect\.outputs\.mode\s*==\s*['"]self-test['"]\)\s*&&\s*vars\.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD\s*==\s*['"]true['"]/
+    );
     expect((staging.match(/retention-days:\s*7(?!\d)/g) || []).length).toBe(2);
   });
 });
