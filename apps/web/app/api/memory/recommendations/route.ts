@@ -7,7 +7,7 @@ import {
   filterRecommendationEvidenceEpisodes,
   RecommendationTraceSchema
 } from "@agentic/self-improvement-memory";
-import { CapabilitySchema, WorkspaceGovernanceSchema, enterpriseWorkspaceGovernanceDefaults } from "@agentic/contracts";
+import { CapabilitySchema, WorkspaceGovernanceSchema } from "@agentic/contracts";
 import {
   assessShadowReplayReadiness,
   buildAutonomyBudget,
@@ -15,6 +15,7 @@ import {
   riskFromCapabilities
 } from "@agentic/policy";
 import { recordHistogram } from "@agentic/observability";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError } from "../../../../lib/api-response";
 import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../lib/server";
@@ -69,7 +70,7 @@ async function resolveActiveWorkspaceGovernance(userId: string) {
     (await repository.getWorkspaceGovernance(activeWorkspace.id, userId)) ??
     WorkspaceGovernanceSchema.parse({
       workspaceId: activeWorkspace.id,
-      ...enterpriseWorkspaceGovernanceDefaults,
+      ...resolveWorkspaceGovernanceDefaultsFromEnv(),
       updatedBy: userId,
       createdAt: activeWorkspace.createdAt,
       updatedAt: activeWorkspace.updatedAt
