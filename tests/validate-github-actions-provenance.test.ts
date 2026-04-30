@@ -277,6 +277,55 @@ jobs:
     ]);
   });
 
+  it("ignores uses keys that are not step or reusable workflow references", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+env:
+  uses: docs
+jobs:
+  validate:
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          uses: docs
+          flow: { uses: docs }
+      - run: echo ok
+        env:
+          uses: docs
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        line: 7,
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      })
+    ]);
+    expect(validateWorkflowActionPins(uses)).toEqual([]);
+  });
+
+  it("detects reusable workflow job references", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  shared:
+    uses: owner/repo/.github/workflows/reusable.yml@v1
+    with:
+      uses: docs
+`
+    );
+
+    expect(validateWorkflowActionPins(uses)).toEqual([
+      expect.objectContaining({
+        line: 4,
+        value: "owner/repo/.github/workflows/reusable.yml@v1",
+        reason: "External GitHub Action reference must be pinned to a 40-character lowercase commit SHA."
+      })
+    ]);
+  });
+
   it("allows local and docker action references", () => {
     const uses: WorkflowActionUse[] = [
       {

@@ -18,6 +18,21 @@ export interface WorkflowActionPinFinding {
 
 const WORKFLOW_EXTENSIONS = new Set([".yml", ".yaml"]);
 const FULL_SHA_REF = /^[a-f0-9]{40}$/u;
+const NON_ACTION_USES_CONTEXT_KEYS = new Set([
+  "defaults",
+  "env",
+  "inputs",
+  "outputs",
+  "permissions",
+  "secrets",
+  "strategy",
+  "with"
+]);
+
+type YamlContext = {
+  indent: number;
+  key: string;
+};
 
 function parseArgs(argv: string[]) {
   let workflowsDir = ".github/workflows";
@@ -338,10 +353,64 @@ function isBlockScalarValue(value: string): boolean {
   return /^[>|](?:(?:[+-]?[1-9])|(?:[1-9][+-]?)|[+-])?(?:\s+#.*)?$/u.test(value.trim());
 }
 
+function isYamlListItem(line: string): boolean {
+  return /^\s*-\s*/u.test(line);
+}
+
+function contextAtIndent(stack: YamlContext[], indent: number): YamlContext[] {
+  return stack.filter((entry) => entry.indent < indent);
+}
+
+function hasBlockingUsesContext(context: YamlContext[], startIndex: number): boolean {
+  return context.slice(startIndex + 1).some((entry) => NON_ACTION_USES_CONTEXT_KEYS.has(entry.key));
+}
+
+function isStepUsesContext(context: YamlContext[], indent: number): boolean {
+  const stepsIndex = context.findLastIndex((entry) => entry.key === "steps");
+  if (stepsIndex < 0) {
+    return false;
+  }
+
+  return !hasBlockingUsesContext(context, stepsIndex) && indent > context[stepsIndex].indent;
+}
+
+function isReusableJobUsesContext(context: YamlContext[], indent: number): boolean {
+  const jobsIndex = context.findLastIndex((entry) => entry.key === "jobs");
+  if (jobsIndex < 0 || jobsIndex + 1 >= context.length) {
+    return false;
+  }
+
+  const jobContext = context[jobsIndex + 1];
+  if (jobContext.indent <= context[jobsIndex].indent || indent <= jobContext.indent) {
+    return false;
+  }
+
+  return !hasBlockingUsesContext(context, jobsIndex + 1);
+}
+
+function isActionUsesContext(stack: YamlContext[], indent: number): boolean {
+  const context = contextAtIndent(stack, indent);
+  return isStepUsesContext(context, indent) || isReusableJobUsesContext(context, indent);
+}
+
+function updateYamlContextStack(stack: YamlContext[], parsedLine: { indent: number; key: string; value: string }): void {
+  while (stack.length > 0 && stack[stack.length - 1].indent >= parsedLine.indent) {
+    stack.pop();
+  }
+
+  if (parsedLine.value === "" || isBlockScalarValue(parsedLine.value)) {
+    stack.push({
+      indent: parsedLine.indent,
+      key: parsedLine.key
+    });
+  }
+}
+
 export function collectWorkflowActionUses(filePath: string, content: string): WorkflowActionUse[] {
   const uses: WorkflowActionUse[] = [];
   const lines = content.split(/\r?\n/u);
   const yamlAnchors = new Map<string, string>();
+  const yamlContextStack: YamlContext[] = [];
   let blockScalarIndent: number | null = null;
   let explicitUsesKeyIndent: number | null = null;
 
@@ -352,6 +421,10 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
         return;
       }
       blockScalarIndent = null;
+    }
+
+    while (yamlContextStack.length > 0 && yamlContextStack[yamlContextStack.length - 1].indent >= lineIndent) {
+      yamlContextStack.pop();
     }
 
     if (explicitUsesKeyIndent !== null) {
@@ -375,14 +448,20 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
     }
 
     const parsedExplicitUsesKey = parseYamlExplicitUsesKeyLine(lineContent);
-    if (parsedExplicitUsesKey) {
+    if (parsedExplicitUsesKey && isActionUsesContext(yamlContextStack, parsedExplicitUsesKey.indent)) {
       explicitUsesKeyIndent = parsedExplicitUsesKey.indent;
+      return;
+    } else if (parsedExplicitUsesKey) {
       return;
     }
 
     recordYamlFlowAnchors(lineContent, yamlAnchors);
+    const parsedLine = parseYamlKeyValueLine(lineContent);
     const parsedFlowUses = parseYamlFlowUsesMappings(lineContent);
-    if (parsedFlowUses.length > 0) {
+    if (
+      parsedFlowUses.length > 0 &&
+      (parsedLine?.key === "steps" || (isYamlListItem(lineContent) && isActionUsesContext(yamlContextStack, lineIndent)))
+    ) {
       for (const parsedFlowUse of parsedFlowUses) {
         const value = resolveYamlUseValue(parsedFlowUse.value, yamlAnchors);
         const refSeparator = value.lastIndexOf("@");
@@ -395,7 +474,6 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
       }
     }
 
-    const parsedLine = parseYamlKeyValueLine(lineContent);
     if (!parsedLine) {
       return;
     }
@@ -406,7 +484,7 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
     recordYamlAnchor(parsedLine.value, yamlAnchors);
 
     const parsedFlowSequenceUses = parseYamlFlowSequenceUses(parsedLine.value, parsedLine.indent);
-    if (parsedFlowSequenceUses.length > 0) {
+    if (parsedFlowSequenceUses.length > 0 && parsedLine.key === "steps") {
       for (const parsedFlowUse of parsedFlowSequenceUses) {
         const value = resolveYamlUseValue(parsedFlowUse.value, yamlAnchors);
         const refSeparator = value.lastIndexOf("@");
@@ -417,10 +495,16 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
           ref: refSeparator >= 0 ? value.slice(refSeparator + 1) : null
         });
       }
+      updateYamlContextStack(yamlContextStack, parsedLine);
       return;
     }
 
     if (parsedLine.key !== "uses") {
+      updateYamlContextStack(yamlContextStack, parsedLine);
+      return;
+    }
+
+    if (!isActionUsesContext(yamlContextStack, parsedLine.indent)) {
       return;
     }
 
