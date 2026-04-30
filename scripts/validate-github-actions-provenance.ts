@@ -90,6 +90,18 @@ function parseYamlKeyValueLine(line: string): { indent: number; key: string; val
   };
 }
 
+function parseYamlFlowUsesLine(line: string): { indent: number; value: string } | null {
+  const match = line.match(/^(\s*)-\s*\{\s*(?:"uses"|'uses'|uses)\s*:\s*([^,}]+)(?:[,}].*)$/u);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    indent: match[1].length,
+    value: match[2].trim()
+  };
+}
+
 function isBlockScalarValue(value: string): boolean {
   return /^[>|](?:(?:[+-]?[1-9])|(?:[1-9][+-]?)|[+-])?(?:\s+#.*)?$/u.test(value.trim());
 }
@@ -106,6 +118,19 @@ export function collectWorkflowActionUses(filePath: string, content: string): Wo
         return;
       }
       blockScalarIndent = null;
+    }
+
+    const parsedFlowUses = parseYamlFlowUsesLine(lineContent);
+    if (parsedFlowUses) {
+      const value = trimYamlScalar(parsedFlowUses.value);
+      const refSeparator = value.lastIndexOf("@");
+      uses.push({
+        filePath,
+        line: index + 1,
+        value,
+        ref: refSeparator >= 0 ? value.slice(refSeparator + 1) : null
+      });
+      return;
     }
 
     const parsedLine = parseYamlKeyValueLine(lineContent);

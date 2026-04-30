@@ -46,6 +46,32 @@ jobs:
     ]);
   });
 
+  it("rejects mutable refs in flow-style uses mappings", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - { uses: actions/checkout@v6, with: { fetch-depth: 0 } }
+      - { "uses": "actions/setup-node@v6" }
+`
+    );
+
+    expect(validateWorkflowActionPins(uses)).toEqual([
+      expect.objectContaining({
+        line: 5,
+        value: "actions/checkout@v6",
+        reason: "External GitHub Action reference must be pinned to a 40-character lowercase commit SHA."
+      }),
+      expect.objectContaining({
+        line: 6,
+        value: "actions/setup-node@v6",
+        reason: "External GitHub Action reference must be pinned to a 40-character lowercase commit SHA."
+      })
+    ]);
+  });
+
   it("allows local and docker action references", () => {
     const uses: WorkflowActionUse[] = [
       {
