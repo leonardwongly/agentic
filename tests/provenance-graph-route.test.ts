@@ -144,6 +144,53 @@ describe("provenance graph route", () => {
     expect(payload.graph.nodes.some((node) => node.id === `job:${rootJob.id}`)).toBe(true);
   });
 
+  it("resolves long memory roots with bounded pages instead of unbounded scans", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const longMemoryId = `memory-${"root-".repeat(60)}`;
+    const rootMemory = createMemoryRecord({
+      id: longMemoryId,
+      userId: SYSTEM_USER_ID,
+      category: "audit",
+      memoryType: "confirmed",
+      content: "Older memory root with a long upstream identifier.",
+      confidence: 0.9,
+      source: "test",
+      createdAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z"
+    });
+    await repository.saveMemory(rootMemory);
+    for (let index = 0; index < 125; index += 1) {
+      await repository.saveMemory(
+        createMemoryRecord({
+          id: `newer-memory-${index}`,
+          userId: SYSTEM_USER_ID,
+          category: "audit",
+          memoryType: "observed",
+          content: `Newer memory ${index}.`,
+          confidence: 0.75,
+          source: "test",
+          createdAt: `2026-04-21T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
+          updatedAt: `2026-04-21T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`
+        })
+      );
+    }
+    const listMemoryPageSpy = vi.spyOn(repository, "listMemoryPage");
+    const listMemorySpy = vi.spyOn(repository, "listMemory");
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await graphRoute(
+      buildAuthorizedGetRequest(`http://localhost/api/provenance/graph?rootId=context_packet:ctx_${longMemoryId}&limit=1`)
+    );
+    const payload = (await response.json()) as { graph: { nodes: Array<{ id: string }> } };
+
+    expect(response.status).toBe(200);
+    expect(payload.graph.nodes.some((node) => node.id === `context_packet:ctx_${longMemoryId}`)).toBe(true);
+    expect(listMemorySpy).not.toHaveBeenCalled();
+    expect(listMemoryPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 100 }));
+  });
+
   it("includes restricted owner memories in audit provenance graphs", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH

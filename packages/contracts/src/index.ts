@@ -958,7 +958,7 @@ export const ExecutionProvenanceGraphSchema = z
     timeline: z.array(ExecutionProvenanceTimelineEntrySchema).max(500),
     query: z
       .object({
-        rootId: z.string().min(1).max(240).nullable().default(null),
+        rootId: z.string().min(1).nullable().default(null),
         depth: z.number().int().min(0).max(4),
         limit: z.number().int().min(1).max(500)
       })
