@@ -437,6 +437,7 @@ describe("public share view route", () => {
       shareUrl: string;
     };
     const token = decodeURIComponent(sharePayload.shareUrl.split("/share/")[1] ?? "");
+    seenKeys.length = 0;
 
     const response = await publicShareViewRoute(
       buildPublicShareViewRequest(

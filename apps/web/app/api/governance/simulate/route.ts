@@ -2,15 +2,16 @@ import { z } from "zod";
 import {
   CapabilitySchema,
   WorkspaceGovernanceSchema,
-  WorkspaceShadowReplayPolicySchema,
-  enterpriseWorkspaceGovernanceDefaults
+  WorkspaceShadowReplayPolicySchema
 } from "@agentic/contracts";
 import {
   assessWorkspaceGovernanceConformance,
   buildAutonomyBudget,
   buildGovernanceSimulationScenarios,
+  evaluateGovernanceSimulationCalibration,
   simulateGovernanceScenarios
 } from "@agentic/policy";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../../lib/auth";
 import {
@@ -68,7 +69,7 @@ async function resolveWorkspaceContext(userId: string) {
     (await repository.getWorkspaceGovernance(activeWorkspace.id, userId)) ??
     WorkspaceGovernanceSchema.parse({
       workspaceId: activeWorkspace.id,
-      ...enterpriseWorkspaceGovernanceDefaults,
+      ...resolveWorkspaceGovernanceDefaultsFromEnv(),
       updatedBy: userId,
       createdAt: activeWorkspace.createdAt,
       updatedAt: activeWorkspace.updatedAt
@@ -115,15 +116,28 @@ export async function POST(request: Request) {
         capabilities: scenario.capabilities,
         confidence: scenario.confidence
       })) ?? buildGovernanceSimulationScenarios();
+    const simulationStartedAt = Date.now();
+    const simulations = simulateGovernanceScenarios({
+      governance: effectiveGovernance,
+      scenarios
+    });
+    const calibration = evaluateGovernanceSimulationCalibration({
+      simulations,
+      latencyMs: Date.now() - simulationStartedAt
+    });
 
     return authenticatedJson({
       governance: effectiveGovernance,
       autonomyBudget: buildAutonomyBudget(effectiveGovernance),
       conformance: assessWorkspaceGovernanceConformance(effectiveGovernance),
-      simulations: simulateGovernanceScenarios({
-        governance: effectiveGovernance,
-        scenarios
-      }),
+      simulations,
+      calibration: {
+        status: calibration.status,
+        autonomyExpansionAllowed: calibration.autonomyExpansionAllowed,
+        thresholds: calibration.thresholds,
+        metrics: calibration.metrics,
+        findings: calibration.findings
+      },
       dashboard
     });
   } catch (error) {

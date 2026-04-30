@@ -86,8 +86,12 @@ jobs:
 
       - name: Validate migrations
         run: |
+          npm run db:check-migrations
           npm run db:migrate
           npm run db:status -- --require-ready
+
+      - name: Run governance simulation suite
+        run: npm run governance:simulate
 
       - name: Run security regression suite
         run: npm run test:security:regression
@@ -142,11 +146,8 @@ jobs:
         run: npm run security:collect-evidence -- --require-artifacts --output-dir artifacts/compliance
 
       - name: Upload supply-chain evidence
+        if: github.event_name != 'pull_request' && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true'
         uses: actions/upload-artifact@v7
-        # PR validation should fail if evidence generation is broken, but not
-        # when GitHub artifact storage quota is exhausted. Push/main runs still
-        # treat archival as a required supply-chain control.
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
         with:
           name: agentic-supply-chain-evidence
           path: |
@@ -154,6 +155,7 @@ jobs:
             artifacts/build
             artifacts/compliance
           if-no-files-found: error
+          retention-days: 7
 
       - name: Attest security evidence
         if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')

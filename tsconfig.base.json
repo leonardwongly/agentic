@@ -47,6 +47,9 @@
       "@agentic/db": [
         "packages/db/src/index.ts"
       ],
+      "@agentic/db/migration-discipline": [
+        "packages/db/src/migration-discipline.ts"
+      ],
       "@agentic/db/migration-runtime": [
         "packages/db/src/migration-runtime.ts"
       ],

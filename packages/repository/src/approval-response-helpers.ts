@@ -9,13 +9,20 @@ import {
   type ApprovalDecisionScope,
   type ApprovalRequest,
   type EvidenceRecord,
-  type GoalBundle
+  type GoalBundle,
+  type JobRecord
 } from "@agentic/contracts";
 import { respondToApproval as applyApprovalResponse } from "@agentic/orchestrator";
 import { ApprovalMutationError } from "./repository-types";
 
 function subjectUserIdForActor(actor: ActorContext): string {
   return ActorContextSchema.parse(actor).subjectUserId;
+}
+
+export function assertApprovalFollowUpJobOwner(job: JobRecord, userId: string): void {
+  if (job.userId !== userId) {
+    throw new Error("Approval follow-up job owner must match the approval mutation actor.");
+  }
 }
 
 function buildApprovalEvidenceRecord(params: {

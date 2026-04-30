@@ -210,7 +210,7 @@ export const workspaceSelections = pgTable("workspace_selections", {
 export const workspaceGovernance = pgTable("workspace_governance", {
   workspaceId: text("workspace_id").primaryKey(),
   approvalMode: text("approval_mode").notNull(),
-  requireAuditExports: boolean("require_audit_exports").notNull(),
+  requireAuditExports: boolean("require_audit_exports").notNull().default(true),
   maxAutoRunRiskClass: text("max_auto_run_risk_class").notNull(),
   publicSharingEnabled: boolean("public_sharing_enabled").notNull().default(false),
   providerAccessRequiresApproval: boolean("provider_access_requires_approval").notNull().default(true),
@@ -334,6 +334,9 @@ export const watchers = pgTable("watchers", {
   sourceSystems: jsonb("source_systems").$type<string[]>().notNull(),
   status: text("status").notNull(),
   expiryAt: timestamp("expiry_at", { withTimezone: true }),
+  schedule: jsonb("schedule").$type<Record<string, unknown>>().notNull(),
+  lastEvaluation: jsonb("last_evaluation").$type<Record<string, unknown> | null>(),
+  escalationPolicy: jsonb("escalation_policy").$type<Record<string, unknown>>().notNull(),
   actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
   teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),

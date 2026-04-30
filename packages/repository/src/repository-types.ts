@@ -50,6 +50,7 @@ import type {
 } from "@agentic/contracts";
 import type { GovernanceConformanceReport } from "@agentic/policy";
 import type { DashboardOperationsTower } from "./dashboard-operations";
+import type { WatcherLeaseClaimParams } from "./watcher-lease-helpers";
 
 export type DashboardData = {
   workspaces: Workspace[];
@@ -344,6 +345,7 @@ export type AgenticRepository = {
   saveEvidenceRecord(record: EvidenceRecord): Promise<EvidenceRecord>;
   listWatchers(filters?: WatcherListFilters): Promise<Watcher[]>;
   listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage>;
+  claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null>;
   saveWatcher(watcher: Watcher): Promise<Watcher>;
   listIntegrations(userId?: string): Promise<IntegrationAccount[]>;
   listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage>;

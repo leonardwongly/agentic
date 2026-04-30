@@ -13,7 +13,9 @@
     "dev": "npm run dev -w @agentic/web",
     "build": "npm run build -w @agentic/web && npm run build -w @agentic/worker",
     "db:migrate": "tsx scripts/db-migrate.ts",
+    "db:check-migrations": "tsx scripts/check-migration-discipline.ts",
     "db:status": "tsx scripts/db-status.ts",
+    "governance:simulate": "tsx scripts/governance-simulation-suite.ts",
     "security:audit-runtime": "tsx scripts/runtime-vulnerability-gate.ts",
     "security:sbom": "tsx scripts/generate-sbom.ts",
     "security:collect-evidence": "tsx scripts/collect-compliance-evidence.ts",
@@ -66,5 +68,8 @@
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^4.0.2"
+  },
+  "overrides": {
+    "postcss": "8.5.12"
   }
 }

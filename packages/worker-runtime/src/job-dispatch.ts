@@ -37,19 +37,47 @@ import {
   buildTemplateRunPayload
 } from "./job-payloads";
 
-function stableSerialize(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableSerialize(item)).join(",")}]`;
+function stableSerialize(value: unknown, seen = new WeakSet<object>()): string {
+  if (value === null) {
+    return "null";
   }
 
-  if (value && typeof value === "object") {
+  switch (typeof value) {
+    case "string":
+    case "number":
+    case "boolean":
+      return JSON.stringify(value);
+    case "undefined":
+      return "{\"$unsupported\":\"undefined\"}";
+    case "bigint":
+      return `{"$unsupported":"bigint","value":${JSON.stringify(value.toString())}}`;
+    case "symbol":
+      return `{"$unsupported":"symbol","value":${JSON.stringify(value.toString())}}`;
+    case "function":
+      return "{\"$unsupported\":\"function\"}";
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item, seen)).join(",")}]`;
+  }
+
+  if (value instanceof Date) {
+    return JSON.stringify(value.toISOString());
+  }
+
+  if (seen.has(value)) {
+    return "{\"$unsupported\":\"circular\"}";
+  }
+
+  seen.add(value);
+  try {
     return `{${Object.entries(value)
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableSerialize(entry)}`)
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableSerialize(entry, seen)}`)
       .join(",")}}`;
+  } finally {
+    seen.delete(value);
   }
-
-  return JSON.stringify(value);
 }
 
 function buildApprovalFollowUpActionId(params: {
