@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
+import { WorkspaceGovernanceSchema } from "@agentic/contracts";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
 import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { GOAL_SHARE_MUTATION_DENIED_REASON, canManageGoalSharesForRole } from "../../../../../lib/workspace-role-permissions";
@@ -58,7 +60,14 @@ async function assertPublicSharingEnabled(
   }
   const governance =
     (workspaceId ? null : dashboard?.workspaceGovernance) ??
-    (await repository.getWorkspaceGovernance(governanceWorkspaceId, userId));
+    (await repository.getWorkspaceGovernance(governanceWorkspaceId, userId)) ??
+    WorkspaceGovernanceSchema.parse({
+      workspaceId: governanceWorkspaceId,
+      ...resolveWorkspaceGovernanceDefaultsFromEnv(),
+      updatedBy: userId,
+      createdAt: dashboard?.activeWorkspace?.createdAt ?? new Date().toISOString(),
+      updatedAt: dashboard?.activeWorkspace?.updatedAt ?? new Date().toISOString()
+    });
 
   if (!governance?.publicSharingEnabled) {
     throw new ApiRouteError(403, "Public sharing is disabled until workspace governance explicitly enables it.");
