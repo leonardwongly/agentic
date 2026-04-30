@@ -84,4 +84,61 @@ describe("provenance graph route", () => {
     expect(response.status).toBe(400);
     expect(payload.error).toContain("Too big");
   });
+
+  it("resolves job roots before applying collection limits", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const bundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Prepare a job-root provenance graph.",
+      memories: [],
+      integrations: []
+    });
+    await repository.saveGoalBundle(bundle);
+    const rootJob = await repository.enqueueJob(
+      createJobRecord({
+        id: "older-root-job",
+        userId: SYSTEM_USER_ID,
+        kind: "goal_create",
+        payload: {
+          type: "goal_create",
+          goalId: bundle.goal.id,
+          workflowId: bundle.workflow.id,
+          request: "Create older root job.",
+          workspaceId: null,
+          agentId: null,
+          metadata: {}
+        }
+      })
+    );
+
+    for (let index = 0; index < 5; index += 1) {
+      await repository.enqueueJob(
+        createJobRecord({
+          id: `newer-job-${index}`,
+          userId: SYSTEM_USER_ID,
+          kind: "goal_create",
+          payload: {
+            type: "goal_create",
+            goalId: bundle.goal.id,
+            workflowId: bundle.workflow.id,
+            request: `Create newer job ${index}.`,
+            workspaceId: null,
+            agentId: null,
+            metadata: {}
+          }
+        })
+      );
+    }
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await graphRoute(
+      buildAuthorizedGetRequest(`http://localhost/api/provenance/graph?rootId=job:${rootJob.id}&limit=1`)
+    );
+    const payload = (await response.json()) as { graph: { nodes: Array<{ id: string }> } };
+
+    expect(response.status).toBe(200);
+    expect(payload.graph.nodes.some((node) => node.id === `job:${rootJob.id}`)).toBe(true);
+  });
 });

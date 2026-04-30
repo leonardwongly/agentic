@@ -116,6 +116,55 @@ describe("execution provenance graph", () => {
     });
   });
 
+  it("preserves source owner ids when building nodes for shared data", async () => {
+    const sourceOwnerId = "source-owner";
+    const bundle = await processUserRequest({
+      userId: sourceOwnerId,
+      request: "Create a shared provenance brief.",
+      memories: [],
+      integrations: []
+    });
+    const job = createJobRecord({
+      userId: sourceOwnerId,
+      kind: "goal_create",
+      payload: {
+        type: "goal_create",
+        goalId: bundle.goal.id,
+        workflowId: bundle.workflow.id,
+        request: "Create shared graph job.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      }
+    });
+    const memory = createMemoryRecord({
+      id: "shared-memory",
+      userId: sourceOwnerId,
+      category: "shared",
+      memoryType: "observed",
+      content: "Shared memory.",
+      confidence: 0.8,
+      source: "test"
+    });
+
+    const graph = buildExecutionProvenanceGraph({
+      userId: "requesting-member",
+      goals: [bundle],
+      jobs: [job],
+      memories: [memory],
+      limit: 50
+    });
+
+    expect(graph.nodes.filter((node) => node.id !== `approval:${bundle.approvals[0]?.id}`)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: `goal:${bundle.goal.id}`, ownerUserId: sourceOwnerId }),
+        expect.objectContaining({ id: `job:${job.id}`, ownerUserId: sourceOwnerId }),
+        expect.objectContaining({ id: "memory:shared-memory", ownerUserId: sourceOwnerId }),
+        expect.objectContaining({ id: "context_packet:ctx_shared-memory", ownerUserId: sourceOwnerId })
+      ])
+    );
+  });
+
   it("keeps large graph projections bounded for traversal performance", async () => {
     const bundle = await processUserRequest({
       userId: SYSTEM_USER_ID,

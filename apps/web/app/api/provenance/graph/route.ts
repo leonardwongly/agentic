@@ -16,6 +16,18 @@ function goalIdFromRoot(rootId: string | null): string | null {
   return rootId?.startsWith("goal:") ? rootId.slice("goal:".length) : null;
 }
 
+function rootIdParts(rootId: string | null): { type: string; id: string } | null {
+  const separator = rootId?.indexOf(":") ?? -1;
+  if (!rootId || separator <= 0) {
+    return null;
+  }
+
+  return {
+    type: rootId.slice(0, separator),
+    id: rootId.slice(separator + 1)
+  };
+}
+
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
@@ -27,22 +39,33 @@ export async function GET(request: Request) {
     });
     const repository = await getSeededRepository();
     const rootGoalId = goalIdFromRoot(query.rootId);
+    const root = rootIdParts(query.rootId);
     const goalsPromise = rootGoalId
       ? repository.getGoalBundleForUser(rootGoalId, principal.userId).then((goal) => (goal ? [goal] : []))
       : repository.listGoalsPage({ userId: principal.userId, limit: query.limit }).then((page) => page.items);
-    const [goals, jobs, memories, evidenceRecords] = await Promise.all([
+    const rootJobPromise =
+      root?.type === "job" || root?.type === "failure" ? repository.getJob(root.id, principal.userId) : Promise.resolve(null);
+    const rootMemoryPromise =
+      root?.type === "memory" || root?.type === "context_packet"
+        ? repository.listMemory(principal.userId).then((memories) =>
+            memories.find((memory) => memory.id === root.id || `ctx_${memory.id}` === root.id) ?? null
+          )
+        : Promise.resolve(null);
+    const [goals, jobs, memories, evidenceRecords, rootJob, rootMemory] = await Promise.all([
       goalsPromise,
       repository.listJobs({ userId: principal.userId, limit: query.limit }),
       repository.listContextPacketMemory({ userId: principal.userId, limit: query.limit }),
-      repository.listEvidenceRecords({ userId: principal.userId, goalId: rootGoalId ?? undefined, limit: query.limit })
+      repository.listEvidenceRecords({ userId: principal.userId, goalId: rootGoalId ?? undefined, limit: query.limit }),
+      rootJobPromise,
+      rootMemoryPromise
     ]);
 
     return authenticatedJson({
       graph: buildExecutionProvenanceGraph({
         userId: principal.userId,
         goals,
-        jobs,
-        memories,
+        jobs: rootJob ? [rootJob, ...jobs.filter((job) => job.id !== rootJob.id)] : jobs,
+        memories: rootMemory ? [rootMemory, ...memories.filter((memory) => memory.id !== rootMemory.id)] : memories,
         evidenceRecords,
         rootId: query.rootId,
         depth: query.depth,

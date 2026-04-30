@@ -107,7 +107,7 @@ function addGoalBundle(
     buildNode({
       id: goalNodeId,
       type: "goal",
-      ownerUserId: params.userId,
+      ownerUserId: bundle.goal.userId,
       label: bundle.goal.title,
       summary: bundle.goal.explanation,
       createdAt: bundle.goal.createdAt,
@@ -151,11 +151,11 @@ function addGoalBundle(
   }
 
   for (const action of bundle.actionLogs) {
-    addActionLog(params.userId, action, nodes, edges, goalNodeId);
+    addActionLog(bundle.goal.userId, action, nodes, edges, goalNodeId);
   }
 
   for (const artifact of bundle.artifacts) {
-    addArtifact(params.userId, artifact, nodes, edges, goalNodeId);
+    addArtifact(bundle.goal.userId, artifact, nodes, edges, goalNodeId);
   }
 }
 
@@ -231,7 +231,6 @@ function addArtifact(
 }
 
 function addEvidenceRecord(
-  userId: string,
   evidence: EvidenceRecord,
   nodes: Map<string, ExecutionProvenanceNode>,
   edges: Map<string, ExecutionProvenanceEdge>
@@ -243,7 +242,7 @@ function addEvidenceRecord(
     buildNode({
       id: decisionNodeId,
       type: "decision",
-      ownerUserId: userId,
+      ownerUserId: evidence.userId,
       label: `${evidence.decision} approval`,
       summary: evidence.decisionRationale ?? evidence.sourceSummary,
       sensitivity: evidence.riskClass,
@@ -270,7 +269,6 @@ function addEvidenceRecord(
 }
 
 function addJob(
-  userId: string,
   job: JobRecord,
   nodes: Map<string, ExecutionProvenanceNode>,
   edges: Map<string, ExecutionProvenanceEdge>
@@ -281,7 +279,7 @@ function addJob(
     buildNode({
       id: jobNodeId,
       type: "job",
-      ownerUserId: userId,
+      ownerUserId: job.userId,
       label: `${job.kind} ${job.status}`,
       summary: `Durable ${job.kind} job is ${job.status} after ${job.attemptCount}/${job.maxAttempts} attempts.`,
       createdAt: job.createdAt,
@@ -331,7 +329,7 @@ function addJob(
       buildNode({
         id: failureNodeId,
         type: "failure",
-        ownerUserId: userId,
+        ownerUserId: job.userId,
         label: `${job.kind} dead letter`,
         summary: job.lastError ? truncate(job.lastError) : "Durable job entered the dead-letter state.",
         createdAt: job.deadLetteredAt ?? job.updatedAt,
@@ -355,7 +353,6 @@ function addJob(
 }
 
 function addMemory(
-  userId: string,
   memory: MemoryRecord,
   nodes: Map<string, ExecutionProvenanceNode>,
   edges: Map<string, ExecutionProvenanceEdge>
@@ -368,7 +365,7 @@ function addMemory(
     buildNode({
       id: memoryNodeId,
       type: "memory",
-      ownerUserId: userId,
+      ownerUserId: memory.userId,
       label: memory.category,
       summary: `${memory.memoryType} memory captured from ${memory.source}.`,
       sensitivity: memory.sensitivity,
@@ -384,7 +381,7 @@ function addMemory(
     buildNode({
       id: packetNodeId,
       type: "context_packet",
-      ownerUserId: userId,
+      ownerUserId: memory.userId,
       label: packet.category,
       summary: packet.contentSummary,
       sensitivity: packet.sensitivity,
@@ -471,15 +468,15 @@ export function buildExecutionProvenanceGraph(params: BuildExecutionProvenanceGr
   }
 
   for (const evidence of params.evidenceRecords ?? []) {
-    addEvidenceRecord(params.userId, evidence, nodes, edges);
+    addEvidenceRecord(evidence, nodes, edges);
   }
 
   for (const job of params.jobs) {
-    addJob(params.userId, job, nodes, edges);
+    addJob(job, nodes, edges);
   }
 
   for (const memory of params.memories) {
-    addMemory(params.userId, memory, nodes, edges);
+    addMemory(memory, nodes, edges);
   }
 
   const sortedNodes = [...nodes.values()].sort((left, right) => {
