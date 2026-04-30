@@ -115,6 +115,35 @@ jobs:
     ]);
   });
 
+  it("does not treat uses text inside block scalars with indentation indicators as action references", () => {
+    const uses = collectWorkflowActionUses(
+      ".github/workflows/ci.yml",
+      `
+jobs:
+  validate:
+    steps:
+      - run: |2
+          echo "uses: actions/checkout@v6"
+      - uses: actions/github-script@6b7254ff8b482b4d753a1e2f286705a42a696a5a
+        with:
+          script: >-2
+            core.info("uses: actions/setup-node@v5")
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+`
+    );
+
+    expect(uses).toEqual([
+      expect.objectContaining({
+        line: 7,
+        value: "actions/github-script@6b7254ff8b482b4d753a1e2f286705a42a696a5a"
+      }),
+      expect.objectContaining({
+        line: 11,
+        value: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+      })
+    ]);
+  });
+
   it("strips inline YAML comments without truncating quoted scalars", () => {
     const uses = collectWorkflowActionUses(
       ".github/workflows/ci.yml",

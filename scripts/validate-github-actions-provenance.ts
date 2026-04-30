@@ -91,7 +91,7 @@ function parseYamlKeyValueLine(line: string): { indent: number; key: string; val
 }
 
 function isBlockScalarValue(value: string): boolean {
-  return /^[>|][+-]?(?:\s+#.*)?$/u.test(value.trim());
+  return /^[>|](?:(?:[+-]?[1-9])|(?:[1-9][+-]?))?(?:\s+#.*)?$/u.test(value.trim());
 }
 
 export function collectWorkflowActionUses(filePath: string, content: string): WorkflowActionUse[] {
