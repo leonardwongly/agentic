@@ -187,8 +187,9 @@ describe("AOS remediation tracker", () => {
     expect(spawnSyncMock).toHaveBeenCalledWith(
       "gh",
       expect.arrayContaining(["api", "--paginate", "--slurp", "repos/leonardwongly/agentic/issues?state=all&per_page=100"]),
-      expect.objectContaining({ encoding: "utf8" })
+      expect.objectContaining({ encoding: "utf8", maxBuffer: expect.any(Number) })
     );
+    expect(spawnSyncMock.mock.calls[0][2].maxBuffer).toBeGreaterThan(1024 * 1024);
   });
 
   it("paginates live issue coverage instead of truncating AOS issue history", () => {

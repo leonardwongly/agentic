@@ -97,6 +97,7 @@ interface FormatOutputOptions {
 
 const DEFAULT_CONFIG_PATH = "config/remediation/aos-tracker.json";
 const EXPECTED_AOS_IDS = Array.from({ length: 19 }, (_, index) => `AOS-${String(index).padStart(2, "0")}`);
+const GH_ISSUE_QUERY_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const VALID_PRIORITIES: Priority[] = ["critical", "high", "medium", "low"];
 const VALID_PRIORITY_SET = new Set<string>(VALID_PRIORITIES);
 const REQUIRED_SOURCE_IDS = ["blueprint", "assessment", "tracker", "implementation"];
@@ -503,7 +504,8 @@ export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repo
     "gh",
     ["api", "--paginate", "--slurp", `repos/${repo}/issues?state=all&per_page=100`],
     {
-      encoding: "utf8"
+      encoding: "utf8",
+      maxBuffer: GH_ISSUE_QUERY_MAX_BUFFER_BYTES
     }
   );
 
