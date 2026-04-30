@@ -6102,7 +6102,9 @@ class PostgresRepository implements AgenticRepository {
       await this.upsertGoalBundle(client, updatedBundle);
       await this.saveEvidenceRecordWithClient(client, evidenceRecord);
 
-      if (shouldSaveJob) await this.saveJobWithClient(client, savedJob);
+      if (shouldSaveJob) {
+        await this.saveJobWithClient(client, savedJob);
+      }
 
       return {
         bundle: parsedBundle,
