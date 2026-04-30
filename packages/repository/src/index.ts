@@ -159,11 +159,12 @@ import { assembleDashboardData } from "./dashboard-data";
 import { buildBriefingHistory, buildDashboardControlPlane, buildNowQueue } from "./dashboard-control-plane";
 import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
+import { listContextPacketMemoryFromStore, listContextPacketMemoryWithPool } from "./repository-context-packet-memory";
+import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
 import {
   assertRunningJobOwner, autopilotEventMatchesBudget, buildDeletedWorkspaceTombstone, buildJobLifecycleJournal,
-  claimJobRecord, isJobBlockedByConcurrency, goalShareTerminalAt, isJobClaimableAt, isJobScopedToWorkspace,
-  normalizeAutopilotEventDetails, resolveRetentionWindow, sortJobsForClaim, withAutopilotSuppression,
-  workspaceGoalIdsFromStore
+  goalShareTerminalAt, isJobScopedToWorkspace, normalizeAutopilotEventDetails, resolveRetentionWindow,
+  withAutopilotSuppression, workspaceGoalIdsFromStore
 } from "./repository-runtime-helpers";
 import {
   ApprovalMutationError,
@@ -263,61 +264,12 @@ const DEFAULT_RUNTIME_STORE_PATH = path.resolve(
   "../../../.agentic/runtime-store.json"
 );
 
-function normalizeSqlConcurrencyLimit(value: number | undefined): number | null {
-  if (!Number.isInteger(value) || value === undefined || value <= 0) {
-    return null;
-  }
-
-  return value;
-}
-
-function normalizeContextPacketLimit(value: number | undefined): number {
-  return Math.max(1, Math.min(Math.trunc(value ?? 50), 200));
-}
-
 function normalizeProvenanceCollectionLimit(value: number | undefined): number | null {
   if (value === undefined) {
     return null;
   }
 
   return Math.max(1, Math.min(Math.trunc(value), 500));
-}
-
-function normalizeSensitivityForQuery(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function memoryMatchesContextPacketQuery(
-  memory: MemoryRecord,
-  params: {
-    userId: string;
-    agent?: AgentName;
-    includeExpired?: boolean;
-    allowedSensitivities?: string[];
-    now?: number;
-  }
-): boolean {
-  if (memory.userId !== params.userId) {
-    return false;
-  }
-
-  if (!params.includeExpired && memory.expiryAt) {
-    const expiryAt = Date.parse(memory.expiryAt);
-    if (Number.isFinite(expiryAt) && expiryAt <= (params.now ?? Date.now())) {
-      return false;
-    }
-  }
-
-  if (params.agent && !memory.permissions.includes(params.agent)) {
-    return false;
-  }
-
-  const sensitivity = normalizeSensitivityForQuery(memory.sensitivity);
-  if (!params.allowedSensitivities) {
-    return sensitivity !== "restricted";
-  }
-
-  return new Set(params.allowedSensitivities.map(normalizeSensitivityForQuery)).has(sensitivity);
 }
 
 function resolveDefaultStorePath(): string {
@@ -2329,33 +2281,10 @@ class FileRepository implements AgenticRepository {
   }): Promise<JobRecord | null> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const claimedAt = params.now ?? nowIso();
-      const claimedAtMs = Date.parse(claimedAt);
-      const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
-      const runningJobs = store.jobs.filter((job) => job.status === "running");
-      const claimable = sortJobsForClaim(
-        store.jobs.filter((job) => {
-          if (params.userId && job.userId !== params.userId) {
-            return false;
-          }
-
-          if (kinds.length > 0 && !kinds.includes(job.kind)) {
-            return false;
-          }
-
-          if (!isJobClaimableAt(job, claimedAtMs)) {
-            return false;
-          }
-
-          return !isJobBlockedByConcurrency(job, runningJobs, params.concurrencyLimits, claimedAtMs);
-        })
-      )[0];
-
-      if (!claimable) {
+      const claimed = claimNextJobFromStore(store, params);
+      if (!claimed) {
         return null;
       }
-
-      const claimed = claimJobRecord(claimable, params.runnerId, params.leaseMs, claimedAt);
       store.jobs = upsertById(store.jobs, claimed);
       await this.writeStore(store);
       return JobRecordSchema.parse(clone(claimed));
@@ -2495,15 +2424,7 @@ class FileRepository implements AgenticRepository {
     now?: number;
   }): Promise<MemoryRecord[]> {
     const store = await this.readStore();
-    const limit = normalizeContextPacketLimit(params.limit);
-    return store.memories
-      .filter((memory) => memoryMatchesContextPacketQuery(memory, params))
-      .map((memory) => MemoryRecordSchema.parse(clone(memory)))
-      .sort((left, right) => {
-        const updatedOrder = right.updatedAt.localeCompare(left.updatedAt);
-        return updatedOrder !== 0 ? updatedOrder : right.createdAt.localeCompare(left.createdAt);
-      })
-      .slice(0, limit);
+    return listContextPacketMemoryFromStore(store.memories, params);
   }
 
   async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
@@ -7000,97 +6921,14 @@ class PostgresRepository implements AgenticRepository {
     now?: string;
     concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null> {
-    return this.withTransaction(async (client) => {
-      const claimedAt = params.now ?? nowIso();
-      const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
-      const values: unknown[] = [claimedAt];
-      const maxRunningPerKind = normalizeSqlConcurrencyLimit(params.concurrencyLimits?.maxRunningPerKind);
-      const maxRunningPerUser = normalizeSqlConcurrencyLimit(params.concurrencyLimits?.maxRunningPerUser);
-      const maxRunningPerConcurrencyKey = normalizeSqlConcurrencyLimit(
-        params.concurrencyLimits?.maxRunningPerConcurrencyKey
-      );
-      const predicates = [
-        `((status in ('queued', 'retrying') and available_at <= $1) or (status = 'running' and lease_expires_at is not null and lease_expires_at <= $1))`
-      ];
-
-      if (params.userId) {
-        values.push(params.userId);
-        predicates.push(`user_id = $${values.length}`);
-      }
-
-      if (kinds.length > 0) {
-        values.push(kinds);
-        predicates.push(`kind = any($${values.length}::text[])`);
-      }
-
-      if (maxRunningPerKind !== null || maxRunningPerUser !== null || maxRunningPerConcurrencyKey !== null) {
-        await client.query("select pg_advisory_xact_lock(hashtext('agentic:jobs:concurrency'))");
-      }
-
-      if (maxRunningPerKind !== null) {
-        values.push(maxRunningPerKind);
-        predicates.push(`
-          (
-            select count(*)
-            from jobs running_kind
-            where running_kind.status = 'running'
-              and running_kind.kind = jobs.kind
-              and (running_kind.lease_expires_at is null or running_kind.lease_expires_at > $1)
-          ) < $${values.length}
-        `);
-      }
-
-      if (maxRunningPerUser !== null) {
-        values.push(maxRunningPerUser);
-        predicates.push(`
-          (
-            select count(*)
-            from jobs running_user
-            where running_user.status = 'running'
-              and running_user.user_id = jobs.user_id
-              and (running_user.lease_expires_at is null or running_user.lease_expires_at > $1)
-          ) < $${values.length}
-        `);
-      }
-
-      if (maxRunningPerConcurrencyKey !== null) {
-        values.push(maxRunningPerConcurrencyKey);
-        predicates.push(`
-          (
-            jobs.concurrency_key is null
-            or (
-              select count(*)
-              from jobs running_key
-              where running_key.status = 'running'
-                and running_key.concurrency_key = jobs.concurrency_key
-                and (running_key.lease_expires_at is null or running_key.lease_expires_at > $1)
-            ) < $${values.length}
-          )
-        `);
-      }
-
-      const result = await client.query(
-        `
-          select * from jobs
-          where ${predicates.join(" and ")}
-          order by case priority when 'critical' then 0 when 'high' then 1 when 'normal' then 2 when 'low' then 3 when 'maintenance' then 4 else 2 end asc,
-            available_at asc, created_at asc
-          limit 1
-          for update skip locked
-        `,
-        values
-      );
-
-      const claimable = result.rows[0] ? this.mapJobRow(result.rows[0]) : null;
-
-      if (!claimable) {
-        return null;
-      }
-
-      const claimed = claimJobRecord(claimable, params.runnerId, params.leaseMs, claimedAt);
-      await this.saveJobWithClient(client, claimed);
-      return JobRecordSchema.parse(clone(claimed));
-    });
+    return this.withTransaction((client) =>
+      claimNextJobWithClient(
+        client,
+        params,
+        (row) => this.mapJobRow(row),
+        (transactionClient, job) => this.saveJobWithClient(transactionClient, job)
+      )
+    );
   }
 
   async completeJob(params: {
@@ -7240,56 +7078,7 @@ class PostgresRepository implements AgenticRepository {
     now?: number;
   }): Promise<MemoryRecord[]> {
     await this.ready;
-    const limit = normalizeContextPacketLimit(params.limit);
-    const values: unknown[] = [params.userId];
-    const predicates = ["user_id = $1"];
-
-    if (!params.includeExpired) {
-      values.push(new Date(params.now ?? Date.now()).toISOString());
-      predicates.push(`(expiry_at is null or expiry_at > $${values.length})`);
-    }
-
-    if (params.agent) {
-      values.push(params.agent);
-      predicates.push(`$${values.length} = any(permissions)`);
-    }
-
-    if (params.allowedSensitivities) {
-      values.push(params.allowedSensitivities.map(normalizeSensitivityForQuery));
-      predicates.push(`lower(sensitivity) = any($${values.length}::text[])`);
-    } else {
-      predicates.push(`lower(sensitivity) <> 'restricted'`);
-    }
-
-    values.push(limit);
-    const result = await this.pool.query(
-      `
-        select * from memory_records
-        where ${predicates.join(" and ")}
-        order by updated_at desc, created_at desc, id desc
-        limit $${values.length}
-      `,
-      values
-    );
-
-    return result.rows.map((row) =>
-      MemoryRecordSchema.parse({
-        id: row.id,
-        userId: row.user_id,
-        category: row.category,
-        memoryType: row.memory_type,
-        content: row.content,
-        confidence: Number(row.confidence),
-        source: row.source,
-        sensitivity: row.sensitivity,
-        permissions: row.permissions ?? [],
-        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-        reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
-        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-        createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
-      })
-    );
+    return listContextPacketMemoryWithPool(this.pool, params);
   }
 
   async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
