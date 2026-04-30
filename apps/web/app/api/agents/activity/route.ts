@@ -52,6 +52,8 @@ export async function GET(request: Request) {
         }
       });
 
+      // AOS-07 security-header exception: SSE needs a live stream body and event-stream headers.
+      // withApiTelemetry applies the base API security headers before returning the response.
       return new Response(stream, {
         headers: {
           "Content-Type": "text/event-stream",

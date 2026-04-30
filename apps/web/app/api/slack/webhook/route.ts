@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { createHumanActorContext } from "@agentic/contracts";
 import {
   verifySlackSignature
@@ -130,7 +129,7 @@ export async function POST(request: Request) {
       }
     })();
 
-    if (decisionResult instanceof NextResponse) {
+    if (decisionResult instanceof Response) {
       return decisionResult;
     }
 

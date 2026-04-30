@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createHumanActorContext } from "@agentic/contracts";
 import {
@@ -160,7 +159,7 @@ export async function POST(request: Request) {
       }
     })();
 
-    if (decisionResult instanceof NextResponse) {
+    if (decisionResult instanceof Response) {
       await consumeTelegramApprovalActions(action.approvalId);
       return decisionResult;
     }

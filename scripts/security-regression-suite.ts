@@ -23,6 +23,7 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
     id: "auth-session-and-provider-callbacks",
     description: "Fail closed on token misuse, state tampering, and callback abuse.",
     files: [
+      "tests/api-security-headers.test.ts",
       "tests/auth.test.ts",
       "tests/google-provider-routes.test.ts"
     ]

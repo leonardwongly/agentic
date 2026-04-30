@@ -5,6 +5,11 @@ import { getSeededRepository } from "../../../../../lib/server";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
+function buildAgentExportFileName(name: string): string {
+  const safeName = name.trim().replace(/[^\w.-]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 80);
+  return `${safeName || "agent"}.agent.json`;
+}
+
 export async function GET(request: Request, { params }: RouteParams) {
   try {
     const principal = await requireApiSession(request);
@@ -53,7 +58,7 @@ export async function GET(request: Request, { params }: RouteParams) {
     return authenticatedResponse(JSON.stringify(exportData, null, 2), {
       headers: {
         "Content-Type": "application/json",
-        "Content-Disposition": `attachment; filename="${agent.name}.agent.json"`
+        "Content-Disposition": `attachment; filename="${buildAgentExportFileName(agent.name)}"`
       }
     });
   } catch (error) {

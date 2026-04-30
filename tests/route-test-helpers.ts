@@ -62,6 +62,7 @@ export function buildInvalidJsonRequest(url: string): Request {
 }
 
 export function expectNoStoreHeaders(response: Response) {
+  expectBaseSecurityHeaders(response);
   expect(response.headers.get("cache-control")).toBe(AUTHENTICATED_API_CACHE_CONTROL);
   expect(response.headers.get("pragma")).toBe("no-cache");
   expect(response.headers.get("expires")).toBe("0");
@@ -76,6 +77,7 @@ export function expectBaseSecurityHeaders(response: Response) {
 }
 
 export function expectOperationalNoStoreHeaders(response: Response) {
+  expectBaseSecurityHeaders(response);
   expect(response.headers.get("cache-control")).toBe(OPERATIONAL_API_CACHE_CONTROL);
   expect(response.headers.get("pragma")).toBe("no-cache");
   expect(response.headers.get("expires")).toBe("0");
