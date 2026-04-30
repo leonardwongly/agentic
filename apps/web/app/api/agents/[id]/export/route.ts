@@ -1,6 +1,6 @@
 import { AgentExportSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../../../lib/auth";
-import { authenticatedJson, handleApiError } from "../../../../../lib/api-response";
+import { authenticatedJson, authenticatedResponse, handleApiError } from "../../../../../lib/api-response";
 import { getSeededRepository } from "../../../../../lib/server";
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -50,7 +50,7 @@ export async function GET(request: Request, { params }: RouteParams) {
       }
     });
 
-    return new Response(JSON.stringify(exportData, null, 2), {
+    return authenticatedResponse(JSON.stringify(exportData, null, 2), {
       headers: {
         "Content-Type": "application/json",
         "Content-Disposition": `attachment; filename="${agent.name}.agent.json"`

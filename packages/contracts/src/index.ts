@@ -2721,6 +2721,92 @@ export const AgentDefinitionSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
+export const agentRunnerFailureCodeValues = [
+  "validation_failure",
+  "permission_denied",
+  "dependency_failure",
+  "timeout",
+  "unsafe_output",
+  "unsupported_agent"
+] as const;
+export const AgentRunnerFailureCodeSchema = z.enum(agentRunnerFailureCodeValues);
+
+export const AgentRunnerPermissionsSchema = z
+  .object({
+    allowedCapabilities: z.array(CapabilitySchema).default([]),
+    blockedCapabilities: z.array(CapabilitySchema).default([]),
+    maxRiskClass: RiskClassSchema.default("R2"),
+    sideEffectCapabilities: z.array(CapabilitySchema).default([])
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const blocked = new Set(value.blockedCapabilities);
+
+    for (const capability of value.allowedCapabilities) {
+      if (blocked.has(capability)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Capability "${capability}" cannot be both allowed and blocked.`,
+          path: ["blockedCapabilities"]
+        });
+      }
+    }
+
+    for (const capability of value.sideEffectCapabilities) {
+      if (!value.allowedCapabilities.includes(capability)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Side-effect capability "${capability}" must also be explicitly allowed.`,
+          path: ["sideEffectCapabilities"]
+        });
+      }
+    }
+  });
+
+export const AgentRunnerTelemetrySchema = z
+  .object({
+    runnerId: z.string().min(1).max(120),
+    executionId: z.string().min(1).max(160),
+    traceId: z.string().min(1).max(160).nullable().default(null),
+    startedAt: z.string().datetime()
+  })
+  .strict();
+
+export const AgentRunnerInputSchema = z
+  .object({
+    task: TaskSchema,
+    scenario: z.string().min(1).max(20_000),
+    requestContext: z.string().min(1).max(20_000),
+    agentDefinition: AgentDefinitionSchema.nullable().default(null),
+    permissions: AgentRunnerPermissionsSchema,
+    timeoutMs: z.number().int().min(100).max(300_000).default(30_000),
+    telemetry: AgentRunnerTelemetrySchema
+  })
+  .strict();
+
+export const AgentRunnerOutputSchema = z
+  .object({
+    result: AgentResultSchema,
+    telemetry: AgentRunnerTelemetrySchema.extend({
+      completedAt: z.string().datetime(),
+      durationMs: z.number().int().min(0)
+    })
+  })
+  .strict();
+
+export const AgentRunnerContractSchema = z
+  .object({
+    id: z.string().min(1).max(120),
+    version: z.string().regex(/^v\d+$/u, "Agent runner contract versions must use v<integer> format."),
+    agentNames: z.array(AgentNameSchema).min(1),
+    declaredCapabilities: z.array(CapabilitySchema).default([]),
+    outputModes: z.array(AgentExecutionModeSchema).min(1),
+    timeoutMs: z.number().int().min(100).max(300_000),
+    telemetryEvents: z.array(z.enum(["agent.started", "agent.completed", "agent.failed"])).min(2),
+    failureCodes: z.array(AgentRunnerFailureCodeSchema).min(1)
+  })
+  .strict();
+
 /**
  * Agent metrics for performance tracking
  */
@@ -3202,6 +3288,12 @@ export type AgentMemoryPermission = z.infer<typeof AgentMemoryPermissionSchema>;
 export type PromptVariable = z.infer<typeof PromptVariableSchema>;
 export type AgentBehaviorConfig = z.infer<typeof AgentBehaviorConfigSchema>;
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
+export type AgentRunnerFailureCode = z.infer<typeof AgentRunnerFailureCodeSchema>;
+export type AgentRunnerPermissions = z.infer<typeof AgentRunnerPermissionsSchema>;
+export type AgentRunnerTelemetry = z.infer<typeof AgentRunnerTelemetrySchema>;
+export type AgentRunnerInput = z.infer<typeof AgentRunnerInputSchema>;
+export type AgentRunnerOutput = z.infer<typeof AgentRunnerOutputSchema>;
+export type AgentRunnerContract = z.infer<typeof AgentRunnerContractSchema>;
 export type AgentMetrics = z.infer<typeof AgentMetricsSchema>;
 export type OperatorProductStatus = z.infer<typeof OperatorProductStatusSchema>;
 export type OperatorProductReadiness = z.infer<typeof OperatorProductReadinessSchema>;
