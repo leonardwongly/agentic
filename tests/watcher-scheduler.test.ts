@@ -361,7 +361,12 @@ describe("watcher scheduler", () => {
         idempotencyKey: "watcher:watcher-scheduler-continues-after-claim:2026-04-20T00:00:00.000Z"
       }
     ]);
-    expect(persisted.find((candidate) => candidate.id === firstWatcher.id)?.schedule.lease).toBeNull();
+    expect(persisted.find((candidate) => candidate.id === firstWatcher.id)?.schedule).toMatchObject({
+      lease: null,
+      lastRunAt: null,
+      nextRunAt: null,
+      cursor: null
+    });
     expect(persisted.find((candidate) => candidate.id === secondWatcher.id)?.schedule.lease).toBeNull();
   });
 
@@ -422,7 +427,17 @@ describe("watcher scheduler", () => {
         idempotencyKey: "watcher:watcher-scheduler-continues-after-save:2026-04-20T00:00:00.000Z"
       }
     ]);
-    expect(persisted.find((candidate) => candidate.id === firstWatcher.id)?.schedule.lease).toBeNull();
+    expect(persisted.find((candidate) => candidate.id === firstWatcher.id)?.schedule).toMatchObject({
+      lease: null,
+      cursor: "gmail-cursor-1",
+      lastRunAt: "2026-04-20T00:00:00.000Z",
+      nextRunAt: "2026-04-20T00:05:00.000Z"
+    });
+    expect(persisted.find((candidate) => candidate.id === firstWatcher.id)?.lastEvaluation).toMatchObject({
+      wouldTrigger: true,
+      reason: "VIP thread triggered.",
+      idempotencyKey: "watcher:watcher-scheduler-save-fails:2026-04-20T00:00:00.000Z"
+    });
     expect(persisted.find((candidate) => candidate.id === secondWatcher.id)?.schedule.lease).toBeNull();
   });
 

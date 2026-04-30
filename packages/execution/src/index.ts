@@ -461,6 +461,7 @@ export function createWorkflowDagInstance(params: {
         nodeId: node.id,
         status: "queued",
         attemptCount: 0,
+        maxAttempts: node.retryPolicy.maxAttempts,
         runnerId: null,
         lastError: null,
         startedAt: null,
@@ -545,6 +546,12 @@ export function retryWorkflowDagNode(params: {
 
   if (execution.status !== "failed") {
     throw new Error(`Workflow DAG node ${params.nodeId} must be failed before it can be retried.`);
+  }
+
+  if (execution.attemptCount >= execution.maxAttempts) {
+    throw new Error(
+      `Workflow DAG node ${params.nodeId} exhausted retry attempts (${execution.attemptCount}/${execution.maxAttempts}).`
+    );
   }
 
   const timestamp = params.now ?? nowIso();

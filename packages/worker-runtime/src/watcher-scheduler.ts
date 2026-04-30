@@ -90,6 +90,26 @@ function clearWatcherLease(watcher: Watcher, evaluatedAt: string): Watcher {
   });
 }
 
+function applyWatcherEvaluationProgress(params: {
+  watcher: Watcher;
+  evaluation: WatcherSignalEvaluation;
+  lastEvaluation: unknown;
+  evaluatedAt: string;
+}): Watcher {
+  return WatcherSchema.parse({
+    ...params.watcher,
+    schedule: {
+      ...params.watcher.schedule,
+      cursor: params.evaluation.cursor ?? params.watcher.schedule.cursor,
+      lastRunAt: params.evaluatedAt,
+      nextRunAt: computeNextRunAt(params.watcher, params.evaluatedAt),
+      lease: null
+    },
+    lastEvaluation: params.lastEvaluation,
+    updatedAt: params.evaluatedAt
+  });
+}
+
 async function defaultEvaluateWatcher(watcher: Watcher) {
   return {
     wouldTrigger: false,
@@ -157,17 +177,17 @@ export async function runWatcherSchedulerOnce(params: {
 
     let evaluation: WatcherSignalEvaluation;
     let leaseReleased = false;
-    const releaseLease = async () => {
+    const releaseLease = async (replacement?: Watcher) => {
       if (leaseReleased) {
         return;
       }
 
-      await params.repository.saveWatcher(clearWatcherLease(leasedWatcher, evaluatedAt));
+      await params.repository.saveWatcher(replacement ?? clearWatcherLease(leasedWatcher, evaluatedAt));
       leaseReleased = true;
     };
-    const tryReleaseLease = async (): Promise<string | null> => {
+    const tryReleaseLease = async (replacement?: Watcher): Promise<string | null> => {
       try {
-        await releaseLease();
+        await releaseLease(replacement);
         return null;
       } catch (error) {
         return getErrorMessage(error, "Watcher lease release failed.");
@@ -198,24 +218,18 @@ export async function runWatcherSchedulerOnce(params: {
     });
 
     if (leasedWatcher.schedule.dryRun || !evaluation.wouldTrigger) {
+      const progressedWatcher = applyWatcherEvaluationProgress({
+        watcher: leasedWatcher,
+        evaluation,
+        lastEvaluation,
+        evaluatedAt
+      });
+
       try {
-        await params.repository.saveWatcher(
-          WatcherSchema.parse({
-            ...leasedWatcher,
-            schedule: {
-              ...leasedWatcher.schedule,
-              cursor: evaluation.cursor ?? leasedWatcher.schedule.cursor,
-              lastRunAt: evaluatedAt,
-              nextRunAt: computeNextRunAt(leasedWatcher, evaluatedAt),
-              lease: null
-            },
-            lastEvaluation,
-            updatedAt: evaluatedAt
-          })
-        );
+        await params.repository.saveWatcher(progressedWatcher);
         leaseReleased = true;
       } catch (error) {
-        const releaseError = await tryReleaseLease();
+        const releaseError = await tryReleaseLease(progressedWatcher);
         decisions.push({
           watcherId: watcher.id,
           action: "skipped",
@@ -236,8 +250,16 @@ export async function runWatcherSchedulerOnce(params: {
       continue;
     }
 
+    const progressedWatcher = applyWatcherEvaluationProgress({
+      watcher: leasedWatcher,
+      evaluation,
+      lastEvaluation,
+      evaluatedAt
+    });
+    let claim: Awaited<ReturnType<AgenticRepository["claimAutopilotEvent"]>>;
+
     try {
-      const claim = await params.repository.claimAutopilotEvent({
+      claim = await params.repository.claimAutopilotEvent({
         userId: params.userId,
         kind: "watcher_triggered",
         sourceId: watcher.id,
@@ -258,21 +280,21 @@ export async function runWatcherSchedulerOnce(params: {
         actorContext: watcher.actorContext,
         debounceMinutes: Math.ceil(watcher.escalationPolicy.minSuppressionMs / 60_000)
       });
+    } catch (error) {
+      const releaseError = await tryReleaseLease();
+      decisions.push({
+        watcherId: watcher.id,
+        action: "skipped",
+        reason: releaseError
+          ? `${getErrorMessage(error, "Watcher trigger persistence failed.")} Lease release failed: ${releaseError}`
+          : getErrorMessage(error, "Watcher trigger persistence failed."),
+        idempotencyKey
+      });
+      continue;
+    }
 
-      await params.repository.saveWatcher(
-        WatcherSchema.parse({
-          ...leasedWatcher,
-          schedule: {
-            ...leasedWatcher.schedule,
-            cursor: evaluation.cursor ?? leasedWatcher.schedule.cursor,
-            lastRunAt: evaluatedAt,
-            nextRunAt: computeNextRunAt(leasedWatcher, evaluatedAt),
-            lease: null
-          },
-          lastEvaluation,
-          updatedAt: evaluatedAt
-        })
-      );
+    try {
+      await params.repository.saveWatcher(progressedWatcher);
       leaseReleased = true;
       decisions.push({
         watcherId: watcher.id,
@@ -283,7 +305,7 @@ export async function runWatcherSchedulerOnce(params: {
         idempotencyKey
       });
     } catch (error) {
-      const releaseError = await tryReleaseLease();
+      const releaseError = await tryReleaseLease(progressedWatcher);
       decisions.push({
         watcherId: watcher.id,
         action: "skipped",

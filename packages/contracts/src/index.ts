@@ -2570,6 +2570,7 @@ export const WorkflowDagNodeExecutionSchema = z
     nodeId: z.string().trim().min(1).max(160),
     status: WorkflowDagNodeStatusSchema.default("queued"),
     attemptCount: z.number().int().min(0).max(25).default(0),
+    maxAttempts: z.number().int().min(1).max(25).default(3),
     runnerId: z.string().trim().min(1).max(120).nullable().default(null),
     lastError: z.string().max(1_000).nullable().default(null),
     startedAt: z.string().datetime().nullable().default(null),
