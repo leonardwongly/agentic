@@ -37,6 +37,8 @@
     "test:load:observability": "tsx scripts/observability-load.ts",
     "test:failure:observability": "tsx scripts/observability-failure-injection.ts",
     "telemetry:rollout-gate": "tsx scripts/observability-rollout-gate.ts",
+    "remediation:dashboard": "tsx scripts/aos-remediation-dashboard.ts --include-git-snapshot",
+    "remediation:verify": "tsx scripts/aos-remediation-dashboard.ts --verify-issue-query --include-git-snapshot",
     "start:web:prod": "tsx scripts/start-web.ts",
     "start:worker:prod": "tsx scripts/start-worker.ts",
     "worker:start": "npm run start -w @agentic/worker",
