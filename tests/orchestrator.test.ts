@@ -45,6 +45,40 @@ describe("orchestrator", () => {
     expect(approval?.decisionRationale).toBeNull();
   });
 
+  it("spawns bounded sub-agent tasks for complex delegation requests", async () => {
+    const bundle = await processUserRequest({
+      ...buildContext(),
+      request: "Add robust agentic capabilities that spawn sub-agents for complex tasks with clear roles and responsibilities."
+    });
+    const subAgentArtifact = bundle.artifacts.find((artifact) => artifact.metadata.kind === "sub_agent_plan");
+    const subAgentTasks = bundle.tasks.filter((task) => task.title.startsWith("Sub-agent:"));
+    const plannedLog = bundle.actionLogs.find((log) => log.kind === "subagents.planned");
+    const coreTask = subAgentTasks.find((task) => task.title.includes("Core Implementation Agent"));
+    const reconTask = subAgentTasks.find((task) => task.title.includes("Recon and Scoping Agent"));
+    const coreTaskLog = bundle.actionLogs.find((log) => log.taskId === coreTask?.id && log.kind === "task.created");
+
+    expect(bundle.goal.intent).toBe("complex-delegation");
+    expect(subAgentArtifact?.metadata).toMatchObject({
+      kind: "sub_agent_plan",
+      coordinationStrategy: "hybrid",
+      parentAgent: "orchestrator",
+      subAgentCount: 4
+    });
+    expect(subAgentArtifact?.content).toMatch(/Recon and Scoping Agent/);
+    expect(subAgentArtifact?.content).toMatch(/Core Implementation Agent/);
+    expect(plannedLog?.details).toMatchObject({
+      subAgentPlanId: `subagents-${bundle.goal.id}`,
+      coordinationStrategy: "hybrid"
+    });
+    expect(subAgentTasks.map((task) => task.assignedAgent)).toEqual(["research", "workflow", "knowledge", "communications"]);
+    expect(coreTask?.dependsOn).toEqual(reconTask ? [reconTask.id] : []);
+    expect(coreTaskLog?.details).toMatchObject({
+      subAgentRoleId: "core-implementation",
+      subAgentRoleName: "Core Implementation Agent"
+    });
+    expect(bundle.actionLogs.filter((log) => log.kind === "agent.completed").length).toBeGreaterThanOrEqual(subAgentTasks.length);
+  });
+
   it("registers watchers for travel preparation", async () => {
     const bundle = await processUserRequest({
       ...buildContext(),

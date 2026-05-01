@@ -7,8 +7,10 @@ import {
   type ApprovalDecisionScope,
   type ApprovalPreview,
   ApprovalRequestSchema,
+  ArtifactSchema,
   GoalBundleSchema,
   GoalSchema,
+  SubAgentPlanSchema,
   TaskSchema,
   WorkflowStateSchema,
   WatcherSchema,
@@ -20,10 +22,14 @@ import {
   type ApprovalDecision,
   type ApprovalRequest,
   type Artifact,
+  type Capability,
   type Goal,
   type GoalBundle,
   type IntegrationAccount,
   type MemoryRecord,
+  type RiskClass,
+  type SubAgentPlan,
+  type SubAgentRole,
   type Task,
   type Watcher,
   type WorkspaceGovernance
@@ -43,7 +49,12 @@ export { generateBriefing, generateMorningBriefing } from "./morning-briefing";
 export { refineGoal } from "./goal-refinement";
 export { createGoalTemplate, interpolateTemplate, computeNextRun, shouldTemplateRun } from "./goal-templates";
 
-export type ScenarioKey = "inbox-triage" | "weekly-planning" | "travel-preparation" | "general-coordination";
+export type ScenarioKey =
+  | "inbox-triage"
+  | "weekly-planning"
+  | "travel-preparation"
+  | "complex-delegation"
+  | "general-coordination";
 
 type PlannedTask = {
   title: string;
@@ -51,6 +62,9 @@ type PlannedTask = {
   assignedAgent: Task["assignedAgent"];
   capabilities: Task["toolCapabilities"];
   confidence: number;
+  dependsOnRoleIds?: string[];
+  subAgentRole?: SubAgentRole;
+  subAgentPlanId?: string;
 };
 
 const scenarioCatalog: Record<
@@ -192,6 +206,23 @@ const scenarioCatalog: Record<
       })
     ]
   },
+  "complex-delegation": {
+    title: "Complex multi-agent delegation",
+    intent: "complex-delegation",
+    description:
+      "Break complex work into explicit sub-agent roles with bounded responsibilities, dependencies, guardrails, and policy-aware handoffs.",
+    tasks: [
+      {
+        title: "Define the sub-agent operating plan",
+        summary:
+          "Create the parent work breakdown, role boundaries, dependency graph, handoff criteria, and approval-sensitive guardrails before specialist work starts.",
+        assignedAgent: "orchestrator",
+        capabilities: ["read", "search", "create", "monitor"],
+        confidence: 0.82
+      }
+    ],
+    watcherFactory: () => []
+  },
   "general-coordination": {
     title: "General coordination request",
     intent: "general-coordination",
@@ -226,6 +257,10 @@ const scenarioCatalog: Record<
 function detectScenarioRegex(request: string): ScenarioKey {
   const normalized = request.toLowerCase();
 
+  if (/(sub-?agents?|delegate|delegation|parallel workstreams?|multi[- ]agent|specialist agents?|complex task)/.test(normalized)) {
+    return "complex-delegation";
+  }
+
   if (/(inbox|email|reply|triage|messages?)/.test(normalized)) {
     return "inbox-triage";
   }
@@ -242,13 +277,20 @@ function detectScenarioRegex(request: string): ScenarioKey {
 }
 
 async function detectScenarioLlm(request: string): Promise<ScenarioKey> {
-  const validScenarios: ScenarioKey[] = ["inbox-triage", "weekly-planning", "travel-preparation", "general-coordination"];
+  const validScenarios: ScenarioKey[] = [
+    "inbox-triage",
+    "weekly-planning",
+    "travel-preparation",
+    "complex-delegation",
+    "general-coordination"
+  ];
   const prompt = `Classify this user request into exactly one scenario. Reply with ONLY the scenario key, nothing else.
 
 Scenarios:
 - inbox-triage: Email management, message triage, drafting replies, communication follow-ups
 - weekly-planning: Calendar review, week planning, scheduling, focus blocks, commitment management
 - travel-preparation: Trip planning, flights, hotels, itineraries, travel checklists, packing
+- complex-delegation: Complex work that asks for sub-agents, delegation, parallel workstreams, specialist roles, or role responsibilities
 - general-coordination: Everything else — general tasks, research, administrative work, multi-domain requests
 
 User request: "${request.slice(0, 500)}"
@@ -293,6 +335,254 @@ async function detectScenario(request: string): Promise<ScenarioKey> {
 
 function normalizeRequest(request: string): string {
   return request.trim().replace(/\s+/g, " ");
+}
+
+type SubAgentRoleTemplate = {
+  id: string;
+  name: string;
+  agent: Task["assignedAgent"];
+  role: string;
+  capabilities: Capability[];
+  responsibilities: string[];
+  inputContracts: string[];
+  expectedOutputs: string[];
+  dependsOn: string[];
+  riskClass: RiskClass;
+  handoffCriteria: string[];
+  guardrails: string[];
+  confidence: number;
+};
+
+const subAgentRoleTemplates: SubAgentRoleTemplate[] = [
+  {
+    id: "recon-scoping",
+    name: "Recon and Scoping Agent",
+    agent: "research",
+    role: "Discover affected surfaces, constraints, prior art, and unresolved assumptions before implementation begins.",
+    capabilities: ["read", "search", "draft"],
+    responsibilities: [
+      "Map the affected modules, contracts, configs, and tests.",
+      "Separate verified evidence from assumptions and identify blockers.",
+      "Recommend the safest implementation seam and validation scope."
+    ],
+    inputContracts: ["Normalized request and parent operating plan.", "Relevant memories, integrations, and governance posture."],
+    expectedOutputs: [
+      "Affected-surface map with concrete references.",
+      "Ranked risks, dependencies, and recommended next implementation step."
+    ],
+    dependsOn: [],
+    riskClass: "R2",
+    handoffCriteria: [
+      "Recon output cites evidence and open questions.",
+      "Implementation can begin without broadening the request scope."
+    ],
+    guardrails: [
+      "Read-only unless explicitly assigned implementation ownership.",
+      "Do not treat inferred behavior as verified behavior."
+    ],
+    confidence: 0.8
+  },
+  {
+    id: "core-implementation",
+    name: "Core Implementation Agent",
+    agent: "workflow",
+    role: "Convert the accepted design into small, reversible, test-backed implementation work.",
+    capabilities: ["read", "search", "draft", "create", "update", "monitor"],
+    responsibilities: [
+      "Implement the main logic using existing project patterns.",
+      "Keep diffs scoped to the assigned ownership boundary.",
+      "Attach tests and validation evidence to the same logical work unit."
+    ],
+    inputContracts: ["Recon output and accepted design constraints.", "Explicit file/module ownership boundaries."],
+    expectedOutputs: [
+      "Focused implementation output or patch plan.",
+      "Changed contracts, runtime assumptions, and rollback notes."
+    ],
+    dependsOn: ["recon-scoping"],
+    riskClass: "R2",
+    handoffCriteria: [
+      "Core behavior is covered by targeted tests.",
+      "Any compatibility or rollout implications are documented."
+    ],
+    guardrails: [
+      "Avoid unrelated refactors.",
+      "Preserve existing public contracts unless a breaking change is intentional and documented."
+    ],
+    confidence: 0.78
+  },
+  {
+    id: "test-hardening",
+    name: "Test and Hardening Agent",
+    agent: "knowledge",
+    role: "Challenge the implementation with regression, edge, negative, and governance-oriented validation.",
+    capabilities: ["read", "search", "create", "monitor"],
+    responsibilities: [
+      "Add or recommend focused tests for happy path, edge cases, and abuse cases.",
+      "Verify policy gates, provenance, and role boundaries remain intact.",
+      "Capture unresolved risks with concrete mitigation steps."
+    ],
+    inputContracts: ["Implementation output and recon evidence.", "Policy, security, and validation expectations."],
+    expectedOutputs: [
+      "Targeted test coverage and validation checklist.",
+      "Residual risk list with owner and follow-up recommendation."
+    ],
+    dependsOn: ["core-implementation"],
+    riskClass: "R2",
+    handoffCriteria: [
+      "Validation commands and results are explicitly named.",
+      "Failures are triaged as code defects, environment blockers, or accepted residual risk."
+    ],
+    guardrails: [
+      "Do not mark work complete without evidence.",
+      "Do not expose raw prompts, secrets, or private context in summaries."
+    ],
+    confidence: 0.79
+  },
+  {
+    id: "handoff-coordination",
+    name: "Handoff Coordination Agent",
+    agent: "communications",
+    role: "Prepare user-facing status, review requests, and approval-safe communication after specialist work converges.",
+    capabilities: ["read", "search", "draft"],
+    responsibilities: [
+      "Summarize completed work, validation, risks, and next actions.",
+      "Draft approval requests when work would create external side effects.",
+      "Keep final claims aligned with actual verification evidence."
+    ],
+    inputContracts: ["Final integration checklist.", "Validation and residual-risk notes from specialist roles."],
+    expectedOutputs: [
+      "Concise delivery summary.",
+      "Approval-safe follow-up draft when user or external action is required."
+    ],
+    dependsOn: ["test-hardening"],
+    riskClass: "R2",
+    handoffCriteria: [
+      "Summary distinguishes implemented, validated, blocked, and proposed work.",
+      "Any external send remains behind the existing approval workflow."
+    ],
+    guardrails: [
+      "Never send messages as part of planning.",
+      "Do not overstate execution or validation status."
+    ],
+    confidence: 0.76
+  }
+];
+
+function intersectCapabilities(allowed: Capability[], granted: Capability[]): Capability[] {
+  const grantedCapabilities = new Set(granted);
+  return allowed.filter((capability) => grantedCapabilities.has(capability));
+}
+
+function buildSubAgentPlan(params: {
+  goalId: string;
+  requestCapabilities: Capability[];
+  createdAt: string;
+}): SubAgentPlan {
+  const fallbackCapabilities: Capability[] = ["read", "search", "draft", "create", "update", "monitor"];
+  const parentCapabilities = Array.from(new Set([...fallbackCapabilities, ...params.requestCapabilities]));
+  const roles = subAgentRoleTemplates.map((template): SubAgentRole => {
+    const allowedCapabilities = intersectCapabilities(template.capabilities, parentCapabilities);
+
+    return {
+      id: template.id,
+      name: template.name,
+      agent: template.agent,
+      role: template.role,
+      responsibilities: template.responsibilities,
+      allowedCapabilities,
+      inputContracts: template.inputContracts,
+      expectedOutputs: template.expectedOutputs,
+      dependsOn: template.dependsOn,
+      riskClass: template.riskClass,
+      handoffCriteria: template.handoffCriteria,
+      guardrails: template.guardrails
+    };
+  });
+
+  return SubAgentPlanSchema.parse({
+    id: `subagents-${params.goalId}`,
+    goalId: params.goalId,
+    anchorTaskId: null,
+    parentAgent: "orchestrator",
+    coordinationStrategy: "hybrid",
+    roles,
+    successCriteria: [
+      "Every spawned role has a clear owner, capability envelope, dependency list, handoff criteria, and guardrails.",
+      "Parallel workstreams converge through the orchestrator before completion is claimed.",
+      "External side effects remain gated by the existing task policy and approval workflow."
+    ],
+    createdAt: params.createdAt
+  });
+}
+
+function formatSubAgentPlan(plan: SubAgentPlan): string {
+  const roles = plan.roles
+    .map(
+      (role, index) =>
+        `${index + 1}. ${role.name} (${role.agent})\n` +
+        `   Role: ${role.role}\n` +
+        `   Responsibilities: ${role.responsibilities.join(" | ")}\n` +
+        `   Capabilities: ${role.allowedCapabilities.join(", ") || "artifact-only"}\n` +
+        `   Depends on: ${role.dependsOn.join(", ") || "none"}\n` +
+        `   Expected outputs: ${role.expectedOutputs.join(" | ")}\n` +
+        `   Handoff criteria: ${role.handoffCriteria.join(" | ")}\n` +
+        `   Guardrails: ${role.guardrails.join(" | ")}`
+    )
+    .join("\n\n");
+
+  return (
+    `Sub-agent plan: ${plan.id}\n` +
+    `Coordination strategy: ${plan.coordinationStrategy}\n` +
+    `Parent agent: ${plan.parentAgent}\n\n` +
+    `${roles}\n\n` +
+    `Success criteria:\n- ${plan.successCriteria.join("\n- ")}`
+  );
+}
+
+function expandPlannedTasks(params: {
+  baseTasks: PlannedTask[];
+  subAgentPlan: SubAgentPlan | null;
+}): PlannedTask[] {
+  if (!params.subAgentPlan) {
+    return params.baseTasks;
+  }
+
+  const subAgentPlan = params.subAgentPlan;
+  const spawnedTasks = subAgentPlan.roles.map((role) => {
+    const template = subAgentRoleTemplates.find((candidate) => candidate.id === role.id);
+
+    return {
+      title: `Sub-agent: ${role.name}`,
+      summary: `${role.role} Responsibilities: ${role.responsibilities.join(" ")}`,
+      assignedAgent: role.agent,
+      capabilities: role.allowedCapabilities,
+      confidence: template?.confidence ?? 0.74,
+      dependsOnRoleIds: role.dependsOn,
+      subAgentRole: role,
+      subAgentPlanId: subAgentPlan.id
+    } satisfies PlannedTask;
+  });
+
+  return [...params.baseTasks, ...spawnedTasks];
+}
+
+function buildSubAgentPlanArtifact(plan: SubAgentPlan): Artifact {
+  return ArtifactSchema.parse({
+    id: crypto.randomUUID(),
+    goalId: plan.goalId,
+    artifactType: "checklist",
+    title: "Sub-agent operating plan",
+    content: formatSubAgentPlan(plan),
+    metadata: {
+      kind: "sub_agent_plan",
+      subAgentPlanId: plan.id,
+      coordinationStrategy: plan.coordinationStrategy,
+      parentAgent: plan.parentAgent,
+      subAgentCount: plan.roles.length,
+      subAgentIds: plan.roles.map((role) => role.id)
+    },
+    createdAt: plan.createdAt
+  });
 }
 
 function explanationForGoal(params: {
@@ -520,8 +810,21 @@ export async function processUserRequest(params: {
   const logs: ActionLog[] = [];
   const tasks: Task[] = [];
   const approvals: ApprovalRequest[] = [];
-  const artifacts = [];
+  const artifacts: Artifact[] = [];
   const requestCapabilities = inferCapabilitiesFromRequest(request);
+  const subAgentPlan =
+    scenario === "complex-delegation"
+      ? buildSubAgentPlan({
+          goalId,
+          requestCapabilities,
+          createdAt
+        })
+      : null;
+  const plannedTasks = expandPlannedTasks({
+    baseTasks: catalog.tasks,
+    subAgentPlan
+  });
+  const subAgentTaskIds = new Map<string, string>();
   const confidenceBias = Math.min(0.08, relevantMemories.length * 0.01);
 
   function appendLog(input: Parameters<typeof createActionLog>[0]): ActionLog {
@@ -576,13 +879,42 @@ export async function processUserRequest(params: {
     }
   });
 
-  for (const plannedTask of catalog.tasks) {
+  if (subAgentPlan) {
+    const subAgentArtifact = buildSubAgentPlanArtifact(subAgentPlan);
+    artifacts.push(subAgentArtifact);
+    appendLog({
+      goalId,
+      workflowId: workflow.id,
+      actor: "orchestrator",
+      kind: "subagents.planned",
+      message: `Prepared ${subAgentPlan.roles.length} sub-agent roles for complex delegation.`,
+      details: {
+        subAgentPlanId: subAgentPlan.id,
+        coordinationStrategy: subAgentPlan.coordinationStrategy,
+        roles: subAgentPlan.roles.map((role) => ({
+          id: role.id,
+          name: role.name,
+          agent: role.agent,
+          responsibilities: role.responsibilities,
+          allowedCapabilities: role.allowedCapabilities,
+          dependsOn: role.dependsOn,
+          riskClass: role.riskClass
+        })),
+        artifactId: subAgentArtifact.id
+      }
+    });
+  }
+
+  for (const plannedTask of plannedTasks) {
     const capabilities = Array.from(
       new Set([
         ...plannedTask.capabilities,
         ...requestCapabilities.filter((capability) => plannedTask.capabilities.includes(capability))
       ])
     );
+    const dependsOn = plannedTask.dependsOnRoleIds
+      ?.map((roleId) => subAgentTaskIds.get(roleId))
+      .filter((taskId): taskId is string => Boolean(taskId));
     const scorecard = await params.resolveAgentMetrics?.(plannedTask.assignedAgent);
     const decision = evaluateTaskPolicy({
       capabilities,
@@ -602,19 +934,41 @@ export async function processUserRequest(params: {
       riskClass: decision.riskClass,
       requiresApproval: decision.requiresApproval,
       toolCapabilities: capabilities,
+      dependsOn,
       state
     });
     const agentResult = await runAgent(task, catalog.title, {
       agentDefinition: params.agentDefinition
     });
+    const agentArtifacts = plannedTask.subAgentRole
+      ? agentResult.artifacts.map((artifact) =>
+          ArtifactSchema.parse({
+            ...artifact,
+            metadata: {
+              ...artifact.metadata,
+              kind: "sub_agent_output",
+              subAgentPlanId: plannedTask.subAgentPlanId,
+              subAgentRoleId: plannedTask.subAgentRole?.id,
+              subAgentRoleName: plannedTask.subAgentRole?.name,
+              responsibilities: plannedTask.subAgentRole?.responsibilities,
+              expectedOutputs: plannedTask.subAgentRole?.expectedOutputs,
+              handoffCriteria: plannedTask.subAgentRole?.handoffCriteria,
+              guardrails: plannedTask.subAgentRole?.guardrails
+            }
+          })
+        )
+      : agentResult.artifacts;
     const nextTask = TaskSchema.parse({
       ...task,
-      artifactIds: agentResult.artifacts.map((artifact) => artifact.id)
+      artifactIds: agentArtifacts.map((artifact) => artifact.id)
     });
-    const actionIntent = decision.requiresApproval ? inferActionIntentFromArtifacts(nextTask, agentResult.artifacts) : null;
+    const actionIntent = decision.requiresApproval ? inferActionIntentFromArtifacts(nextTask, agentArtifacts) : null;
 
     tasks.push(nextTask);
-    artifacts.push(...agentResult.artifacts);
+    artifacts.push(...agentArtifacts);
+    if (plannedTask.subAgentRole) {
+      subAgentTaskIds.set(plannedTask.subAgentRole.id, nextTask.id);
+    }
     appendLog({
       goalId,
       taskId: nextTask.id,
@@ -625,7 +979,14 @@ export async function processUserRequest(params: {
       details: {
         assignedAgent: nextTask.assignedAgent,
         state: nextTask.state,
-        requiresApproval: nextTask.requiresApproval
+        requiresApproval: nextTask.requiresApproval,
+        ...(plannedTask.subAgentRole && {
+          subAgentPlanId: plannedTask.subAgentPlanId,
+          subAgentRoleId: plannedTask.subAgentRole.id,
+          subAgentRoleName: plannedTask.subAgentRole.name,
+          responsibilities: plannedTask.subAgentRole.responsibilities,
+          dependsOnRoleIds: plannedTask.dependsOnRoleIds ?? []
+        })
       }
     });
     appendLog({

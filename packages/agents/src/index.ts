@@ -171,6 +171,23 @@ function contentForBuiltInAgent(task: Task, scenario: string): AgentContent {
         ],
         confidence: task.riskClass === "R1" ? 0.82 : 0.73
       };
+    case "orchestrator":
+      return {
+        summary: "Prepared a deterministic orchestration scaffold.",
+        artifactType: "checklist",
+        content:
+          `Scenario: ${scenario}\n\nOrchestration plan:\n` +
+          "- Clarify the parent objective, constraints, and trust boundaries.\n" +
+          "- Delegate specialist lanes only with explicit responsibilities, capability envelopes, and handoff criteria.\n" +
+          "- Merge specialist outputs through one integration checkpoint before claiming completion.",
+        executionMode: "deterministic_scaffold",
+        explanation: `orchestrator produced a deterministic coordination scaffold for "${task.title}".`,
+        nextSteps: [
+          "Persist the coordination scaffold on the goal timeline.",
+          "Keep specialist work inside the parent policy and capability envelope."
+        ],
+        confidence: task.riskClass === "R1" ? 0.84 : 0.76
+      };
     default:
       return {
         summary: `Prepared a manual-review scaffold because ${task.assignedAgent} is not production-implemented yet.`,
