@@ -1,4 +1,5 @@
 import { assembleDashboardData } from "../packages/repository/src/dashboard-data";
+import { DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS } from "@agentic/contracts";
 
 describe("assembleDashboardData instrumentation", () => {
   const originalTimingLog = process.env.AGENTIC_DASHBOARD_TIMING_LOG;
@@ -40,6 +41,7 @@ describe("assembleDashboardData instrumentation", () => {
         userId: "user-1",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -66,6 +68,61 @@ describe("assembleDashboardData instrumentation", () => {
       }),
       buildOperatingSections: () => ({
         generatedAt: "2024-01-01T00:00:00.000Z",
+        roleView: {
+          role: null,
+          label: "Setup view",
+          summary: "No active workspace is selected.",
+          focusAreas: [],
+          prioritizedSectionKeys: []
+        },
+        teamWorkflow: {
+          mode: "setup",
+          label: "Team workflow not active",
+          summary: "No active workspace is selected.",
+          visibilityLabel: "Setup-only visibility",
+          queueMetrics: [],
+          ownershipAssignments: [],
+          queues: [],
+          controls: [],
+          auditCoverage: {
+            required: false,
+            status: "attention",
+            summary: "Activate a workspace before evaluating whether audit export coverage is meeting the governed baseline.",
+            latestStatus: null,
+            latestCompletedAt: null
+          },
+          actionBoundaries: [],
+          handoffGuidance: [],
+          permissions: {
+            manageMembers: {
+              allowed: false,
+              reason: "Select or create a workspace before managing members."
+            },
+            editGovernance: {
+              allowed: false,
+              reason: "Select a workspace before editing governance controls."
+            },
+            exportAudit: {
+              allowed: false,
+              reason: "Select a workspace before exporting workspace audit evidence."
+            },
+            managePrivacyOperations: {
+              allowed: false,
+              reason: "Select a workspace before running privacy lifecycle operations."
+            }
+          },
+          escalationTargetRole: null,
+          slaStatus: "attention",
+          slaSummary: "A workspace must be activated before team ownership can be enforced."
+        },
+        nextBestAction: {
+          kind: "configure_workspace",
+          label: "Activate a workspace",
+          summary: "Select or create a workspace before using the operator shell.",
+          status: "attention",
+          targetSection: "workspaces",
+          role: null
+        },
         sections: []
       }),
       buildBriefingHistory: () => [],
@@ -111,6 +168,7 @@ describe("assembleDashboardData instrumentation", () => {
         userId: "user-1",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -137,6 +195,61 @@ describe("assembleDashboardData instrumentation", () => {
       }),
       buildOperatingSections: () => ({
         generatedAt: "2024-01-01T00:00:00.000Z",
+        roleView: {
+          role: null,
+          label: "Setup view",
+          summary: "No active workspace is selected.",
+          focusAreas: [],
+          prioritizedSectionKeys: []
+        },
+        teamWorkflow: {
+          mode: "setup",
+          label: "Team workflow not active",
+          summary: "No active workspace is selected.",
+          visibilityLabel: "Setup-only visibility",
+          queueMetrics: [],
+          ownershipAssignments: [],
+          queues: [],
+          controls: [],
+          auditCoverage: {
+            required: false,
+            status: "attention",
+            summary: "Activate a workspace before evaluating whether audit export coverage is meeting the governed baseline.",
+            latestStatus: null,
+            latestCompletedAt: null
+          },
+          actionBoundaries: [],
+          handoffGuidance: [],
+          permissions: {
+            manageMembers: {
+              allowed: false,
+              reason: "Select or create a workspace before managing members."
+            },
+            editGovernance: {
+              allowed: false,
+              reason: "Select a workspace before editing governance controls."
+            },
+            exportAudit: {
+              allowed: false,
+              reason: "Select a workspace before exporting workspace audit evidence."
+            },
+            managePrivacyOperations: {
+              allowed: false,
+              reason: "Select a workspace before running privacy lifecycle operations."
+            }
+          },
+          escalationTargetRole: null,
+          slaStatus: "attention",
+          slaSummary: "A workspace must be activated before team ownership can be enforced."
+        },
+        nextBestAction: {
+          kind: "configure_workspace",
+          label: "Activate a workspace",
+          summary: "Select or create a workspace before using the operator shell.",
+          status: "attention",
+          targetSection: "workspaces",
+          role: null
+        },
         sections: []
       }),
       buildBriefingHistory: () => [],
@@ -290,6 +403,7 @@ describe("assembleDashboardData instrumentation", () => {
         userId: "user-1",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -354,6 +468,91 @@ describe("assembleDashboardData instrumentation", () => {
         memoryCount: 1,
         updatedAt: "2024-01-01T00:06:00.000Z"
       }
+    });
+  });
+
+  it("attaches governance conformance to the assembled dashboard payload", () => {
+    const dashboard = assembleDashboardData({
+      userId: "user-1",
+      workspaces: [],
+      activeWorkspace: null,
+      workspaceSelection: null,
+      workspaceMembers: [],
+      workspaceGovernance: {
+        workspaceId: "workspace-1",
+        approvalMode: "risk_based",
+        requireAuditExports: false,
+        maxAutoRunRiskClass: "R1",
+        externalSendRequiresApproval: true,
+        calendarWriteRequiresApproval: true,
+        retentionDays: 365,
+        updatedBy: "user-1",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      goals: [],
+      goalShares: [],
+      privacyOperations: [],
+      approvals: [],
+      evidenceRecords: [],
+      commitments: [],
+      briefingPreferences: {
+        userId: "user-1",
+        timezone: "Asia/Singapore",
+        focus: "balanced",
+        schedules: [],
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      autopilotSettings: {
+        userId: "user-1",
+        mode: "notify_only",
+        debounceMinutes: 15,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      autopilotEvents: [],
+      memories: [],
+      integrations: [],
+      watchers: [],
+      filterBundlesForWorkspace: (goals) => goals,
+      mergeCommitments: () => [],
+      buildDiagnostics: () => ({
+        status: "healthy",
+        totalCount: 0,
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        items: []
+      }),
+      buildControlPlane: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        sections: []
+      }),
+      buildNowQueue: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        totalCount: 0,
+        items: []
+      }),
+      buildOperatingSections: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        sections: []
+      }),
+      buildBriefingHistory: () => [],
+      sortArtifacts: (artifacts) => artifacts,
+      sortActionLogs: (logs) => logs
+    });
+
+    expect(dashboard.governanceConformance).toMatchObject({
+      status: "non_conformant",
+      checks: expect.arrayContaining([
+        expect.objectContaining({
+          id: "audit-exports",
+          status: "fail"
+        }),
+        expect.objectContaining({
+          id: "retention-window",
+          status: "pass"
+        })
+      ])
     });
   });
 });

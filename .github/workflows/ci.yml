@@ -6,6 +6,12 @@ on:
       - main
   pull_request:
 
+env:
+  # GitHub is deprecating the Node 20 Actions runtime; opt into the Node 24
+  # path now so warning-only transitions do not become surprise CI failures later.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NEXT_TELEMETRY_DISABLED: "1"
+
 permissions:
   contents: read
   actions: read
@@ -13,22 +19,45 @@ permissions:
   id-token: write
 
 jobs:
+  provenance-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Validate GitHub Actions provenance pins
+        run: npm run ci:validate-provenance
+
   dependency-review:
-    if: github.event_name == 'pull_request'
+    # Dependency review only works on public repositories and supported GHAS-backed
+    # private repos. Skip unsupported private repos by default, with an explicit
+    # opt-in knob for environments that enable the necessary GitHub features.
+    if: github.event_name == 'pull_request' && (!github.event.repository.private || vars.ENABLE_DEPENDENCY_REVIEW == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 2
 
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           fail-on-severity: high
 
   validate:
+    needs: provenance-gate
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -48,28 +77,41 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/agentic
       AGENTIC_ACCESS_KEY: ci-access-key
       NODE_ENV: test
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 20
           cache: npm
+
+      - name: Install pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
 
       - run: npm ci
 
       - name: Create security artifact directories
         run: mkdir -p artifacts/security artifacts/build artifacts/compliance
 
+      - name: Validate compliance registry references
+        run: npm run compliance:validate-registry
+
       - name: Audit production dependencies
-        run: npm run security:audit-runtime -- --report artifacts/security/runtime-audit-report.json
+        run: npm run security:audit-runtime -- --minimum-severity moderate --report artifacts/security/runtime-audit-report.json
 
       - name: Validate migrations
         run: |
+          npm run db:check-migrations
           npm run db:migrate
           npm run db:status -- --require-ready
+
+      - name: Run governance simulation suite
+        run: npm run governance:simulate
 
       - name: Run security regression suite
         run: npm run test:security:regression
@@ -82,6 +124,10 @@ jobs:
 
       - name: Validate architecture fitness
         run: npm run test:architecture:fitness
+
+      - name: Validate parallel worktree ownership
+        if: startsWith(github.head_ref, 'feat/parallel-') || startsWith(github.ref_name, 'feat/parallel-')
+        run: npm run test:parallel-worktree:fitness
 
       - name: Validate performance fitness
         run: npm run test:performance:fitness
@@ -102,7 +148,7 @@ jobs:
         run: npm run test:e2e
 
       - name: Build container image
-        run: docker build -t agentic-ci:${{ github.sha }} .
+        run: docker build --build-arg NODE_OPTIONS="$NODE_OPTIONS" -t agentic-ci:${{ github.sha }} .
 
       - name: Package deployable build artifacts
         run: |
@@ -120,7 +166,8 @@ jobs:
         run: npm run security:collect-evidence -- --require-artifacts --output-dir artifacts/compliance
 
       - name: Upload supply-chain evidence
-        uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request' && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agentic-supply-chain-evidence
           path: |
@@ -128,17 +175,30 @@ jobs:
             artifacts/build
             artifacts/compliance
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Note pull request evidence upload skip
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Generated supply-chain evidence locally for PR validation."
+          echo "Skipping artifact upload on pull_request events to avoid quota-bound CI failures."
 
       - name: Attest security evidence
-        if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@v2
+        if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: artifacts/security/agentic-sbom.spdx.json
 
       - name: Attest deployable build artifacts
-        if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@v2
+        if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: |
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
+
+      - name: Note attestation capability skip
+        if: github.event_name != 'pull_request' && github.event.repository.private && github.event.repository.owner.type != 'Organization' && vars.ENABLE_ATTESTATIONS != 'true'
+        run: |
+          echo "Skipping provenance attestation in this repository context."
+          echo "GitHub only supports attestations for public repos and supported organization-backed private repos by default."

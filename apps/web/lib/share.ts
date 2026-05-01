@@ -3,9 +3,12 @@ import { z } from "zod";
 import { createActionLog } from "@agentic/observability";
 import type { ActorContext, GoalBundle } from "@agentic/contracts";
 import { getServerSigningSecret } from "./auth";
+import {
+  GOAL_SHARE_DEFAULT_EXPIRY_DAYS,
+  getGoalShareExpiryFromDays
+} from "./share-disclosure";
 
 const GOAL_SHARE_TOKEN_VERSION = 1;
-const GOAL_SHARE_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 export const SHARE_VIEW_DEDUP_WINDOW_MS = 1000 * 60 * 15;
 const MAX_GOAL_SHARE_TOKEN_LENGTH = 4096;
 
@@ -19,6 +22,17 @@ const GoalShareTokenPayloadSchema = z
   .strict();
 
 export type GoalShareTokenPayload = z.infer<typeof GoalShareTokenPayloadSchema>;
+
+export type GoalShareTokenInspection =
+  | {
+      valid: true;
+      expired: boolean;
+      payload: GoalShareTokenPayload;
+    }
+  | {
+      valid: false;
+      reason: "malformed" | "signature" | "payload";
+    };
 
 export type SharedGoalView = {
   title: string;
@@ -59,8 +73,8 @@ function constantTimeEqual(left: string, right: string): boolean {
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-export function getGoalShareExpiry(now = Date.now()): string {
-  return new Date(now + GOAL_SHARE_TTL_MS).toISOString();
+export function getGoalShareExpiry(now = Date.now(), expiryDays = GOAL_SHARE_DEFAULT_EXPIRY_DAYS): string {
+  return getGoalShareExpiryFromDays(expiryDays, now);
 }
 
 export function createGoalShareToken(shareId: string, goalId: string, expiresAt = getGoalShareExpiry()): string {
@@ -76,15 +90,21 @@ export function createGoalShareToken(shareId: string, goalId: string, expiresAt 
   return `${encodedPayload}.${signature}`;
 }
 
-export function verifyGoalShareToken(token: string, now = Date.now()): GoalShareTokenPayload | null {
+export function inspectGoalShareToken(token: string, now = Date.now()): GoalShareTokenInspection {
   if (token.length === 0 || token.length > MAX_GOAL_SHARE_TOKEN_LENGTH) {
-    return null;
+    return {
+      valid: false,
+      reason: "malformed"
+    };
   }
 
   const [encodedPayload, signature, ...rest] = token.trim().split(".");
 
   if (!encodedPayload || !signature || rest.length > 0) {
-    return null;
+    return {
+      valid: false,
+      reason: "malformed"
+    };
   }
 
   let expectedSignature: string;
@@ -92,11 +112,17 @@ export function verifyGoalShareToken(token: string, now = Date.now()): GoalShare
   try {
     expectedSignature = signGoalSharePayload(encodedPayload);
   } catch {
-    return null;
+    return {
+      valid: false,
+      reason: "signature"
+    };
   }
 
   if (!constantTimeEqual(signature, expectedSignature)) {
-    return null;
+    return {
+      valid: false,
+      reason: "signature"
+    };
   }
 
   try {
@@ -104,10 +130,23 @@ export function verifyGoalShareToken(token: string, now = Date.now()): GoalShare
       JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as unknown
     );
 
-    return payload.exp >= now ? payload : null;
+    return {
+      valid: true,
+      expired: payload.exp < now,
+      payload
+    };
   } catch {
-    return null;
+    return {
+      valid: false,
+      reason: "payload"
+    };
   }
+}
+
+export function verifyGoalShareToken(token: string, now = Date.now()): GoalShareTokenPayload | null {
+  const inspection = inspectGoalShareToken(token, now);
+
+  return inspection.valid && !inspection.expired ? inspection.payload : null;
 }
 
 export function buildGoalShareUrl(requestUrl: string, token: string): string {
@@ -123,7 +162,8 @@ export function createGoalShareCreatedLog(
   shareId: string,
   token: string,
   expiresAt: string,
-  actorContext: ActorContext | null = null
+  actorContext: ActorContext | null = null,
+  details: Record<string, unknown> = {}
 ) {
   return createActionLog({
     goalId: bundle.goal.id,
@@ -136,7 +176,8 @@ export function createGoalShareCreatedLog(
       shareId,
       expiresAt,
       tokenFingerprint: fingerprintGoalShareToken(token),
-      actorContext
+      actorContext,
+      ...details
     }
   });
 }
@@ -196,6 +237,101 @@ export function createGoalShareRevokedLog(
     details: {
       shareId,
       actorContext
+    }
+  });
+}
+
+function hasRecentShareAuditLog(params: {
+  bundle: GoalBundle;
+  kind: string;
+  shareId: string;
+  tokenFingerprint: string;
+  reason?: string;
+  now: number;
+}): boolean {
+  const dedupeThreshold = params.now - SHARE_VIEW_DEDUP_WINDOW_MS;
+
+  return params.bundle.actionLogs.some((log) => {
+    if (log.kind !== params.kind) {
+      return false;
+    }
+
+    const createdAt = Date.parse(log.createdAt);
+    const shareId = typeof log.details.shareId === "string" ? log.details.shareId : null;
+    const tokenFingerprint = typeof log.details.tokenFingerprint === "string" ? log.details.tokenFingerprint : null;
+    const reason = typeof log.details.reason === "string" ? log.details.reason : null;
+
+    return (
+      shareId === params.shareId &&
+      tokenFingerprint === params.tokenFingerprint &&
+      (!params.reason || reason === params.reason) &&
+      Number.isFinite(createdAt) &&
+      createdAt >= dedupeThreshold
+    );
+  });
+}
+
+export function createGoalShareExpiredLog(
+  bundle: GoalBundle,
+  shareId: string,
+  tokenFingerprint: string,
+  now = Date.now()
+) {
+  const alreadyLogged = bundle.actionLogs.some((log) => {
+    const loggedShareId = typeof log.details.shareId === "string" ? log.details.shareId : null;
+    return log.kind === "share.link_expired" && loggedShareId === shareId;
+  });
+
+  if (alreadyLogged) {
+    return null;
+  }
+
+  return createActionLog({
+    goalId: bundle.goal.id,
+    taskId: null,
+    workflowId: bundle.workflow.id,
+    actor: "public-share",
+    kind: "share.link_expired",
+    message: `Public share link expired for "${bundle.goal.title}".`,
+    details: {
+      shareId,
+      tokenFingerprint,
+      auditedAt: new Date(now).toISOString()
+    }
+  });
+}
+
+export function createGoalShareFailedAccessLog(
+  bundle: GoalBundle,
+  shareId: string,
+  tokenFingerprint: string,
+  reason: "expired" | "revoked" | "not_found",
+  now = Date.now()
+) {
+  if (
+    hasRecentShareAuditLog({
+      bundle,
+      kind: "share.access_failed",
+      shareId,
+      tokenFingerprint,
+      reason,
+      now
+    })
+  ) {
+    return null;
+  }
+
+  return createActionLog({
+    goalId: bundle.goal.id,
+    taskId: null,
+    workflowId: bundle.workflow.id,
+    actor: "public-share",
+    kind: "share.access_failed",
+    message: `Blocked public share access for "${bundle.goal.title}".`,
+    details: {
+      shareId,
+      tokenFingerprint,
+      reason
     }
   });
 }

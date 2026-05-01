@@ -5,6 +5,12 @@ import { fileURLToPath } from "node:url";
 import { pgTable, text, timestamp, boolean, jsonb, real, integer, index, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool, type PoolClient } from "pg";
+import {
+  getRequiredAuthRuntimeSchemaObjectStatus,
+  REQUIRED_AUTH_RUNTIME_INDEXES,
+  REQUIRED_AUTH_RUNTIME_TABLES,
+  type AuthRuntimeSchemaObjectStatus
+} from "./auth-runtime-schema";
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
@@ -92,6 +98,7 @@ export const goals = pgTable("goals", {
   status: text("status").notNull(),
   confidence: real("confidence").notNull(),
   explanation: text("explanation").notNull(),
+  goalContract: jsonb("goal_contract").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -109,6 +116,7 @@ export const tasks = pgTable("tasks", {
   dependsOn: jsonb("depends_on").$type<string[]>().notNull(),
   toolCapabilities: jsonb("tool_capabilities").$type<string[]>().notNull(),
   artifactIds: jsonb("artifact_ids").$type<string[]>().notNull(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -124,6 +132,7 @@ export const memoryRecords = pgTable("memory_records", {
   sensitivity: text("sensitivity").notNull(),
   permissions: jsonb("permissions").$type<string[]>().notNull(),
   actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+  contextPacketConsent: jsonb("context_packet_consent").$type<Record<string, unknown> | null>(),
   reviewAt: timestamp("review_at", { withTimezone: true }),
   expiryAt: timestamp("expiry_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
@@ -153,6 +162,7 @@ export const approvalRequests = pgTable("approval_requests", {
   decisionScope: text("decision_scope"),
   decisionRationale: text("decision_rationale"),
   history: jsonb("history").$type<Array<Record<string, unknown>>>().notNull(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   expiryAt: timestamp("expiry_at", { withTimezone: true }).notNull(),
   respondedAt: timestamp("responded_at", { withTimezone: true })
@@ -207,10 +217,14 @@ export const workspaceSelections = pgTable("workspace_selections", {
 export const workspaceGovernance = pgTable("workspace_governance", {
   workspaceId: text("workspace_id").primaryKey(),
   approvalMode: text("approval_mode").notNull(),
-  requireAuditExports: boolean("require_audit_exports").notNull(),
+  requireAuditExports: boolean("require_audit_exports").notNull().default(true),
   maxAutoRunRiskClass: text("max_auto_run_risk_class").notNull(),
+  publicSharingEnabled: boolean("public_sharing_enabled").notNull().default(false),
+  providerAccessRequiresApproval: boolean("provider_access_requires_approval").notNull().default(true),
+  escalationRequiresApproval: boolean("escalation_requires_approval").notNull().default(true),
   externalSendRequiresApproval: boolean("external_send_requires_approval").notNull(),
   calendarWriteRequiresApproval: boolean("calendar_write_requires_approval").notNull(),
+  shadowReplayPolicy: jsonb("shadow_replay_policy").$type<Record<string, unknown> | null>(),
   retentionDays: integer("retention_days").notNull(),
   updatedBy: text("updated_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
@@ -227,6 +241,7 @@ export const goalShares = pgTable(
     tokenFingerprint: text("token_fingerprint").notNull(),
     status: text("status").notNull(),
     actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+    disclosureReview: jsonb("disclosure_review").$type<Record<string, unknown> | null>(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
@@ -326,7 +341,11 @@ export const watchers = pgTable("watchers", {
   sourceSystems: jsonb("source_systems").$type<string[]>().notNull(),
   status: text("status").notNull(),
   expiryAt: timestamp("expiry_at", { withTimezone: true }),
+  schedule: jsonb("schedule").$type<Record<string, unknown>>().notNull(),
+  lastEvaluation: jsonb("last_evaluation").$type<Record<string, unknown> | null>(),
+  escalationPolicy: jsonb("escalation_policy").$type<Record<string, unknown>>().notNull(),
   actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });
@@ -377,6 +396,7 @@ export const autopilotEvents = pgTable("autopilot_events", {
   status: text("status").notNull(),
   details: jsonb("details").$type<Record<string, unknown>>().notNull(),
   actorContext: jsonb("actor_context").$type<Record<string, unknown> | null>(),
+  teamResponsibility: jsonb("team_responsibility").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   processedAt: timestamp("processed_at", { withTimezone: true }),
   resultGoalId: text("result_goal_id"),
@@ -583,6 +603,37 @@ export function createDb(url: string) {
 
 const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const SCHEMA_MIGRATIONS_TABLE = "agentic_schema_migrations";
+const LEGACY_AGENT_DEFINITIONS_BOOTSTRAP_SQL = `
+  create table if not exists agent_definitions (
+    id text primary key,
+    user_id text not null,
+    name text not null,
+    display_name text not null,
+    description text not null,
+    icon text not null,
+    category text not null,
+    tags jsonb not null default '[]'::jsonb,
+    system_prompt text not null,
+    prompt_variables jsonb not null default '[]'::jsonb,
+    artifact_type text not null,
+    behavior_config jsonb not null default '{}'::jsonb,
+    allowed_capabilities jsonb not null default '[]'::jsonb,
+    blocked_capabilities jsonb not null default '[]'::jsonb,
+    max_risk_class text not null,
+    integration_permissions jsonb not null default '[]'::jsonb,
+    memory_permissions jsonb not null default '[]'::jsonb,
+    actor_context jsonb,
+    is_built_in boolean not null default false,
+    parent_agent_id text,
+    version integer not null,
+    status text not null,
+    created_at timestamptz not null,
+    updated_at timestamptz not null
+  );
+
+  create unique index if not exists agent_definitions_user_name_idx
+    on agent_definitions (user_id, name);
+`;
 
 type MigrationQueryable = Pick<Pool, "query"> | PoolClient;
 
@@ -596,11 +647,18 @@ export type DatabaseMigrationFile = {
 export type DatabaseSchemaStatus = {
   reachable: boolean;
   ready: boolean;
-  failureReason: "unreachable" | "metadata_missing" | "pending_migrations" | "migration_drift" | null;
+  failureReason:
+    | "unreachable"
+    | "metadata_missing"
+    | "pending_migrations"
+    | "migration_drift"
+    | "required_schema_missing"
+    | null;
   missingMetadataTable: boolean;
   appliedMigrations: string[];
   pendingMigrations: string[];
   driftedMigrations: string[];
+  requiredSchemaObjects: AuthRuntimeSchemaObjectStatus;
   lastAppliedAt: string | null;
 };
 
@@ -644,6 +702,12 @@ function createEmptySchemaStatus(
     appliedMigrations: [],
     pendingMigrations: [],
     driftedMigrations: [],
+    requiredSchemaObjects: {
+      tables: [...REQUIRED_AUTH_RUNTIME_TABLES],
+      indexes: [...REQUIRED_AUTH_RUNTIME_INDEXES],
+      missingTables: [],
+      missingIndexes: []
+    },
     lastAppliedAt: null,
     ...overrides
   };
@@ -682,6 +746,12 @@ async function ensureMigrationMetadataTable(queryable: MigrationQueryable): Prom
   `);
 }
 
+async function ensureLegacyMigrationBootstrapTables(queryable: MigrationQueryable): Promise<void> {
+  // `0001_init.sql` alters `agent_definitions` before it creates the table. Bootstrap the
+  // final table shape first so fresh databases can apply the legacy migration without drift.
+  await queryable.query(LEGACY_AGENT_DEFINITIONS_BOOTSTRAP_SQL);
+}
+
 async function loadAppliedMigrationRows(
   queryable: MigrationQueryable
 ): Promise<Array<{ name: string; checksum: string; appliedAt: string }>> {
@@ -706,6 +776,7 @@ function summarizeDatabaseSchemaStatus(params: {
   missingMetadataTable: boolean;
   pendingMigrations: string[];
   driftedMigrations: string[];
+  requiredSchemaObjects?: DatabaseSchemaStatus["requiredSchemaObjects"];
 }): Pick<DatabaseSchemaStatus, "ready" | "failureReason"> {
   if (params.driftedMigrations.length > 0) {
     return {
@@ -718,6 +789,16 @@ function summarizeDatabaseSchemaStatus(params: {
     return {
       ready: false,
       failureReason: params.missingMetadataTable ? "metadata_missing" : "pending_migrations"
+    };
+  }
+
+  if (
+    params.requiredSchemaObjects &&
+    (params.requiredSchemaObjects.missingTables.length > 0 || params.requiredSchemaObjects.missingIndexes.length > 0)
+  ) {
+    return {
+      ready: false,
+      failureReason: "required_schema_missing"
     };
   }
 
@@ -736,6 +817,8 @@ function buildSchemaNotReadyMessage(status: DatabaseSchemaStatus): string {
       return "Database schema is not ready. Run database migrations before starting the application.";
     case "migration_drift":
       return "Database migration metadata does not match the checked-in migration files.";
+    case "required_schema_missing":
+      return "Database schema is missing required runtime tables or indexes. Run database migrations before starting the application.";
     default:
       return "Database schema is not ready.";
   }
@@ -786,9 +869,9 @@ export async function getDatabaseSchemaStatus(options?: {
         });
       }
 
-      const metadataTableResult = await queryable.query<{ exists: string | null }>(
-        `select to_regclass('public.${SCHEMA_MIGRATIONS_TABLE}') as exists`
-      );
+      const metadataTableResult = await queryable.query<{ exists: string | null }>("select to_regclass($1) as exists", [
+        SCHEMA_MIGRATIONS_TABLE
+      ]);
       const metadataTableExists = Boolean(metadataTableResult.rows[0]?.exists);
 
       if (!metadataTableExists) {
@@ -807,6 +890,7 @@ export async function getDatabaseSchemaStatus(options?: {
       }
 
       const appliedRows = await loadAppliedMigrationRows(queryable);
+      const requiredSchemaObjects = await getRequiredAuthRuntimeSchemaObjectStatus(queryable);
       const appliedByName = new Map(appliedRows.map((row) => [row.name, row]));
       const migrationNames = new Set(migrationFiles.map((migration) => migration.name));
       const pendingMigrations: string[] = [];
@@ -834,7 +918,8 @@ export async function getDatabaseSchemaStatus(options?: {
       const summary = summarizeDatabaseSchemaStatus({
         missingMetadataTable: false,
         pendingMigrations,
-        driftedMigrations
+        driftedMigrations,
+        requiredSchemaObjects
       });
 
       return createEmptySchemaStatus({
@@ -842,6 +927,7 @@ export async function getDatabaseSchemaStatus(options?: {
         appliedMigrations: appliedRows.map((row) => row.name),
         pendingMigrations,
         driftedMigrations: Array.from(new Set(driftedMigrations)).sort((left, right) => left.localeCompare(right)),
+        requiredSchemaObjects,
         lastAppliedAt: appliedRows.length > 0 ? appliedRows[appliedRows.length - 1]!.appliedAt : null
       });
     }
@@ -888,6 +974,7 @@ export async function runDatabaseMigrations(options?: {
       }
 
       await ensureMigrationMetadataTable(queryable);
+      await ensureLegacyMigrationBootstrapTables(queryable);
       const appliedRows = await loadAppliedMigrationRows(queryable);
       const appliedByName = new Map(appliedRows.map((row) => [row.name, row]));
 

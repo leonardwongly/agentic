@@ -1,4 +1,11 @@
-import { ApprovalRequestSchema, JobRecordSchema, WatcherSchema, nowIso } from "@agentic/contracts";
+import {
+  appendJobExecutionJournalEntry,
+  ApprovalRequestSchema,
+  deriveJobRecoveryState,
+  JobRecordSchema,
+  WatcherSchema,
+  nowIso
+} from "@agentic/contracts";
 import {
   computeJobRetryDelayMs,
   createDurableJobQueue,
@@ -106,9 +113,104 @@ describe("execution", () => {
     });
 
     expect(job.status).toBe("queued");
+    expect(job.journal).toMatchObject({
+      lifecycleState: "queued",
+      retryCount: 0,
+      sideEffectTarget: "goal:goal-1",
+      replayedFromJobId: null,
+      recovery: null
+    });
+    expect(job.journal.entries).toHaveLength(1);
+    expect(job.journal.entries[0]).toMatchObject({
+      state: "queued",
+      attempt: 0,
+      summary: "Job queued for worker execution."
+    });
     expect(isJobClaimable(job, Date.parse(job.availableAt))).toBe(true);
     expect(computeJobRetryDelayMs(1, { baseDelayMs: 500, maxDelayMs: 5_000 })).toBe(500);
     expect(computeJobRetryDelayMs(4, { baseDelayMs: 500, maxDelayMs: 2_000 })).toBe(2_000);
+  });
+
+  it("preserves explicit null concurrency keys", () => {
+    const job = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      concurrencyKey: null,
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Create a job without per-key concurrency.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      }
+    });
+
+    expect(job.concurrencyKey).toBeNull();
+  });
+
+  it("passes an abort signal to timed durable job handlers", async () => {
+    const baseJob = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      timeoutMs: 100,
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Exercise timeout cancellation.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      }
+    });
+    const runningJob = JobRecordSchema.parse({
+      ...baseJob,
+      status: "running",
+      attemptCount: 1,
+      claimedBy: "worker-1",
+      claimedAt: "2026-04-16T00:00:00.000Z",
+      lastAttemptAt: "2026-04-16T00:00:00.000Z",
+      leaseExpiresAt: "2026-04-16T00:00:30.000Z"
+    });
+    let observedSignal: AbortSignal | undefined;
+    const queue = createDurableJobQueue(
+      {
+        enqueueJob: async (job) => job,
+        claimNextJob: async () => runningJob,
+        completeJob: async () => {
+          throw new Error("Timed out job should not be acknowledged.");
+        },
+        retryJob: async (params) =>
+          JobRecordSchema.parse({
+            ...runningJob,
+            status: "retrying",
+            claimedBy: null,
+            claimedAt: null,
+            leaseExpiresAt: null,
+            availableAt: params.availableAt,
+            lastError: params.error
+          }),
+        deadLetterJob: async () => runningJob
+      },
+      { runnerId: "worker-1" }
+    );
+
+    const result = await processNextDurableJob({
+      queue,
+      handlers: {
+        goal_create: async (_job, context) => {
+          observedSignal = context?.signal;
+          await new Promise((resolve) => setTimeout(resolve, 125));
+        }
+      }
+    });
+
+    expect(observedSignal).toBeDefined();
+    expect(observedSignal?.aborted).toBe(true);
+    expect(result.finalJob?.status).toBe("retrying");
+    expect(result.finalJob?.lastError).toContain("timed out");
   });
 
   it("routes failures into retry and dead-letter transitions through the durable queue contract", async () => {
@@ -152,6 +254,24 @@ describe("execution", () => {
             leaseExpiresAt: null,
             availableAt: params.availableAt,
             lastError: params.error,
+            journal: appendJobExecutionJournalEntry({
+              journal: baseJob.journal,
+              at: params.availableAt,
+              status: "retrying",
+              attemptCount: 1,
+              summary: "Attempt 1 failed and retry 2 was scheduled.",
+              error: params.error,
+              metadata: {
+                nextAvailableAt: params.availableAt
+              },
+              retryCount: 1,
+              recovery: deriveJobRecoveryState({
+                jobId: params.jobId,
+                status: "retrying",
+                payload: baseJob.payload,
+                replayedFromJobId: baseJob.journal.replayedFromJobId
+              })
+            }),
             updatedAt: params.availableAt
           });
         },
@@ -167,6 +287,21 @@ describe("execution", () => {
             leaseExpiresAt: null,
             deadLetteredAt: params.deadLetteredAt,
             lastError: params.error,
+            journal: appendJobExecutionJournalEntry({
+              journal: baseJob.journal,
+              at: params.deadLetteredAt,
+              status: "dead_letter",
+              attemptCount: 2,
+              summary: "Job dead-lettered after 2/2 attempts.",
+              error: params.error,
+              retryCount: 2,
+              recovery: deriveJobRecoveryState({
+                jobId: params.jobId,
+                status: "dead_letter",
+                payload: baseJob.payload,
+                replayedFromJobId: baseJob.journal.replayedFromJobId
+              })
+            }),
             updatedAt: params.deadLetteredAt
           });
         }
@@ -208,9 +343,242 @@ describe("execution", () => {
 
     expect(retried.status).toBe("retrying");
     expect(retried.availableAt).toBe("2026-04-16T00:00:00.500Z");
+    expect(retried.journal).toMatchObject({
+      lifecycleState: "retrying",
+      retryCount: 1,
+      recovery: {
+        strategy: "retry_job"
+      }
+    });
+    expect(retried.journal.entries.at(-1)).toMatchObject({
+      state: "retrying",
+      attempt: 1,
+      error: "temporary upstream failure",
+      metadata: {
+        nextAvailableAt: "2026-04-16T00:00:00.500Z"
+      }
+    });
     expect(deadLettered.status).toBe("dead_letter");
     expect(deadLettered.deadLetteredAt).toBe("2026-04-16T00:05:00.000Z");
+    expect(deadLettered.journal).toMatchObject({
+      lifecycleState: "dead_letter",
+      retryCount: 2,
+      recovery: {
+        strategy: "manual_review"
+      }
+    });
+    expect(deadLettered.journal.entries.at(-1)).toMatchObject({
+      state: "dead_letter",
+      attempt: 2,
+      error: "permanent upstream failure"
+    });
     expect(recordedCalls.map((call) => call.type)).toEqual(["retry", "dead_letter"]);
+  });
+
+  it("dead-letters non-idempotent jobs when retry safety is required", async () => {
+    const baseJob = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Create a side-effecting goal.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      },
+      idempotencyKey: null,
+      maxAttempts: 3
+    });
+    const calls: string[] = [];
+    const queue = createDurableJobQueue(
+      {
+        enqueueJob: async (job) => job,
+        claimNextJob: async () => null,
+        completeJob: async () => {
+          throw new Error("completeJob should not be called");
+        },
+        retryJob: async () => {
+          calls.push("retry");
+          throw new Error("retryJob should not be called for non-idempotent failures");
+        },
+        deadLetterJob: async (params) => {
+          calls.push("dead_letter");
+          return JobRecordSchema.parse({
+            ...baseJob,
+            status: "dead_letter",
+            attemptCount: 1,
+            claimedBy: params.runnerId,
+            deadLetteredAt: params.deadLetteredAt,
+            lastError: params.error,
+            updatedAt: params.deadLetteredAt
+          });
+        }
+      },
+      {
+        runnerId: "worker-1",
+        requireIdempotencyForRetry: true
+      }
+    );
+
+    const running = JobRecordSchema.parse({
+      ...baseJob,
+      status: "running",
+      attemptCount: 1,
+      claimedBy: "worker-1",
+      claimedAt: "2026-04-16T00:00:00.000Z",
+      lastAttemptAt: "2026-04-16T00:00:00.000Z",
+      leaseExpiresAt: "2026-04-16T00:00:30.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    const finalJob = await queue.fail({
+      job: running,
+      error: new Error("unsafe duplicate side effect"),
+      now: "2026-04-16T00:00:00.000Z"
+    });
+
+    expect(finalJob.status).toBe("dead_letter");
+    expect(calls).toEqual(["dead_letter"]);
+  });
+
+  it("fails timed-out jobs through the durable processing path", async () => {
+    const job = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Run a bounded worker task.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      },
+      timeoutMs: 100,
+      maxAttempts: 1
+    });
+    const running = JobRecordSchema.parse({
+      ...job,
+      status: "running",
+      attemptCount: 1,
+      claimedBy: "worker-1",
+      claimedAt: "2026-04-16T00:00:00.000Z",
+      lastAttemptAt: "2026-04-16T00:00:00.000Z",
+      leaseExpiresAt: "2026-04-16T00:00:30.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+    const queue = createDurableJobQueue(
+      {
+        enqueueJob: async (candidate) => candidate,
+        claimNextJob: async () => running,
+        completeJob: async () => {
+          throw new Error("completeJob should not be called for a timed-out handler");
+        },
+        retryJob: async () => {
+          throw new Error("retryJob should not be called when maxAttempts is exhausted");
+        },
+        deadLetterJob: async (params) =>
+          JobRecordSchema.parse({
+            ...running,
+            status: "dead_letter",
+            deadLetteredAt: params.deadLetteredAt,
+            lastError: params.error,
+            updatedAt: params.deadLetteredAt
+          })
+      },
+      { runnerId: "worker-1" }
+    );
+
+    const abortObserved: string[] = [];
+    const result = await processNextDurableJob({
+      queue,
+      handlers: {
+        goal_create: async (_claimedJob, context) =>
+          new Promise<void>((resolve) => {
+            context.signal.addEventListener(
+              "abort",
+              () => {
+                abortObserved.push("aborted");
+                resolve();
+              },
+              { once: true }
+            );
+          })
+      }
+    });
+
+    expect(abortObserved).toEqual(["aborted"]);
+    expect(result.finalJob?.status).toBe("dead_letter");
+    expect(result.finalJob?.lastError).toContain("timed out");
+  });
+
+  it("settles timed-out durable jobs without waiting for non-cooperative handlers", async () => {
+    const job = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Run a worker task whose handler ignores cancellation.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      },
+      timeoutMs: 100,
+      maxAttempts: 1
+    });
+    const running = JobRecordSchema.parse({
+      ...job,
+      status: "running",
+      attemptCount: 1,
+      claimedBy: "worker-1",
+      claimedAt: "2026-04-16T00:00:00.000Z",
+      lastAttemptAt: "2026-04-16T00:00:00.000Z",
+      leaseExpiresAt: "2026-04-16T00:00:30.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+    const transitions: string[] = [];
+    const queue = createDurableJobQueue(
+      {
+        enqueueJob: async (candidate) => candidate,
+        claimNextJob: async () => running,
+        completeJob: async () => {
+          transitions.push("complete");
+          throw new Error("completeJob should not be called for a timed-out handler");
+        },
+        retryJob: async () => {
+          transitions.push("retry");
+          throw new Error("retryJob should not be called when maxAttempts is exhausted");
+        },
+        deadLetterJob: async (params) => {
+          transitions.push("dead_letter");
+          return JobRecordSchema.parse({
+            ...running,
+            status: "dead_letter",
+            deadLetteredAt: params.deadLetteredAt,
+            lastError: params.error,
+            updatedAt: params.deadLetteredAt
+          });
+        }
+      },
+      { runnerId: "worker-1" }
+    );
+
+    const startedAt = Date.now();
+    const result = await processNextDurableJob({
+      queue,
+      handlers: {
+        goal_create: async () => new Promise<void>(() => {})
+      }
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(250);
+    expect(transitions).toEqual(["dead_letter"]);
+    expect(result.finalJob?.status).toBe("dead_letter");
+    expect(result.finalJob?.lastError).toContain("timed out");
   });
 
   it("processes the next claimed durable job through the registered handler and acknowledges it", async () => {

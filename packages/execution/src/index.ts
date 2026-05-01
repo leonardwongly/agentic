@@ -1,9 +1,15 @@
+import crypto from "node:crypto";
 import {
+  buildApprovalNotificationDeliveryTarget,
+  createJobExecutionJournal,
   JobRecordSchema,
   JobStatusSchema,
   TaskSchema,
   TaskStateSchema,
   WorkflowStateSchema,
+  WorkflowDagInstanceSchema,
+  WorkflowDagNodeExecutionSchema,
+  WorkflowDagSchema,
   nowIso,
   type AgentName,
   type ActorContext,
@@ -11,13 +17,20 @@ import {
   type Capability,
   type Goal,
   type JobKind,
+  type JobPayload,
+  type JobPriority,
   type JobRecord,
   type JobStatus,
-  type JobPayload,
   type RiskClass,
   type Task,
   type TaskState,
   type Watcher,
+  type WorkflowDag,
+  type WorkflowDagInstance,
+  type WorkflowDagNode,
+  type WorkflowDagNodeExecution,
+  type WorkflowDagNodeStatus,
+  type WorkflowDagStatus,
   type WorkflowState
 } from "@agentic/contracts";
 import {
@@ -36,6 +49,16 @@ const legalTaskTransitions: Record<TaskState, readonly TaskState[]> = {
   completed: []
 };
 
+function buildWorkflowNodeExecutionId(instanceId: string, nodeId: string): string {
+  const executionId = `${instanceId}:${nodeId}`;
+  if (executionId.length <= 160) {
+    return executionId;
+  }
+
+  const digest = crypto.createHash("sha256").update(executionId).digest("hex").slice(0, 16);
+  return `${executionId.slice(0, 143)}:${digest}`;
+}
+
 const legalJobTransitions: Record<JobStatus, readonly JobStatus[]> = {
   queued: ["running"],
   running: ["retrying", "completed", "dead_letter"],
@@ -44,10 +67,38 @@ const legalJobTransitions: Record<JobStatus, readonly JobStatus[]> = {
   dead_letter: []
 };
 
+const legalWorkflowDagTransitions: Record<WorkflowDagStatus, readonly WorkflowDagStatus[]> = {
+  queued: ["running", "paused", "cancelled"],
+  running: ["paused", "completed", "failed", "cancelled"],
+  paused: ["running", "cancelled"],
+  completed: [],
+  failed: ["running", "cancelled"],
+  cancelled: []
+};
+
+const legalWorkflowDagNodeTransitions: Record<WorkflowDagNodeStatus, readonly WorkflowDagNodeStatus[]> = {
+  queued: ["running", "skipped", "cancelled"],
+  running: ["paused", "completed", "failed", "cancelled"],
+  paused: ["running", "cancelled"],
+  completed: [],
+  failed: ["queued", "running", "cancelled"],
+  skipped: [],
+  cancelled: []
+};
+
+const workflowRiskRank: Record<RiskClass, number> = {
+  R1: 1,
+  R2: 2,
+  R3: 3,
+  R4: 4
+};
+
 export type ClaimNextJobParams = {
   userId?: string;
   kinds?: JobKind[];
+  queue?: string;
   now?: string;
+  concurrencyLimits?: JobConcurrencyLimits;
 };
 
 export type AcknowledgeJobParams = {
@@ -66,9 +117,11 @@ export type JobQueueStore = {
   claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;
+    concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null>;
   completeJob(params: {
     jobId: string;
@@ -102,7 +155,17 @@ export type JobRetryPolicy = {
   maxDelayMs: number;
 };
 
-export type JobHandler = (job: JobRecord) => Promise<void>;
+export type JobConcurrencyLimits = {
+  maxRunningPerKind?: number;
+  maxRunningPerUser?: number;
+  maxRunningPerConcurrencyKey?: number;
+};
+
+export type JobHandlerContext = {
+  signal: AbortSignal;
+};
+
+export type JobHandler = (job: JobRecord, context?: JobHandlerContext) => Promise<void>;
 
 export type JobHandlerMap = Partial<Record<JobKind, JobHandler>>;
 
@@ -116,6 +179,47 @@ const defaultRetryPolicy: JobRetryPolicy = {
   factor: 2,
   maxDelayMs: 5 * 60_000
 };
+
+function deriveJobSideEffectTarget(payload: JobPayload): string | null {
+  if (payload.type === "approval_follow_up") {
+    return `goal:${payload.goalId}:task:${payload.taskId}`;
+  }
+
+  if (payload.type === "approval_notification") {
+    return buildApprovalNotificationDeliveryTarget(payload);
+  }
+
+  if (payload.type === "autopilot_process") {
+    return `autopilot-event:${payload.autopilotEventId}`;
+  }
+
+  if ("goalId" in payload && typeof payload.goalId === "string" && payload.goalId.trim()) {
+    return `goal:${payload.goalId}`;
+  }
+
+  if (payload.type === "privacy_operation") {
+    return `privacy:${payload.operationId}`;
+  }
+
+  if (payload.type === "public_share_view") {
+    return `share:${payload.shareId}`;
+  }
+
+  return null;
+}
+
+function deriveReplayedFromJobId(payload: JobPayload): string | null {
+  const candidate =
+    payload.metadata && typeof payload.metadata.replayedFromJobId === "string"
+      ? payload.metadata.replayedFromJobId.trim()
+      : "";
+  return candidate || null;
+}
+
+function deriveJobConcurrencyKey(userId: string, kind: JobKind, payload: JobPayload): string {
+  const sideEffectTarget = deriveJobSideEffectTarget(payload);
+  return sideEffectTarget ? `${userId}:${sideEffectTarget}` : `${userId}:${kind}`;
+}
 
 export function createWorkflowState(
   goalId: string,
@@ -148,6 +252,7 @@ export function createTask(params: {
   toolCapabilities: Capability[];
   dependsOn?: string[];
   state?: TaskState;
+  responsibility?: Task["responsibility"];
 }): Task {
   const timestamp = nowIso();
 
@@ -164,6 +269,7 @@ export function createTask(params: {
     dependsOn: params.dependsOn ?? [],
     toolCapabilities: params.toolCapabilities,
     artifactIds: [],
+    responsibility: params.responsibility,
     createdAt: timestamp,
     updatedAt: timestamp
   });
@@ -181,14 +287,26 @@ export function createJobRecord(params: {
   idempotencyKey?: string | null;
   maxAttempts?: number;
   availableAt?: string;
+  priority?: JobPriority;
+  queue?: string;
+  concurrencyKey?: string | null;
+  timeoutMs?: number | null;
 }): JobRecord {
   const timestamp = nowIso();
+  const replayedFromJobId = deriveReplayedFromJobId(params.payload);
 
   return JobRecordSchema.parse({
     id: crypto.randomUUID(),
     userId: params.userId,
     kind: params.kind,
     status: "queued",
+    priority: params.priority ?? "normal",
+    queue: params.queue?.trim() || "default",
+    concurrencyKey:
+      params.concurrencyKey === null
+        ? null
+        : params.concurrencyKey?.trim() || deriveJobConcurrencyKey(params.userId, params.kind, params.payload),
+    timeoutMs: params.timeoutMs ?? null,
     idempotencyKey: params.idempotencyKey?.trim() || null,
     payload: params.payload,
     actorContext: params.actorContext ?? null,
@@ -202,6 +320,20 @@ export function createJobRecord(params: {
     completedAt: null,
     deadLetteredAt: null,
     lastError: null,
+    journal: createJobExecutionJournal({
+      at: timestamp,
+      status: "queued",
+      attemptCount: 0,
+      maxAttempts: params.maxAttempts ?? 3,
+      idempotencyKey: params.idempotencyKey?.trim() || null,
+      sideEffectTarget: deriveJobSideEffectTarget(params.payload),
+      replayedFromJobId,
+      summary: replayedFromJobId
+        ? `Replay queued from job ${replayedFromJobId}.`
+        : "Job queued for worker execution.",
+      recovery: null,
+      retryCount: 0
+    }),
     createdAt: timestamp,
     updatedAt: timestamp
   });
@@ -209,6 +341,307 @@ export function createJobRecord(params: {
 
 export function canTransitionJobState(from: JobStatus, to: JobStatus): boolean {
   return legalJobTransitions[from].includes(to);
+}
+
+export class WorkflowDagValidationError extends Error {
+  constructor(
+    public readonly issues: string[],
+    message = `Workflow DAG validation failed: ${issues.join("; ")}`,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = "WorkflowDagValidationError";
+  }
+}
+
+function capabilityGrantSatisfiesWorkflowNode(node: WorkflowDagNode): boolean {
+  switch (node.actionIntent.type) {
+    case "send_message":
+      return node.actionIntent.mode === "send"
+        ? node.permissionGrant.capabilities.includes("send")
+        : node.permissionGrant.capabilities.includes("draft") || node.permissionGrant.capabilities.includes("send");
+    case "schedule_event":
+      return node.permissionGrant.capabilities.includes("schedule");
+    case "create_note":
+      return node.permissionGrant.capabilities.includes("create");
+    case "update_record":
+      return node.permissionGrant.capabilities.includes("update");
+    case "delete_record":
+      return node.permissionGrant.capabilities.includes("delete");
+    case "monitor_signal":
+      return node.permissionGrant.capabilities.includes("monitor");
+    case "manual_review":
+    default:
+      return true;
+  }
+}
+
+function buildWorkflowDagAdjacency(dag: WorkflowDag): Map<string, Set<string>> {
+  const adjacency = new Map<string, Set<string>>();
+
+  for (const node of dag.nodes) {
+    adjacency.set(node.id, new Set());
+  }
+
+  for (const node of dag.nodes) {
+    for (const dependency of node.dependsOn) {
+      adjacency.get(dependency)?.add(node.id);
+    }
+  }
+
+  for (const edge of dag.edges) {
+    adjacency.get(edge.from)?.add(edge.to);
+  }
+
+  return adjacency;
+}
+
+function findWorkflowDagCycle(dag: WorkflowDag): string[] | null {
+  const adjacency = buildWorkflowDagAdjacency(dag);
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const path: string[] = [];
+
+  const visit = (nodeId: string): string[] | null => {
+    if (visiting.has(nodeId)) {
+      return [...path.slice(path.indexOf(nodeId)), nodeId];
+    }
+
+    if (visited.has(nodeId)) {
+      return null;
+    }
+
+    visiting.add(nodeId);
+    path.push(nodeId);
+
+    for (const next of adjacency.get(nodeId) ?? []) {
+      const cycle = visit(next);
+
+      if (cycle) {
+        return cycle;
+      }
+    }
+
+    visiting.delete(nodeId);
+    visited.add(nodeId);
+    path.pop();
+    return null;
+  };
+
+  for (const node of dag.nodes) {
+    const cycle = visit(node.id);
+
+    if (cycle) {
+      return cycle;
+    }
+  }
+
+  return null;
+}
+
+export function validateWorkflowDag(input: WorkflowDag): WorkflowDag {
+  const dag = WorkflowDagSchema.parse(input);
+  const issues: string[] = [];
+  const cycle = findWorkflowDagCycle(dag);
+
+  if (cycle) {
+    issues.push(`cycle detected: ${cycle.join(" -> ")}`);
+  }
+
+  for (const node of dag.nodes) {
+    if (!capabilityGrantSatisfiesWorkflowNode(node)) {
+      issues.push(`node ${node.id} is missing required capabilities for ${node.actionIntent.type}`);
+    }
+
+    if (workflowRiskRank[node.actionIntent.riskClass] > workflowRiskRank[node.permissionGrant.maxRiskClass]) {
+      issues.push(
+        `node ${node.id} action risk ${node.actionIntent.riskClass} exceeds permission ceiling ${node.permissionGrant.maxRiskClass}`
+      );
+    }
+
+    if (node.compensation.required && !node.compensation.actionIntent) {
+      issues.push(`node ${node.id} requires compensation but has no compensation action intent`);
+    }
+  }
+
+  if (issues.length > 0) {
+    throw new WorkflowDagValidationError(issues);
+  }
+
+  return dag;
+}
+
+export function createWorkflowDagInstance(params: {
+  dag: WorkflowDag;
+  instanceId?: string;
+  now?: string;
+}): WorkflowDagInstance {
+  const dag = validateWorkflowDag(params.dag);
+  const timestamp = params.now ?? nowIso();
+  const instanceId = params.instanceId ?? crypto.randomUUID();
+
+  return WorkflowDagInstanceSchema.parse({
+    id: instanceId,
+    dagId: dag.id,
+    workflowId: dag.workflowId,
+    status: "queued",
+    nodeExecutions: dag.nodes.map((node) =>
+      WorkflowDagNodeExecutionSchema.parse({
+        id: buildWorkflowNodeExecutionId(instanceId, node.id),
+        instanceId,
+        nodeId: node.id,
+        status: "queued",
+        attemptCount: 0,
+        maxAttempts: node.retryPolicy.maxAttempts,
+        runnerId: null,
+        lastError: null,
+        startedAt: null,
+        completedAt: null,
+        updatedAt: timestamp
+      })
+    ),
+    auditLog: [`${timestamp} workflow DAG instance created from ${dag.id}`],
+    createdAt: timestamp,
+    updatedAt: timestamp
+  });
+}
+
+export function transitionWorkflowDagInstance(params: {
+  instance: WorkflowDagInstance;
+  status: WorkflowDagStatus;
+  reason?: string | null;
+  now?: string;
+}): WorkflowDagInstance {
+  const current = WorkflowDagInstanceSchema.parse(params.instance);
+  const nextStatus = params.status;
+
+  if (!legalWorkflowDagTransitions[current.status].includes(nextStatus)) {
+    throw new Error(`Illegal workflow DAG transition from "${current.status}" to "${nextStatus}" for instance ${current.id}.`);
+  }
+
+  const timestamp = params.now ?? nowIso();
+
+  return WorkflowDagInstanceSchema.parse({
+    ...current,
+    status: nextStatus,
+    pausedAt: nextStatus === "paused" ? timestamp : nextStatus === "running" ? null : current.pausedAt,
+    cancelledAt: nextStatus === "cancelled" ? timestamp : current.cancelledAt,
+    cancelReason: nextStatus === "cancelled" ? params.reason ?? "Workflow DAG cancelled." : current.cancelReason,
+    auditLog: [
+      ...current.auditLog,
+      `${timestamp} transitioned from ${current.status} to ${nextStatus}${params.reason ? `: ${params.reason}` : ""}`
+    ],
+    updatedAt: timestamp
+  });
+}
+
+export function transitionWorkflowDagNode(params: {
+  execution: WorkflowDagNodeExecution;
+  status: WorkflowDagNodeStatus;
+  runnerId?: string | null;
+  error?: string | null;
+  now?: string;
+}): WorkflowDagNodeExecution {
+  const current = WorkflowDagNodeExecutionSchema.parse(params.execution);
+  const nextStatus = params.status;
+
+  if (!legalWorkflowDagNodeTransitions[current.status].includes(nextStatus)) {
+    throw new Error(`Illegal workflow DAG node transition from "${current.status}" to "${nextStatus}" for node ${current.nodeId}.`);
+  }
+
+  const timestamp = params.now ?? nowIso();
+  const startsNewAttempt = nextStatus === "running" && (current.status === "queued" || current.status === "failed");
+
+  if (startsNewAttempt && current.attemptCount >= current.maxAttempts) {
+    throw new Error(
+      `Workflow DAG node ${current.nodeId} exhausted retry attempts (${current.attemptCount}/${current.maxAttempts}).`
+    );
+  }
+
+  return WorkflowDagNodeExecutionSchema.parse({
+    ...current,
+    status: nextStatus,
+    runnerId: params.runnerId ?? current.runnerId,
+    attemptCount: startsNewAttempt ? current.attemptCount + 1 : current.attemptCount,
+    lastError: params.error ?? (nextStatus === "running" || nextStatus === "completed" ? null : current.lastError),
+    startedAt: nextStatus === "running" ? timestamp : current.startedAt,
+    completedAt: nextStatus === "completed" || nextStatus === "skipped" || nextStatus === "cancelled" ? timestamp : current.completedAt,
+    updatedAt: timestamp
+  });
+}
+
+export function retryWorkflowDagNode(params: {
+  instance: WorkflowDagInstance;
+  nodeId: string;
+  now?: string;
+}): WorkflowDagInstance {
+  const current = WorkflowDagInstanceSchema.parse(params.instance);
+  const execution = current.nodeExecutions.find((candidate) => candidate.nodeId === params.nodeId);
+
+  if (!execution) {
+    throw new Error(`Workflow DAG node ${params.nodeId} was not found in instance ${current.id}.`);
+  }
+
+  if (execution.status !== "failed") {
+    throw new Error(`Workflow DAG node ${params.nodeId} must be failed before it can be retried.`);
+  }
+
+  if (execution.attemptCount >= execution.maxAttempts) {
+    throw new Error(
+      `Workflow DAG node ${params.nodeId} exhausted retry attempts (${execution.attemptCount}/${execution.maxAttempts}).`
+    );
+  }
+
+  const timestamp = params.now ?? nowIso();
+  const retried = WorkflowDagNodeExecutionSchema.parse({
+    ...execution,
+    status: "queued",
+    runnerId: null,
+    lastError: null,
+    updatedAt: timestamp
+  });
+
+  return WorkflowDagInstanceSchema.parse({
+    ...current,
+    status: current.status === "failed" ? "running" : current.status,
+    nodeExecutions: current.nodeExecutions.map((candidate) => (candidate.nodeId === params.nodeId ? retried : candidate)),
+    auditLog: [...current.auditLog, `${timestamp} queued retry for node ${params.nodeId}`],
+    updatedAt: timestamp
+  });
+}
+
+export function inspectWorkflowDagInstance(instance: WorkflowDagInstance) {
+  const parsed = WorkflowDagInstanceSchema.parse(instance);
+  const counts = parsed.nodeExecutions.reduce<Record<WorkflowDagNodeStatus, number>>(
+    (memo, execution) => {
+      memo[execution.status] += 1;
+      return memo;
+    },
+    {
+      queued: 0,
+      running: 0,
+      paused: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      cancelled: 0
+    }
+  );
+
+  return {
+    id: parsed.id,
+    dagId: parsed.dagId,
+    workflowId: parsed.workflowId,
+    status: parsed.status,
+    counts,
+    nodeExecutions: parsed.nodeExecutions.map((execution) => ({
+      nodeId: execution.nodeId,
+      status: execution.status,
+      attemptCount: execution.attemptCount,
+      runnerId: execution.runnerId,
+      lastError: execution.lastError
+    }))
+  };
 }
 
 export function isJobClaimable(job: JobRecord, now = Date.now()): boolean {
@@ -230,14 +663,31 @@ export function isJobClaimable(job: JobRecord, now = Date.now()): boolean {
   return false;
 }
 
-export function computeJobRetryDelayMs(attemptCount: number, policy?: Partial<JobRetryPolicy>): number {
+export function computeJobRetryDelayMs(
+  attemptCount: number,
+  policy?: Partial<JobRetryPolicy>,
+  options?: {
+    jitterRatio?: number;
+    random?: () => number;
+  }
+): number {
   const normalized = {
     ...defaultRetryPolicy,
     ...policy
   };
   const attemptIndex = Math.max(0, attemptCount - 1);
   const multiplier = normalized.factor ** attemptIndex;
-  return Math.min(normalized.maxDelayMs, Math.round(normalized.baseDelayMs * multiplier));
+  const baseDelay = Math.min(normalized.maxDelayMs, Math.round(normalized.baseDelayMs * multiplier));
+  const jitterRatio = Math.max(0, Math.min(1, options?.jitterRatio ?? 0));
+
+  if (jitterRatio === 0) {
+    return baseDelay;
+  }
+
+  const random = options?.random ?? Math.random;
+  const spread = Math.round(baseDelay * jitterRatio);
+  const offset = Math.round((random() * 2 - 1) * spread);
+  return Math.max(0, Math.min(normalized.maxDelayMs, baseDelay + offset));
 }
 
 export function createDurableJobQueue(
@@ -246,6 +696,9 @@ export function createDurableJobQueue(
     runnerId: string;
     leaseMs?: number;
     retryPolicy?: Partial<JobRetryPolicy>;
+    concurrencyLimits?: JobConcurrencyLimits;
+    retryJitterRatio?: number;
+    requireIdempotencyForRetry?: boolean;
   }
 ): DurableJobQueue {
   const leaseMs = options.leaseMs ?? 30_000;
@@ -282,9 +735,11 @@ export function createDurableJobQueue(
           const claimed = await store.claimNextJob({
             userId: params?.userId,
             kinds: params?.kinds,
+            queue: params?.queue,
             runnerId: options.runnerId,
             leaseMs,
-            now: params?.now
+            now: params?.now,
+            concurrencyLimits: params?.concurrencyLimits ?? options.concurrencyLimits
           });
 
           recordCounter("durable_job.claim.total", 1, {
@@ -324,7 +779,10 @@ export function createDurableJobQueue(
       const timestamp = params.now ?? nowIso();
       const error = normalizeJobError(params.error);
 
-      if (params.job.attemptCount >= params.job.maxAttempts) {
+      if (
+        params.job.attemptCount >= params.job.maxAttempts ||
+        (options.requireIdempotencyForRetry === true && !params.job.idempotencyKey)
+      ) {
         return withSpan(
           "durable_job.dead_letter",
           {
@@ -350,9 +808,10 @@ export function createDurableJobQueue(
         );
       }
 
-      const nextAvailableAt = new Date(
-        Date.parse(timestamp) + computeJobRetryDelayMs(params.job.attemptCount, retryPolicy)
-      ).toISOString();
+      const retryDelayMs = computeJobRetryDelayMs(params.job.attemptCount, retryPolicy, {
+        jitterRatio: params.job.idempotencyKey ? options.retryJitterRatio : 0
+      });
+      const nextAvailableAt = new Date(Date.parse(timestamp) + retryDelayMs).toISOString();
 
       return withSpan(
         "durable_job.retry",
@@ -420,7 +879,7 @@ export async function processNextDurableJob(params: {
             jobId: job.id,
             jobKind: job.kind
           },
-          async () => handler(job)
+          async () => runJobHandlerWithOptionalTimeout(job, handler)
         )
     );
     return {
@@ -435,6 +894,39 @@ export async function processNextDurableJob(params: {
       claimedJob: job,
       finalJob: await params.queue.fail({ job, error: coerceJobFailure(error) })
     };
+  }
+}
+
+async function runJobHandlerWithOptionalTimeout(job: JobRecord, handler: JobHandler): Promise<void> {
+  if (!job.timeoutMs) {
+    await handler(job, { signal: new AbortController().signal });
+    return;
+  }
+
+  let timeout: NodeJS.Timeout | null = null;
+  const controller = new AbortController();
+  const timeoutError = new Error(`Durable job ${job.id} timed out after ${job.timeoutMs}ms.`);
+  const handlerPromise = Promise.resolve().then(() => handler(job, { signal: controller.signal }));
+  handlerPromise.catch(() => {
+    // The worker settles the durable job on the first failure result. Late handler
+    // failures after a timeout must not create unhandled rejections or a second
+    // queue transition.
+  });
+
+  try {
+    await Promise.race([
+      handlerPromise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort(timeoutError);
+          reject(timeoutError);
+        }, job.timeoutMs ?? 0);
+      })
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 

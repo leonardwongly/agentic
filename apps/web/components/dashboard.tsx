@@ -2,8 +2,11 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  commitmentInboxBucketValues,
   privacyOperationKindValues,
   workspaceRoleValues,
+  defaultWorkspaceShadowReplayPolicy,
+  enterpriseWorkspaceGovernanceDefaults,
   DEFAULT_COMMITMENT_INBOX_LIMIT,
   type OperatorProduct,
   type OperatorProductSelection,
@@ -12,31 +15,96 @@ import {
   type AgentDefinition,
   type AutopilotSettings,
   type ApprovalDecisionScope,
+  type AutonomyBudget,
   type BriefingPreferences,
   type BriefingType,
   type CommitmentInboxBucket,
   type CommitmentInboxPage,
   type GoalTemplate,
+  type PolicyDecision,
+  type PolicyReplayValidation,
   type WorkspaceGovernance
 } from "@agentic/contracts";
-import { describeIntegrationReadiness, type LocalNoteDocument } from "@agentic/integrations/client";
-import { getMemoryFreshness } from "@agentic/memory";
+import type { LocalNoteDocument } from "@agentic/integrations/client";
+import type { PolicyLearningInfluenceComparison, PolicyShadowReplayReadiness } from "@agentic/policy";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
+import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
+import { DashboardCommandCenter } from "./dashboard-command-center";
+import {
+  DashboardGoalsCard,
+  type RecommendationLoadState
+} from "./dashboard-goals-card";
+import { DashboardAdvancedSurface } from "./dashboard-advanced-surface";
+import type {
+  GoalRecommendationsApiResponse,
+  OperatorProductPayload,
+  PrivacyControlsApiResponse,
+  PrivacyControlSummary,
+  RecommendationFeedbackApiResponse,
+  RequestState
+} from "./dashboard-types";
 import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
 import { CoreLoopViewTracker } from "./core-loop-view-tracker";
+import {
+  buildDashboardCommandCenterModel,
+  getPreferredCommandCenterRole,
+  type CommandCenterRole
+} from "../lib/command-center";
 import { isAdvancedDashboardSection } from "../lib/dashboard-surface";
 import { describeCoreLoopHealth, summarizeCoreLoopTelemetry } from "../lib/core-loop-telemetry";
-import { summarizeFeatureCapabilities } from "../lib/feature-capabilities";
+import {
+  deriveFeatureCapabilityReadiness,
+  resolveFeatureCapabilities,
+  summarizeFeatureCapabilities
+} from "../lib/feature-capabilities";
 import { buildNlCapabilitySummary } from "../lib/nl-capabilities";
-import { getGoalShareSuccessMessage } from "../lib/share-client";
-import { AgentsPanel } from "./agents";
+import {
+  GOAL_SHARE_MUTATION_DENIED_REASON,
+  canManageGoalSharesForRole,
+  canOperateSharedWorkflow,
+  getSharedWorkflowDeniedReason,
+  resolveWorkspaceRoleForUser
+} from "../lib/workspace-role-permissions";
+import {
+  buildGoalRecommendationQuery,
+  buildRecommendationFeedbackPayload,
+  buildRecommendationRefinementSource,
+  type RecommendationRefinementSource
+} from "../lib/workflow-recommendations";
 import { CommandPalette } from "./command-palette";
+import {
+  buildClientIdempotencyKey,
+  type BriefingCreateApiResponse,
+  type BriefingJobStatusApiResponse,
+  type DocsRenderApiResponse,
+  type DocsRenderJobStatusApiResponse,
+  type GoalJobStatusApiResponse,
+  type GoalQueuedApiResponse,
+  loadDashboardSnapshot as fetchDashboardSnapshot,
+  loadTemplatesSnapshot as fetchTemplatesSnapshot,
+  type NLIntentApiResponse,
+  pollJobStatusUntilSettled,
+  type TemplateRunApiResponse,
+  type TemplateRunJobStatusApiResponse,
+  readJson
+} from "./dashboard-async";
 import { DashboardOperatingSectionsCard } from "./dashboard-operating-sections";
 import { DashboardOperationsSections } from "./dashboard-operations-sections";
+import { useGoalShareReview } from "./use-goal-share-review";
 import {
   StatusBadge,
   RiskBadge,
+  ExecutionModeBadge,
+  ImplementationTierBadge,
+  approvalMatchesExecutionModeFilter,
+  bundleMatchesExecutionModeFilter,
+  executionModeFilterOptions,
+  extractArtifactExecutionMode,
+  getExecutionModeFilterOption,
+  getImplementationTierPresentation,
+  getExecutionModePresentation,
+  matchesExecutionModeFilter,
   CopyButton,
   CopyableText,
   RelativeTime,
@@ -49,20 +117,14 @@ import {
   QuickActionsBar,
   FloatingActionsBar,
   NoApprovalsEmpty,
-  NoGoalsEmpty,
-  NoMemoriesEmpty,
   NoArtifactsEmpty,
-  NoWatchersEmpty,
-  NoTemplatesEmpty,
   // 10x Components Phase 1
   StatsBar,
   useStatsBar,
   CollapsibleSection,
-  GoalPreview,
   ArtifactPreview,
   ApprovalPreview,
   useSmartDefaults,
-  ContextualSuggestion,
   useRecentActions,
   RecentActionsBar,
   useBatchSelection,
@@ -74,7 +136,6 @@ import {
   UnifiedFeed,
   useUnifiedFeed,
   RiskClassHelp,
-  MemoryTypeHelp,
   FeatureHelp,
   useDeepLink,
   ShareLinkButton,
@@ -96,15 +157,13 @@ import {
   ThemeToggle,
   NLFloatingBar,
   useNLExecutor,
-  MemorySearch,
-  useBulkMemorySelection,
-  BulkMemoryActions,
   TimelineFilter,
   useFilteredTimeline,
   HealthIndicator,
   InlineGoalProgress,
   useGoalProgress,
-  AgentOverride
+  formatConfidencePercentage,
+  type ExecutionModeFilterValue
 } from "./ui";
 
 type DashboardProps = {
@@ -113,143 +172,59 @@ type DashboardProps = {
   initialCommitmentInbox: CommitmentInboxPage;
 };
 
-type RequestState = {
-  kind: "idle" | "success" | "error";
-  message: string;
-};
+type WorkspaceGovernanceDraft = Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt">;
 
-type NLIntentQueuedJob = {
-  id: string;
-  kind: "goal_create" | "briefing_create";
-  status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-  goalId: string;
-  briefingType?: BriefingType;
-  attemptCount: number;
-  maxAttempts: number;
-  createdAt: string;
-  updatedAt: string;
-};
+function resolveClientGovernanceDefaults(): WorkspaceGovernanceDraft {
+  const profile =
+    process.env.NEXT_PUBLIC_AGENTIC_GOVERNANCE_DEFAULT_PROFILE ?? process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
+  if (profile?.trim().toLowerCase() !== "demo") {
+    return enterpriseWorkspaceGovernanceDefaults;
+  }
 
-type NLIntentApiResponse = {
-  message: string;
-  data?: unknown;
-  dashboard?: DashboardData;
-  job?: NLIntentQueuedJob;
-  statusUrl?: string;
-};
-
-type OperatorProductPayload = {
-  products: OperatorProduct[];
-  selection: OperatorProductSelection | null;
-  agents: AgentDefinition[];
-  templates: GoalTemplate[];
-};
-
-type GoalQueuedApiResponse = {
-  job: {
-    id: string;
-    kind: "goal_create" | "goal_refine";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    goalId: string;
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type GoalQueuedJob = GoalQueuedApiResponse["job"];
-
-type GoalJobStatusApiResponse = {
-  job: GoalQueuedJob;
-  result: {
-    goalId: string;
-    goalStatus: "planned" | "running" | "waiting" | "completed";
-    taskCount: number;
-    completedTaskCount: number;
-    pendingApprovalCount: number;
-    artifactCount: number;
-    watcherCount: number;
-    requiresReview: boolean;
-  } | null;
-  error: string | null;
-};
-
-type BriefingCreateApiResponse = {
-  job: {
-    id: string;
-    kind: "briefing_create";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    goalId: string;
-    briefingType: BriefingType;
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type BriefingJobStatusApiResponse = {
-  job: BriefingCreateApiResponse["job"];
-  result: GoalJobStatusApiResponse["result"];
-  error: string | null;
-};
-
-type TemplateRunApiResponse = {
-  job: {
-    id: string;
-    kind: "template_run";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    templateId: string;
-    goalId: string;
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type TemplateRunJobStatusApiResponse = {
-  job: TemplateRunApiResponse["job"];
-  result: GoalJobStatusApiResponse["result"];
-  error: string | null;
-};
-
-type DocsRenderApiResponse = {
-  job: {
-    id: string;
-    kind: "docs_render";
-    status: "queued" | "running" | "retrying" | "completed" | "dead_letter";
-    attemptCount: number;
-    maxAttempts: number;
-    createdAt: string;
-    updatedAt: string;
-  };
-  statusUrl: string;
-};
-
-type DocsRenderJobStatusApiResponse = {
-  job: DocsRenderApiResponse["job"];
-  result: {
-    message: string;
-  } | null;
-  error: string | null;
-};
-
-const GOAL_JOB_POLL_INTERVAL_MS = 500;
-const GOAL_JOB_POLL_TIMEOUT_MS = 60_000;
-
-function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt"> {
   return {
-    approvalMode: governance?.approvalMode ?? "risk_based",
-    requireAuditExports: governance?.requireAuditExports ?? false,
-    maxAutoRunRiskClass: governance?.maxAutoRunRiskClass ?? "R1",
-    externalSendRequiresApproval: governance?.externalSendRequiresApproval ?? true,
-    calendarWriteRequiresApproval: governance?.calendarWriteRequiresApproval ?? true,
-    retentionDays: governance?.retentionDays ?? 365
+    approvalMode: "risk_based",
+    requireAuditExports: true,
+    maxAutoRunRiskClass: "R1",
+    publicSharingEnabled: true,
+    providerAccessRequiresApproval: true,
+    escalationRequiresApproval: true,
+    externalSendRequiresApproval: true,
+    calendarWriteRequiresApproval: true,
+    shadowReplayPolicy: defaultWorkspaceShadowReplayPolicy,
+    retentionDays: 365
+  };
+}
+
+function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): WorkspaceGovernanceDraft {
+  const defaults = resolveClientGovernanceDefaults();
+  return {
+    approvalMode: governance?.approvalMode ?? defaults.approvalMode,
+    requireAuditExports: governance?.requireAuditExports ?? defaults.requireAuditExports,
+    maxAutoRunRiskClass: governance?.maxAutoRunRiskClass ?? defaults.maxAutoRunRiskClass,
+    publicSharingEnabled: governance?.publicSharingEnabled ?? defaults.publicSharingEnabled,
+    providerAccessRequiresApproval:
+      governance?.providerAccessRequiresApproval ?? defaults.providerAccessRequiresApproval,
+    escalationRequiresApproval: governance?.escalationRequiresApproval ?? defaults.escalationRequiresApproval,
+    externalSendRequiresApproval:
+      governance?.externalSendRequiresApproval ?? defaults.externalSendRequiresApproval,
+    calendarWriteRequiresApproval:
+      governance?.calendarWriteRequiresApproval ?? defaults.calendarWriteRequiresApproval,
+    shadowReplayPolicy: {
+      enabled: governance?.shadowReplayPolicy?.enabled ?? defaults.shadowReplayPolicy.enabled,
+      promotionMode:
+        governance?.shadowReplayPolicy?.promotionMode ?? defaults.shadowReplayPolicy.promotionMode,
+      rollbackOutcome:
+        governance?.shadowReplayPolicy?.rollbackOutcome ?? defaults.shadowReplayPolicy.rollbackOutcome,
+      minimumMatchedEpisodes:
+        governance?.shadowReplayPolicy?.minimumMatchedEpisodes ?? defaults.shadowReplayPolicy.minimumMatchedEpisodes,
+      minimumPrecision:
+        governance?.shadowReplayPolicy?.minimumPrecision ?? defaults.shadowReplayPolicy.minimumPrecision,
+      maximumNegativeOutcomeRate:
+        governance?.shadowReplayPolicy?.maximumNegativeOutcomeRate ?? defaults.shadowReplayPolicy.maximumNegativeOutcomeRate,
+      maximumFailureCostRate:
+        governance?.shadowReplayPolicy?.maximumFailureCostRate ?? defaults.shadowReplayPolicy.maximumFailureCostRate
+    },
+    retentionDays: governance?.retentionDays ?? defaults.retentionDays
   };
 }
 
@@ -280,27 +255,9 @@ function formatCommitmentUrgencyLabel(value: string): string {
   return value.replace(/_/gu, " ");
 }
 
-async function readJson<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as T & { error?: string };
-
-  if (!response.ok) {
-    const message = typeof payload === "object" && payload && "error" in payload ? String(payload.error) : "Request failed.";
-    throw new Error(message);
-  }
-
-  return payload;
+function isCommitmentInboxBucket(value: string | undefined): value is CommitmentInboxBucket {
+  return value !== undefined && commitmentInboxBucketValues.includes(value as CommitmentInboxBucket);
 }
-
-async function waitForDelay(ms: number): Promise<void> {
-  await new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function buildClientIdempotencyKey(): string {
-  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 const commitmentInboxSections: Array<{
   bucket: CommitmentInboxBucket;
   label: string;
@@ -341,8 +298,16 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [briefingState, setBriefingState] = useState<RequestState>({ kind: "idle", message: "" });
   const [autopilotState, setAutopilotState] = useState<RequestState>({ kind: "idle", message: "" });
   const [privacyState, setPrivacyState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [lastShareUrl, setLastShareUrl] = useState<string | null>(null);
+  const [privacyInventoryState, setPrivacyInventoryState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [privacyControls, setPrivacyControls] = useState<PrivacyControlSummary | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const {
+    lastShareUrl,
+    pendingShareReview,
+    shareGoal,
+    confirmGoalShare,
+    cancelGoalShareReview
+  } = useGoalShareReview({ setData, setIsPending, setShareState });
   const [templates, setTemplates] = useState<GoalTemplate[]>([]);
   const [templateState, setTemplateState] = useState<RequestState>({ kind: "idle", message: "" });
   const [operatorProducts, setOperatorProducts] = useState<OperatorProduct[]>([]);
@@ -351,16 +316,22 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [operatorProductTemplates, setOperatorProductTemplates] = useState<GoalTemplate[]>([]);
   const [operatorProductState, setOperatorProductState] = useState<RequestState>({ kind: "idle", message: "" });
   const [refinementInputs, setRefinementInputs] = useState<Record<string, string>>({});
+  const [refinementSourceByGoal, setRefinementSourceByGoal] = useState<Record<string, RecommendationRefinementSource>>({});
   const [refinementState, setRefinementState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [recommendationState, setRecommendationState] = useState<RequestState>({ kind: "idle", message: "" });
+  const [recommendationResultsByGoal, setRecommendationResultsByGoal] = useState<Record<string, RecommendationLoadState>>({});
+  const [recommendationPendingByGoal, setRecommendationPendingByGoal] = useState<Record<string, boolean>>({});
   const [slideOutPanel, setSlideOutPanel] = useState<{ type: string; data: unknown } | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
+  const [commandCenterRole, setCommandCenterRole] = useState<CommandCenterRole>("command");
   const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(undefined);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const [commitmentBucket, setCommitmentBucket] = useState<CommitmentInboxBucket>(initialCommitmentInbox.bucket);
   const [commitmentInbox, setCommitmentInbox] = useState(initialCommitmentInbox);
   const [commitmentInboxState, setCommitmentInboxState] = useState<RequestState>({ kind: "idle", message: "" });
   const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
+  const [executionModeFilter, setExecutionModeFilter] = useState<ExecutionModeFilterValue>("all");
   const [briefingPreferencesDraft, setBriefingPreferencesDraft] = useState<BriefingPreferences>(initialData.briefingPreferences);
   const [autopilotDraft, setAutopilotDraft] = useState<AutopilotSettings>(initialData.autopilotSettings);
   const [workspaceName, setWorkspaceName] = useState("");
@@ -374,6 +345,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const selectedNoteTitleRef = useRef("");
   const selectedNoteContentRef = useRef("");
   const commitmentInboxRequestIdRef = useRef(0);
+  const recommendationQueriesRef = useRef<Record<string, string | null>>({});
 
   // 10x Dashboard Hooks - Phase 1
   const statsBar = useStatsBar(data);
@@ -387,9 +359,39 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   // 10x Dashboard Hooks - Phase 2
   const undo = useUndo();
   const [approvalGroupBy, setApprovalGroupBy] = useState<GroupBy>("none");
-  const approvalGroups = useApprovalGroups(data.approvals.filter((a) => a.decision === "pending"), approvalGroupBy);
-  const memoryBulkSelection = useBulkMemorySelection();
   const timelineFilters = useFilteredTimeline(data.actionLogs);
+  const pendingApprovals = useMemo(
+    () => data.approvals.filter((approval) => approval.decision === "pending"),
+    [data.approvals]
+  );
+  const goalBundleById = useMemo(
+    () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle])),
+    [data.goals]
+  );
+  const goalConfidenceById = useMemo(
+    () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.confidence])),
+    [data.goals]
+  );
+  const filteredGoalBundles = useMemo(
+    () => data.goals.filter((bundle) => bundleMatchesExecutionModeFilter(bundle, executionModeFilter)),
+    [data.goals, executionModeFilter]
+  );
+  const filteredPendingApprovals = useMemo(
+    () =>
+      pendingApprovals.filter((approval) =>
+        approvalMatchesExecutionModeFilter(approval, goalBundleById.get(approval.goalId), executionModeFilter)
+      ),
+    [executionModeFilter, goalBundleById, pendingApprovals]
+  );
+  const filteredLatestArtifacts = useMemo(
+    () =>
+      data.latestArtifacts.filter((artifact) =>
+        matchesExecutionModeFilter(extractArtifactExecutionMode(artifact), executionModeFilter)
+      ),
+    [data.latestArtifacts, executionModeFilter]
+  );
+  const approvalGroups = useApprovalGroups(filteredPendingApprovals, approvalGroupBy);
+  const selectedExecutionModeFilter = getExecutionModeFilterOption(executionModeFilter);
   
   // NL Executor for dashboard commands
   const executeNlIntent = useCallback(
@@ -490,15 +492,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   });
   
   // Batch selection for approvals
-  const approvalBatch = useBatchSelection(
-    data.approvals.filter((a) => a.decision === "pending"),
-    "approval"
-  );
-
-  const pendingApprovals = useMemo(
-    () => data.approvals.filter((approval) => approval.decision === "pending"),
-    [data.approvals]
-  );
+  const approvalBatch = useBatchSelection(filteredPendingApprovals, "approval");
   const nlCapabilitySummary = useMemo(
     () =>
       buildNlCapabilitySummary({
@@ -513,17 +507,49 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     () => data.integrations.filter((integration) => integration.status === "ready").length,
     [data.integrations]
   );
-  const featureCapabilitySummary = useMemo(() => summarizeFeatureCapabilities(), []);
+  const resolvedFeatureCapabilities = useMemo(
+    () =>
+      resolveFeatureCapabilities({
+        activeWorkspaceName: data.activeWorkspace?.name ?? null,
+        watcherCount: data.watchers.filter((watcher) => watcher.status === "active").length,
+        autopilotMode: data.autopilotSettings.mode,
+        operations: data.operations
+          ? {
+              asyncExecutionStatus: data.operations.asyncExecution.status,
+              asyncIssueCount: data.operations.asyncExecution.issueCount,
+              connectorHealthStatus: data.operations.connectorHealth.status,
+              connectorIssueCount: data.operations.connectorHealth.issueCount,
+              autonomyPostureStatus: data.operations.autonomyPosture.status,
+              hasOverridePaths: data.operations.autonomyPosture.overridePaths.length > 0
+            }
+          : null
+      }),
+    [data.activeWorkspace?.name, data.autopilotSettings.mode, data.operations, data.watchers]
+  );
+  const featureCapabilityReadiness = useMemo(
+    () =>
+      deriveFeatureCapabilityReadiness({
+        autopilotSettings: data.autopilotSettings,
+        autopilotEvents: data.autopilotEvents,
+        watchers: data.watchers,
+        diagnostics: data.diagnostics
+      }),
+    [data.autopilotEvents, data.autopilotSettings, data.diagnostics, data.watchers]
+  );
+  const featureCapabilitySummary = useMemo(
+    () => summarizeFeatureCapabilities(featureCapabilityReadiness),
+    [featureCapabilityReadiness]
+  );
+  const watcherCapability = useMemo(
+    () => resolvedFeatureCapabilities.find((feature) => feature.id === "watchers") ?? null,
+    [resolvedFeatureCapabilities]
+  );
+  const autopilotCapability = useMemo(
+    () => resolvedFeatureCapabilities.find((feature) => feature.id === "autopilot-control") ?? null,
+    [resolvedFeatureCapabilities]
+  );
   const coreLoopSummary = useMemo(() => summarizeCoreLoopTelemetry(data), [data]);
   const coreLoopHealthCopy = useMemo(() => describeCoreLoopHealth(coreLoopSummary), [coreLoopSummary]);
-  const integrationSurfaces = useMemo(
-    () =>
-      data.integrations.map((integration) => ({
-        integration,
-        readiness: describeIntegrationReadiness(integration)
-      })),
-    [data.integrations]
-  );
 
   const selectedOperatorProduct = useMemo(
     () =>
@@ -534,10 +560,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   );
 
   const operatorProductTemplateLookup = templates.length > 0 ? templates : operatorProductTemplates;
-
-  const selectedNotePreview = useMemo(
-    () => notes.find((note) => note.slug === selectedNoteSlug) ?? null,
-    [notes, selectedNoteSlug]
+  const commandCenterModel = useMemo(
+    () =>
+      buildDashboardCommandCenterModel({
+        data,
+        selectedOperatorProduct
+      }),
+    [data, selectedOperatorProduct]
   );
 
   const shareStatsByGoal = useMemo(
@@ -557,6 +586,52 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         })
       ),
     [data.goalShares, data.goals]
+  );
+  const currentDashboardUserId =
+    data.workspaceSelection?.userId ?? data.briefingPreferences.userId ?? data.autopilotSettings.userId ?? null;
+  const canManageGoalShares = Boolean(data.activeWorkspace) && canManageGoalSharesForRole(data.operatingSections.roleView.role);
+  const goalSharePermissionReason = data.activeWorkspace
+    ? GOAL_SHARE_MUTATION_DENIED_REASON
+    : "Select a workspace before managing public goal share links.";
+  const resolveSharedWorkflowMutationState = useCallback(
+    (
+      workspaceId: string | null | undefined,
+      operation: "refine_goal" | "manage_watchers" | "replay_dead_letter_job"
+    ) => {
+      const workspaceRole =
+        resolveWorkspaceRoleForUser(data.workspaceMembers, workspaceId, currentDashboardUserId) ??
+        (workspaceId === data.activeWorkspace?.id ? data.operatingSections.roleView.role : null);
+      const allowed = canOperateSharedWorkflow({ workspaceId, role: workspaceRole });
+
+      return {
+        allowed,
+        reason: allowed ? null : getSharedWorkflowDeniedReason(operation)
+      };
+    },
+    [
+      currentDashboardUserId,
+      data.activeWorkspace?.id,
+      data.operatingSections.roleView.role,
+      data.workspaceMembers
+    ]
+  );
+  const goalRefinementStateById = useMemo(
+    () =>
+      new Map(
+        data.goals.map((bundle) => [
+          bundle.goal.id,
+          resolveSharedWorkflowMutationState(bundle.goal.workspaceId, "refine_goal")
+        ])
+      ),
+    [data.goals, resolveSharedWorkflowMutationState]
+  );
+  const sharedJobReplayState = useMemo(
+    () =>
+      resolveSharedWorkflowMutationState(
+        data.activeWorkspace && !data.activeWorkspace.isPersonal ? data.activeWorkspace.id : null,
+        "replay_dead_letter_job"
+      ),
+    [data.activeWorkspace, resolveSharedWorkflowMutationState]
   );
 
   const reliabilityHealth = useMemo(() => {
@@ -617,6 +692,15 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     scrollToSectionTarget(section, itemId);
   }, [deepLink, scrollToSectionTarget, showAdvancedOperations]);
 
+  const openView = useCallback((section: string, itemId?: string, filter?: CommitmentInboxBucket | null) => {
+    if (section === "commitments" && filter) {
+      setCommitmentBucket(filter);
+      deepLink.setFilter(filter);
+    }
+
+    navigateToSection(section, itemId);
+  }, [deepLink, navigateToSection]);
+
   const openDiagnosticTarget = useCallback((target: DashboardDiagnosticTarget) => {
     navigateToSection(target.section, target.itemId);
   }, [navigateToSection]);
@@ -656,6 +740,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   }, [data, deepLink.state.item, deepLink.state.section, scrollToSectionTarget, showAdvancedOperations]);
 
   useEffect(() => {
+    if (!isCommitmentInboxBucket(deepLink.state.filter) || deepLink.state.filter === commitmentBucket) {
+      return;
+    }
+
+    setCommitmentBucket(deepLink.state.filter);
+  }, [commitmentBucket, deepLink.state.filter]);
+
+  useEffect(() => {
     setBriefingPreferencesDraft(data.briefingPreferences);
   }, [data.briefingPreferences]);
 
@@ -670,6 +762,104 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   useEffect(() => {
     void loadOperatorProducts();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    for (const bundle of filteredGoalBundles.slice(0, 4)) {
+      const query = buildGoalRecommendationQuery(bundle);
+      const goalId = bundle.goal.id;
+
+      if (!query) {
+        recommendationQueriesRef.current[goalId] = null;
+        setRecommendationResultsByGoal((prev) => {
+          const existing = prev[goalId];
+
+          if (existing?.status === "ready" && existing.query === null && existing.recommendations.length === 0 && existing.error === null) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            [goalId]: {
+              status: "ready",
+              query: null,
+              recommendations: [],
+              policyPromotion: null,
+              error: null
+            }
+          };
+        });
+        continue;
+      }
+
+      const queryString = query.toString();
+
+      if (recommendationQueriesRef.current[goalId] === queryString) {
+        continue;
+      }
+
+      recommendationQueriesRef.current[goalId] = queryString;
+      setRecommendationResultsByGoal((prev) => ({
+        ...prev,
+        [goalId]: {
+          status: "loading",
+          query: queryString,
+          recommendations: prev[goalId]?.recommendations ?? [],
+          policyPromotion: prev[goalId]?.policyPromotion ?? null,
+          error: null
+        }
+      }));
+
+      void (async () => {
+        try {
+          const payload = await readJson<GoalRecommendationsApiResponse>(
+            await fetch(`/api/memory/recommendations?${queryString}`, {
+              cache: "no-store"
+            })
+          );
+
+          if (cancelled) {
+            return;
+          }
+
+          setRecommendationResultsByGoal((prev) => ({
+            ...prev,
+            [goalId]: {
+              status: "ready",
+              query: queryString,
+              recommendations: payload.recommendations,
+              policyPromotion: payload.policyPromotion,
+              error: null
+            }
+          }));
+        } catch (error) {
+          if (cancelled) {
+            return;
+          }
+
+          setRecommendationResultsByGoal((prev) => ({
+            ...prev,
+            [goalId]: {
+              status: "error",
+              query: queryString,
+              recommendations: [],
+              policyPromotion: null,
+              error: error instanceof Error ? error.message : "Failed to load recommendation history."
+            }
+          }));
+        }
+      })();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredGoalBundles]);
+ 
+  useEffect(() => {
+    setCommandCenterRole(getPreferredCommandCenterRole(selectedOperatorProduct));
+  }, [selectedOperatorProduct]);
 
   const setSelectedNoteTitleDraft = (value: string) => {
     selectedNoteTitleRef.current = value;
@@ -729,100 +919,105 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   }, [statsBar]);
 
   const loadDashboardSnapshot = useCallback(async () => {
-    return readJson<{ dashboard: DashboardData }>(
-      await fetch("/api/goals", {
-        cache: "no-store"
-      })
-    );
+    return fetchDashboardSnapshot();
   }, []);
+
+  const loadPrivacyControls = useCallback(async () => {
+    try {
+      const payload = await readJson<PrivacyControlsApiResponse>(
+        await fetch("/api/governance/privacy", {
+          cache: "no-store"
+        })
+      );
+
+      startTransition(() => {
+        setPrivacyControls(payload.controls);
+        setPrivacyInventoryState({
+          kind: "success",
+          message: `Registry v${payload.controls.registryVersion} reviewed ${payload.controls.reviewedAt}.`
+        });
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to load privacy controls.";
+
+      setPrivacyControls(null);
+      setPrivacyInventoryState({
+        kind: "error",
+        message: errorMessage
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPrivacyControls();
+  }, [loadPrivacyControls]);
 
   const loadTemplatesSnapshot = useCallback(async () => {
-    return readJson<{ templates: GoalTemplate[] }>(
-      await fetch("/api/templates", {
-        cache: "no-store"
-      })
-    );
+    return fetchTemplatesSnapshot();
   }, []);
 
-  const pollGoalJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
+  const pollGoalJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<GoalJobStatusApiResponse>(statusUrl);
+  }, []);
 
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<GoalJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
+  const pollBriefingJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<BriefingJobStatusApiResponse>(statusUrl);
+  }, []);
 
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
+  const pollTemplateRunJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<TemplateRunJobStatusApiResponse>(statusUrl);
+  }, []);
+
+  const pollDocsRenderJobUntilSettled = useCallback((statusUrl: string) => {
+    return pollJobStatusUntilSettled<DocsRenderJobStatusApiResponse>(statusUrl);
+  }, []);
+
+  const submitRecommendationFeedback = useCallback(
+    async (goalId: string, recommendation: WorkflowRecommendation, decision: "accepted" | "edited" | "rejected" | "ignored", goalTitle: string) => {
+      setRecommendationPendingByGoal((prev) => ({ ...prev, [goalId]: true }));
+
+      try {
+        const payload = await readJson<RecommendationFeedbackApiResponse>(
+          await fetch(`/api/goals/${goalId}/recommendations/feedback`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json"
+            },
+            body: JSON.stringify(buildRecommendationFeedbackPayload(recommendation, decision))
+          })
+        );
+
+        startTransition(() => {
+          setData(payload.dashboard);
+          statsBar.updateSync();
+        });
+
+        if (decision === "edited") {
+          const sourceRecommendation = buildRecommendationRefinementSource(recommendation, goalTitle);
+
+          setRefinementInputs((prev) => ({
+            ...prev,
+            [goalId]: sourceRecommendation.suggestedMessage
+          }));
+          setRefinementSourceByGoal((prev) => ({
+            ...prev,
+            [goalId]: sourceRecommendation
+          }));
+        }
+
+        const successMessage = payload.message;
+        setRecommendationState({ kind: "success", message: successMessage });
+        toast.success(successMessage);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Failed to record recommendation feedback.";
+        setRecommendationState({ kind: "error", message: errorMessage });
+        toast.error("Recommendation feedback failed", errorMessage);
+      } finally {
+        setRecommendationPendingByGoal((prev) => ({ ...prev, [goalId]: false }));
       }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
-  }, []);
-
-  const pollBriefingJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<BriefingJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
-  }, []);
-
-  const pollTemplateRunJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<TemplateRunJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
-  }, []);
-
-  const pollDocsRenderJobUntilSettled = useCallback(async (statusUrl: string) => {
-    const startedAt = Date.now();
-
-    while (Date.now() - startedAt < GOAL_JOB_POLL_TIMEOUT_MS) {
-      const payload = await readJson<DocsRenderJobStatusApiResponse>(
-        await fetch(statusUrl, {
-          cache: "no-store"
-        })
-      );
-
-      if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
-        return payload;
-      }
-
-      await waitForDelay(GOAL_JOB_POLL_INTERVAL_MS);
-    }
-
-    return null;
-  }, []);
+    },
+    [statsBar]
+  );
 
   const submitGoalRequest = useCallback(async (nextRequest: string, agentId?: string) => {
     setIsPending(true);
@@ -1405,45 +1600,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     }
   };
 
-  const shareGoal = async (goalId: string, title: string) => {
-    setIsPending(true);
-
-    try {
-      const payload = await readJson<{ shareId: string; shareUrl: string; dashboard: DashboardData }>(
-        await fetch(`/api/goals/${encodeURIComponent(goalId)}/share`, {
-          method: "POST"
-        })
-      );
-      const canCopy = typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function";
-      let copiedToClipboard = false;
-
-      if (canCopy) {
-        try {
-          await navigator.clipboard.writeText(payload.shareUrl);
-          copiedToClipboard = true;
-        } catch {
-          copiedToClipboard = false;
-        }
-      }
-
-      startTransition(() => {
-        setData(payload.dashboard);
-        setLastShareUrl(payload.shareUrl);
-        setShareState({
-          kind: "success",
-          message: getGoalShareSuccessMessage(title, copiedToClipboard)
-        });
-      });
-    } catch (error) {
-      setShareState({
-        kind: "error",
-        message: error instanceof Error ? error.message : "Failed to create the public share link."
-      });
-    } finally {
-      setIsPending(false);
-    }
-  };
-
   const getApprovalNote = useCallback((approvalId: string) => {
     const nextNote = approvalNotes[approvalId]?.trim();
     return nextNote ? nextNote : null;
@@ -1528,6 +1684,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
   const refineGoal = async (goalId: string) => {
     const message = (refinementInputs[goalId] ?? "").trim();
+    const sourceRecommendation = refinementSourceByGoal[goalId];
 
     if (!message) {
       setRefinementState({ kind: "error", message: "Enter a refinement message before submitting." });
@@ -1545,7 +1702,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             "content-type": "application/json",
             "x-idempotency-key": buildClientIdempotencyKey()
           },
-          body: JSON.stringify({ message })
+          body: JSON.stringify({
+            message,
+            ...(sourceRecommendation ? { sourceRecommendation } : {})
+          })
         })
       );
       const settled = await pollGoalJobUntilSettled(queued.statusUrl);
@@ -1565,6 +1725,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       startTransition(() => {
         setData(snapshot.dashboard);
         setRefinementInputs((prev) => ({ ...prev, [goalId]: "" }));
+        setRefinementSourceByGoal((prev) => {
+          const { [goalId]: _removed, ...rest } = prev;
+          return rest;
+        });
         setRefinementState({ kind: "success", message: "Goal refined successfully." });
         toast.success("Goal refined successfully.");
         statsBar.updateSync();
@@ -2094,7 +2258,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           <ThemeToggle />
         </div>
 
-        <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openTarget={deepLink.openTarget} />
+        <DashboardCommandCenter
+          model={commandCenterModel}
+          role={commandCenterRole}
+          onRoleChange={setCommandCenterRole}
+          openTarget={navigateToSection}
+        />
+
+        <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openView={openView} />
 
         {/* Recent Actions */}
         {recentActions.recentActions.length > 0 && (
@@ -2178,7 +2349,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           {data.diagnostics.items.length === 0 ? (
             <p className="empty-state">
               The dashboard is clear. New reliability issues will appear here as soon as approvals expire, memories go stale,
-              queues degrade, connectors lose health, workflows block, or watchers outlive their goals.
+              context signals conflict, queues degrade, connectors lose health, workflows block, or watchers outlive their goals.
             </p>
           ) : (
             <div className="diagnostic-grid">
@@ -2332,6 +2503,16 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             totalIntegrations={data.integrations.length}
             watcherCount={data.watchers.length}
             autopilotMode={data.autopilotSettings.mode}
+            watchersReadiness={watcherCapability?.readiness ?? "preview"}
+            watchersReason={
+              watcherCapability?.runtimeReason ??
+              "Operational telemetry is unavailable, so watcher readiness stays fail-closed."
+            }
+            autopilotReadiness={autopilotCapability?.readiness ?? "preview"}
+            autopilotReason={
+              autopilotCapability?.runtimeReason ??
+              "Operational telemetry is unavailable, so autopilot readiness stays fail-closed."
+            }
             coreOperationalCount={featureCapabilitySummary.core.operationalOrBetter}
             coreTotalCount={featureCapabilitySummary.core.total}
             advancedOperationalCount={featureCapabilitySummary.advanced.operationalOrBetter}
@@ -2350,6 +2531,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               governanceState={governanceState}
               autopilotState={autopilotState}
               privacyState={privacyState}
+              privacyInventoryState={privacyInventoryState}
+              privacyControls={privacyControls}
               workspaceName={workspaceName}
               setWorkspaceName={setWorkspaceName}
               workspaceSlug={workspaceSlug}
@@ -2384,6 +2567,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               highlightedItemId={highlightedItemId}
               getItemAnchorId={getDashboardItemAnchorId}
               navigateToSection={navigateToSection}
+              canReplayDeadLetterJobs={sharedJobReplayState.allowed}
+              replayPermissionReason={sharedJobReplayState.reason ?? ""}
             />
           ) : null}
 
@@ -2560,7 +2745,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                   key={section.bucket}
                   type="button"
                   className={`filter-chip ${commitmentBucket === section.bucket ? "active" : ""}`}
-                  onClick={() => setCommitmentBucket(section.bucket)}
+                  onClick={() => {
+                    setCommitmentBucket(section.bucket);
+                    deepLink.setFilter(section.bucket);
+                  }}
                 >
                   {section.label} ({commitmentInbox.counts[section.bucket]})
                 </button>
@@ -2784,118 +2972,66 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             </div>
           </article>
 
-        <article className="card request-card" id="section-goals">
+        <article className="card">
           <div className="card-header">
-            <h2>Request work</h2>
-            <span>{data.goals.length} goals</span>
+            <h2>Execution visibility</h2>
+            <span>Filters goals, approvals, and artifacts together</span>
           </div>
-            {/* Smart suggestion */}
-            <ContextualSuggestion
-              type="goal"
-              currentValue={request}
-              onApply={(suggestion) => setRequest(suggestion)}
-            />
-            <textarea
-              value={request}
-              onChange={(event) => setRequest(event.target.value)}
-              placeholder="Example: Clear today’s approvals, surface blocked commitments, and draft replies for anything urgent."
-              rows={6}
-            />
-            {/* Agent Override - select specific agent for this goal */}
-            <AgentOverride
-              value={selectedAgentId}
-              onChange={setSelectedAgentId}
-              disabled={isPending}
-            />
-            <div className="hero-button-row">
-              <button type="button" className="primary-button" onClick={createGoal} disabled={isPending}>
-                Submit request
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void generateBriefing("startup")} disabled={isPending}>
-                Startup Briefing
-              </button>
-            </div>
-            <p className={`status-chip ${submitState.kind}`}>
-              {submitState.message || "Requests are validated, policy checked, and converted into bounded execution bundles before anything runs."}
-            </p>
-            {shareState.message ? (
-              <div className="share-status-row">
-                <p className={`status-chip ${shareState.kind}`}>{shareState.message}</p>
-                {lastShareUrl ? (
-                  <>
-                    <CopyButton value={lastShareUrl} label="Copy" />
-                    <a className="inline-link" href={lastShareUrl}>
-                      Open public share page
-                    </a>
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-            {refinementState.message ? (
-              <p className={`status-chip ${refinementState.kind}`}>{refinementState.message}</p>
-            ) : null}
-            <div className="list-stack">
-              {data.goals.length === 0 && <NoGoalsEmpty onCreate={focusRequestComposer} />}
-              {data.goals.slice(0, 4).map((bundle) => {
-                const refinementLogs = bundle.actionLogs.filter((log) => log.kind === "goal.refined");
-                const isActive = bundle.goal.status !== "completed";
-                return (
-                  <div
-                    className={`list-item vertical ${highlightedItemId === bundle.goal.id ? "selection-highlight" : ""}`}
-                    id={getDashboardItemAnchorId(bundle.goal.id)}
-                    key={bundle.goal.id}
-                  >
-                  <div>
-                    <strong>{bundle.goal.title}</strong>
-                    <p>{bundle.goal.explanation}</p>
-                  </div>
-                  <div className="goal-item-actions">
-                    <StatusBadge status={bundle.goal.status} />
-                    <CopyableText value={bundle.goal.id} />
-                    <button type="button" className="secondary-button" onClick={() => shareGoal(bundle.goal.id, bundle.goal.title)} disabled={isPending}>
-                      Copy share link
-                    </button>
-                    {bundle.goal.status === "completed" ? (
-                      <button type="button" className="secondary-button" onClick={() => saveAsTemplate(bundle.goal.title, bundle.goal.request)} disabled={isPending}>
-                        Save as template
-                      </button>
-                    ) : null}
-                    <small className="share-metric">
-                      {shareStatsByGoal.get(bundle.goal.id)?.active ?? 0} active · {shareStatsByGoal.get(bundle.goal.id)?.viewed ?? 0} viewed
-                    </small>
-                  </div>
-                  {refinementLogs.length > 0 ? (
-                    <div className="refinement-history">
-                      {refinementLogs.map((log) => (
-                        <small key={log.id} className="refinement-log">{log.message}</small>
-                      ))}
-                    </div>
-                  ) : null}
-                  {isActive ? (
-                    <div className="refinement-row">
-                      <input
-                        value={refinementInputs[bundle.goal.id] ?? ""}
-                        onChange={(event) =>
-                          setRefinementInputs((prev) => ({ ...prev, [bundle.goal.id]: event.target.value }))
-                        }
-                        placeholder="Refine this goal..."
-                        maxLength={2000}
-                      />
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => refineGoal(bundle.goal.id)}
-                        disabled={isPending || !(refinementInputs[bundle.goal.id] ?? "").trim()}
-                      >
-                        Refine
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+          <div className="approval-actions">
+            <label className="field">
+              <span>Execution mode</span>
+              <select
+                aria-label="Execution mode filter"
+                value={executionModeFilter}
+                onChange={(event) => setExecutionModeFilter(event.target.value as ExecutionModeFilterValue)}
+              >
+                {executionModeFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="detail-list-summary">{selectedExecutionModeFilter.description}</p>
           </div>
         </article>
+
+        <DashboardGoalsCard
+          filteredGoalBundles={filteredGoalBundles}
+          totalGoalCount={data.goals.length}
+          request={request}
+          setRequest={setRequest}
+          selectedAgentId={selectedAgentId}
+          setSelectedAgentId={setSelectedAgentId}
+          createGoal={createGoal}
+          generateStartupBriefing={async () => {
+            await generateBriefing("startup");
+          }}
+          isPending={isPending}
+          submitState={submitState}
+          shareState={shareState}
+          refinementState={refinementState}
+          recommendationState={recommendationState}
+          lastShareUrl={lastShareUrl}
+          focusRequestComposer={focusRequestComposer}
+          canManageGoalShares={canManageGoalShares}
+          goalSharePermissionReason={goalSharePermissionReason}
+          pendingShareReview={pendingShareReview}
+          shareGoal={shareGoal}
+          confirmGoalShare={confirmGoalShare}
+          cancelGoalShareReview={cancelGoalShareReview}
+          saveAsTemplate={saveAsTemplate}
+          shareStatsByGoal={shareStatsByGoal}
+          highlightedItemId={highlightedItemId}
+          getItemAnchorId={getDashboardItemAnchorId}
+          refinementInputs={refinementInputs}
+          setRefinementInputs={setRefinementInputs}
+          refineGoal={refineGoal}
+          goalRefinementStateById={goalRefinementStateById}
+          recommendationResultsByGoal={recommendationResultsByGoal}
+          recommendationPendingByGoal={recommendationPendingByGoal}
+          submitRecommendationFeedback={submitRecommendationFeedback}
+        />
 
         <article className="card" id="section-approvals">
           <div className="card-header">
@@ -2905,7 +3041,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                 value={approvalGroupBy}
                 onChange={setApprovalGroupBy}
               />
-              <span>{pendingApprovals.length} pending</span>
+              <span>{filteredPendingApprovals.length} / {pendingApprovals.length} pending</span>
               <FocusModeButton
                 sectionId="approvals"
                 sectionTitle="Approvals"
@@ -2953,7 +3089,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                 >
                   {group.approvals.map((approval, idx) => {
                     // Get global index for keyboard navigation
-                    const globalIndex = pendingApprovals.findIndex(a => a.id === approval.id);
+                    const globalIndex = filteredPendingApprovals.findIndex(a => a.id === approval.id);
                     return (
                       <KeyboardApprovalItem
                         key={approval.id}
@@ -3020,8 +3156,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             </div>
           ) : (
           <div className="list-stack">
-            {pendingApprovals.length === 0 ? <NoApprovalsEmpty /> : null}
-            {pendingApprovals.map((approval, index) => (
+            {filteredPendingApprovals.length === 0 ? (
+              pendingApprovals.length === 0 ? (
+                <NoApprovalsEmpty />
+              ) : (
+                <p className="status-chip idle">No pending approvals match the current execution-mode filter.</p>
+              )
+            ) : null}
+            {filteredPendingApprovals.map((approval, index) => (
               <KeyboardApprovalItem
                 key={approval.id}
                 index={index}
@@ -3090,24 +3232,48 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             <FeatureHelp feature="artifacts">
               <h2>Artifacts</h2>
             </FeatureHelp>
-            <span>{data.latestArtifacts.length} recent</span>
+            <span>{filteredLatestArtifacts.length} / {data.latestArtifacts.length} recent</span>
           </div>
           <div className="artifact-stack">
-            {data.latestArtifacts.length === 0 && <NoArtifactsEmpty />}
-            {data.latestArtifacts.map((artifact) => (
-              <div className="artifact-card" key={artifact.id}>
-                <div className="card-header">
-                  <ArtifactPreview artifact={artifact}>
-                    <strong>{artifact.title}</strong>
-                  </ArtifactPreview>
-                  <StatusBadge status={artifact.artifactType} />
+            {filteredLatestArtifacts.length === 0 ? (
+              data.latestArtifacts.length === 0 ? (
+                <NoArtifactsEmpty />
+              ) : (
+                <p className="status-chip idle">No artifacts match the current execution-mode filter.</p>
+              )
+            ) : null}
+            {filteredLatestArtifacts.map((artifact) => {
+              const executionMode = extractArtifactExecutionMode(artifact);
+              const goalConfidence = goalConfidenceById.get(artifact.goalId);
+
+              return (
+                <div className="artifact-card" key={artifact.id}>
+                  <div className="card-header">
+                    <ArtifactPreview artifact={artifact}>
+                      <strong>{artifact.title}</strong>
+                    </ArtifactPreview>
+                    <div className="detail-list-badges">
+                      <StatusBadge status={artifact.artifactType} />
+                      <ImplementationTierBadge mode={executionMode} />
+                      <ExecutionModeBadge mode={executionMode} />
+                    </div>
+                  </div>
+                  <div className="detail-list-meta">
+                    <span>Implementation tier: <strong>{getImplementationTierPresentation(executionMode).label}</strong></span>
+                  </div>
+                  <div className="detail-list-meta">
+                    <span>Execution mode: <strong>{getExecutionModePresentation(executionMode).label}</strong></span>
+                    <span>
+                      Goal confidence: <strong>{typeof goalConfidence === "number" ? formatConfidencePercentage(goalConfidence) : "Unavailable"}</strong>
+                    </span>
+                  </div>
+                  <pre>{artifact.content}</pre>
+                  <div className="artifact-actions">
+                    <CopyButton value={artifact.content} label="Copy content" />
+                  </div>
                 </div>
-                <pre>{artifact.content}</pre>
-                <div className="artifact-actions">
-                  <CopyButton value={artifact.content} label="Copy content" />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </article>
 
@@ -3134,375 +3300,46 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           </div>
         </article>
 
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-memory"
-        >
-          <div className="card-header">
-            <h2>Memory inspector</h2>
-            <span>{data.memories.length} records</span>
-          </div>
-          
-          {/* Memory Search */}
-          <MemorySearch
-            memories={data.memories.map(m => ({
-              id: m.id,
-              content: m.content,
-              category: m.category,
-              memoryType: m.memoryType,
-              confidence: m.confidence,
-              createdAt: m.createdAt
-            }))}
-            categories={[...new Set(data.memories.map(m => m.category))]}
-            memoryTypes={[...new Set(data.memories.map(m => m.memoryType))]}
-            onSelect={(memory) => {
-              // Could open memory details
-            }}
-          />
-          
-          {/* Bulk Memory Actions */}
-          {memoryBulkSelection.selectedIds.size > 0 && (
-            <BulkMemoryActions
-              selectedMemories={data.memories
-                .filter(m => memoryBulkSelection.selectedIds.has(m.id))
-                .map(m => ({
-                  id: m.id,
-                  content: m.content,
-                  category: m.category,
-                  memoryType: m.memoryType,
-                  confidence: m.confidence,
-                  createdAt: m.createdAt
-                }))}
-              categories={[...new Set(data.memories.map(m => m.category))]}
-              memoryTypes={["observed", "inferred", "confirmed"]}
-              onDelete={async (ids) => {
-                toast.info(`Would delete ${ids.length} memories`);
-                memoryBulkSelection.deselectAll();
-              }}
-              onRecategorize={async (ids, newCategory) => {
-                toast.info(`Would recategorize ${ids.length} memories to ${newCategory}`);
-                memoryBulkSelection.deselectAll();
-              }}
-              onChangeType={async (ids, newType) => {
-                toast.info(`Would change ${ids.length} memories to type ${newType}`);
-                memoryBulkSelection.deselectAll();
-              }}
-              onExport={(memories) => {
-                const json = JSON.stringify(memories, null, 2);
-                const blob = new Blob([json], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = "memories-export.json";
-                a.click();
-              }}
-              onClear={memoryBulkSelection.deselectAll}
-            />
-          )}
-          
-          <label className="field">
-            <span>Category</span>
-            <select value={memoryCategory} onChange={(event) => setMemoryCategory(event.target.value)}>
-              <option value="working-style">working-style</option>
-              <option value="preferences">preferences</option>
-              <option value="projects">projects</option>
-              <option value="travel">travel</option>
-            </select>
-          </label>
-          <textarea
-            value={memoryContent}
-            onChange={(event) => setMemoryContent(event.target.value)}
-            placeholder="Add an observed or confirmed memory."
-            rows={4}
-          />
-          <button type="button" onClick={saveMemory} disabled={isPending}>
-            Save memory
-          </button>
-          <div className="list-stack">
-            {data.memories.length === 0 && <NoMemoriesEmpty onAdd={() => document.querySelector<HTMLTextAreaElement>("#section-memory textarea")?.focus()} />}
-            {data.memories.slice(0, 5).map((memory) => {
-              const freshness = getMemoryFreshness(memory);
-
-              return (
-                <div
-                  className={`list-item vertical ${memoryBulkSelection.selectedIds.has(memory.id) ? "selected" : ""} ${highlightedItemId === memory.id ? "selection-highlight" : ""}`}
-                  id={getDashboardItemAnchorId(memory.id)}
-                  key={memory.id}
-                  onClick={() => memoryBulkSelection.toggle(memory.id)}
-                >
-                  <div>
-                    <strong>{memory.category}</strong>
-                    <p>{memory.content}</p>
-                  </div>
-                  <div className="approval-actions">
-                    <MemoryTypeHelp memoryType={memory.memoryType}>
-                      <StatusBadge status={memory.memoryType} />
-                    </MemoryTypeHelp>
-                    <span className="pill">{Math.round(memory.confidence * 100)}%</span>
-                    {freshness !== "fresh" ? <span className="pill">{freshness.replace("_", " ")}</span> : null}
-                    <RelativeTime date={memory.createdAt} />
-                    {freshness !== "fresh" ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void updateMemory(memory.id, "review");
-                        }}
-                        disabled={isPending}
-                      >
-                        Review
-                      </button>
-                    ) : null}
-                    {memory.memoryType !== "confirmed" ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void updateMemory(memory.id, "confirm");
-                        }}
-                        disabled={isPending}
-                      >
-                        Confirm
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-integrations"
-        >
-          <div className="card-header">
-            <h2>Integrations</h2>
-            <span>{data.integrations.length} adapters</span>
-          </div>
-          <div className="list-stack">
-            {integrationSurfaces.map(({ integration, readiness }) => {
-              const isManagedGoogle =
-                integration.metadata.provider === "google" && integration.metadata.managed === true;
-              const providerActionLabel =
-                integration.status === "ready" ? "Reconnect Google" : "Connect Google";
-
-              return (
-                <div className="list-item vertical" key={integration.id}>
-                  <div>
-                    <strong>{integration.name}</strong>
-                    <p>
-                      {integration.system} · {integration.capabilities.join(", ")}
-                    </p>
-                    <p>{readiness.reason}</p>
-                  </div>
-                  <div className="approval-actions">
-                    <StatusBadge status={integration.status} />
-                    <StatusBadge status={readiness.tier}>{readiness.label}</StatusBadge>
-                    {readiness.supportedModes.length > 0 ? <span className="pill">{readiness.supportedModes.join(" · ")}</span> : null}
-                    {isManagedGoogle ? (
-                      <button type="button" className="secondary-button" onClick={connectGoogleProvider} disabled={isPending}>
-                        {providerActionLabel}
-                      </button>
-                    ) : (
-                      <button type="button" className="secondary-button" onClick={() => cycleIntegration(integration.id, integration.status)} disabled={isPending}>
-                        Toggle
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-notes"
-        >
-          <div className="card-header">
-            <h2>Local notes</h2>
-            <span>{notes.length} indexed</span>
-          </div>
-          <div className="note-toolbar">
-            <input
-              value={noteQuery}
-              onChange={(event) => setNoteQuery(event.target.value)}
-              placeholder="Search local notes"
-            />
-            <button type="button" className="secondary-button" onClick={searchNotes} disabled={isPending}>
-              Search
-            </button>
-          </div>
-          <label className="field">
-            <span>Title</span>
-            <input value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} placeholder="Example: Travel packing list" />
-          </label>
-          <textarea
-            value={noteContent}
-            onChange={(event) => setNoteContent(event.target.value)}
-            placeholder="Write a note that should be searchable through the notes adapter."
-            rows={4}
-          />
-          <button type="button" onClick={createLocalNote} disabled={isPending}>
-            Create local note
-          </button>
-          <p className={`status-chip ${noteState.kind}`}>
-            {noteState.message || "Search, open, and edit filesystem-backed notes through the provider-neutral adapter."}
-          </p>
-          <div className="list-stack">
-            {notes.slice(0, 5).map((note) => (
-              <div className="list-item vertical" key={note.id}>
-                <div>
-                  <strong>{note.title}</strong>
-                  <p>{note.content.split("\n").slice(1).join(" ").trim().slice(0, 180) || "No note body."}</p>
-                </div>
-                <div className="note-meta-row">
-                  <RelativeTime date={note.updatedAt} />
-                  <button type="button" className="secondary-button" onClick={() => openLocalNote(note.slug)} disabled={isPending}>
-                    Open
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="note-editor">
-            <div className="card-header">
-              <h3>{selectedNotePreview ? `Edit ${selectedNotePreview.title}` : "Note editor"}</h3>
-              <span>{selectedNotePreview ? selectedNotePreview.slug : "Select a note"}</span>
-            </div>
-            <label className="field">
-              <span>Editor title</span>
-              <input
-                value={selectedNoteTitle}
-                onChange={(event) => setSelectedNoteTitleDraft(event.target.value)}
-                placeholder="Open a note to edit its title"
-                disabled={!selectedNoteSlug || isPending}
-              />
-            </label>
-            <textarea
-              value={selectedNoteContent}
-              onChange={(event) => setSelectedNoteContentDraft(event.target.value)}
-              placeholder="Open a note to edit its body."
-              rows={6}
-              disabled={!selectedNoteSlug || isPending}
-            />
-            <button type="button" onClick={saveSelectedNote} disabled={isPending || !selectedNoteSlug}>
-              Save selected note
-            </button>
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-watchers"
-        >
-          <div className="card-header">
-            <FeatureHelp feature="watchers">
-              <h2>Watchers</h2>
-            </FeatureHelp>
-            <span>{data.watchers.length} active models</span>
-          </div>
-          <div className="list-stack">
-            {data.watchers.length === 0 ? <NoWatchersEmpty /> : null}
-            {data.watchers.map((watcher) => (
-              <div
-                className={`list-item vertical ${highlightedItemId === watcher.id ? "selection-highlight" : ""}`}
-                id={getDashboardItemAnchorId(watcher.id)}
-                key={watcher.id}
-              >
-                <div>
-                  <strong>{watcher.targetEntity}</strong>
-                  <p>{watcher.condition}</p>
-                </div>
-                <div className="approval-actions">
-                  <StatusBadge status={watcher.status} />
-                  <span className="pill">{watcher.frequency}</span>
-                  {watcher.status === "active" ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => void updateWatcher(watcher.id, "pause")}
-                      disabled={isPending}
-                    >
-                      Pause
-                    </button>
-                  ) : null}
-                  {watcher.status === "paused" ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => void updateWatcher(watcher.id, "resume")}
-                      disabled={isPending}
-                    >
-                      Resume
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-templates"
-        >
-          <div className="card-header">
-            <FeatureHelp feature="templates">
-              <h2>Templates</h2>
-            </FeatureHelp>
-            <span>{templates.length} saved</span>
-          </div>
-          <button type="button" className="secondary-button" onClick={loadTemplates} disabled={isPending}>
-            Load templates
-          </button>
-          <p className={`status-chip ${templateState.kind}`}>
-            {templateState.message || "Save completed goals as reusable templates with optional scheduling."}
-          </p>
-          <div className="list-stack">
-            {templates.length === 0 ? <NoTemplatesEmpty onLoad={loadTemplates} /> : null}
-            {templates.map((template) => (
-              <div className="list-item vertical" key={template.id}>
-                <div>
-                  <strong>{template.name}</strong>
-                  <p>{template.request.slice(0, 160)}{template.request.length > 160 ? "..." : ""}</p>
-                </div>
-                <div className="goal-item-actions">
-                  <StatusBadge status={template.schedule.enabled ? "scheduled" : "manual"} />
-                  {template.schedule.enabled && <span className="pill">{template.schedule.cron}</span>}
-                  <RelativeTime date={template.updatedAt} />
-                  <button type="button" className="primary-button" onClick={() => runTemplate(template.id)} disabled={isPending}>
-                    Run now
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => deleteTemplate(template.id, template.updatedAt)}
-                    disabled={isPending}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article
-          className={`card ${showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}`}
-          id="section-agents"
-        >
-          <div className="card-header">
-            <h2>Agents</h2>
-            <span>Custom agents</span>
-          </div>
-          <div className="agents-section">
-            <AgentsPanel />
-          </div>
-        </article>
+        <DashboardAdvancedSurface
+          showAdvancedOperations={showAdvancedOperations}
+          data={data}
+          notes={notes}
+          templates={templates}
+          templateState={templateState}
+          highlightedItemId={highlightedItemId}
+          getItemAnchorId={getDashboardItemAnchorId}
+          isPending={isPending}
+          memoryCategory={memoryCategory}
+          setMemoryCategory={setMemoryCategory}
+          memoryContent={memoryContent}
+          setMemoryContent={setMemoryContent}
+          saveMemory={saveMemory}
+          updateMemory={updateMemory}
+          connectGoogleProvider={connectGoogleProvider}
+          cycleIntegration={cycleIntegration}
+          noteQuery={noteQuery}
+          setNoteQuery={setNoteQuery}
+          searchNotes={searchNotes}
+          noteTitle={noteTitle}
+          setNoteTitle={setNoteTitle}
+          noteContent={noteContent}
+          setNoteContent={setNoteContent}
+          createLocalNote={createLocalNote}
+          noteState={noteState}
+          openLocalNote={openLocalNote}
+          selectedNoteSlug={selectedNoteSlug}
+          selectedNoteTitle={selectedNoteTitle}
+          setSelectedNoteTitleDraft={setSelectedNoteTitleDraft}
+          selectedNoteContent={selectedNoteContent}
+          setSelectedNoteContentDraft={setSelectedNoteContentDraft}
+          saveSelectedNote={saveSelectedNote}
+          goalBundleById={goalBundleById}
+          resolveSharedWorkflowMutationState={resolveSharedWorkflowMutationState}
+          updateWatcher={updateWatcher}
+          loadTemplates={loadTemplates}
+          runTemplate={runTemplate}
+          deleteTemplate={deleteTemplate}
+        />
       </section>
 
       <FloatingActionsBar position="bottom">

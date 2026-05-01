@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { postDashboardCoreLoopEvent } from "../lib/core-loop-client";
 
 type CoreLoopViewTrackerProps = {
   workspaceId: string | null;
@@ -28,14 +29,8 @@ export function CoreLoopViewTracker({ workspaceId }: CoreLoopViewTrackerProps) {
       return;
     }
 
-    void fetch("/api/dashboard/core-loop", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        event: "dashboard_view"
-      })
+    void postDashboardCoreLoopEvent({
+      event: "dashboard_view"
     }).catch(() => undefined);
   }, [workspaceId]);
 

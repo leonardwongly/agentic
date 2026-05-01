@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { WorkspaceGovernanceSchema, WorkspaceMemberSchema, WorkspaceSchema, WorkspaceSelectionSchema, WorkspaceRoleSchema, nowIso } from "@agentic/contracts";
+import {
+  WorkspaceGovernanceSchema,
+  WorkspaceMemberSchema,
+  WorkspaceSchema,
+  WorkspaceSelectionSchema,
+  WorkspaceRoleSchema,
+  nowIso
+} from "@agentic/contracts";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
@@ -58,6 +66,25 @@ async function buildWorkspaceResponse(repository: Awaited<ReturnType<typeof getS
   });
 }
 
+async function requireOwnedWorkspace(
+  repository: Awaited<ReturnType<typeof getSeededRepository>>,
+  userId: string,
+  workspaceId: string
+) {
+  const workspace =
+    (await repository.listWorkspaces(userId)).find((candidate) => candidate.id === workspaceId) ?? null;
+
+  if (!workspace) {
+    throw new ApiRouteError(404, "Workspace not found.");
+  }
+
+  if (workspace.ownerUserId !== userId) {
+    throw new ApiRouteError(403, "Only the workspace owner can manage members.");
+  }
+
+  return workspace;
+}
+
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
@@ -106,12 +133,7 @@ export async function POST(request: Request) {
       });
       const governance = WorkspaceGovernanceSchema.parse({
         workspaceId: workspace.id,
-        approvalMode: "risk_based",
-        requireAuditExports: false,
-        maxAutoRunRiskClass: "R1",
-        externalSendRequiresApproval: true,
-        calendarWriteRequiresApproval: true,
-        retentionDays: 365,
+        ...resolveWorkspaceGovernanceDefaultsFromEnv(),
         updatedBy: principal.userId,
         createdAt: timestamp,
         updatedAt: timestamp
@@ -145,6 +167,8 @@ export async function POST(request: Request) {
     if (!memberUserId) {
       throw new ApiRouteError(400, "Workspace member userId must not be empty.");
     }
+
+    await requireOwnedWorkspace(repository, principal.userId, body.workspaceId);
 
     await repository.saveWorkspaceMember(
       WorkspaceMemberSchema.parse({

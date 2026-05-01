@@ -13,12 +13,46 @@ import {
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
-import { RelativeTime, StatusBadge } from "./ui";
+import { Badge, RelativeTime, StatusBadge } from "./ui";
+import {
+  GOAL_SHARE_MUTATION_DENIED_REASON,
+  canManageGoalSharesForRole,
+  resolveWorkspaceRoleForUser
+} from "../lib/workspace-role-permissions";
 
 type RequestState = {
   kind: "idle" | "success" | "error";
   message: string;
 };
+
+type PrivacyControlSummary = {
+  registryVersion: number;
+  reviewedAt: string;
+  owners: string[];
+  totalDatasets: number;
+  classifications: Array<{
+    id: string;
+    label: string;
+    summary: string;
+    datasetCount: number;
+  }>;
+  lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
+  datasets: Array<{
+    id: string;
+    title: string;
+    classificationId: string;
+    classificationLabel: string;
+    retentionLabel: string;
+    tokenizationStrategy: "opaque_identifier" | "redacted_reference" | "not_applicable";
+    productSurfaceCount: number;
+    minimizationRuleCount: number;
+    maskingRuleCount: number;
+    lifecycleOperations: Array<(typeof privacyOperationKindValues)[number]>;
+  }>;
+};
+
+type GovernanceConformanceSummary = NonNullable<DashboardData["governanceConformance"]>;
+type GovernanceConformanceCheck = GovernanceConformanceSummary["checks"][number];
 
 type WorkspaceGovernanceDraft = Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt">;
 
@@ -30,6 +64,8 @@ type DashboardOperationsSectionsProps = {
   governanceState: RequestState;
   autopilotState: RequestState;
   privacyState: RequestState;
+  privacyInventoryState?: RequestState;
+  privacyControls?: PrivacyControlSummary | null;
   workspaceName: string;
   setWorkspaceName: Dispatch<SetStateAction<string>>;
   workspaceSlug: string;
@@ -81,6 +117,82 @@ const privacyOperationStatusLabels: Record<PrivacyOperation["status"], string> =
   failed: "failed"
 };
 
+const privacyTokenizationLabels: Record<PrivacyControlSummary["datasets"][number]["tokenizationStrategy"], string> = {
+  opaque_identifier: "Opaque IDs",
+  redacted_reference: "Redacted refs",
+  not_applicable: "Not applicable"
+};
+
+const governanceConformanceLabels: Record<GovernanceConformanceSummary["status"], string> = {
+  conformant: "Conformant",
+  needs_attention: "Needs attention",
+  non_conformant: "Blocking exceptions"
+};
+
+const governanceCheckGuidance: Record<
+  string,
+  {
+    control: string;
+    remediation: string;
+  }
+> = {
+  "audit-exports": {
+    control: "Require audit exports",
+    remediation: "Enable the audit export requirement so investigators and reviewers can retrieve evidence on demand."
+  },
+  "external-send-approval": {
+    control: "External sends always require approval",
+    remediation: "Turn approval back on before allowing outbound communication to leave the workspace."
+  },
+  "calendar-write-approval": {
+    control: "Calendar writes always require approval",
+    remediation: "Re-enable review unless you have a documented exception for autonomous scheduling."
+  },
+  "risk-ceiling": {
+    control: "Max auto-run risk class",
+    remediation: "Keep the ceiling at R2 or lower unless you can justify autonomous external commitments."
+  },
+  "always-review-ceiling": {
+    control: "Approval mode and max auto-run risk class",
+    remediation: "If the workspace stays in always-review mode, reduce the stored ceiling to R1 so operators do not inherit a misleading policy."
+  },
+  "retention-window": {
+    control: "Retention days",
+    remediation: "Keep retention inside the 30 to 730 day operating range unless a documented legal or privacy exception applies."
+  }
+};
+
+function getGovernanceConformanceVariant(status: GovernanceConformanceSummary["status"]): "success" | "warning" | "error" {
+  switch (status) {
+    case "conformant":
+      return "success";
+    case "needs_attention":
+      return "warning";
+    default:
+      return "error";
+  }
+}
+
+function getGovernanceCheckVariant(status: GovernanceConformanceCheck["status"]): "success" | "warning" | "error" {
+  switch (status) {
+    case "pass":
+      return "success";
+    case "warn":
+      return "warning";
+    default:
+      return "error";
+  }
+}
+
+function getGovernanceCheckGuidance(check: GovernanceConformanceCheck) {
+  return (
+    governanceCheckGuidance[check.id] ?? {
+      control: "Governance policy",
+      remediation: "Review this setting and bring it back into the workspace default conformance range."
+    }
+  );
+}
+
 function formatPrivacyOperationTimestamp(operation: PrivacyOperation): string {
   return operation.completedAt ?? operation.startedAt ?? operation.updatedAt;
 }
@@ -97,6 +209,40 @@ function summarizeGoalShareStatus(share: GoalShareRecord): string {
   return `Expires ${share.expiresAt}`;
 }
 
+function formatAutopilotLabel(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function readAutopilotMetadata(details: Record<string, unknown> | undefined) {
+  const eventEnvelope =
+    details && typeof details.eventEnvelope === "object" && details.eventEnvelope !== null
+      ? (details.eventEnvelope as Record<string, unknown>)
+      : null;
+  const policy =
+    details && typeof details.policy === "object" && details.policy !== null ? (details.policy as Record<string, unknown>) : null;
+  const operatorRoute =
+    details && typeof details.operatorRoute === "object" && details.operatorRoute !== null
+      ? (details.operatorRoute as Record<string, unknown>)
+      : null;
+
+  return {
+    family: typeof eventEnvelope?.family === "string" ? eventEnvelope.family : null,
+    priority: typeof eventEnvelope?.priority === "string" ? eventEnvelope.priority : null,
+    queue: typeof policy?.queue === "string" ? policy.queue : null,
+    operatorRoute:
+      typeof operatorRoute?.section === "string" && typeof operatorRoute?.label === "string"
+        ? {
+            section: operatorRoute.section as DashboardDiagnosticTarget["section"],
+            itemId: typeof operatorRoute.itemId === "string" ? operatorRoute.itemId : undefined,
+            label: operatorRoute.label,
+            actionLabel: typeof operatorRoute.actionLabel === "string" ? operatorRoute.actionLabel : undefined
+          }
+        : null
+  };
+}
+
 export function DashboardOperationsSections(props: DashboardOperationsSectionsProps) {
   const {
     data,
@@ -106,6 +252,8 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
     governanceState,
     autopilotState,
     privacyState,
+    privacyInventoryState = { kind: "idle", message: "" },
+    privacyControls = null,
     workspaceName,
     setWorkspaceName,
     workspaceSlug,
@@ -132,6 +280,23 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
     revokeGoalShare
   } = props;
   const goalTitleById = new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.title]));
+  const teamPermissions = data.operatingSections.teamWorkflow.permissions;
+  const canManageMembers = teamPermissions.manageMembers.allowed && Boolean(data.activeWorkspace);
+  const canEditGovernance = teamPermissions.editGovernance.allowed && Boolean(data.activeWorkspace);
+  const canExportAudit = teamPermissions.exportAudit.allowed && Boolean(data.activeWorkspace);
+  const canManagePrivacyOperations = teamPermissions.managePrivacyOperations.allowed && Boolean(data.activeWorkspace);
+  const activeWorkspaceRole = resolveWorkspaceRoleForUser(
+    data.workspaceMembers,
+    data.activeWorkspace?.id,
+    data.workspaceSelection?.userId ?? null
+  );
+  const canManageGoalShares = Boolean(data.activeWorkspace) && canManageGoalSharesForRole(activeWorkspaceRole);
+  const goalSharePermissionReason = data.activeWorkspace
+    ? GOAL_SHARE_MUTATION_DENIED_REASON
+    : "Select a workspace before managing public goal share links.";
+  const governanceConformance = data.governanceConformance ?? null;
+  const blockingGovernanceChecks = governanceConformance?.checks.filter((check) => check.status === "fail") ?? [];
+  const warningGovernanceChecks = governanceConformance?.checks.filter((check) => check.status === "warn") ?? [];
 
   return (
     <>
@@ -217,18 +382,23 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             </div>
           ))}
         </div>
-        <div className="list-stack compact">
+        <div className="list-stack compact" style={{ opacity: canManageMembers ? 1 : 0.65 }}>
           <label className="field">
             <span>Member user ID</span>
             <input
               value={workspaceMemberUserId}
               onChange={(event) => setWorkspaceMemberUserId(event.target.value)}
               placeholder="alex@example.com"
+              disabled={isPending || !canManageMembers}
             />
           </label>
           <label className="field">
             <span>Role</span>
-            <select value={workspaceMemberRole} onChange={(event) => setWorkspaceMemberRole(event.target.value as (typeof workspaceRoleValues)[number])}>
+            <select
+              value={workspaceMemberRole}
+              onChange={(event) => setWorkspaceMemberRole(event.target.value as (typeof workspaceRoleValues)[number])}
+              disabled={isPending || !canManageMembers}
+            >
               {workspaceRoleValues.map((role) => (
                 <option key={role} value={role}>
                   {role}
@@ -236,9 +406,10 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ))}
             </select>
           </label>
-          <button type="button" className="secondary-button" onClick={() => void addWorkspaceMember()} disabled={isPending || !data.activeWorkspace}>
+          <button type="button" className="secondary-button" onClick={() => void addWorkspaceMember()} disabled={isPending || !canManageMembers}>
             Add member
           </button>
+          {!canManageMembers ? <p className="operator-product-subtitle">{teamPermissions.manageMembers.reason}</p> : null}
         </div>
       </article>
 
@@ -250,7 +421,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               Approval policy and audit defaults stay at the workspace boundary so collaboration does not widen autonomy silently.
             </p>
           </div>
-          <button type="button" className="secondary-button" onClick={() => void exportWorkspaceAudit()} disabled={isPending || !data.activeWorkspace}>
+          <button type="button" className="secondary-button" onClick={() => void exportWorkspaceAudit()} disabled={isPending || !canExportAudit}>
             Export audit
           </button>
         </div>
@@ -260,11 +431,79 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ? `Editing governance for ${data.activeWorkspace.name}.`
               : "Select a workspace before editing governance.")}
         </p>
-        <div className="list-stack compact">
+        <p className="operator-product-subtitle">{teamPermissions.exportAudit.reason}</p>
+        <div className="list-stack compact" style={{ opacity: canEditGovernance ? 1 : 0.65 }}>
+        {governanceConformance ? (
+          <div className="list-stack compact">
+            <div className="list-item vertical">
+              <div className="operator-product-row-heading">
+                <div>
+                  <strong>Conformance status</strong>
+                  <p>{governanceConformance.summary}</p>
+                </div>
+                <div className="goal-item-actions">
+                  <Badge variant={getGovernanceConformanceVariant(governanceConformance.status)}>
+                    {governanceConformanceLabels[governanceConformance.status]}
+                  </Badge>
+                  <span className="pill">{blockingGovernanceChecks.length} blocking</span>
+                  <span className="pill">{warningGovernanceChecks.length} warnings</span>
+                </div>
+              </div>
+            </div>
+            {blockingGovernanceChecks.length > 0 ? (
+              <div className="list-stack compact">
+                {blockingGovernanceChecks.map((check) => {
+                  const guidance = getGovernanceCheckGuidance(check);
+
+                  return (
+                    <div className="list-item vertical" key={check.id}>
+                      <div className="operator-product-row-heading">
+                        <div>
+                          <strong>{check.summary}</strong>
+                          <p>{check.detail}</p>
+                        </div>
+                        <Badge variant={getGovernanceCheckVariant(check.status)}>Action required</Badge>
+                      </div>
+                      <p>
+                        <strong>{guidance.control}:</strong> {guidance.remediation}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            {warningGovernanceChecks.length > 0 ? (
+              <div className="list-stack compact">
+                {warningGovernanceChecks.map((check) => {
+                  const guidance = getGovernanceCheckGuidance(check);
+
+                  return (
+                    <div className="list-item vertical" key={check.id}>
+                      <div className="operator-product-row-heading">
+                        <div>
+                          <strong>{check.summary}</strong>
+                          <p>{check.detail}</p>
+                        </div>
+                        <Badge variant={getGovernanceCheckVariant(check.status)}>Needs review</Badge>
+                      </div>
+                      <p>
+                        <strong>{guidance.control}:</strong> {guidance.remediation}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        </div>
+        <p className="operator-product-subtitle">{teamPermissions.exportAudit.reason}</p>
+        <div className="list-stack compact" style={{ opacity: canEditGovernance ? 1 : 0.65 }}>
           <label className="field">
             <span>Approval mode</span>
             <select
               value={governanceDraft.approvalMode}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -283,6 +522,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <span>Max auto-run risk class</span>
             <select
               value={governanceDraft.maxAutoRunRiskClass}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -304,6 +544,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               min={7}
               max={3650}
               value={governanceDraft.retentionDays}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -316,6 +557,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <input
               type="checkbox"
               checked={governanceDraft.requireAuditExports}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -328,7 +570,50 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
           <label className="checkbox-row">
             <input
               type="checkbox"
+              checked={governanceDraft.publicSharingEnabled}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  publicSharingEnabled: event.target.checked
+                }))
+              }
+            />
+            Enable public goal share links
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={governanceDraft.providerAccessRequiresApproval}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  providerAccessRequiresApproval: event.target.checked
+                }))
+              }
+            />
+            Provider-backed actions require approval
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={governanceDraft.escalationRequiresApproval}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  escalationRequiresApproval: event.target.checked
+                }))
+              }
+            />
+            Escalation actions require approval
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
               checked={governanceDraft.externalSendRequiresApproval}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -342,6 +627,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <input
               type="checkbox"
               checked={governanceDraft.calendarWriteRequiresApproval}
+              disabled={isPending || !canEditGovernance}
               onChange={(event) =>
                 setGovernanceDraft((current) => ({
                   ...current,
@@ -351,9 +637,145 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             />
             Calendar writes always require approval
           </label>
-          <button type="button" className="primary-button" onClick={() => void saveWorkspaceGovernance()} disabled={isPending || !data.activeWorkspace}>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={governanceDraft.shadowReplayPolicy.enabled}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    enabled: event.target.checked
+                  }
+                }))
+              }
+            />
+            Require shadow replay evidence before widening to R3 autonomy
+          </label>
+          <label className="field">
+            <span>Learning promotion mode</span>
+            <select
+              value={governanceDraft.shadowReplayPolicy.promotionMode}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    promotionMode: event.target.value as WorkspaceGovernance["shadowReplayPolicy"]["promotionMode"]
+                  }
+                }))
+              }
+            >
+              <option value="validated_autonomy">validated_autonomy</option>
+              <option value="shadow_only">shadow_only</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Learning rollback outcome</span>
+            <select
+              value={governanceDraft.shadowReplayPolicy.rollbackOutcome}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    rollbackOutcome: event.target.value as WorkspaceGovernance["shadowReplayPolicy"]["rollbackOutcome"]
+                  }
+                }))
+              }
+            >
+              <option value="allowed_with_confirmation">allowed_with_confirmation</option>
+              <option value="downgrade_to_draft">downgrade_to_draft</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Shadow replay minimum matched episodes</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={governanceDraft.shadowReplayPolicy.minimumMatchedEpisodes}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    minimumMatchedEpisodes: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Shadow replay minimum precision</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={governanceDraft.shadowReplayPolicy.minimumPrecision}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    minimumPrecision: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Shadow replay maximum negative outcome rate</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={governanceDraft.shadowReplayPolicy.maximumNegativeOutcomeRate}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    maximumNegativeOutcomeRate: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Shadow replay maximum failure cost rate</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={governanceDraft.shadowReplayPolicy.maximumFailureCostRate}
+              disabled={isPending || !canEditGovernance}
+              onChange={(event) =>
+                setGovernanceDraft((current) => ({
+                  ...current,
+                  shadowReplayPolicy: {
+                    ...current.shadowReplayPolicy,
+                    maximumFailureCostRate: Number(event.target.value)
+                  }
+                }))
+              }
+            />
+          </label>
+          <button type="button" className="primary-button" onClick={() => void saveWorkspaceGovernance()} disabled={isPending || !canEditGovernance}>
             Save governance
           </button>
+          {!canEditGovernance ? <p className="operator-product-subtitle">{teamPermissions.editGovernance.reason}</p> : null}
         </div>
       </article>
 
@@ -373,7 +795,73 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
               ? `Privacy controls are scoped to ${data.activeWorkspace.name}.`
               : "Select a workspace before running privacy operations.")}
         </p>
-        <div className="list-stack compact">
+        <div className="card-header">
+          <h3>Data handling inventory</h3>
+          <span>{privacyControls ? `${privacyControls.totalDatasets} datasets` : "Unavailable"}</span>
+        </div>
+        <p className={`status-chip ${privacyInventoryState.kind}`}>
+          {privacyInventoryState.message ||
+            (privacyControls
+              ? `Registry owners: ${privacyControls.owners.join(", ")}.`
+              : "Privacy inventory has not loaded yet.")}
+        </p>
+        {privacyControls ? (
+          <div className="list-stack compact">
+            <div className="list-item vertical">
+              <div>
+                <strong>Coverage summary</strong>
+                <p>
+                  {privacyControls.classifications.length} classifications across {privacyControls.totalDatasets} datasets. Lifecycle operations:
+                  {" "}
+                  {privacyControls.lifecycleOperations.map((kind) => privacyOperationLabels[kind]).join(", ")}.
+                </p>
+              </div>
+              <div className="goal-item-actions">
+                <span className="pill">registry v{privacyControls.registryVersion}</span>
+              </div>
+            </div>
+            {privacyControls.classifications.map((classification) => (
+              <div className="list-item vertical" key={classification.id}>
+                <div>
+                  <strong>{classification.label}</strong>
+                  <p>{classification.summary}</p>
+                </div>
+                <div className="goal-item-actions">
+                  <span className="pill">{classification.datasetCount} datasets</span>
+                </div>
+              </div>
+            ))}
+            {privacyControls.datasets.map((dataset) => (
+              <div className="list-item vertical" key={dataset.id}>
+                <div>
+                  <strong>{dataset.title}</strong>
+                  <p>
+                    {dataset.classificationLabel} · {dataset.retentionLabel}
+                  </p>
+                </div>
+                <div className="goal-item-actions">
+                  <span className="pill">{privacyTokenizationLabels[dataset.tokenizationStrategy]}</span>
+                  <span className="pill">{dataset.productSurfaceCount} surfaces</span>
+                  <span className="pill">{dataset.minimizationRuleCount} minimization</span>
+                  <span className="pill">{dataset.maskingRuleCount} masking</span>
+                </div>
+                <p>
+                  Lifecycle hooks: {dataset.lifecycleOperations.map((kind) => privacyOperationLabels[kind]).join(", ")}.
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="list-stack compact">
+            <div className="list-item vertical">
+              <div>
+                <strong>Inventory unavailable</strong>
+                <p>Load the workspace privacy controls to inspect classifications, minimization, masking, and tokenization coverage.</p>
+              </div>
+            </div>
+          </div>
+        )}
+        <div className="list-stack compact" style={{ opacity: canManagePrivacyOperations ? 1 : 0.65 }}>
           {privacyOperationKindValues.map((kind) => (
             <div className="list-item vertical" key={kind}>
               <div>
@@ -385,20 +873,23 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
                   type="button"
                   className={kind === "workspace_delete" ? "danger-button" : "secondary-button"}
                   onClick={() => void runPrivacyOperation(kind)}
-                  disabled={isPending || !data.activeWorkspace}
+                  disabled={isPending || !canManagePrivacyOperations}
                 >
                   {privacyOperationLabels[kind]}
                 </button>
               </div>
             </div>
           ))}
+          {!canManagePrivacyOperations ? (
+            <p className="operator-product-subtitle">{teamPermissions.managePrivacyOperations.reason}</p>
+          ) : null}
         </div>
 
         <div className="card-header">
           <h3>Recent share links</h3>
           <span>{data.goalShares.length} tracked</span>
         </div>
-        <div className="list-stack">
+        <div className="list-stack" style={{ opacity: canManageGoalShares ? 1 : 0.65 }}>
           {data.goalShares.length === 0 ? (
             <div className="list-item vertical">
               <div>
@@ -421,7 +912,8 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
                       type="button"
                       className="secondary-button"
                       onClick={() => void revokeGoalShare(share.goalId, share.id, goalTitleById.get(share.goalId) ?? share.goalId)}
-                      disabled={isPending}
+                      disabled={isPending || !canManageGoalShares}
+                      title={!canManageGoalShares ? goalSharePermissionReason : undefined}
                     >
                       Revoke
                     </button>
@@ -431,6 +923,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             ))
           )}
         </div>
+        {!canManageGoalShares ? <p className="operator-product-subtitle">{goalSharePermissionReason}</p> : null}
 
         <div className="card-header">
           <h3>Recent privacy operations</h3>
@@ -527,45 +1020,64 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <div className="list-item vertical">
               <div>
                 <strong>No autopilot events yet</strong>
-                <p>Watcher triggers, template schedules, and briefing schedules will appear here once they fire.</p>
+                <p>
+                  Watcher signals, scheduled runs, inbound communications, deadlines, approvals, connector failures,
+                  and dormant workflows will appear here once they fire.
+                </p>
               </div>
             </div>
           ) : (
-            data.autopilotEvents.slice(0, 5).map((event) => (
-              <div
-                className={`list-item vertical ${highlightedItemId === event.id ? "selection-highlight" : ""}`}
-                id={getItemAnchorId(event.id)}
-                key={event.id}
-              >
-                <div>
-                  <strong>{event.summary}</strong>
-                  <p>
-                    {event.kind.replaceAll("_", " ")} via {autopilotModeLabels[event.mode].toLowerCase()}
-                  </p>
+            data.autopilotEvents.slice(0, 5).map((event) => {
+              const metadata = readAutopilotMetadata(event.details);
+
+              return (
+                <div
+                  className={`list-item vertical ${highlightedItemId === event.id ? "selection-highlight" : ""}`}
+                  id={getItemAnchorId(event.id)}
+                  key={event.id}
+                >
+                  <div>
+                    <strong>{event.summary}</strong>
+                    <p>
+                      {formatAutopilotLabel(event.kind)} via {autopilotModeLabels[event.mode].toLowerCase()}
+                      {metadata.queue ? ` · ${formatAutopilotLabel(metadata.queue)}` : ""}
+                    </p>
+                  </div>
+                  <div className="goal-item-actions">
+                    <StatusBadge status={event.status} />
+                    {metadata.family ? <span className="pill">{formatAutopilotLabel(metadata.family)}</span> : null}
+                    {metadata.priority ? <span className="pill">{formatAutopilotLabel(metadata.priority)} priority</span> : null}
+                    <span className="pill">{autopilotModeLabels[event.mode]}</span>
+                    <RelativeTime date={event.processedAt ?? event.createdAt} />
+                    {metadata.operatorRoute ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => openDiagnosticTarget(metadata.operatorRoute!)}
+                      >
+                        {metadata.operatorRoute.actionLabel ?? "Open route"}
+                      </button>
+                    ) : null}
+                    {event.resultGoalId ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() =>
+                          openDiagnosticTarget({
+                            section: "goals",
+                            itemId: event.resultGoalId ?? undefined,
+                            label: event.summary
+                          })
+                        }
+                      >
+                        Open goal
+                      </button>
+                    ) : null}
+                  </div>
+                  {event.error ? <p className="status-chip error">{event.error}</p> : null}
                 </div>
-                <div className="goal-item-actions">
-                  <StatusBadge status={event.status} />
-                  <span className="pill">{autopilotModeLabels[event.mode]}</span>
-                  <RelativeTime date={event.processedAt ?? event.createdAt} />
-                  {event.resultGoalId ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() =>
-                        openDiagnosticTarget({
-                          section: "goals",
-                          itemId: event.resultGoalId ?? undefined,
-                          label: event.summary
-                        })
-                      }
-                    >
-                      Open goal
-                    </button>
-                  ) : null}
-                </div>
-                {event.error ? <p className="status-chip error">{event.error}</p> : null}
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </article>

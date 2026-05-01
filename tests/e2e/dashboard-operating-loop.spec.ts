@@ -10,15 +10,24 @@ test("operating loop cards deep-link operators into the active queue", async ({ 
   );
   await requestCard.locator(".hero-button-row").getByRole("button", { name: "Submit request" }).click();
 
-  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible();
+  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
+    timeout: 15000
+  });
 
   const operatingLoop = page.locator(".control-plane-card");
   const nowCard = operatingLoop.locator('.control-plane-section:has(strong:text-is("Now"))');
   const executionCard = operatingLoop.locator('.control-plane-section:has(strong:text-is("Execution"))');
+  const ownerLaneControl = operatingLoop.locator('.control-plane-detail-card:has(strong:text-is("Open owner lane"))');
 
   await expect(operatingLoop.getByRole("heading", { name: "Operating loop" })).toBeVisible();
   await expect(nowCard).toBeVisible();
   await expect(executionCard).toBeVisible();
+  await expect(ownerLaneControl).toBeVisible();
+
+  await ownerLaneControl.click();
+  await expect(page).toHaveURL(/section=approvals/);
+  await expect(page).toHaveURL(/item=/);
+  await expect(page.locator("#section-approvals .selection-highlight").first()).toBeVisible();
 
   await nowCard.click();
   await expect(page).toHaveURL(/section=now/);

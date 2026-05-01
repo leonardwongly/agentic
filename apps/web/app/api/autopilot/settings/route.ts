@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { AutopilotSettingsSchema, AutopilotModeSchema, nowIso } from "@agentic/contracts";
+import {
+  AutopilotReliabilityControlsSchema,
+  AutopilotSettingsSchema,
+  AutopilotModeSchema,
+  nowIso
+} from "@agentic/contracts";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
@@ -9,7 +14,8 @@ import { getSeededRepository } from "../../../../lib/server";
 const UpdateAutopilotSettingsSchema = z
   .object({
     mode: AutopilotModeSchema.optional(),
-    debounceMinutes: z.number().int().min(1).max(1440).optional()
+    debounceMinutes: z.number().int().min(1).max(1440).optional(),
+    reliabilityControls: AutopilotReliabilityControlsSchema.optional()
   })
   .strict();
 

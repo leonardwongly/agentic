@@ -5,6 +5,11 @@ import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from 
 import { requireJsonContentType } from "../../../../lib/api-errors";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { getSeededRepository } from "../../../../lib/server";
+import {
+  canOperateSharedWorkflow,
+  getSharedWorkflowDeniedReason,
+  resolveWorkspaceRoleForUser
+} from "../../../../lib/workspace-role-permissions";
 
 const WatcherIdSchema = z.string().trim().min(1).max(200);
 
@@ -30,6 +35,21 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       throw new ApiRouteError(404, `Watcher ${watcherId} was not found.`);
     }
 
+    const goal = await repository.getGoalBundleForUser(existing.goalId, principal.userId);
+
+    if (!goal) {
+      throw new ApiRouteError(404, `Watcher goal ${existing.goalId} was not found.`);
+    }
+
+    if (goal.goal.workspaceId) {
+      const workspaceMembers = await repository.listWorkspaceMembers(goal.goal.workspaceId, principal.userId);
+      const role = resolveWorkspaceRoleForUser(workspaceMembers, goal.goal.workspaceId, principal.userId);
+
+      if (!canOperateSharedWorkflow({ workspaceId: goal.goal.workspaceId, role })) {
+        throw new ApiRouteError(403, getSharedWorkflowDeniedReason("manage_watchers"));
+      }
+    }
+
     const updated = WatcherSchema.parse({
       ...existing,
       status: body.action === "pause" ? "paused" : "active",
@@ -37,10 +57,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       updatedAt: nowIso()
     });
 
-    await repository.saveWatcher(updated);
+    const savedWatcher = await repository.saveWatcher(updated);
 
     return authenticatedJson({
-      watcher: updated,
+      watcher: savedWatcher,
       dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {

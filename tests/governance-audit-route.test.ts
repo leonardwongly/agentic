@@ -3,7 +3,6 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
-import { createRepository } from "@agentic/repository";
 import { vi } from "vitest";
 import {
   resetAuthSessionStateStoreForTesting,
@@ -12,7 +11,7 @@ import {
 } from "../apps/web/lib/auth-session-store";
 import * as authModule from "../apps/web/lib/auth";
 import { GET as governanceAuditRouteGet } from "../apps/web/app/api/governance/audit/route";
-import { buildAuthorizedGetRequest, expectNoStoreHeaders } from "./route-test-helpers";
+import { buildAuthorizedGetRequest, createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
 
 type AuditExportPayload = {
   workspace: { id: string };
@@ -76,9 +75,7 @@ describe("governance audit route", () => {
   });
 
   it("exports the active workspace with tamper-evident integrity metadata and excludes other tenants", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const otherUserId = "tenant-b";
     const otherActor = createSystemActorContext(otherUserId);
 
@@ -115,7 +112,7 @@ describe("governance audit route", () => {
     expect(response.headers.get("content-disposition")).toContain(dashboard.activeWorkspace!.slug);
     expect(response.headers.get("x-agentic-audit-digest")).toBe(payload.integrity.digest);
     expect(response.headers.get("x-agentic-governance-mode")).toBe(payload.governance?.approvalMode ?? null);
-    expect(response.headers.get("x-agentic-governance-conformance")).toBe("non_conformant");
+    expect(response.headers.get("x-agentic-governance-conformance")).toBe("conformant");
     expectNoStoreHeaders(response);
     expect(payload.workspace.id).toBe(dashboard.activeWorkspace!.id);
     expect(payload.privacyOperations).not.toEqual(
@@ -163,9 +160,7 @@ describe("governance audit route", () => {
   });
 
   it("limits collaborators to the selected shared workspace and excludes the owner's personal workspace data", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const ownerUserId = "workspace-owner";
     const collaboratorUserId = "workspace-collaborator";
     const ownerActor = createSystemActorContext(ownerUserId);

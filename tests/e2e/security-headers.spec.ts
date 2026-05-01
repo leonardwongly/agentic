@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { openRequestComposer, unlockDashboard } from "./helpers";
+import {
+  enablePublicSharingForE2E,
+  E2E_UI_TIMEOUT_MS,
+  expectShareLinkReady,
+  openRequestComposer,
+  submitRequest,
+  unlockDashboard
+} from "./helpers";
 
 const useProductionServer = process.env.PLAYWRIGHT_USE_PROD_SERVER === "true" && Boolean(process.env.DATABASE_URL?.trim());
 
@@ -39,6 +46,7 @@ test("serves a nonce-backed content security policy on HTML pages", async ({ pag
 
 test("keeps the authenticated dashboard non-cacheable and applies security headers to public share pages", async ({ browser, page }) => {
   await unlockDashboard(page);
+  await enablePublicSharingForE2E(page);
 
   const dashboardResponse = await page.goto("/");
   const cacheControl = dashboardResponse?.headers()["cache-control"] ?? "";
@@ -51,11 +59,12 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
     expect(cacheControl).toMatch(/no-store|no-cache/u);
   }
 
-  const { requestInput } = await openRequestComposer(page);
-  await requestInput.fill(
+  const { requestCard, requestInput } = await openRequestComposer(page);
+  await submitRequest(
+    requestCard,
+    requestInput,
     "Triage my inbox and prepare replies for important clients."
   );
-  await page.getByRole("button", { name: "Submit request" }).click();
 
   const createdGoal = page
     .locator(".request-card .list-item")
@@ -64,9 +73,16 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
     })
     .first();
 
-  await createdGoal.getByRole("button", { name: "Copy share link" }).click();
+  await createdGoal.getByRole("button", { name: "Review share" }).click();
+  await expect(page.getByRole("heading", { name: "Public Share Review" })).toBeVisible({
+    timeout: E2E_UI_TIMEOUT_MS
+  });
+  await page.getByRole("button", { name: "Create public link" }).click();
+  await expectShareLinkReady(page, "Inbox triage and follow-up prep");
 
-  const shareUrl = await page.getByRole("link", { name: "Open public share page" }).getAttribute("href");
+  const shareLink = page.getByRole("link", { name: "Open public share page" });
+  await expect(shareLink).toBeVisible();
+  const shareUrl = await shareLink.getAttribute("href");
 
   expect(shareUrl).toBeTruthy();
 

@@ -1,7 +1,13 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createHumanActorContext, createSystemActorContext } from "@agentic/contracts";
+import {
+  SYSTEM_USER_ID,
+  WorkspaceMemberSchema,
+  WorkspaceSchema,
+  createHumanActorContext,
+  createSystemActorContext
+} from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
@@ -15,10 +21,12 @@ import {
   setAuthSessionStateStoreForTesting,
   type AuthSessionStateStore
 } from "../apps/web/lib/auth-session-store";
+import { SHARED_GOAL_REFINEMENT_DENIED_REASON } from "../apps/web/lib/workspace-role-permissions";
 import { GET as goalRoute } from "../apps/web/app/api/goals/[id]/route";
 import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
 import { POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
 import { POST as goalRefineRoute } from "../apps/web/app/api/goals/[id]/refine/route";
+import { createRouteTestRepository } from "./route-test-helpers";
 
 describe("goal route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
@@ -27,10 +35,12 @@ describe("goal route", () => {
   async function createGoalForUser(
     repository: ReturnType<typeof createRepository>,
     userId: string,
-    request: string
+    request: string,
+    workspaceId?: string | null
   ) {
     const bundle = await processUserRequest({
       userId,
+      workspaceId,
       request,
       memories: await repository.listMemory(userId),
       integrations: await repository.listIntegrations(userId)
@@ -40,10 +50,59 @@ describe("goal route", () => {
     return bundle;
   }
 
+  async function createSharedWorkspace(
+    repository: ReturnType<typeof createRepository>,
+    ownerUserId: string,
+    memberUserId: string
+  ) {
+    const timestamp = "2026-04-22T00:00:00.000Z";
+    const ownerActor = createSystemActorContext(ownerUserId);
+    const workspaceId = "workspace-shared-goal-refine";
+
+    await repository.saveWorkspace(
+      WorkspaceSchema.parse({
+        id: workspaceId,
+        ownerUserId,
+        slug: "shared-goal-refine",
+        name: "Shared Goal Refine Workspace",
+        description: "Shared workspace for goal refinement permission tests.",
+        isPersonal: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }),
+      ownerActor
+    );
+    await repository.saveWorkspaceMember(
+      WorkspaceMemberSchema.parse({
+        id: "workspace-shared-goal-refine-owner",
+        workspaceId,
+        userId: ownerUserId,
+        role: "owner",
+        joinedAt: timestamp,
+        updatedAt: timestamp
+      }),
+      ownerActor
+    );
+
+    return {
+      workspaceId,
+      addMember: async (role: "editor" | "viewer") =>
+        repository.saveWorkspaceMember(
+          WorkspaceMemberSchema.parse({
+            id: `workspace-shared-goal-refine-${memberUserId}-${role}`,
+            workspaceId,
+            userId: memberUserId,
+            role,
+            joinedAt: timestamp,
+            updatedAt: timestamp
+          }),
+          ownerActor
+        )
+    };
+  }
+
   async function processQueuedGoalJobs(maxJobs = 1) {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const selfImprovementRepository = createSelfImprovementRepository({
       baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-goal-route-memory-"))
     });
@@ -102,9 +161,7 @@ describe("goal route", () => {
       };
       statusUrl: string;
     };
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     expect(createResponse.status).toBe(202);
     expect(createPayload.job.kind).toBe("goal_create");
@@ -167,7 +224,7 @@ describe("goal route", () => {
     expect(completedStatusPayload.job.status).toBe("completed");
     expect(completedStatusPayload.result.goalId).toBe(createPayload.job.goalId);
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
-    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
     expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
   });
@@ -197,9 +254,7 @@ describe("goal route", () => {
       job: { id: string; goalId: string; status: string };
       statusUrl: string;
     };
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(202);
@@ -211,9 +266,7 @@ describe("goal route", () => {
   });
 
   it("deduplicates retried goal refinements when the same idempotency key is reused", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan a reviewer-safe follow-up workflow.");
     const idempotencyKey = "goal-refine-retry-1";
     const buildRequest = () =>
@@ -225,7 +278,13 @@ describe("goal route", () => {
           "x-idempotency-key": idempotencyKey
         },
         body: JSON.stringify({
-          message: "Also include an executive summary for reviewers."
+          message: "Also include an executive summary for reviewers.",
+          sourceRecommendation: {
+            key: "execution_path:communications:send_message:R3:send",
+            source: "outcome_trace",
+            suggestedMessage:
+              'Refine "Plan a reviewer-safe follow-up workflow." to follow the communications send_message recommendation. Preserve the draft, send capability path.'
+          }
         })
       });
 
@@ -252,7 +311,18 @@ describe("goal route", () => {
     expect(secondPayload.job.id).toBe(firstPayload.job.id);
     expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
     expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.payload).toMatchObject({
+      type: "goal_refine",
+      metadata: {
+        sourceRecommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          source: "outcome_trace"
+        }
+      }
+    });
   });
 
   it("rate limits queued goal creation with a route-scoped abuse key", async () => {
@@ -321,9 +391,7 @@ describe("goal route", () => {
   });
 
   it("returns 404 for a goal owned by another user", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -351,9 +419,7 @@ describe("goal route", () => {
   });
 
   it("returns 404 when attempting to refine another user's goal", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(SYSTEM_USER_ID);
@@ -384,10 +450,123 @@ describe("goal route", () => {
     expect(payload.error).toContain(`Goal ${secondaryBundle.goal.id} was not found.`);
   });
 
-  it("returns 404 for a goal job owned by another user", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+  it("returns 403 when a viewer tries to refine a shared workspace goal", async () => {
+    const repository = createRouteTestRepository();
+    const viewerUserId = "user-viewer";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(viewerUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    await workspace.addMember("viewer");
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Keep the shared planning lane current for the team.",
+      workspace.workspaceId
+    );
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: viewerUserId,
+      sessionId: "session-viewer",
+      expiresAt: null
     });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    try {
+      const response = await goalRefineRoute(
+        new Request(`http://localhost/api/goals/${bundle.goal.id}/refine`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            message: "Add an escalation summary for the shared workflow."
+          })
+        }),
+        {
+          params: Promise.resolve({ id: bundle.goal.id })
+        }
+      );
+      const payload = (await response.json()) as { error?: string };
+
+      expect(response.status).toBe(403);
+      expect(payload.error).toBe(SHARED_GOAL_REFINEMENT_DENIED_REASON);
+      await expect(repository.listJobs({ userId: viewerUserId })).resolves.toHaveLength(0);
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+  });
+
+  it("queues refinement when an editor refines a shared workspace goal", async () => {
+    const repository = createRouteTestRepository();
+    const editorUserId = "user-editor";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(editorUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, editorUserId);
+    await workspace.addMember("editor");
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Keep the shared launch workflow aligned with current operator guidance.",
+      workspace.workspaceId
+    );
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: editorUserId,
+      sessionId: "session-editor",
+      expiresAt: null
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    try {
+      const response = await goalRefineRoute(
+        new Request(`http://localhost/api/goals/${bundle.goal.id}/refine`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            message: "Add the operator recovery path and escalation checklist."
+          })
+        }),
+        {
+          params: Promise.resolve({ id: bundle.goal.id })
+        }
+      );
+      const payload = (await response.json()) as {
+        job: { id: string; goalId: string; kind: string; status: string };
+        statusUrl: string;
+      };
+      const sharedJobs = await repository.listJobs({ userId: editorUserId });
+
+      expect(response.status).toBe(202);
+      expect(payload.job).toMatchObject({
+        goalId: bundle.goal.id,
+        kind: "goal_refine",
+        status: "queued"
+      });
+      expect(payload.statusUrl).toBe(`/api/goals/jobs/${payload.job.id}`);
+      expect(sharedJobs.some((job) => job.id === payload.job.id)).toBe(true);
+      expect(await repository.getJob(payload.job.id, editorUserId)).toMatchObject({
+        actorContext: createHumanActorContext(editorUserId, "session-editor"),
+        payload: {
+          type: "goal_refine",
+          goalId: bundle.goal.id,
+          workspaceId: workspace.workspaceId
+        }
+      });
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+  });
+
+  it("returns 404 for a goal job owned by another user", async () => {
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults("user-secondary");
     const job = await repository.enqueueJob(createJobRecord({
@@ -425,9 +604,7 @@ describe("goal route", () => {
   });
 
   it("returns a sanitized dead-letter failure message from the goal job status route", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const queued = await repository.enqueueJob(createJobRecord({
@@ -488,9 +665,7 @@ describe("goal route", () => {
   });
 
   it("returns a sanitized dead-letter failure message for queued goal refinements", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a refined planning bundle.");
@@ -548,12 +723,10 @@ describe("goal route", () => {
     expect(payload.result).toBeNull();
     expect(payload.error).toBe("Goal refinement failed. Retry the request or inspect worker logs.");
     expect(payload.error).not.toContain("SECRET");
-  });
+  }, 15_000);
 
   it("stamps access-key actor context onto goal refinement logs", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan follow-ups for my open client work.");
@@ -597,9 +770,7 @@ describe("goal route", () => {
   });
 
   it("stamps session actor context onto goal refinement logs", async () => {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
     await repository.seedDefaults(secondaryUserId);

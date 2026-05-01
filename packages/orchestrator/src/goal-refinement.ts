@@ -1,20 +1,25 @@
 import {
   createSystemActorContext,
   GoalBundleSchema,
+  deriveTaskResponsibility,
+  type RecommendationRefinementSource,
   TaskSchema,
   WorkflowStateSchema,
   nowIso,
   type ActorContext,
   type AgentMetrics,
+  type Capability,
   type GoalBundle,
   type MemoryRecord,
+  type RiskClass,
   type Task,
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { createTask } from "@agentic/execution";
 import { runAgent } from "@agentic/agents";
-import { createActionLog } from "@agentic/observability";
-import { evaluateTaskPolicy } from "@agentic/policy";
+import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
+import { calculateNormalizedEditDistance, createActionLog } from "@agentic/observability";
+import { buildPolicyDecisionTrace, riskFromCapabilities, simulateTaskPolicy, type PolicyReplayValidation } from "@agentic/policy";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
@@ -197,13 +202,21 @@ export async function refineGoal(params: {
   refinement: string;
   memories: MemoryRecord[];
   actorContext?: ActorContext | null;
+  sourceRecommendation?: RecommendationRefinementSource | null;
   resolveAgentMetrics?: (agentIdOrName: string) => Promise<AgentMetrics | null>;
+  resolvePolicyReplayValidation?: (params: {
+    agent: Task["assignedAgent"];
+    capabilities: Capability[];
+    riskClass: RiskClass;
+    title: string;
+  }) => Promise<PolicyReplayValidation | null>;
   governance?: WorkspaceGovernance | null;
 }): Promise<GoalBundle> {
   const bundle = GoalBundleSchema.parse(params.bundle);
   const refinement = params.refinement.trim();
   const actorContext = params.actorContext ?? createSystemActorContext(bundle.goal.userId);
   const actorLabel = actorContext.executor.userId ?? actorContext.executor.label;
+  const sourceRecommendation = params.sourceRecommendation ?? null;
 
   if (!refinement) {
     throw new Error("A non-empty refinement message is required.");
@@ -213,8 +226,21 @@ export async function refineGoal(params: {
     throw new Error("The refinement message exceeds the 2000 character safety limit.");
   }
 
+  const recommendationEditDistance = sourceRecommendation
+    ? calculateNormalizedEditDistance({
+        baseline: sourceRecommendation.suggestedMessage,
+        submitted: refinement
+      })
+    : null;
+  const contextPack = buildWorkflowContextPack({
+    kind: "goal_refinement",
+    query: `${bundle.goal.request}\n${refinement}`,
+    records: params.memories,
+    agent: "orchestrator"
+  });
+
   const changes = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY
-    ? await detectRefinementLlm(bundle, refinement, params.memories)
+    ? await detectRefinementLlm(bundle, refinement, contextPack.selectedMemories)
     : detectRefinementHeuristic(bundle, refinement);
 
   const logs = [...bundle.actionLogs];
@@ -233,13 +259,20 @@ export async function refineGoal(params: {
       details: {
         refinement,
         actorContext,
+        sourceRecommendation: sourceRecommendation
+          ? {
+              key: sourceRecommendation.key,
+              source: sourceRecommendation.source
+            }
+          : null,
         changesDetected: {
           updatedCount: changes.updatedTasks.length,
           newCount: changes.newTasks.length,
           removedCount: changes.removedTaskIds.length,
           titleChanged: !!changes.goalTitleUpdate,
           explanationChanged: !!changes.explanationUpdate
-        }
+        },
+        contextPack: summarizeWorkflowContextPack(contextPack)
       }
     })
   );
@@ -300,15 +333,24 @@ export async function refineGoal(params: {
   // Add new tasks
   for (const planned of changes.newTasks) {
     const capabilities = planned.capabilities ?? ["read", "draft"];
+    const policyRiskClass = riskFromCapabilities(capabilities);
     const scorecard = await params.resolveAgentMetrics?.(planned.assignedAgent);
-    const decision = evaluateTaskPolicy({
+    const learningValidation = await params.resolvePolicyReplayValidation?.({
+      agent: planned.assignedAgent,
+      capabilities,
+      riskClass: policyRiskClass,
+      title: planned.title
+    });
+    const policyResult = simulateTaskPolicy({
       capabilities,
       confidence: planned.confidence,
       title: planned.title,
       memories: params.memories,
       scorecard,
-      governance: params.governance
+      governance: params.governance,
+      learningValidation
     });
+    const decision = policyResult.decision;
     const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
     const task = createTask({
       goalId: bundle.goal.id,
@@ -319,6 +361,12 @@ export async function refineGoal(params: {
       riskClass: decision.riskClass,
       requiresApproval: decision.requiresApproval,
       toolCapabilities: capabilities,
+      responsibility: deriveTaskResponsibility({
+        assignedAgent: planned.assignedAgent,
+        requiresApproval: decision.requiresApproval,
+        ownerUserId: bundle.goal.userId,
+        workspaceId: bundle.goal.workspaceId
+      }),
       state
     });
 
@@ -341,6 +389,7 @@ export async function refineGoal(params: {
         message: `Evaluated policy for new task "${nextTask.title}".`,
         details: {
           ...decision,
+          policyTrace: buildPolicyDecisionTrace(policyResult),
           actorContext
         }
       })
@@ -356,6 +405,7 @@ export async function refineGoal(params: {
         details: {
           confidence: agentResult.confidence,
           executionMode: agentResult.executionMode,
+          implementationTier: agentResult.implementationTier,
           nextSteps: agentResult.nextSteps,
           actorContext
         }
@@ -375,7 +425,14 @@ export async function refineGoal(params: {
         actorContext,
         updatedTaskIds: changes.updatedTasks.map((u) => u.taskId),
         newTaskCount: changes.newTasks.length,
-        removedTaskIds: changes.removedTaskIds
+        removedTaskIds: changes.removedTaskIds,
+        sourceRecommendation: sourceRecommendation
+          ? {
+              key: sourceRecommendation.key,
+              source: sourceRecommendation.source
+            }
+          : null,
+        recommendationEditDistance
       }
     })
   );

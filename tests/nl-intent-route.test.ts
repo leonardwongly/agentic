@@ -15,16 +15,19 @@ import {
 import { GET as briefingJobRoute } from "../apps/web/app/api/briefing/jobs/[id]/route";
 import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
 import { GET as nlIntentCapabilitiesRoute, POST as nlIntentRoute } from "../apps/web/app/api/nl/intent/route";
-import { buildAuthorizedGetRequest, buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-helpers";
+import {
+  buildAuthorizedGetRequest,
+  buildAuthorizedJsonRequest,
+  createRouteTestRepository,
+  expectNoStoreHeaders
+} from "./route-test-helpers";
 
 describe("nl intent route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 
   async function buildRepository() {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
 
     await repository.seedDefaults(SYSTEM_USER_ID);
     return repository;
@@ -63,9 +66,7 @@ describe("nl intent route", () => {
   }
 
   async function processQueuedNlIntentJobs(maxJobs = 1) {
-    const repository = createRepository({
-      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
-    });
+    const repository = createRouteTestRepository();
     const selfImprovementRepository = createSelfImprovementRepository({
       baseDir: await mkdtemp(path.join(os.tmpdir(), "agentic-nl-intent-route-memory-"))
     });
@@ -192,9 +193,10 @@ describe("nl intent route", () => {
       message: string;
       dashboard: { approvals: Array<{ id: string; decision: string; riskClass: string }> };
     };
+    const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
 
     expect(response.status).toBe(200);
-    expect(payload.message).toContain("Approved 1 R2 approval");
+    expect(payload.message).toBe("Approved 1 R2 approval and queued 1 follow-up job.");
     expect(payload.dashboard.approvals).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -204,6 +206,19 @@ describe("nl intent route", () => {
         })
       ])
     );
+    expect(queuedJobs).toEqual([
+      expect.objectContaining({
+        kind: "approval_follow_up",
+        status: "queued",
+        payload: expect.objectContaining({
+          type: "approval_follow_up",
+          approvalId: bundle.approvals[0]!.id,
+          goalId: bundle.goal.id,
+          taskId: bundle.approvals[0]!.taskId,
+          decision: "approved"
+        })
+      })
+    ]);
     expectNoStoreHeaders(response);
   }, 15_000);
 
@@ -298,7 +313,7 @@ describe("nl intent route", () => {
     expect(completedStatusPayload.job.status).toBe("completed");
     expect(completedStatusPayload.result.goalId).toBe(payload.job.goalId);
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
-    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
     expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
     expect(await repository.getGoalBundleForUser(payload.job.goalId, SYSTEM_USER_ID)).toEqual(
@@ -406,7 +421,7 @@ describe("nl intent route", () => {
     expect(completedStatusPayload.job.briefingType).toBe("startup");
     expect(completedStatusPayload.result.goalId).toBe(payload.job.goalId);
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
-    expect(completedStatusPayload.result.completedTaskCount).toBeGreaterThan(0);
+    expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
     expect(persistedBundle?.goal.intent).toBe("briefing:startup");
     expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);

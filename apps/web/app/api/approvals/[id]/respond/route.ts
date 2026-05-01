@@ -1,14 +1,8 @@
 import { z } from "zod";
-import { captureExecutionOutcomeSignals, captureMemoriesFromBundle, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "@agentic/orchestrator";
-import { isSlackReady, sendNotification, createLocalNote } from "@agentic/integrations";
-import type { GoalBundle } from "@agentic/contracts";
-import { ApprovalMutationError, type AgenticRepository } from "@agentic/repository";
-import { requireApiSession } from "../../../../../lib/auth";
-import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
-import { resolveGoogleWorkspaceAdapters } from "../../../../../lib/google-provider-adapters";
-import { requireJsonContentType } from "../../../../../lib/api-errors";
-import { persistCapturedMemories } from "../../../../../lib/persist-captured-memories";
+import { ApprovalMutationError } from "@agentic/repository";
+import { respondToApprovalAndEnqueueFollowUpJob } from "@agentic/worker-runtime";
+import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
+import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { getSeededRepository } from "../../../../../lib/server";
 
 const ApprovalIdSchema = z.string().trim().min(1).max(200);
@@ -21,73 +15,31 @@ const ApprovalResponseSchema = z
   })
   .strict();
 
-function mergeIds(...groups: Array<string[] | undefined>): string[] {
-  return Array.from(new Set(groups.flatMap((group) => group ?? [])));
-}
+type RouteContext = { params: Promise<{ id: string }> };
 
-async function finalizeApprovalEvidenceRecord(params: {
-  repository: AgenticRepository;
-  bundle: GoalBundle;
-  userId: string;
-  approvalId: string;
-  memoryIds: string[];
-}) {
-  const { repository, bundle, userId, approvalId, memoryIds } = params;
-  const approval = bundle.approvals.find((candidate) => candidate.id === approvalId);
-
-  if (!approval || approval.decision === "pending") {
-    return;
-  }
-
-  const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
-  const evidenceRecord =
-    (await repository.listEvidenceRecords({ userId, approvalId }))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .at(0) ?? null;
-
-  if (!evidenceRecord) {
-    return;
-  }
-
-  const relatedActionLogIds = bundle.actionLogs
-    .filter(
-      (log) => log.taskId === approval.taskId || (typeof log.details.approvalId === "string" && log.details.approvalId === approvalId)
-    )
-    .map((log) => log.id);
-  const relatedArtifactIds = bundle.artifacts
-    .filter((artifact) => artifact.taskId === approval.taskId)
-    .map((artifact) => artifact.id);
-
-  await repository.saveEvidenceRecord({
-    ...evidenceRecord,
-    resultingTaskState: task?.state ?? evidenceRecord.resultingTaskState,
-    resultingGoalStatus: bundle.goal.status,
-    actionLogIds: mergeIds(evidenceRecord.actionLogIds, relatedActionLogIds),
-    artifactIds: mergeIds(
-      evidenceRecord.artifactIds,
-      relatedArtifactIds,
-      approval.actionIntent?.type === "manual_review" ? approval.actionIntent.artifactIds : undefined
-    ),
-    memoryIds: mergeIds(evidenceRecord.memoryIds, memoryIds),
-    updatedAt: new Date().toISOString()
-  });
-}
-
-export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  try {
-    requireJsonContentType(request);
-    const principal = await requireApiSession(request);
-    const actor = createActorContextFromPrincipal(principal);
-    const { id } = await context.params;
+export const POST = createGovernedMutationRoute<z.infer<typeof ApprovalResponseSchema>, RouteContext>(
+  {
+    route: "api.approvals.respond",
+    fallbackError: "Failed to respond to approval.",
+    bodySchema: ApprovalResponseSchema,
+    rateLimit: {
+      namespace: "approval-response",
+      error: "Too many approval response requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ routeContext, principal, actorContext: actor, body }) => {
+    const { id } = await routeContext.params;
     const approvalId = ApprovalIdSchema.parse(id);
-    const body = await parseJsonBody(request, ApprovalResponseSchema);
     const repository = await getSeededRepository();
-    let updatedBundle = await (async () => {
+    const { bundle: updatedBundle, job: queuedJob } = await (async () => {
       try {
-        return await repository.respondToApproval({
+        return await respondToApprovalAndEnqueueFollowUpJob({
+          repository,
+          userId: principal.userId,
           approvalId,
           decision: body.decision,
-          actor,
+          actorContext: actor,
           scope: body.scope,
           rationale: body.rationale ?? null
         });
@@ -97,122 +49,42 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
             throw new ApiRouteError(404, error.message);
           }
 
+          if (error.code === "forbidden") {
+            throw new ApiRouteError(403, error.message);
+          }
+
           throw new ApiRouteError(409, error.message);
         }
 
         throw error;
       }
     })();
+    const approval = updatedBundle.approvals.find((candidate) => candidate.id === approvalId);
 
-    // Execute approved tasks via integration adapters
-    let executionResults: ExecutionResult[] = [];
-    if (body.decision === "approved") {
-      const approval = updatedBundle.approvals.find((a) => a.id === approvalId);
-      if (approval) {
-        try {
-          const googleAdapters = await resolveGoogleWorkspaceAdapters({
-            repository,
-            userId: principal.userId,
-            workspaceId: updatedBundle.goal.workspaceId
-          });
-          const adapters = {
-            gmail: googleAdapters?.gmail,
-            calendar: googleAdapters?.calendar,
-            notes: { createLocalNote }
-          };
-          const governance = updatedBundle.goal.workspaceId
-            ? await repository.getWorkspaceGovernance(updatedBundle.goal.workspaceId, principal.userId)
-            : null;
-          const { results, logs } = await executeApprovedTasks({
-            bundle: updatedBundle,
-            approvedTaskIds: [approval.taskId],
-            adapters,
-            governance
-          });
-          executionResults = results;
-          updatedBundle = reconcileExecutionResults({
-            bundle: updatedBundle,
-            results,
-            logs
-          });
-          console.log(`[execution] Executed ${results.length} task(s) after approval:`, results.map((r) => `${r.action}: ${r.success ? "OK" : "FAILED"}`).join(", "));
-        } catch (execError) {
-          console.error("[execution] Failed to execute approved task:", execError);
-        }
-      }
+    if (!approval) {
+      throw new Error(`Approval ${approvalId} is missing after response mutation.`);
     }
-
-    await repository.saveGoalBundle(updatedBundle);
-
-    const capturedMemoryIds: string[] = [];
-
-    if (executionResults.length > 0) {
-      try {
-        const persisted = await persistCapturedMemories({
-          repository,
-          captured: captureExecutionOutcomeSignals(updatedBundle, principal.userId, executionResults, actor),
-          goalId: updatedBundle.goal.id,
-          label: "execution-capture",
-          actorContext: actor
-        });
-        capturedMemoryIds.push(...persisted.memories.map((memory) => memory.id));
-      } catch (captureError) {
-        console.error("[execution-capture] Failed to persist execution outcome signals after approval:", captureError);
-      }
-    }
-
-    if (updatedBundle.goal.status === "completed") {
-      try {
-        const persisted = await persistCapturedMemories({
-          repository,
-          captured: captureMemoriesFromBundle(updatedBundle, principal.userId, actor),
-          goalId: updatedBundle.goal.id,
-          label: "auto-capture",
-          actorContext: actor
-        });
-        capturedMemoryIds.push(...persisted.memories.map((memory) => memory.id));
-      } catch (captureError) {
-        console.error("[auto-capture] Failed to persist captured memories after approval:", captureError);
-      }
-    }
-
-    try {
-      await finalizeApprovalEvidenceRecord({
-        repository,
+    return authenticatedJson(
+      {
         bundle: updatedBundle,
-        userId: principal.userId,
-        approvalId,
-        memoryIds: capturedMemoryIds
-      });
-    } catch (evidenceError) {
-      console.error("[approval-evidence] Failed to reconcile approval evidence after execution:", evidenceError);
-    }
-
-    // Send Slack notification about the decision (non-blocking)
-    if (isSlackReady()) {
-      try {
-        const slackChannel = process.env.SLACK_DEFAULT_CHANNEL ?? "#approvals";
-        const taskTitle =
-          updatedBundle.tasks.find(
-            (t) => t.id === updatedBundle.approvals.find((a) => a.id === approvalId)?.taskId
-          )?.title ?? "Unknown task";
-        const statusEmoji = body.decision === "approved" ? "\u2713" : "\u2717";
-        const statusLabel = body.decision === "approved" ? "Approved" : "Rejected";
-
-        await sendNotification({
-          channel: slackChannel,
-          text: `${statusEmoji} ${statusLabel}: ${taskTitle}`
-        });
-      } catch (slackError) {
-        console.error("[approval] Failed to send Slack notification:", slackError);
-      }
-    }
-
-    return authenticatedJson({
-      bundle: updatedBundle,
-      dashboard: await repository.getDashboardData(principal.userId)
-    });
-  } catch (error) {
-    return handleApiError(error, "Failed to respond to approval.");
+        dashboard: await repository.getDashboardData(principal.userId),
+        job: {
+          id: queuedJob.id,
+          kind: queuedJob.kind,
+          status: queuedJob.status,
+          goalId: queuedJob.payload.goalId,
+          approvalId: queuedJob.payload.approvalId,
+          taskId: queuedJob.payload.taskId,
+          actionId: queuedJob.payload.metadata.actionId,
+          decision: queuedJob.payload.decision,
+          attemptCount: queuedJob.attemptCount,
+          maxAttempts: queuedJob.maxAttempts,
+          createdAt: queuedJob.createdAt,
+          updatedAt: queuedJob.updatedAt
+        },
+        statusUrl: `/api/approvals/jobs/${queuedJob.id}`
+      },
+      { status: 202 }
+    );
   }
-}
+);

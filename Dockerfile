@@ -21,12 +21,16 @@ COPY packages/worker-runtime/package.json packages/worker-runtime/package.json
 RUN npm ci
 
 FROM deps AS build
+ARG NODE_OPTIONS=--max-old-space-size=4096
+ENV NODE_OPTIONS=${NODE_OPTIONS}
+ENV NEXT_TELEMETRY_DISABLED=1
 COPY . .
 RUN npm run build
 
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 COPY --from=deps /app/node_modules ./node_modules

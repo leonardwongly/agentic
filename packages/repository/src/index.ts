@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
@@ -10,7 +10,9 @@ import {
   AgentDefinitionSchema,
   AgentMetricsSchema,
   ActorContextSchema,
+  AutopilotEventBudgetSchema,
   AutopilotEventSchema,
+  DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   AutopilotSettingsSchema,
   type ApprovalDecision,
   type ApprovalDecisionScope,
@@ -20,10 +22,11 @@ import {
   ApprovalRequestSchema,
   ArtifactSchema,
   type AutopilotEvent,
+  type AutopilotEventDetails,
+  type AutopilotEventBudget,
   type AutopilotEventKind,
   type AutopilotMode,
   type AutopilotSettings,
-  BriefingHistoryItemSchema,
   BriefingPreferencesSchema,
   briefingTypeValues,
   CommitmentSchema,
@@ -40,6 +43,8 @@ import {
   JobKindSchema,
   JobRecordSchema,
   JobStatusSchema,
+  type JobExecutionJournal,
+  type JobStatus,
   IntegrationAccountPageSchema,
   MemoryRecordSchema,
   OperatorProductSchema,
@@ -63,15 +68,21 @@ import {
   WorkspaceSelectionSchema,
   clone,
   createSystemActorContext,
+  deriveApprovalResponsibility,
+  deriveAutopilotEventResponsibility,
+  deriveGoalResponsibility,
+  deriveJobRecoveryState,
+  deriveTaskResponsibility,
+  deriveWatcherResponsibility,
   nowIso,
   type ActionLog,
   type AgentDefinition,
+  type AgentName,
   type AgentMetrics,
   type ActorContext,
   type ApprovalRequest,
   type Artifact,
   type AutopilotEventPage,
-  type BriefingHistoryItem,
   type BriefingPreferences,
   type BriefingType,
   type Commitment,
@@ -98,7 +109,6 @@ import {
   type ProviderCredentialSecretRecord,
   type JobKind,
   type JobRecord,
-  type JobStatus,
   type MemoryRecord,
   type MemoryRecordPage,
   type NowQueue,
@@ -115,8 +125,19 @@ import {
 } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord, getMemoryFreshness } from "@agentic/memory";
-import { respondToApproval as applyApprovalResponse } from "@agentic/orchestrator";
+import { assertApprovalFollowUpJobOwner, buildApprovalResponseMutation } from "./approval-response-helpers";
+import {
+  buildFallbackApprovalActionIntent,
+  buildFallbackApprovalPreview
+} from "./approval-fallbacks";
+import { assertWorkspaceGovernanceStartupConfig, resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults"; export { resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults";
 import { deriveAgentMetricsFromGoals } from "./agent-metrics";
+import {
+  buildPendingAutopilotEvent,
+  buildSuppressedAutopilotEvent,
+  countsTowardAutopilotBudget,
+  evaluateAutopilotClaimControls
+} from "./autopilot-event-claim-helpers";
 import { defaultAgents, defaultOperatorProducts } from "./built-in-catalog";
 import {
   buildCollectionPage,
@@ -134,13 +155,41 @@ import {
   sortCommitments,
   CommitmentInboxQueryError
 } from "./commitment-helpers";
+import { claimWatcherLeaseInRuntimeStore, claimWatcherLeaseWithPostgresClient, type WatcherLeaseClaimParams } from "./watcher-lease-helpers";
 import { assembleDashboardData } from "./dashboard-data";
-import {
-  buildDashboardOperationsTower,
-  type DashboardOperationsTower
-} from "./dashboard-operations";
+import { appendGoalActionLogsToStore, appendGoalActionLogsWithClient } from "./action-log-append";
+import { buildBriefingHistory, buildDashboardControlPlane, buildNowQueue } from "./dashboard-control-plane";
+import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
-
+import { listContextPacketMemoryFromStore, listContextPacketMemoryWithPool } from "./repository-context-packet-memory";
+import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
+import {
+  assertRunningJobOwner, autopilotEventMatchesBudget, buildDeletedWorkspaceTombstone, buildJobLifecycleJournal,
+  goalShareTerminalAt, isJobScopedToWorkspace, normalizeAutopilotEventDetails, resolveRetentionWindow,
+  withAutopilotSuppression, workspaceGoalIdsFromStore
+} from "./repository-runtime-helpers";
+import {
+  ApprovalMutationError,
+  JobMutationError,
+  type AgenticRepository,
+  type AutopilotEventClaim,
+  type CollectionPageParams,
+  type DashboardControlPlane,
+  type DashboardControlPlaneSection,
+  type DashboardData,
+  type DashboardDiagnostic,
+  type DashboardDiagnostics,
+  type GoalPageParams,
+  type GoalShareListFilters,
+  type JobConcurrencyLimits,
+  type PrivacyOperationListFilters,
+  type WatcherListFilters,
+  type WatcherPageParams,
+  type WorkspaceAuditExport,
+  type WorkspaceDeleteParams,
+  type WorkspaceRetentionParams
+} from "./repository-types";
+import { buildWorkspaceAuditExport } from "./workspace-audit-export";
 const UserRecordSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -195,318 +244,11 @@ const RuntimeStoreSchema = z.object({
 
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 
-export type DashboardData = {
-  workspaces: Workspace[];
-  activeWorkspace: Workspace | null;
-  workspaceSelection: WorkspaceSelection | null;
-  workspaceMembers: WorkspaceMember[];
-  workspaceGovernance: WorkspaceGovernance | null;
-  goalShares: GoalShareRecord[];
-  privacyOperations: PrivacyOperation[];
-  controlPlane: DashboardControlPlane;
-  operatingSections: DashboardOperatingSections;
-  nowQueue: NowQueue;
-  goals: GoalBundle[];
-  approvals: ApprovalRequest[];
-  commitments: Commitment[];
-  briefingPreferences: BriefingPreferences;
-  briefingHistory: BriefingHistoryItem[];
-  autopilotSettings: AutopilotSettings;
-  autopilotEvents: AutopilotEvent[];
-  memories: MemoryRecord[];
-  watchers: Watcher[];
-  integrations: IntegrationAccount[];
-  latestArtifacts: Artifact[];
-  actionLogs: ActionLog[];
-  diagnostics: DashboardDiagnostics;
-  operations?: DashboardOperationsTower;
-};
-
-export type DashboardDiagnosticKind =
-  | "expired_approvals"
-  | "stale_memories"
-  | "stuck_workflows"
-  | "orphan_watchers"
-  | "async_execution_issues"
-  | "connector_degradation";
-
-export type DashboardDiagnosticSeverity = "warning" | "critical";
-
-export type DashboardDiagnosticSection =
-  | "goals"
-  | "approvals"
-  | "memory"
-  | "watchers"
-  | "operations";
-
-export type DashboardControlPlaneKey = "workspace" | "commitments" | "automation" | "execution" | "trust";
-
-export type DashboardControlPlaneStatus = "healthy" | "attention" | "critical" | "idle";
-
-export type DashboardControlPlaneSection = {
-  key: DashboardControlPlaneKey;
-  title: string;
-  description: string;
-  status: DashboardControlPlaneStatus;
-  targetSection: string;
-  targetItemId?: string;
-  stats: string[];
-  highlights: string[];
-};
-
-export type DashboardControlPlane = {
-  generatedAt: string;
-  sections: DashboardControlPlaneSection[];
-};
-
-export type DashboardDiagnosticTarget = {
-  section: DashboardDiagnosticSection;
-  itemId?: string;
-  label: string;
-  action?: "review_memory" | "pause_watcher";
-  actionLabel?: string;
-};
-
-export type WorkspaceAuditExport = {
-  workspaceId: string;
-  fileName: string;
-  contentType: string;
-  content: string;
-  generatedAt: string;
-};
-
-export type DashboardDiagnostic = {
-  kind: DashboardDiagnosticKind;
-  title: string;
-  count: number;
-  severity: DashboardDiagnosticSeverity;
-  reasons: string[];
-  targets: DashboardDiagnosticTarget[];
-};
-
-export type DashboardDiagnostics = {
-  status: "healthy" | "warning" | "critical";
-  totalCount: number;
-  generatedAt: string;
-  items: DashboardDiagnostic[];
-};
-
-export type WatcherListFilters = {
-  userId?: string;
-  goalId?: string;
-};
-
-export type GoalShareListFilters = {
-  userId?: string;
-  goalId?: string;
-  workspaceId?: string | null;
-  statuses?: GoalShareStatus[];
-};
-
-export type PrivacyOperationListFilters = {
-  userId?: string;
-  workspaceId?: string;
-  kinds?: PrivacyOperationKind[];
-  statuses?: PrivacyOperationStatus[];
-};
-
-export type CollectionPageParams = {
-  userId?: string;
-  limit?: number;
-  cursor?: string | null;
-};
-
-export type GoalPageParams = CollectionPageParams & {
-  workspaceId?: string | null;
-};
-
-export type WatcherPageParams = CollectionPageParams & {
-  goalId?: string;
-};
-
-export type WorkspaceRetentionParams = {
-  workspaceId: string;
-  userId: string;
-  retentionDays: number;
-  now?: string;
-};
-
-export type WorkspaceDeleteParams = {
-  workspaceId: string;
-  userId: string;
-  operationId: string;
-  now?: string;
-};
-
-export type AutopilotEventClaim =
-  | {
-      outcome: "claimed";
-      event: AutopilotEvent;
-    }
-  | {
-      outcome: "duplicate" | "debounced";
-      event: AutopilotEvent;
-    };
-
-export class JobMutationError extends Error {
-  constructor(
-    public readonly code: "not_found" | "not_running" | "not_owner",
-    message: string
-  ) {
-    super(message);
-    this.name = "JobMutationError";
-  }
-}
-
-export class ApprovalMutationError extends Error {
-  constructor(
-    public readonly code: "not_found" | "already_handled" | "expired",
-    message: string
-  ) {
-    super(message);
-    this.name = "ApprovalMutationError";
-  }
-}
-
 export { CommitmentInboxQueryError, CollectionPageQueryError };
+export { ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters, type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
+export { buildExecutionProvenanceGraph } from "./provenance-graph";
 
-export type AgenticRepository = {
-  backend: "file" | "postgres";
-  seedDefaults(userId?: string): Promise<void>;
-  listWorkspaces(userId?: string): Promise<Workspace[]>;
-  saveWorkspace(workspace: Workspace, actor: ActorContext): Promise<Workspace>;
-  listWorkspaceMembers(workspaceId: string, userId?: string): Promise<WorkspaceMember[]>;
-  saveWorkspaceMember(member: WorkspaceMember, actor: ActorContext): Promise<WorkspaceMember>;
-  getWorkspaceSelection(userId?: string): Promise<WorkspaceSelection | null>;
-  saveWorkspaceSelection(selection: WorkspaceSelection): Promise<WorkspaceSelection>;
-  getWorkspaceGovernance(workspaceId: string, userId?: string): Promise<WorkspaceGovernance | null>;
-  saveWorkspaceGovernance(governance: WorkspaceGovernance, actor: ActorContext): Promise<WorkspaceGovernance>;
-  listGoalShares(filters?: GoalShareListFilters): Promise<GoalShareRecord[]>;
-  getGoalShare(shareId: string, userId?: string): Promise<GoalShareRecord | null>;
-  getGoalShareByTokenFingerprint(tokenFingerprint: string): Promise<GoalShareRecord | null>;
-  saveGoalShare(share: GoalShareRecord): Promise<GoalShareRecord>;
-  listPrivacyOperations(filters?: PrivacyOperationListFilters): Promise<PrivacyOperation[]>;
-  getPrivacyOperation(operationId: string, userId?: string): Promise<PrivacyOperation | null>;
-  savePrivacyOperation(operation: PrivacyOperation): Promise<PrivacyOperation>;
-  enforceWorkspaceRetention(params: WorkspaceRetentionParams): Promise<Record<string, unknown>>;
-  deleteWorkspaceData(params: WorkspaceDeleteParams): Promise<Record<string, unknown>>;
-  exportWorkspaceAudit(workspaceId: string, userId?: string): Promise<WorkspaceAuditExport>;
-  saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle>;
-  respondToApproval(params: {
-    approvalId: string;
-    decision: Exclude<ApprovalDecision, "pending">;
-    actor: ActorContext;
-    scope?: ApprovalDecisionScope;
-    rationale?: string | null;
-  }): Promise<GoalBundle>;
-  getGoalBundle(goalId: string): Promise<GoalBundle | null>;
-  getGoalBundleForUser(goalId: string, userId?: string): Promise<GoalBundle | null>;
-  listGoals(userId?: string): Promise<GoalBundle[]>;
-  listGoalsPage(params?: GoalPageParams): Promise<GoalBundlePage>;
-  listApprovals(userId?: string): Promise<ApprovalRequest[]>;
-  listEvidenceRecords(params?: {
-    userId?: string;
-    goalId?: string;
-    approvalId?: string;
-  }): Promise<EvidenceRecord[]>;
-  listCommitments(userId?: string): Promise<Commitment[]>;
-  listCommitmentInbox(params?: {
-    userId?: string;
-    bucket?: CommitmentInboxBucket;
-    limit?: number;
-    cursor?: string | null;
-  }): Promise<CommitmentInboxPage>;
-  getCommitment(commitmentId: string, userId?: string): Promise<Commitment | null>;
-  saveCommitment(commitment: Commitment): Promise<Commitment>;
-  deleteCommitment(commitmentId: string, userId?: string): Promise<void>;
-  getBriefingPreferences(userId?: string): Promise<BriefingPreferences>;
-  saveBriefingPreferences(preferences: BriefingPreferences): Promise<BriefingPreferences>;
-  getAutopilotSettings(userId?: string): Promise<AutopilotSettings>;
-  saveAutopilotSettings(settings: AutopilotSettings): Promise<AutopilotSettings>;
-  listAutopilotEvents(userId?: string): Promise<AutopilotEvent[]>;
-  listAutopilotEventsPage(params?: CollectionPageParams): Promise<AutopilotEventPage>;
-  claimAutopilotEvent(params: {
-    userId?: string;
-    kind: AutopilotEventKind;
-    sourceId: string;
-    idempotencyKey?: string | null;
-    mode: AutopilotMode;
-    summary: string;
-    details?: Record<string, unknown>;
-    actorContext?: ActorContext | null;
-    debounceMinutes: number;
-  }): Promise<AutopilotEventClaim>;
-  saveAutopilotEvent(event: AutopilotEvent): Promise<AutopilotEvent>;
-  listJobs(params?: {
-    userId?: string;
-    kinds?: JobKind[];
-    statuses?: JobStatus[];
-  }): Promise<JobRecord[]>;
-  getJob(jobId: string, userId?: string): Promise<JobRecord | null>;
-  enqueueJob(job: JobRecord): Promise<JobRecord>;
-  claimNextJob(params: {
-    userId?: string;
-    kinds?: JobKind[];
-    runnerId: string;
-    leaseMs: number;
-    now?: string;
-  }): Promise<JobRecord | null>;
-  completeJob(params: {
-    jobId: string;
-    runnerId: string;
-    completedAt?: string;
-  }): Promise<JobRecord>;
-  retryJob(params: {
-    jobId: string;
-    runnerId: string;
-    availableAt: string;
-    error: string;
-  }): Promise<JobRecord>;
-  deadLetterJob(params: {
-    jobId: string;
-    runnerId: string;
-    deadLetteredAt?: string;
-    error: string;
-  }): Promise<JobRecord>;
-  listMemory(userId?: string): Promise<MemoryRecord[]>;
-  listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage>;
-  saveMemory(record: MemoryRecord): Promise<MemoryRecord>;
-  saveEvidenceRecord(record: EvidenceRecord): Promise<EvidenceRecord>;
-  listWatchers(filters?: WatcherListFilters): Promise<Watcher[]>;
-  listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage>;
-  saveWatcher(watcher: Watcher): Promise<Watcher>;
-  listIntegrations(userId?: string): Promise<IntegrationAccount[]>;
-  listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage>;
-  upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount>;
-  listProviderCredentials(userId?: string): Promise<ProviderCredential[]>;
-  getProviderCredential(credentialId: string, userId?: string): Promise<ProviderCredential | null>;
-  saveProviderCredential(credential: ProviderCredential): Promise<ProviderCredential>;
-  getProviderCredentialSecret(
-    credentialId: string,
-    kind: ProviderCredentialSecretKind,
-    userId?: string
-  ): Promise<ProviderCredentialSecretRecord | null>;
-  saveProviderCredentialSecret(record: ProviderCredentialSecretRecord): Promise<ProviderCredentialSecretRecord>;
-  listTemplates(userId?: string): Promise<GoalTemplate[]>;
-  saveTemplate(template: GoalTemplate): Promise<GoalTemplate>;
-  deleteTemplate(templateId: string): Promise<void>;
-  listWorkflowTemplates(userId?: string): Promise<WorkflowCanvasTemplate[]>;
-  getWorkflowTemplate(templateId: string, userId?: string): Promise<WorkflowCanvasTemplate | null>;
-  saveWorkflowTemplate(template: WorkflowCanvasTemplate): Promise<WorkflowCanvasTemplate>;
-  deleteWorkflowTemplate(templateId: string, userId?: string): Promise<void>;
-  getDashboardData(userId?: string): Promise<DashboardData>;
-  // Agent Management
-  listAgents(userId?: string): Promise<AgentDefinition[]>;
-  getAgent(agentId: string, userId?: string): Promise<AgentDefinition | null>;
-  saveAgent(agent: AgentDefinition): Promise<AgentDefinition>;
-  deleteAgent(agentId: string, userId?: string): Promise<void>;
-  getAgentMetrics(agentId: string, period?: "day" | "week" | "month" | "all", userId?: string): Promise<AgentMetrics | null>;
-  saveAgentMetrics(metrics: AgentMetrics): Promise<AgentMetrics>;
-  listOperatorProducts(userId?: string): Promise<OperatorProduct[]>;
-  getOperatorProductSelection(userId?: string): Promise<OperatorProductSelection | null>;
-  saveOperatorProduct(product: OperatorProduct): Promise<OperatorProduct>;
-  saveOperatorProductSelection(selection: OperatorProductSelection): Promise<OperatorProductSelection>;
-};
+const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
 const STALLED_WORKFLOW_MS = 30 * 60 * 1000;
 const APPROVAL_WAIT_SLA_MS = 6 * 60 * 60 * 1000;
@@ -514,10 +256,11 @@ const DASHBOARD_GOAL_LIMIT = 40;
 const DASHBOARD_AUTOPILOT_EVENT_LIMIT = 24;
 const DASHBOARD_MEMORY_LIMIT = 40;
 const DASHBOARD_INTEGRATION_LIMIT = 24;
-const DEFAULT_RUNTIME_STORE_PATH = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../../.agentic/runtime-store.json"
-);
+const DEFAULT_RUNTIME_STORE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.agentic/runtime-store.json");
+
+function normalizeProvenanceCollectionLimit(value: number | undefined): number | null {
+  return value === undefined ? null : Math.max(1, Math.min(Math.trunc(value), 500));
+}
 
 function resolveDefaultStorePath(): string {
   const configured = process.env.AGENTIC_RUNTIME_STORE_PATH?.trim();
@@ -576,6 +319,10 @@ function upsertByKey<T>(items: T[], nextItem: T, getKey: (item: T) => string): T
 
 function integrationStoreKey(account: Pick<IntegrationAccount, "id" | "userId">): string {
   return `${account.userId}:${account.id}`;
+}
+
+function workspaceMemberStoreKey(member: Pick<WorkspaceMember, "workspaceId" | "userId">): string {
+  return `${member.workspaceId}:${member.userId}`;
 }
 
 function providerCredentialStoreKey(credential: Pick<ProviderCredential, "id" | "userId">): string {
@@ -662,41 +409,6 @@ function uniqueById<T extends { id: string }>(items: T[]): T[] {
   return [...map.values()];
 }
 
-function pluralize(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-function formatCount(count: number, singular: string, plural: string): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function formatAgeAgo(timestamp: string, now: number): string {
-  const parsed = Date.parse(timestamp);
-
-  if (!Number.isFinite(parsed)) {
-    return "recently";
-  }
-
-  const deltaMs = Math.max(0, now - parsed);
-  const minutes = Math.floor(deltaMs / (60 * 1000));
-
-  if (minutes < 1) {
-    return "just now";
-  }
-
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-
-  if (hours < 48) {
-    return `${hours}h ago`;
-  }
-
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
 function resolveAgentFromDefinitions(
   agents: AgentDefinition[],
   agentIdOrName: string,
@@ -717,86 +429,6 @@ function resolveAgentFromDefinitions(
     visibleAgents.find((agent) => agent.name === normalized) ??
     null
   );
-}
-
-function inferApprovalActionTypeFromRequestedAction(requestedAction: string): ApprovalRequest["preview"]["actionType"] {
-  const normalized = requestedAction.toLowerCase();
-
-  if (/\bdelete|remove|erase\b/.test(normalized)) {
-    return "delete";
-  }
-
-  if (/\bsend|reply|email|message\b/.test(normalized)) {
-    return "send";
-  }
-
-  if (/\bschedule|calendar|meeting|event\b/.test(normalized)) {
-    return "schedule";
-  }
-
-  if (/\bupdate|revise|modify\b/.test(normalized)) {
-    return "update";
-  }
-
-  if (/\bcreate|open|add|capture\b/.test(normalized)) {
-    return "create";
-  }
-
-  if (/\bdraft|prepare\b/.test(normalized)) {
-    return "draft";
-  }
-
-  return "artifact-only";
-}
-
-function buildFallbackApprovalPreview(approval: {
-  title: string;
-  requestedAction: string;
-  riskClass: ApprovalRequest["riskClass"];
-}): ApprovalRequest["preview"] {
-  const actionType = inferApprovalActionTypeFromRequestedAction(approval.requestedAction);
-
-  return ApprovalPreviewSchema.parse({
-    actionType,
-    summary: approval.requestedAction,
-    target: approval.title.replace(/\s+requires approval$/u, "") || "Pending action",
-    changes: [
-      {
-        label: "Requested action",
-        before: "Pending user review",
-        after: approval.requestedAction
-      }
-    ],
-    impact: {
-      affectedPeople: actionType === "send" ? ["external recipients"] : [],
-      affectedSystems:
-        actionType === "send"
-          ? ["email"]
-          : actionType === "schedule"
-            ? ["calendar"]
-            : actionType === "create" || actionType === "update" || actionType === "delete"
-              ? ["workspace"]
-              : [],
-      permissions: [],
-      rollback: actionType === "delete" ? "not_supported" : actionType === "draft" || actionType === "artifact-only" ? "supported" : "manual"
-    }
-  });
-}
-
-function buildFallbackApprovalActionIntent(approval: {
-  title: string;
-  requestedAction: string;
-  preview?: ApprovalRequest["preview"] | null;
-}): ApprovalRequest["actionIntent"] {
-  const actionType = approval.preview?.actionType ?? inferApprovalActionTypeFromRequestedAction(approval.requestedAction);
-
-  return ActionIntentSchema.parse({
-    type: "manual_review",
-    actionType,
-    summary: approval.requestedAction,
-    reason: "This approval does not include a typed execution payload and requires manual review before any side effect.",
-    artifactIds: []
-  });
 }
 
 function normalizeApprovalDecisionScope(value: unknown): ApprovalDecisionScope | null {
@@ -833,359 +465,6 @@ function defaultBriefingPreferences(userId: string): BriefingPreferences {
     createdAt: timestamp,
     updatedAt: timestamp
   });
-}
-
-function inferBriefingType(intent: string): BriefingType | null {
-  if (intent === "morning-briefing") {
-    return "startup";
-  }
-
-  if (!intent.startsWith("briefing:")) {
-    return null;
-  }
-
-  const type = intent.slice("briefing:".length);
-  return briefingTypeValues.includes(type as BriefingType) ? (type as BriefingType) : null;
-}
-
-function buildBriefingHistory(goals: GoalBundle[]): BriefingHistoryItem[] {
-  return goals
-    .flatMap((bundle) => {
-      const type = inferBriefingType(bundle.goal.intent);
-
-      if (!type) {
-        return [];
-      }
-
-      const latestArtifact = sortByCreatedDesc(bundle.artifacts)[0] ?? null;
-      return [
-        BriefingHistoryItemSchema.parse({
-          goalId: bundle.goal.id,
-          type,
-          title: bundle.goal.title,
-          status: bundle.goal.status,
-          summary: bundle.goal.explanation,
-          generatedAt: bundle.goal.createdAt,
-          updatedAt: bundle.goal.updatedAt,
-          artifactId: latestArtifact?.id ?? null,
-          artifactTitle: latestArtifact?.title ?? null
-        })
-      ];
-    })
-    .sort((left, right) => right.generatedAt.localeCompare(left.generatedAt))
-    .slice(0, 8);
-}
-
-const riskClassWeight: Record<NonNullable<Commitment["riskClass"]>, number> = {
-  R1: 1,
-  R2: 2,
-  R3: 3,
-  R4: 4
-};
-
-function buildNowQueue(params: {
-  commitments: Commitment[];
-  diagnostics: DashboardDiagnostics;
-  now?: number;
-}): NowQueue {
-  const now = params.now ?? Date.now();
-  const diagnosticTitlesByGoalId = new Map<string, string[]>();
-  const diagnosticTitlesByApprovalId = new Map<string, string[]>();
-
-  for (const diagnostic of params.diagnostics.items) {
-    for (const target of diagnostic.targets) {
-      if (!target.itemId) {
-        continue;
-      }
-
-      if (target.section === "goals") {
-        diagnosticTitlesByGoalId.set(target.itemId, [
-          ...(diagnosticTitlesByGoalId.get(target.itemId) ?? []),
-          diagnostic.title
-        ]);
-      }
-
-      if (target.section === "approvals") {
-        diagnosticTitlesByApprovalId.set(target.itemId, [
-          ...(diagnosticTitlesByApprovalId.get(target.itemId) ?? []),
-          diagnostic.title
-        ]);
-      }
-    }
-  }
-
-  const urgencyWeight: Record<CommitmentUrgency, number> = {
-    immediate: 400,
-    today: 300,
-    soon: 200,
-    later: 100
-  };
-  const statusWeight: Record<Commitment["status"], number> = {
-    "needs-review": 80,
-    stale: 70,
-    blocked: 55,
-    pending: 40,
-    scheduled: 25,
-    completed: 0,
-    dismissed: 0
-  };
-
-  const items = params.commitments
-    .filter((commitment) => isOpenCommitment(commitment))
-    .map((commitment) => {
-      const reasons = [
-        commitment.sourceKind === "approval" && commitment.status === "needs-review"
-          ? "Approval review is required before execution can continue."
-          : null,
-        commitment.sourceKind === "approval" && commitment.status === "stale"
-          ? "Approval has expired and needs review before execution can continue."
-          : null,
-        commitment.status === "needs-review" ? "Requires review before execution can continue." : null,
-        commitment.status === "stale" ? "The underlying obligation is stale and needs intervention." : null,
-        commitment.status === "blocked" ? "Execution is blocked or waiting on another dependency." : null,
-        commitment.confidence < 0.75 ? "Confidence is low; verify before acting." : null,
-        commitment.dueAt ? `Due ${formatAgeAgo(commitment.dueAt, now)}.` : null,
-        ...(diagnosticTitlesByGoalId.get(commitment.goalId ?? "") ?? []).map((title) => `${title} is affecting this workflow.`),
-        ...(diagnosticTitlesByApprovalId.get(commitment.approvalId ?? "") ?? []).map((title) => `${title} is affecting this approval.`)
-      ].filter((reason): reason is string => reason !== null);
-      const score =
-        urgencyWeight[commitment.urgency] +
-        statusWeight[commitment.status] +
-        (commitment.sourceKind === "approval" ? 35 : 0) +
-        (commitment.riskClass ? riskClassWeight[commitment.riskClass] * 10 : 0) +
-        (commitment.confidence < 0.75 ? 20 : 0) +
-        reasons.length * 5;
-
-      return {
-        commitment,
-        reasons,
-        score
-      };
-    })
-    .sort((left, right) => {
-      if (left.score !== right.score) {
-        return right.score - left.score;
-      }
-
-      const leftDueAt = left.commitment.dueAt ?? "9999-12-31T23:59:59.999Z";
-      const rightDueAt = right.commitment.dueAt ?? "9999-12-31T23:59:59.999Z";
-
-      if (leftDueAt !== rightDueAt) {
-        return leftDueAt.localeCompare(rightDueAt);
-      }
-
-      return right.commitment.updatedAt.localeCompare(left.commitment.updatedAt);
-    });
-
-  return {
-    generatedAt: new Date(now).toISOString(),
-    totalCount: items.length,
-    items: items.slice(0, 5).map(({ commitment, reasons }) => ({
-      commitmentId: commitment.id,
-      title: commitment.title,
-      summary: commitment.summary,
-      status: commitment.status,
-      urgency: commitment.urgency,
-      riskClass: commitment.riskClass,
-      confidence: commitment.confidence,
-      dueAt: commitment.dueAt,
-      reasons: reasons.slice(0, 3),
-      suggestedNextAction: commitment.suggestedNextAction
-    }))
-  };
-}
-
-function buildDashboardControlPlane(params: {
-  activeWorkspace: Workspace | null;
-  workspaceMembers: WorkspaceMember[];
-  workspaceGovernance: WorkspaceGovernance | null;
-  goals: GoalBundle[];
-  approvals: ApprovalRequest[];
-  evidenceRecords: EvidenceRecord[];
-  commitments: Commitment[];
-  autopilotSettings: AutopilotSettings;
-  autopilotEvents: AutopilotEvent[];
-  memories: MemoryRecord[];
-  watchers: Watcher[];
-  integrations: IntegrationAccount[];
-  diagnostics: DashboardDiagnostics;
-  operations?: DashboardOperationsTower;
-}): DashboardControlPlane {
-  const freshnessNow = Date.parse(params.diagnostics.generatedAt);
-  const openCommitments = params.commitments.filter(
-    (commitment) => commitment.status !== "completed" && commitment.status !== "dismissed"
-  );
-  const needsReviewCommitments = openCommitments.filter(
-    (commitment) => commitment.status === "needs-review" || commitment.status === "stale"
-  );
-  const blockedCommitments = openCommitments.filter((commitment) => commitment.status === "blocked");
-  const failedEvents = params.autopilotEvents.filter((event) => event.status === "failed");
-  const pendingEvents = params.autopilotEvents.filter((event) => event.status === "pending");
-  const activeWatchers = params.watchers.filter((watcher) => watcher.status === "active");
-  const openGoals = params.goals.filter((bundle) => bundle.goal.status !== "completed");
-  const pendingApprovals = params.approvals.filter((approval) => approval.decision === "pending");
-  const respondedApprovals = params.approvals.filter((approval) => approval.decision !== "pending");
-  const staleMemories = params.memories.filter((record) => getMemoryFreshness(record, freshnessNow) !== "fresh");
-  const readyIntegrations = params.integrations.filter((integration) => integration.status === "ready");
-  const tracedApprovalIds = new Set(params.evidenceRecords.map((record) => record.approvalId));
-  const tracedApprovals = respondedApprovals.filter((approval) => tracedApprovalIds.has(approval.id));
-  const missingEvidenceApprovals = respondedApprovals.filter((approval) => !tracedApprovalIds.has(approval.id));
-  const asyncExecution = params.operations?.asyncExecution;
-  const connectorHealth = params.operations?.connectorHealth;
-  const firstAsyncIssue = asyncExecution?.items[0] ?? null;
-  const firstConnectorIssue = connectorHealth?.items[0] ?? null;
-  const executionDiagnosticTarget =
-    params.diagnostics.items.find(
-      (item) =>
-        item.kind === "stuck_workflows" ||
-        item.kind === "expired_approvals" ||
-        item.kind === "async_execution_issues"
-    )?.targets[0] ?? null;
-  const trustDiagnosticTarget = params.diagnostics.items[0]?.targets[0] ?? null;
-
-  const sections: DashboardControlPlaneSection[] = [
-    {
-      key: "workspace",
-      title: "Workspace",
-      description: params.activeWorkspace
-        ? `${params.activeWorkspace.name} is the active operating surface for goals, approvals, and governance.`
-        : "No workspace is currently active.",
-      status: params.activeWorkspace ? "healthy" : "idle",
-      targetSection: "workspaces",
-      stats: [
-        `${pluralize(params.workspaceMembers.length, "member")}`,
-        `${pluralize(readyIntegrations.length, "ready integration")}`,
-        `Approval ${params.workspaceGovernance?.approvalMode.replaceAll("_", " ") ?? "risk based"}`
-      ],
-      highlights: [
-        params.workspaceGovernance ? `Max auto-run ${params.workspaceGovernance.maxAutoRunRiskClass}` : null,
-        readyIntegrations[0] ? `${readyIntegrations[0].name} connected` : null
-      ].filter((highlight): highlight is string => highlight !== null)
-    },
-    {
-      key: "commitments",
-      title: "Now",
-      description: "Open commitments and pending reviews that define the immediate operator queue.",
-      status:
-        needsReviewCommitments.length > 0
-          ? "critical"
-          : blockedCommitments.length > 0 || openCommitments.length > 0
-            ? "attention"
-            : "idle",
-      targetSection: "commitments",
-      stats: [
-        `${pluralize(openCommitments.length, "open commitment")}`,
-        `${pluralize(needsReviewCommitments.length, "needs-review item")}`,
-        `${pluralize(blockedCommitments.length, "blocked item")}`
-      ],
-      highlights: openCommitments.slice(0, 3).map((commitment) => commitment.title)
-    },
-    {
-      key: "automation",
-      title: "Automation",
-      description: `Autopilot is currently ${params.autopilotSettings.mode.replaceAll("_", " ")} with watcher-driven execution signals.`,
-      status:
-        failedEvents.length > 0
-          ? "critical"
-          : params.autopilotSettings.mode === "auto_run" || pendingEvents.length > 0 || activeWatchers.length > 0
-            ? "attention"
-            : "healthy",
-      targetSection: "autopilot",
-      stats: [
-        `Mode ${params.autopilotSettings.mode.replaceAll("_", " ")}`,
-        `${pluralize(activeWatchers.length, "active watcher")}`,
-        `${pluralize(failedEvents.length, "failed event")}`
-      ],
-      highlights: [
-        failedEvents[0]?.summary ?? null,
-        pendingEvents[0]?.summary ?? null,
-        params.autopilotSettings.mode === "auto_run" ? "Auto-run is enabled." : null
-      ].filter((highlight): highlight is string => highlight !== null)
-    },
-    {
-      key: "execution",
-      title: "Execution",
-      description: "Workflow execution health across active goals, task progress, and approval bottlenecks.",
-      status:
-        asyncExecution?.status === "critical" || executionDiagnosticTarget
-          ? "critical"
-          : asyncExecution?.status === "attention" || pendingApprovals.length > 0 || openGoals.length > 0
-            ? "attention"
-            : "healthy",
-      targetSection: firstAsyncIssue ? "operations" : (executionDiagnosticTarget?.section ?? "goals"),
-      targetItemId: firstAsyncIssue?.id ?? executionDiagnosticTarget?.itemId,
-      stats: [
-        `${pluralize(openGoals.length, "active goal")}`,
-        `${pluralize(asyncExecution?.issueCount ?? 0, "queue issue")}`,
-        asyncExecution
-          ? `${pluralize(asyncExecution.deadLetterJobs, "dead letter")} / ${pluralize(asyncExecution.retryingJobs, "retrying job")}`
-          : `${pluralize(pendingApprovals.length, "pending approval")}`
-      ],
-      highlights:
-        firstAsyncIssue
-          ? [
-              firstAsyncIssue.summary,
-              asyncExecution && asyncExecution.stalePendingCount > 0
-                ? `${pluralize(asyncExecution.stalePendingCount, "stale pending job")} are breaching the queue age threshold.`
-                : null,
-              asyncExecution && asyncExecution.expiredLeaseCount > 0
-                ? `${pluralize(asyncExecution.expiredLeaseCount, "expired lease")} need worker recovery.`
-                : null
-            ].filter((highlight): highlight is string => highlight !== null)
-          : executionDiagnosticTarget
-          ? params.diagnostics.items
-              .filter(
-                (item) =>
-                  item.kind === "stuck_workflows" ||
-                  item.kind === "expired_approvals" ||
-                  item.kind === "async_execution_issues"
-              )
-              .flatMap((item) => item.reasons)
-              .slice(0, 3)
-          : openGoals.slice(0, 3).map((bundle) => bundle.goal.title)
-    },
-    {
-      key: "trust",
-      title: "Trust",
-      description: "Trust posture across approvals, memory freshness, and workspace governance controls.",
-      status:
-        params.diagnostics.status === "critical"
-          ? "critical"
-          : params.diagnostics.status === "warning"
-            ? "attention"
-            : "healthy",
-      targetSection: firstConnectorIssue ? "operations" : (trustDiagnosticTarget?.section ?? "governance"),
-      targetItemId: firstConnectorIssue?.id ?? trustDiagnosticTarget?.itemId,
-      stats: [
-        `${pluralize(params.diagnostics.totalCount, "reliability signal")}`,
-        respondedApprovals.length > 0
-          ? `${tracedApprovals.length}/${respondedApprovals.length} approvals traced`
-          : formatCount(staleMemories.length, "stale memory", "stale memories"),
-        `Max auto ${params.workspaceGovernance?.maxAutoRunRiskClass ?? "R1"}`
-      ],
-      highlights:
-        firstConnectorIssue
-          ? [
-              firstConnectorIssue.summary,
-              connectorHealth && connectorHealth.refreshFailedCount > 0
-                ? `${pluralize(connectorHealth.refreshFailedCount, "refresh failure")} need connector review.`
-                : null,
-              connectorHealth && connectorHealth.validationStaleCount > 0
-                ? `${pluralize(connectorHealth.validationStaleCount, "stale validation")} should be rechecked.`
-                : null
-            ].filter((highlight): highlight is string => highlight !== null)
-          : params.diagnostics.totalCount > 0
-          ? params.diagnostics.items.flatMap((item) => item.reasons).slice(0, 3)
-          : missingEvidenceApprovals.length > 0
-            ? missingEvidenceApprovals.slice(0, 3).map((approval) => `Missing evidence lineage for ${approval.title}.`)
-            : ["No active trust or reliability regressions."]
-    }
-  ];
-
-  return {
-    generatedAt: params.diagnostics.generatedAt,
-    sections
-  };
 }
 
 function defaultUser(userId: string) {
@@ -1254,6 +533,7 @@ function defaultAutopilotSettings(userId: string): AutopilotSettings {
     userId,
     mode: "notify_only",
     debounceMinutes: 15,
+    reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
     actorContext: null,
     createdAt: timestamp,
     updatedAt: timestamp
@@ -1281,19 +561,91 @@ function bundleFromStore(store: RuntimeStore, goalId: string): GoalBundle | null
     throw new Error(`Workflow ${goal.workflowId} is missing for goal ${goalId}.`);
   }
 
+  return normalizeGoalBundleResponsibilities(
+    GoalBundleSchema.parse({
+      goal,
+      workflow,
+      tasks: store.tasks.filter((task) => task.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+      artifacts: store.artifacts.filter((artifact) => artifact.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+      approvals: store.approvals.filter((approval) => approval.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+      watchers: store.watchers.filter((watcher) => watcher.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+      actionLogs: store.actionLogs.filter((log) => log.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    })
+  );
+}
+
+function normalizeGoalBundleResponsibilities(bundle: GoalBundle): GoalBundle {
+  const validated = GoalBundleSchema.parse(bundle);
+  const tasksById = new Map(validated.tasks.map((task) => [task.id, task] as const));
+  const goalResponsibility = deriveGoalResponsibility({
+    userId: validated.goal.userId,
+    workspaceId: validated.goal.workspaceId
+  });
+
   return GoalBundleSchema.parse({
-    goal,
-    workflow,
-    tasks: store.tasks.filter((task) => task.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    artifacts: store.artifacts.filter((artifact) => artifact.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    approvals: store.approvals.filter((approval) => approval.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    watchers: store.watchers.filter((watcher) => watcher.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    actionLogs: store.actionLogs.filter((log) => log.goalId === goalId).sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    ...validated,
+    goal: {
+      ...validated.goal,
+      // Goal-scoped responsibility remains derived until explicit reassignment flows exist.
+      responsibility: goalResponsibility
+    },
+    tasks: validated.tasks.map((task) => ({
+      ...task,
+      responsibility: deriveTaskResponsibility({
+        assignedAgent: task.assignedAgent,
+        requiresApproval: task.requiresApproval,
+        ownerUserId: validated.goal.userId,
+        workspaceId: validated.goal.workspaceId
+      })
+    })),
+    approvals: validated.approvals.map((approval) => ({
+      ...approval,
+      responsibility: deriveApprovalResponsibility({
+        ownerUserId: validated.goal.userId,
+        workspaceId: validated.goal.workspaceId,
+        delegateAgent: tasksById.get(approval.taskId)?.assignedAgent ?? null
+      })
+    })),
+    watchers: validated.watchers.map((watcher) => ({
+      ...watcher,
+      responsibility: deriveWatcherResponsibility({
+        ownerUserId: validated.goal.userId,
+        workspaceId: validated.goal.workspaceId,
+        createdByUserId: watcher.actorContext?.subjectUserId ?? null,
+        targetEntity: watcher.targetEntity
+      })
+    }))
+  });
+}
+
+function normalizeWatcherForGoal(goal: GoalBundle["goal"], watcher: Watcher): Watcher {
+  const validated = WatcherSchema.parse(watcher);
+
+  return WatcherSchema.parse({
+    ...validated,
+    responsibility: deriveWatcherResponsibility({
+      ownerUserId: goal.userId,
+      workspaceId: goal.workspaceId,
+      createdByUserId: validated.actorContext?.subjectUserId ?? null,
+      targetEntity: validated.targetEntity
+    })
+  });
+}
+
+function normalizeAutopilotEvent(event: AutopilotEvent): AutopilotEvent {
+  const validated = AutopilotEventSchema.parse(event);
+
+  return AutopilotEventSchema.parse({
+    ...validated,
+    responsibility: deriveAutopilotEventResponsibility({
+      userId: validated.userId,
+      mode: validated.mode
+    })
   });
 }
 
 function mergeGoalBundleIntoStore(store: RuntimeStore, bundle: GoalBundle): GoalBundle {
-  const validated = GoalBundleSchema.parse(bundle);
+  const validated = normalizeGoalBundleResponsibilities(GoalBundleSchema.parse(bundle));
   const goalId = validated.goal.id;
 
   store.goals = upsertById(store.goals, validated.goal);
@@ -1322,12 +674,6 @@ function mergeGoalBundleIntoStore(store: RuntimeStore, bundle: GoalBundle): Goal
 
   store.actionLogs = uniqueById([...store.actionLogs, ...validated.actionLogs]);
   return validated;
-}
-
-function assertGoalExistsInStore(store: RuntimeStore, goalId: string): void {
-  if (!store.goals.some((goal) => goal.id === goalId)) {
-    throw new Error(`Goal ${goalId} was not found.`);
-  }
 }
 
 function personalWorkspaceIdForUser(userId: string): string {
@@ -1371,12 +717,7 @@ function defaultWorkspaceGovernance(workspaceId: string, updatedBy: string): Wor
 
   return WorkspaceGovernanceSchema.parse({
     workspaceId,
-    approvalMode: "risk_based",
-    requireAuditExports: false,
-    maxAutoRunRiskClass: "R1",
-    externalSendRequiresApproval: true,
-    calendarWriteRequiresApproval: true,
-    retentionDays: 365,
+    ...resolveWorkspaceGovernanceDefaultsFromEnv(),
     updatedBy,
     createdAt: timestamp,
     updatedAt: timestamp
@@ -1518,8 +859,78 @@ function assertWorkspaceOwner(store: RuntimeStore, workspaceId: string, userId: 
   return member;
 }
 
+function assertSharedApprovalResponder(
+  store: RuntimeStore,
+  goal: GoalBundle["goal"],
+  userId: string,
+  approvalId: string
+): void {
+  if (!goal.workspaceId) {
+    return;
+  }
+
+  const member = getWorkspaceMemberFromStore(store, goal.workspaceId, userId);
+
+  if (!member) {
+    throw new ApprovalMutationError("not_found", `Approval ${approvalId} was not found.`);
+  }
+
+  if (member.role !== "owner") {
+    throw new ApprovalMutationError("forbidden", SHARED_APPROVAL_OWNER_MESSAGE);
+  }
+}
+
 function goalByIdFromStore(store: RuntimeStore, goalId: string): GoalBundle["goal"] | null {
   return store.goals.find((candidate) => candidate.id === goalId) ?? null;
+}
+
+function watcherByIdFromStore(store: RuntimeStore, watcherId: string): Watcher | null {
+  return store.watchers.find((candidate) => candidate.id === watcherId) ?? null;
+}
+
+function isGoalIdVisibleToUser(
+  store: RuntimeStore,
+  goalId: string,
+  workspaceIds: Set<string>,
+  userId: string
+): boolean {
+  const goal = goalByIdFromStore(store, goalId);
+  return goal ? isGoalVisibleToUser(goal, workspaceIds, userId) : false;
+}
+
+function isJobVisibleToUserInStore(
+  store: RuntimeStore,
+  job: JobRecord,
+  workspaceIds: Set<string>,
+  userId: string
+): boolean {
+  if (job.userId === userId) {
+    return true;
+  }
+
+  switch (job.payload.type) {
+    case "goal_create":
+    case "goal_refine":
+    case "briefing_create":
+    case "template_run":
+    case "approval_follow_up":
+    case "approval_notification":
+      return (
+        (job.payload.workspaceId ? workspaceIds.has(job.payload.workspaceId) : false) ||
+        isGoalIdVisibleToUser(store, job.payload.goalId, workspaceIds, userId)
+      );
+    case "public_share_view":
+      return isGoalIdVisibleToUser(store, job.payload.goalId, workspaceIds, userId);
+    case "privacy_operation":
+      return job.payload.workspaceId ? workspaceIds.has(job.payload.workspaceId) : false;
+    case "autopilot_process": {
+      const watcher = watcherByIdFromStore(store, job.payload.sourceId);
+      const goal = watcher ? goalByIdFromStore(store, watcher.goalId) : null;
+      return goal?.workspaceId ? workspaceIds.has(goal.workspaceId) : false;
+    }
+    case "docs_render":
+      return false;
+  }
 }
 
 function isGoalShareVisibleToUser(store: RuntimeStore, share: GoalShareRecord, userId: string): boolean {
@@ -1582,285 +993,6 @@ function listWorkspaceMembersForWorkspaceFromStore(store: RuntimeStore, workspac
     .map((member) => WorkspaceMemberSchema.parse(clone(member)));
 }
 
-function buildWorkspaceAuditExport(params: {
-  workspace: Workspace;
-  governance: WorkspaceGovernance | null;
-  members: WorkspaceMember[];
-  goals: GoalBundle[];
-  goalShares: GoalShareRecord[];
-  privacyOperations: PrivacyOperation[];
-}): WorkspaceAuditExport {
-  const generatedAt = nowIso();
-  const payload = {
-    generatedAt,
-    workspace: params.workspace,
-    governance: params.governance,
-    members: params.members,
-    goalShares: params.goalShares,
-    privacyOperations: params.privacyOperations,
-    goals: params.goals.map((bundle) => ({
-      goal: bundle.goal,
-      workflow: bundle.workflow,
-      tasks: bundle.tasks,
-      approvals: bundle.approvals,
-      watchers: bundle.watchers,
-      artifacts: bundle.artifacts,
-      actionLogs: bundle.actionLogs
-    }))
-  };
-  const digest = crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-  const content = JSON.stringify(
-    {
-      ...payload,
-      integrity: {
-        version: "agentic-workspace-audit-integrity-v1",
-        algorithm: "sha256",
-        canonicalization: "json-stringify-v1",
-        digest,
-        recordCounts: {
-          members: params.members.length,
-          goalShares: params.goalShares.length,
-          privacyOperations: params.privacyOperations.length,
-          goals: params.goals.length
-        }
-      }
-    },
-    null,
-    2
-  );
-
-  return {
-    workspaceId: params.workspace.id,
-    fileName: `${params.workspace.slug}-audit-${generatedAt.slice(0, 10)}.json`,
-    contentType: "application/json",
-    generatedAt,
-    content
-  };
-}
-
-const DAY_IN_MS = 24 * 60 * 60 * 1000;
-
-function resolveRetentionWindow(retentionDays: number, now = nowIso()): {
-  effectiveNow: string;
-  effectiveNowMs: number;
-  retentionCutoff: string;
-  retentionCutoffMs: number;
-} {
-  if (!Number.isInteger(retentionDays) || retentionDays < 0) {
-    throw new Error(`Retention days must be a non-negative integer. Received ${retentionDays}.`);
-  }
-
-  const effectiveNowMs = Date.parse(now);
-
-  if (!Number.isFinite(effectiveNowMs)) {
-    throw new Error(`Invalid retention clock value: ${now}.`);
-  }
-
-  const retentionCutoffMs = effectiveNowMs - retentionDays * DAY_IN_MS;
-
-  return {
-    effectiveNow: new Date(effectiveNowMs).toISOString(),
-    effectiveNowMs,
-    retentionCutoff: new Date(retentionCutoffMs).toISOString(),
-    retentionCutoffMs
-  };
-}
-
-function isGoalOwnedByWorkspace(goal: GoalBundle["goal"], workspace: Workspace): boolean {
-  if (goal.workspaceId) {
-    return goal.workspaceId === workspace.id;
-  }
-
-  return workspace.isPersonal && goal.userId === workspace.ownerUserId;
-}
-
-function workspaceGoalIdsFromStore(store: RuntimeStore, workspace: Workspace): Set<string> {
-  return new Set(store.goals.filter((goal) => isGoalOwnedByWorkspace(goal, workspace)).map((goal) => goal.id));
-}
-
-function goalShareTerminalAt(share: Pick<GoalShareRecord, "expiresAt" | "revokedAt">): string {
-  return share.revokedAt ?? share.expiresAt;
-}
-
-function buildDeletedWorkspaceTombstone(workspace: Workspace, operationId: string, now = nowIso()): Workspace {
-  const shortWorkspaceId = workspace.id.replace(/[^a-z0-9]/gi, "").slice(0, 24).toLowerCase() || "workspace";
-  const shortOperationId = operationId.replace(/[^a-z0-9]/gi, "").slice(0, 8).toLowerCase() || "deleted";
-  const slug = `deleted-${shortWorkspaceId}-${shortOperationId}`.slice(0, 120);
-
-  return WorkspaceSchema.parse({
-    ...workspace,
-    slug,
-    name: `Deleted workspace ${workspace.id.slice(0, 8)}`,
-    description: `Deleted on ${now} by privacy operation ${operationId}.`,
-    updatedAt: now
-  });
-}
-
-function isJobScopedToWorkspace(
-  job: JobRecord,
-  params: {
-    workspaceId: string;
-    goalIds: ReadonlySet<string>;
-    watcherIds: ReadonlySet<string>;
-    preservedPrivacyOperationId?: string;
-  }
-): boolean {
-  switch (job.payload.type) {
-    case "goal_create":
-    case "goal_refine":
-      return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
-    case "briefing_create":
-      return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
-    case "template_run":
-      return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
-    case "autopilot_process":
-      return params.watcherIds.has(job.payload.sourceId);
-    case "privacy_operation":
-      return (
-        job.payload.workspaceId === params.workspaceId &&
-        job.payload.operationId !== params.preservedPrivacyOperationId
-      );
-    default:
-      return false;
-  }
-}
-
-function buildPendingAutopilotEvent(params: {
-  userId: string;
-  kind: AutopilotEventKind;
-  sourceId: string;
-  idempotencyKey?: string | null;
-  mode: AutopilotMode;
-  summary: string;
-  details?: Record<string, unknown>;
-  actorContext?: ActorContext | null;
-}): AutopilotEvent {
-  return AutopilotEventSchema.parse({
-    id: crypto.randomUUID(),
-    userId: params.userId,
-    kind: params.kind,
-    sourceId: params.sourceId,
-    idempotencyKey: params.idempotencyKey ?? null,
-    mode: params.mode,
-    summary: params.summary,
-    status: "pending",
-    details: params.details ?? {},
-    actorContext: params.actorContext ?? null,
-    createdAt: nowIso(),
-    processedAt: null,
-    resultGoalId: null,
-    error: null
-  });
-}
-
-function sortJobsForClaim(items: JobRecord[]): JobRecord[] {
-  return [...items].sort((left, right) => {
-    const availableOrder = left.availableAt.localeCompare(right.availableAt);
-    if (availableOrder !== 0) {
-      return availableOrder;
-    }
-
-    return left.createdAt.localeCompare(right.createdAt);
-  });
-}
-
-function isJobClaimable(job: JobRecord, now: number): boolean {
-  if (job.status === "queued" || job.status === "retrying") {
-    return Date.parse(job.availableAt) <= now;
-  }
-
-  if (job.status === "running" && job.leaseExpiresAt) {
-    return Date.parse(job.leaseExpiresAt) <= now;
-  }
-
-  return false;
-}
-
-function claimJobRecord(job: JobRecord, runnerId: string, leaseMs: number, claimedAt: string): JobRecord {
-  return JobRecordSchema.parse({
-    ...job,
-    status: "running",
-    attemptCount: job.attemptCount + 1,
-    claimedBy: runnerId,
-    claimedAt,
-    lastAttemptAt: claimedAt,
-    leaseExpiresAt: new Date(Date.parse(claimedAt) + leaseMs).toISOString(),
-    completedAt: null,
-    deadLetteredAt: null,
-    updatedAt: claimedAt
-  });
-}
-
-function assertRunningJobOwner(job: JobRecord, runnerId: string): void {
-  if (job.status !== "running") {
-    throw new JobMutationError("not_running", `Job ${job.id} is not currently running.`);
-  }
-
-  if (job.claimedBy !== runnerId) {
-    throw new JobMutationError("not_owner", `Job ${job.id} is claimed by another worker.`);
-  }
-}
-
-function buildApprovalEvidenceRecord(params: {
-  actor: ActorContext;
-  previousBundle: GoalBundle;
-  updatedBundle: GoalBundle;
-  originalApproval: ApprovalRequest;
-}): EvidenceRecord {
-  const updatedApproval = params.updatedBundle.approvals.find(
-    (candidate) => candidate.id === params.originalApproval.id
-  );
-  const updatedTask = params.updatedBundle.tasks.find(
-    (candidate) => candidate.id === params.originalApproval.taskId
-  );
-
-  if (!updatedApproval) {
-    throw new Error(`Approval ${params.originalApproval.id} is missing after response processing.`);
-  }
-
-  if (!updatedTask) {
-    throw new Error(`Task ${params.originalApproval.taskId} is missing after response processing.`);
-  }
-
-  if (updatedApproval.decision === "pending" || !updatedApproval.respondedAt || !updatedApproval.decisionScope) {
-    throw new Error(`Approval ${params.originalApproval.id} did not persist a complete response state.`);
-  }
-
-  const previousLogIds = new Set(params.previousBundle.actionLogs.map((log) => log.id));
-  const actionLogIds = params.updatedBundle.actionLogs
-    .filter((log) => !previousLogIds.has(log.id))
-    .map((log) => log.id);
-  const artifactIds =
-    updatedApproval.actionIntent?.type === "manual_review" ? updatedApproval.actionIntent.artifactIds : [];
-
-  return EvidenceRecordSchema.parse({
-    id: crypto.randomUUID(),
-    userId: subjectUserIdForActor(params.actor),
-    goalId: params.updatedBundle.goal.id,
-    taskId: params.originalApproval.taskId,
-    approvalId: params.originalApproval.id,
-    sourceKind: "approval_response",
-    sourceId: params.originalApproval.id,
-    sourceSummary: `${updatedApproval.decision === "approved" ? "Approved" : "Rejected"} "${params.originalApproval.title}".`,
-    riskClass: params.originalApproval.riskClass,
-    requestedAction: params.originalApproval.requestedAction,
-    requestRationale: params.originalApproval.rationale,
-    requiresApproval: true,
-    decision: updatedApproval.decision,
-    decisionScope: updatedApproval.decisionScope,
-    decisionRationale: updatedApproval.decisionRationale,
-    respondedAt: updatedApproval.respondedAt,
-    resultingTaskState: updatedTask.state,
-    resultingGoalStatus: params.updatedBundle.goal.status,
-    actionLogIds,
-    artifactIds,
-    memoryIds: [],
-    actorContext: parseActorContext(params.actor),
-    createdAt: updatedApproval.respondedAt,
-    updatedAt: updatedApproval.respondedAt
-  });
-}
-
 class FileRepository implements AgenticRepository {
   backend = "file" as const;
   private mutationQueue = Promise.resolve();
@@ -1907,11 +1039,19 @@ class FileRepository implements AgenticRepository {
   private async writeStore(store: RuntimeStore): Promise<void> {
     const validated = RuntimeStoreSchema.parse(store);
     const directory = path.dirname(this.storePath);
-    const tempPath = `${this.storePath}.tmp`;
+    const tempPath = path.join(
+      directory,
+      `${path.basename(this.storePath)}.${process.pid}.${crypto.randomUUID()}.tmp`
+    );
 
     await mkdir(directory, { recursive: true });
-    await writeFile(tempPath, JSON.stringify(validated, null, 2), "utf8");
-    await rename(tempPath, this.storePath);
+    try {
+      await writeFile(tempPath, JSON.stringify(validated, null, 2), "utf8");
+      await rename(tempPath, this.storePath);
+    } catch (error) {
+      await unlink(tempPath).catch(() => {});
+      throw error;
+    }
   }
 
   async seedDefaults(userId = SYSTEM_USER_ID): Promise<void> {
@@ -2073,7 +1213,7 @@ class FileRepository implements AgenticRepository {
         store.users.push(defaultUser(validated.userId));
       }
 
-      store.workspaceMembers = upsertById(store.workspaceMembers, validated);
+      store.workspaceMembers = upsertByKey(store.workspaceMembers, validated, workspaceMemberStoreKey);
       await this.writeStore(store);
       return WorkspaceMemberSchema.parse(clone(validated));
     });
@@ -2432,10 +1572,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async saveWorkspaceGovernance(
-    governance: WorkspaceGovernance,
-    actor: ActorContext
-  ): Promise<WorkspaceGovernance> {
+  async saveWorkspaceGovernance(governance: WorkspaceGovernance, actor: ActorContext): Promise<WorkspaceGovernance> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const validated = WorkspaceGovernanceSchema.parse(governance);
@@ -2465,8 +1602,7 @@ class FileRepository implements AgenticRepository {
     const privacyOperations = store.privacyOperations
       .filter((operation) => operation.workspaceId === workspaceId)
       .map((operation) => PrivacyOperationSchema.parse(clone(operation)));
-
-    return buildWorkspaceAuditExport({
+    const auditExport = buildWorkspaceAuditExport({
       workspace,
       governance,
       members,
@@ -2474,6 +1610,28 @@ class FileRepository implements AgenticRepository {
       goalShares,
       privacyOperations
     });
+
+    await this.savePrivacyOperation({
+      id: `privacy-export-${crypto.randomUUID()}`,
+      workspaceId,
+      userId,
+      kind: "workspace_export",
+      status: "completed",
+      requestedBy: userId,
+      actorContext: createSystemActorContext(userId),
+      jobId: null,
+      details: {},
+      result: {
+        fileName: auditExport.fileName
+      },
+      startedAt: auditExport.generatedAt,
+      completedAt: auditExport.generatedAt,
+      error: null,
+      createdAt: auditExport.generatedAt,
+      updatedAt: auditExport.generatedAt
+    });
+
+    return auditExport;
   }
 
   async saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle> {
@@ -2486,6 +1644,11 @@ class FileRepository implements AgenticRepository {
       await this.writeStore(store);
       return GoalBundleSchema.parse(clone(validated));
     });
+  }
+
+  async appendGoalActionLogs(goalId: string, logs: ActionLog[]): Promise<ActionLog[]> {
+    return this.withMutationLock(async () =>
+      appendGoalActionLogsToStore(await this.readStore(), goalId, logs, (store) => this.writeStore(store)));
   }
 
   async respondToApproval(params: {
@@ -2522,13 +1685,8 @@ class FileRepository implements AgenticRepository {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
 
-      const originalApproval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
-
-      if (!originalApproval) {
-        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
-      }
-
-      const updatedBundle = applyApprovalResponse({
+      assertSharedApprovalResponder(store, bundle.goal, userId, params.approvalId);
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
         bundle,
         approvalId: params.approvalId,
         decision: params.decision,
@@ -2536,17 +1694,83 @@ class FileRepository implements AgenticRepository {
         scope: params.scope,
         rationale: params.rationale
       });
-      const evidenceRecord = buildApprovalEvidenceRecord({
-        actor,
-        previousBundle: bundle,
-        updatedBundle,
-        originalApproval
-      });
 
       mergeGoalBundleIntoStore(store, updatedBundle);
       store.evidenceRecords = upsertById(store.evidenceRecords, evidenceRecord);
       await this.writeStore(store);
-      return GoalBundleSchema.parse(clone(updatedBundle));
+      return parsedBundle;
+    });
+  }
+
+  async respondToApprovalAndEnqueueJob(params: {
+    approvalId: string;
+    decision: Exclude<ApprovalDecision, "pending">;
+    actor: ActorContext;
+    scope?: ApprovalDecisionScope;
+    rationale?: string | null;
+    buildJob: (bundle: GoalBundle) => JobRecord;
+  }): Promise<{ bundle: GoalBundle; job: JobRecord }> {
+    return this.withMutationLock(async () => {
+      const actor = parseActorContext(params.actor);
+      const userId = subjectUserIdForActor(actor);
+      const store = await this.readStore();
+      const goalIds = goalIdsForUser(store, userId);
+      const approval = store.approvals.find(
+        (candidate) => candidate.id === params.approvalId && goalIds.has(candidate.goalId)
+      );
+
+      if (!approval) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      if (approval.decision !== "pending") {
+        throw new ApprovalMutationError("already_handled", `Approval ${params.approvalId} has already been handled.`);
+      }
+
+      if (Date.parse(approval.expiryAt) <= Date.now()) {
+        throw new ApprovalMutationError("expired", `Approval ${params.approvalId} has expired and can no longer be actioned.`);
+      }
+
+      const bundle = bundleFromStore(store, approval.goalId);
+
+      if (!bundle) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      assertSharedApprovalResponder(store, bundle.goal, userId, params.approvalId);
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
+        bundle,
+        approvalId: params.approvalId,
+        decision: params.decision,
+        actor,
+        scope: params.scope,
+        rationale: params.rationale
+      });
+      const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      assertApprovalFollowUpJobOwner(validatedJob, userId);
+      const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
+      const existingJob = trimmedKey
+        ? store.jobs.find((candidate) => candidate.userId === validatedJob.userId && candidate.idempotencyKey === trimmedKey)
+        : null;
+      const savedJob = existingJob
+        ? JobRecordSchema.parse(clone(existingJob))
+        : JobRecordSchema.parse({
+            ...validatedJob,
+            idempotencyKey: trimmedKey
+          });
+
+      mergeGoalBundleIntoStore(store, updatedBundle);
+      store.evidenceRecords = upsertById(store.evidenceRecords, evidenceRecord);
+
+      if (!existingJob) {
+        store.jobs = upsertById(store.jobs, savedJob);
+      }
+
+      await this.writeStore(store);
+      return {
+        bundle: parsedBundle,
+        job: JobRecordSchema.parse(clone(savedJob))
+      };
     });
   }
 
@@ -2622,16 +1846,13 @@ class FileRepository implements AgenticRepository {
     );
   }
 
-  async listEvidenceRecords(params?: {
-    userId?: string;
-    goalId?: string;
-    approvalId?: string;
-  }): Promise<EvidenceRecord[]> {
+  async listEvidenceRecords(params?: { userId?: string; goalId?: string; approvalId?: string; limit?: number }): Promise<EvidenceRecord[]> {
     const userId = params?.userId ?? SYSTEM_USER_ID;
     const store = await this.readStore();
     const goalIds = goalIdsForUser(store, userId);
+    const limit = normalizeProvenanceCollectionLimit(params?.limit);
 
-    return sortByCreatedDesc(
+    const records = sortByCreatedDesc(
       store.evidenceRecords.filter((record) => {
         if (record.userId !== userId || !goalIds.has(record.goalId)) {
           return false;
@@ -2647,7 +1868,9 @@ class FileRepository implements AgenticRepository {
 
         return true;
       })
-    ).map((record) => EvidenceRecordSchema.parse(clone(record)));
+    );
+
+    return (limit === null ? records : records.slice(0, limit)).map((record) => EvidenceRecordSchema.parse(clone(record)));
   }
 
   async listCommitments(userId = SYSTEM_USER_ID): Promise<Commitment[]> {
@@ -2776,14 +1999,17 @@ class FileRepository implements AgenticRepository {
     idempotencyKey?: string | null;
     mode: AutopilotMode;
     summary: string;
-    details?: Record<string, unknown>;
+    details?: AutopilotEventDetails | Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
+    reliabilityControls?: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim> {
     return this.withMutationLock(async () => {
       const userId = params.userId ?? SYSTEM_USER_ID;
       const store = await this.readStore();
       const trimmedKey = params.idempotencyKey?.trim() || null;
+      const normalizedDetails = normalizeAutopilotEventDetails(params.details);
+      const reliabilityControls = params.reliabilityControls ?? DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS;
 
       if (trimmedKey) {
         const existing = store.autopilotEvents.find(
@@ -2798,9 +2024,61 @@ class FileRepository implements AgenticRepository {
         }
       }
 
+      const windowCutoff = Date.now() - Math.max(params.debounceMinutes, reliabilityControls.budgetWindowMinutes) * 60 * 1000;
+      const recentEvents = sortByCreatedDesc(
+        store.autopilotEvents.filter(
+          (event) => event.userId === userId && Date.parse(event.createdAt) >= windowCutoff
+        )
+      );
+      const budget = normalizedDetails.budget ? AutopilotEventBudgetSchema.parse(normalizedDetails.budget) : null;
+      if (budget) {
+        const budgetCutoff = Date.now() - budget.windowMinutes * 60 * 1000;
+        const observedCount = store.autopilotEvents.filter((event) =>
+          autopilotEventMatchesBudget({
+            event,
+            userId,
+            sourceId: params.sourceId,
+            budget,
+            cutoffMs: budgetCutoff
+          })
+        ).length;
+
+        if (observedCount >= budget.maxEvents) {
+          const ignoredEvent = AutopilotEventSchema.parse({
+            ...buildPendingAutopilotEvent({
+              userId,
+              kind: params.kind,
+              sourceId: params.sourceId,
+              idempotencyKey: trimmedKey,
+              mode: params.mode,
+              summary: params.summary,
+              actorContext: params.actorContext,
+              details: withAutopilotSuppression(normalizedDetails, {
+                outcome: "budget_exhausted",
+                reason: `Budget ${budget.key} exhausted in the active window.`,
+                budgetKey: budget.key,
+                observedCount
+              })
+            }),
+            status: "ignored",
+            processedAt: nowIso()
+          });
+          store.autopilotEvents = upsertById(store.autopilotEvents, ignoredEvent);
+          await this.writeStore(store);
+          return {
+            outcome: "ignored",
+            event: AutopilotEventSchema.parse(clone(ignoredEvent))
+          };
+        }
+      }
+
       const debounceCutoff = Date.now() - params.debounceMinutes * 60 * 1000;
-      const recent = store.autopilotEvents.find((event) => {
+      const recent = recentEvents.find((event) => {
         if (event.userId !== userId || event.kind !== params.kind || event.sourceId !== params.sourceId) {
+          return false;
+        }
+
+        if (!countsTowardAutopilotBudget(event.status) && event.status !== "debounced") {
           return false;
         }
 
@@ -2817,10 +2095,17 @@ class FileRepository implements AgenticRepository {
             mode: params.mode,
             summary: params.summary,
             actorContext: params.actorContext,
-            details: {
-              ...(params.details ?? {}),
-              debouncedByEventId: recent.id
-            }
+            details: withAutopilotSuppression(
+              {
+                ...normalizedDetails,
+                debouncedByEventId: recent.id
+              },
+              {
+                outcome: "debounced",
+                reason: "Suppressed by debounce window.",
+                relatedEventId: recent.id
+              }
+            )
           }),
           status: "debounced",
           processedAt: nowIso()
@@ -2833,6 +2118,42 @@ class FileRepository implements AgenticRepository {
         };
       }
 
+      const controlDecision = evaluateAutopilotClaimControls({
+        recentEvents: recentEvents.filter(
+          (event) => Date.parse(event.createdAt) >= Date.now() - reliabilityControls.budgetWindowMinutes * 60 * 1000
+        ),
+        reliabilityControls
+      });
+
+      if (controlDecision.outcome === "suppress") {
+        const suppressedEvent = buildSuppressedAutopilotEvent({
+          userId,
+          kind: params.kind,
+          sourceId: params.sourceId,
+          idempotencyKey: trimmedKey,
+          mode: params.mode,
+          summary: params.summary,
+          actorContext: params.actorContext,
+          details: params.details,
+          suppression: {
+            reason: controlDecision.reason,
+            budgetWindowMinutes: reliabilityControls.budgetWindowMinutes,
+            recentBudgetedEventCount: controlDecision.recentBudgetedEventCount,
+            maxEventsPerWindow: reliabilityControls.maxEventsPerWindow,
+            pendingEventCount: controlDecision.pendingEventCount,
+            maxPendingEvents: reliabilityControls.maxPendingEvents,
+            consecutiveFailureCount: controlDecision.consecutiveFailureCount,
+            maxConsecutiveFailures: reliabilityControls.maxConsecutiveFailures
+          }
+        });
+        store.autopilotEvents = upsertById(store.autopilotEvents, suppressedEvent);
+        await this.writeStore(store);
+        return {
+          outcome: "suppressed",
+          event: AutopilotEventSchema.parse(clone(suppressedEvent))
+        };
+      }
+
       const claimed = buildPendingAutopilotEvent({
         userId,
         kind: params.kind,
@@ -2841,7 +2162,9 @@ class FileRepository implements AgenticRepository {
         mode: params.mode,
         summary: params.summary,
         actorContext: params.actorContext,
-        details: params.details
+        details: withAutopilotSuppression(normalizedDetails, {
+          outcome: "allowed"
+        })
       });
 
       store.autopilotEvents = upsertById(store.autopilotEvents, claimed);
@@ -2856,25 +2179,26 @@ class FileRepository implements AgenticRepository {
   async saveAutopilotEvent(event: AutopilotEvent): Promise<AutopilotEvent> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const validated = AutopilotEventSchema.parse(event);
+      const validated = normalizeAutopilotEvent(event);
       store.autopilotEvents = upsertById(store.autopilotEvents, validated);
       await this.writeStore(store);
       return AutopilotEventSchema.parse(clone(validated));
     });
   }
 
-  async listJobs(params?: {
-    userId?: string;
-    kinds?: JobKind[];
-    statuses?: JobStatus[];
-  }): Promise<JobRecord[]> {
+  async listJobs(params?: { userId?: string; kinds?: JobKind[]; statuses?: JobStatus[]; limit?: number }): Promise<JobRecord[]> {
     const store = await this.readStore();
     const kinds = params?.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
     const statuses = params?.statuses?.map((status) => JobStatusSchema.parse(status)) ?? [];
+    const workspaceIds = params?.userId ? workspaceIdsForUser(store, params.userId) : null;
+    const limit = normalizeProvenanceCollectionLimit(params?.limit);
 
-    return sortByCreatedDesc(
+    const jobs = sortByCreatedDesc(
       store.jobs.filter((job) => {
-        if (params?.userId && job.userId !== params.userId) {
+        if (
+          params?.userId &&
+          !isJobVisibleToUserInStore(store, job, workspaceIds ?? new Set<string>(), params.userId)
+        ) {
           return false;
         }
 
@@ -2888,12 +2212,17 @@ class FileRepository implements AgenticRepository {
 
         return true;
       })
-    ).map((job) => JobRecordSchema.parse(clone(job)));
+    );
+
+    return (limit === null ? jobs : jobs.slice(0, limit)).map((job) => JobRecordSchema.parse(clone(job)));
   }
 
   async getJob(jobId: string, userId = SYSTEM_USER_ID): Promise<JobRecord | null> {
     const store = await this.readStore();
-    const job = store.jobs.find((candidate) => candidate.id === jobId && candidate.userId === userId);
+    const workspaceIds = workspaceIdsForUser(store, userId);
+    const job = store.jobs.find(
+      (candidate) => candidate.id === jobId && isJobVisibleToUserInStore(store, candidate, workspaceIds, userId)
+    );
     return job ? JobRecordSchema.parse(clone(job)) : null;
   }
 
@@ -2925,33 +2254,18 @@ class FileRepository implements AgenticRepository {
   async claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;
+    concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const claimedAt = params.now ?? nowIso();
-      const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
-      const claimable = sortJobsForClaim(
-        store.jobs.filter((job) => {
-          if (params.userId && job.userId !== params.userId) {
-            return false;
-          }
-
-          if (kinds.length > 0 && !kinds.includes(job.kind)) {
-            return false;
-          }
-
-          return isJobClaimable(job, Date.parse(claimedAt));
-        })
-      )[0];
-
-      if (!claimable) {
+      const claimed = claimNextJobFromStore(store, params);
+      if (!claimed) {
         return null;
       }
-
-      const claimed = claimJobRecord(claimable, params.runnerId, params.leaseMs, claimedAt);
       store.jobs = upsertById(store.jobs, claimed);
       await this.writeStore(store);
       return JobRecordSchema.parse(clone(claimed));
@@ -2978,6 +2292,12 @@ class FileRepository implements AgenticRepository {
         status: "completed",
         leaseExpiresAt: null,
         completedAt,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "completed",
+          at: completedAt,
+          summary: `Job completed successfully on attempt ${existing.attemptCount}.`
+        }),
         updatedAt: completedAt
       });
       store.jobs = upsertById(store.jobs, completed);
@@ -3002,6 +2322,7 @@ class FileRepository implements AgenticRepository {
 
       assertRunningJobOwner(existing, params.runnerId);
       const updatedAt = nowIso();
+      const trimmedError = params.error.trim().slice(0, 1000);
       const retried = JobRecordSchema.parse({
         ...existing,
         status: "retrying",
@@ -3009,7 +2330,18 @@ class FileRepository implements AgenticRepository {
         claimedAt: null,
         leaseExpiresAt: null,
         availableAt: params.availableAt,
-        lastError: params.error.trim().slice(0, 1000),
+        lastError: trimmedError,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "retrying",
+          at: updatedAt,
+          summary: `Attempt ${existing.attemptCount} failed and retry ${existing.attemptCount + 1} was scheduled.`,
+          error: trimmedError,
+          metadata: {
+            nextAvailableAt: params.availableAt
+          },
+          retryCount: existing.attemptCount
+        }),
         updatedAt
       });
       store.jobs = upsertById(store.jobs, retried);
@@ -3034,12 +2366,21 @@ class FileRepository implements AgenticRepository {
 
       assertRunningJobOwner(existing, params.runnerId);
       const deadLetteredAt = params.deadLetteredAt ?? nowIso();
+      const trimmedError = params.error.trim().slice(0, 1000);
       const deadLettered = JobRecordSchema.parse({
         ...existing,
         status: "dead_letter",
         leaseExpiresAt: null,
         deadLetteredAt,
-        lastError: params.error.trim().slice(0, 1000),
+        lastError: trimmedError,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "dead_letter",
+          at: deadLetteredAt,
+          summary: `Job dead-lettered after ${existing.attemptCount}/${existing.maxAttempts} attempts.`,
+          error: trimmedError,
+          retryCount: existing.attemptCount
+        }),
         updatedAt: deadLetteredAt
       });
       store.jobs = upsertById(store.jobs, deadLettered);
@@ -3047,12 +2388,23 @@ class FileRepository implements AgenticRepository {
       return JobRecordSchema.parse(clone(deadLettered));
     });
   }
-
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
     const store = await this.readStore();
     return sortByCreatedDesc(store.memories.filter((memory) => memory.userId === userId)).map((memory) =>
       MemoryRecordSchema.parse(clone(memory))
     );
+  }
+
+  async listContextPacketMemory(params: {
+    userId: string;
+    agent?: AgentName;
+    includeExpired?: boolean;
+    allowedSensitivities?: string[];
+    limit?: number;
+    now?: number;
+  }): Promise<MemoryRecord[]> {
+    const store = await this.readStore();
+    return listContextPacketMemoryFromStore(store.memories, params);
   }
 
   async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
@@ -3118,7 +2470,13 @@ class FileRepository implements AgenticRepository {
       return filters?.goalId ? watcher.goalId === filters.goalId : true;
     });
 
-    return sortByCreatedDesc(watchers).map((watcher) => WatcherSchema.parse(clone(watcher)));
+    return sortByCreatedDesc(watchers).map((watcher) => {
+      const goal = goalByIdFromStore(store, watcher.goalId);
+
+      return goal
+        ? normalizeWatcherForGoal(goal, watcher)
+        : WatcherSchema.parse(clone(watcher));
+    });
   }
 
   async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
@@ -3133,7 +2491,13 @@ class FileRepository implements AgenticRepository {
 
         return params?.goalId ? watcher.goalId === params.goalId : true;
       })
-      .map((watcher) => WatcherSchema.parse(clone(watcher)));
+      .map((watcher) => {
+        const goal = goalByIdFromStore(store, watcher.goalId);
+
+        return goal
+          ? normalizeWatcherForGoal(goal, watcher)
+          : WatcherSchema.parse(clone(watcher));
+      });
 
     return buildCollectionPage({
       items: watchers,
@@ -3147,14 +2511,34 @@ class FileRepository implements AgenticRepository {
     });
   }
 
+  async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const leased = claimWatcherLeaseInRuntimeStore({ watchers: store.watchers, visibleGoalIds: goalIdsForUser(store, params.userId ?? SYSTEM_USER_ID), lease: params, normalizeWatcher: (watcher) => {
+        const goal = goalByIdFromStore(store, watcher.goalId);
+        return goal ? normalizeWatcherForGoal(goal, watcher) : WatcherSchema.parse(clone(watcher));
+      } });
+      if (leased) {
+        await this.writeStore(store);
+      }
+      return leased;
+    });
+  }
+
   async saveWatcher(watcher: Watcher): Promise<Watcher> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
       const validated = WatcherSchema.parse(watcher);
-      assertGoalExistsInStore(store, validated.goalId);
-      store.watchers = upsertById(store.watchers, validated);
+      const goal = goalByIdFromStore(store, validated.goalId);
+
+      if (!goal) {
+        throw new Error(`Goal ${validated.goalId} was not found.`);
+      }
+
+      const normalized = normalizeWatcherForGoal(goal, validated);
+      store.watchers = upsertById(store.watchers, normalized);
       await this.writeStore(store);
-      return WatcherSchema.parse(clone(validated));
+      return WatcherSchema.parse(clone(normalized));
     });
   }
 
@@ -3568,9 +2952,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into memory_records (
-          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, review_at, expiry_at, created_at, updated_at
+          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, context_packet_consent, review_at, expiry_at, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
         on conflict (id) do update
         set category = excluded.category,
             memory_type = excluded.memory_type,
@@ -3580,6 +2964,7 @@ class PostgresRepository implements AgenticRepository {
             sensitivity = excluded.sensitivity,
             permissions = excluded.permissions,
             actor_context = excluded.actor_context,
+            context_packet_consent = excluded.context_packet_consent,
             review_at = excluded.review_at,
             expiry_at = excluded.expiry_at,
             updated_at = excluded.updated_at
@@ -3595,6 +2980,7 @@ class PostgresRepository implements AgenticRepository {
         memory.sensitivity,
         JSON.stringify(memory.permissions),
         JSON.stringify(memory.actorContext),
+        JSON.stringify(memory.contextPacketConsent),
         memory.reviewAt,
         memory.expiryAt,
         memory.createdAt,
@@ -3602,7 +2988,6 @@ class PostgresRepository implements AgenticRepository {
       ]
     );
   }
-
   private async saveEvidenceRecordWithClient(client: PoolClient, record: EvidenceRecord): Promise<void> {
     const evidence = EvidenceRecordSchema.parse(record);
     await client.query(
@@ -3610,12 +2995,12 @@ class PostgresRepository implements AgenticRepository {
         insert into evidence_records (
           id, user_id, goal_id, task_id, approval_id, source_kind, source_id, source_summary, risk_class, requested_action,
           request_rationale, requires_approval, decision, decision_scope, decision_rationale, responded_at,
-          resulting_task_state, resulting_goal_status, action_log_ids, artifact_ids, memory_ids, created_at, updated_at
+          resulting_task_state, resulting_goal_status, action_log_ids, artifact_ids, memory_ids, actor_context, created_at, updated_at
         )
         values (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16,
-          $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22, $23
+          $17, $18, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23, $24
         )
         on conflict (id) do update
         set user_id = excluded.user_id,
@@ -3638,6 +3023,7 @@ class PostgresRepository implements AgenticRepository {
             action_log_ids = excluded.action_log_ids,
             artifact_ids = excluded.artifact_ids,
             memory_ids = excluded.memory_ids,
+            actor_context = excluded.actor_context,
             updated_at = excluded.updated_at
       `,
       [
@@ -3662,6 +3048,7 @@ class PostgresRepository implements AgenticRepository {
         JSON.stringify(evidence.actionLogIds),
         JSON.stringify(evidence.artifactIds),
         JSON.stringify(evidence.memoryIds),
+        evidence.actorContext ? JSON.stringify(evidence.actorContext) : null,
         evidence.createdAt,
         evidence.updatedAt
       ]
@@ -4238,13 +3625,13 @@ class PostgresRepository implements AgenticRepository {
   }
 
   private async saveAutopilotEventWithClient(client: PoolClient, event: AutopilotEvent): Promise<void> {
-    const validated = AutopilotEventSchema.parse(event);
+    const validated = normalizeAutopilotEvent(event);
     await client.query(
       `
         insert into autopilot_events (
-          id, user_id, kind, source_id, idempotency_key, mode, summary, status, details, actor_context, created_at, processed_at, result_goal_id, error
+          id, user_id, kind, source_id, idempotency_key, mode, summary, status, details, actor_context, team_responsibility, created_at, processed_at, result_goal_id, error
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
         on conflict (id) do update
         set user_id = excluded.user_id,
             kind = excluded.kind,
@@ -4255,6 +3642,7 @@ class PostgresRepository implements AgenticRepository {
             status = excluded.status,
             details = excluded.details,
             actor_context = excluded.actor_context,
+            team_responsibility = excluded.team_responsibility,
             processed_at = excluded.processed_at,
             result_goal_id = excluded.result_goal_id,
             error = excluded.error
@@ -4270,6 +3658,7 @@ class PostgresRepository implements AgenticRepository {
         validated.status,
         JSON.stringify(validated.details),
         JSON.stringify(validated.actorContext),
+        JSON.stringify(validated.responsibility),
         validated.createdAt,
         validated.processedAt,
         validated.resultGoalId,
@@ -4283,19 +3672,19 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into jobs (
-          id, user_id, kind, status, idempotency_key, payload, actor_context, max_attempts, attempt_count,
-          claimed_by, last_attempt_at, claimed_at, lease_expires_at, available_at, completed_at, dead_lettered_at,
-          last_error, created_at, updated_at
+          id, user_id, kind, status, priority, queue_name, concurrency_key, timeout_ms, idempotency_key, payload,
+          actor_context, max_attempts, attempt_count, claimed_by, last_attempt_at, claimed_at, lease_expires_at,
+          available_at, completed_at, dead_lettered_at, last_error, execution_journal, created_at, updated_at
         )
-        values (
-          $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9,
-          $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19
-        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24)
         on conflict (id) do update
         set user_id = excluded.user_id,
             kind = excluded.kind,
             status = excluded.status,
+            priority = excluded.priority,
+            queue_name = excluded.queue_name,
+            concurrency_key = excluded.concurrency_key,
+            timeout_ms = excluded.timeout_ms,
             idempotency_key = excluded.idempotency_key,
             payload = excluded.payload,
             actor_context = excluded.actor_context,
@@ -4309,6 +3698,7 @@ class PostgresRepository implements AgenticRepository {
             completed_at = excluded.completed_at,
             dead_lettered_at = excluded.dead_lettered_at,
             last_error = excluded.last_error,
+            execution_journal = excluded.execution_journal,
             updated_at = excluded.updated_at
       `,
       [
@@ -4316,6 +3706,10 @@ class PostgresRepository implements AgenticRepository {
         validated.userId,
         validated.kind,
         validated.status,
+        validated.priority,
+        validated.queue,
+        validated.concurrencyKey,
+        validated.timeoutMs,
         validated.idempotencyKey,
         JSON.stringify(validated.payload),
         JSON.stringify(validated.actorContext),
@@ -4329,6 +3723,7 @@ class PostgresRepository implements AgenticRepository {
         validated.completedAt,
         validated.deadLetteredAt,
         validated.lastError,
+        JSON.stringify(validated.journal),
         validated.createdAt,
         validated.updatedAt
       ]
@@ -4366,25 +3761,31 @@ class PostgresRepository implements AgenticRepository {
   }
 
   private mapAutopilotEventRow(row: Record<string, unknown>): AutopilotEvent {
-    return AutopilotEventSchema.parse({
-      id: row.id,
-      userId: row.user_id,
-      kind: row.kind,
-      sourceId: row.source_id,
-      idempotencyKey: typeof row.idempotency_key === "string" ? row.idempotency_key : null,
-      mode: row.mode,
-      summary: row.summary,
-      status: row.status,
-      details: row.details ?? {},
-      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-      createdAt: new Date(row.created_at as string | number | Date).toISOString(),
-      processedAt: row.processed_at ? new Date(row.processed_at as string | number | Date).toISOString() : null,
-      resultGoalId: typeof row.result_goal_id === "string" ? row.result_goal_id : null,
-      error: typeof row.error === "string" ? row.error : null
-    });
+    return normalizeAutopilotEvent(
+      AutopilotEventSchema.parse({
+        id: row.id,
+        userId: row.user_id,
+        kind: row.kind,
+        sourceId: row.source_id,
+        idempotencyKey: typeof row.idempotency_key === "string" ? row.idempotency_key : null,
+        mode: row.mode,
+        summary: row.summary,
+        status: row.status,
+        details: row.details ?? {},
+        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        responsibility: row.team_responsibility ?? undefined,
+        createdAt: new Date(row.created_at as string | number | Date).toISOString(),
+        processedAt: row.processed_at ? new Date(row.processed_at as string | number | Date).toISOString() : null,
+        resultGoalId: typeof row.result_goal_id === "string" ? row.result_goal_id : null,
+        error: typeof row.error === "string" ? row.error : null
+      })
+    );
   }
 
   private mapGoalRow(row: Record<string, unknown>): GoalBundle["goal"] {
+    const goalContract =
+      row.goal_contract && typeof row.goal_contract === "object" ? (row.goal_contract as Record<string, unknown>) : null;
+
     return GoalSchema.parse({
       id: row.id,
       userId: row.user_id,
@@ -4396,6 +3797,9 @@ class PostgresRepository implements AgenticRepository {
       status: row.status,
       confidence: Number(row.confidence),
       explanation: row.explanation,
+      wedge: goalContract?.wedge,
+      completionContract: goalContract?.completionContract,
+      responsibility: goalContract?.responsibility,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4428,6 +3832,7 @@ class PostgresRepository implements AgenticRepository {
       dependsOn: row.depends_on ?? [],
       toolCapabilities: row.tool_capabilities ?? [],
       artifactIds: row.artifact_ids ?? [],
+      responsibility: row.team_responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4480,6 +3885,7 @@ class PostgresRepository implements AgenticRepository {
       decisionScope: normalizeApprovalDecisionScope(row.decision_scope),
       decisionRationale: typeof row.decision_rationale === "string" ? row.decision_rationale : null,
       history: normalizeApprovalHistory(row.history),
+      responsibility: row.team_responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       expiryAt: new Date(row.expiry_at as string | number | Date).toISOString(),
       respondedAt: row.responded_at ? new Date(row.responded_at as string | number | Date).toISOString() : null
@@ -4497,7 +3903,11 @@ class PostgresRepository implements AgenticRepository {
       sourceSystems: row.source_systems ?? [],
       status: row.status,
       expiryAt: row.expiry_at ? new Date(row.expiry_at as string | number | Date).toISOString() : null,
+      schedule: row.schedule ?? undefined,
+      lastEvaluation: row.last_evaluation ?? null,
+      escalationPolicy: row.escalation_policy ?? undefined,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      responsibility: row.team_responsibility ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4523,6 +3933,10 @@ class PostgresRepository implements AgenticRepository {
       userId: row.user_id,
       kind: row.kind,
       status: row.status,
+      priority: typeof row.priority === "string" ? row.priority : "normal",
+      queue: typeof row.queue_name === "string" ? row.queue_name : "default",
+      concurrencyKey: typeof row.concurrency_key === "string" ? row.concurrency_key : null,
+      timeoutMs: typeof row.timeout_ms === "number" ? row.timeout_ms : null,
       idempotencyKey: typeof row.idempotency_key === "string" ? row.idempotency_key : null,
       payload: row.payload,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
@@ -4536,6 +3950,7 @@ class PostgresRepository implements AgenticRepository {
       completedAt: row.completed_at ? new Date(row.completed_at as string | number | Date).toISOString() : null,
       deadLetteredAt: row.dead_lettered_at ? new Date(row.dead_lettered_at as string | number | Date).toISOString() : null,
       lastError: typeof row.last_error === "string" ? row.last_error : null,
+      journal: row.execution_journal ?? undefined,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4564,6 +3979,7 @@ class PostgresRepository implements AgenticRepository {
       actionLogIds: row.action_log_ids ?? [],
       artifactIds: row.artifact_ids ?? [],
       memoryIds: row.memory_ids ?? [],
+      actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
@@ -4609,8 +4025,12 @@ class PostgresRepository implements AgenticRepository {
       approvalMode: row.approval_mode,
       requireAuditExports: Boolean(row.require_audit_exports),
       maxAutoRunRiskClass: row.max_auto_run_risk_class,
+      publicSharingEnabled: Boolean(row.public_sharing_enabled),
+      providerAccessRequiresApproval: row.provider_access_requires_approval == null ? true : Boolean(row.provider_access_requires_approval),
+      escalationRequiresApproval: row.escalation_requires_approval == null ? true : Boolean(row.escalation_requires_approval),
       externalSendRequiresApproval: Boolean(row.external_send_requires_approval),
       calendarWriteRequiresApproval: Boolean(row.calendar_write_requires_approval),
+      shadowReplayPolicy: row.shadow_replay_policy && typeof row.shadow_replay_policy === "object" ? row.shadow_replay_policy : undefined,
       retentionDays: Number(row.retention_days),
       updatedBy: row.updated_by,
       createdAt: new Date(row.created_at as string | number | Date).toISOString(),
@@ -4655,9 +4075,8 @@ class PostgresRepository implements AgenticRepository {
           id, workspace_id, user_id, role, joined_at, updated_at
         )
         values ($1, $2, $3, $4, $5, $6)
-        on conflict (id) do update
-        set workspace_id = excluded.workspace_id,
-            user_id = excluded.user_id,
+        on conflict (workspace_id, user_id) do update
+        set id = excluded.id,
             role = excluded.role,
             joined_at = excluded.joined_at,
             updated_at = excluded.updated_at
@@ -4702,16 +4121,21 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into workspace_governance (
-          workspace_id, approval_mode, require_audit_exports, max_auto_run_risk_class, external_send_requires_approval,
-          calendar_write_requires_approval, retention_days, updated_by, created_at, updated_at
+          workspace_id, approval_mode, require_audit_exports, max_auto_run_risk_class, public_sharing_enabled,
+          provider_access_requires_approval, escalation_requires_approval, external_send_requires_approval,
+          calendar_write_requires_approval, shadow_replay_policy, retention_days, updated_by, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         on conflict (workspace_id) do update
         set approval_mode = excluded.approval_mode,
             require_audit_exports = excluded.require_audit_exports,
             max_auto_run_risk_class = excluded.max_auto_run_risk_class,
+            public_sharing_enabled = excluded.public_sharing_enabled,
+            provider_access_requires_approval = excluded.provider_access_requires_approval,
+            escalation_requires_approval = excluded.escalation_requires_approval,
             external_send_requires_approval = excluded.external_send_requires_approval,
             calendar_write_requires_approval = excluded.calendar_write_requires_approval,
+            shadow_replay_policy = excluded.shadow_replay_policy,
             retention_days = excluded.retention_days,
             updated_by = excluded.updated_by,
             updated_at = excluded.updated_at
@@ -4721,8 +4145,12 @@ class PostgresRepository implements AgenticRepository {
         validated.approvalMode,
         validated.requireAuditExports,
         validated.maxAutoRunRiskClass,
+        validated.publicSharingEnabled,
+        validated.providerAccessRequiresApproval,
+        validated.escalationRequiresApproval,
         validated.externalSendRequiresApproval,
         validated.calendarWriteRequiresApproval,
+        JSON.stringify(validated.shadowReplayPolicy),
         validated.retentionDays,
         validated.updatedBy,
         validated.createdAt,
@@ -4740,6 +4168,7 @@ class PostgresRepository implements AgenticRepository {
       tokenFingerprint: row.token_fingerprint,
       status: row.status,
       actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+      disclosureReview: (row.disclosure_review as Record<string, unknown> | null) ?? null,
       expiresAt: new Date(row.expires_at as string | number | Date).toISOString(),
       lastViewedAt: row.last_viewed_at ? new Date(row.last_viewed_at as string | number | Date).toISOString() : null,
       revokedAt: row.revoked_at ? new Date(row.revoked_at as string | number | Date).toISOString() : null,
@@ -4747,7 +4176,6 @@ class PostgresRepository implements AgenticRepository {
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
   }
-
   private mapPrivacyOperationRow(row: Record<string, unknown>): PrivacyOperation {
     return PrivacyOperationSchema.parse({
       id: row.id,
@@ -4767,7 +4195,6 @@ class PostgresRepository implements AgenticRepository {
       updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
     });
   }
-
   private async saveGoalShareWithClient(client: PoolClient, share: GoalShareRecord): Promise<void> {
     const validated = GoalShareRecordSchema.parse({
       ...share,
@@ -4776,10 +4203,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into goal_shares (
-          id, goal_id, user_id, workspace_id, token_fingerprint, status, actor_context,
-          expires_at, last_viewed_at, revoked_at, created_at, updated_at
+          id, goal_id, user_id, workspace_id, token_fingerprint, status, actor_context, disclosure_review, expires_at, last_viewed_at, revoked_at, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12)
+        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13)
         on conflict (id) do update
         set goal_id = excluded.goal_id,
             user_id = excluded.user_id,
@@ -4787,6 +4213,7 @@ class PostgresRepository implements AgenticRepository {
             token_fingerprint = excluded.token_fingerprint,
             status = excluded.status,
             actor_context = excluded.actor_context,
+            disclosure_review = excluded.disclosure_review,
             expires_at = excluded.expires_at,
             last_viewed_at = excluded.last_viewed_at,
             revoked_at = excluded.revoked_at,
@@ -4800,6 +4227,7 @@ class PostgresRepository implements AgenticRepository {
         validated.tokenFingerprint,
         validated.status,
         JSON.stringify(validated.actorContext),
+        JSON.stringify(validated.disclosureReview ?? null),
         validated.expiresAt,
         validated.lastViewedAt,
         validated.revokedAt,
@@ -5057,6 +4485,24 @@ class PostgresRepository implements AgenticRepository {
     return member;
   }
 
+  private assertSharedApprovalResponderWithRow(params: {
+    approvalId: string;
+    workspaceId: string | null;
+    workspaceRole: string | null;
+  }): void {
+    if (!params.workspaceId) {
+      return;
+    }
+
+    if (!params.workspaceRole) {
+      throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+    }
+
+    if (params.workspaceRole !== "owner") {
+      throw new ApprovalMutationError("forbidden", SHARED_APPROVAL_OWNER_MESSAGE);
+    }
+  }
+
   private async listWorkspacesForUserWithClient(
     client: Pick<PoolClient, "query">,
     userId: string
@@ -5135,10 +4581,9 @@ class PostgresRepository implements AgenticRepository {
     activeWorkspace: Workspace | null;
     workspaceSelection: WorkspaceSelection | null;
   }> {
-    const [workspaces, selection] = await Promise.all([
-      this.listWorkspacesForUserWithClient(client, userId),
-      this.getWorkspaceSelectionWithClient(client, userId)
-    ]);
+    // A single pg client cannot safely execute overlapping queries.
+    const workspaces = await this.listWorkspacesForUserWithClient(client, userId);
+    const selection = await this.getWorkspaceSelectionWithClient(client, userId);
     const activeWorkspace =
       workspaces.find((workspace) => workspace.id === selection?.workspaceId) ??
       workspaces.find((workspace) => workspace.isPersonal) ??
@@ -5186,29 +4631,27 @@ class PostgresRepository implements AgenticRepository {
     }
 
     const workflowIds = [...new Set(goals.map((goal) => goal.workflowId))];
-    const [workflowResult, tasksResult, artifactsResult, approvalsResult, watchersResult, logsResult] = await Promise.all([
-      client.query("select * from workflows where id = any($1::text[])", [workflowIds]),
-      client.query(
-        "select * from tasks where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      ),
-      client.query(
-        "select * from artifacts where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      ),
-      client.query(
-        "select * from approval_requests where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      ),
-      client.query(
-        "select * from watchers where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      ),
-      client.query(
-        "select * from action_logs where goal_id = any($1::text[]) order by goal_id asc, created_at asc, id asc",
-        [uniqueGoalIds]
-      )
-    ]);
+    const workflowResult = await client.query("select * from workflows where id = any($1::text[])", [workflowIds]);
+    const tasksResult = await client.query(
+      "select * from tasks where goal_id = any($1::text[]) order by goal_id asc, sort_order asc, created_at asc, id asc",
+      [uniqueGoalIds]
+    );
+    const artifactsResult = await client.query(
+      "select * from artifacts where goal_id = any($1::text[]) order by goal_id asc, sort_order asc, created_at asc, id asc",
+      [uniqueGoalIds]
+    );
+    const approvalsResult = await client.query(
+      "select * from approval_requests where goal_id = any($1::text[]) order by goal_id asc, sort_order asc, created_at asc, id asc",
+      [uniqueGoalIds]
+    );
+    const watchersResult = await client.query(
+      "select * from watchers where goal_id = any($1::text[]) order by goal_id asc, sort_order asc, created_at asc, id asc",
+      [uniqueGoalIds]
+    );
+    const logsResult = await client.query(
+      "select * from action_logs where goal_id = any($1::text[]) order by goal_id asc, sort_order asc, created_at asc, id asc",
+      [uniqueGoalIds]
+    );
 
     const goalsById = new Map(goals.map((goal) => [goal.id, goal] as const));
     const workflowsById = new Map(
@@ -5272,15 +4715,17 @@ class PostgresRepository implements AgenticRepository {
       }
 
       return [
-        GoalBundleSchema.parse({
-          goal,
-          workflow,
-          tasks: tasksByGoalId.get(goalId) ?? [],
-          artifacts: artifactsByGoalId.get(goalId) ?? [],
-          approvals: approvalsByGoalId.get(goalId) ?? [],
-          watchers: watchersByGoalId.get(goalId) ?? [],
-          actionLogs: logsByGoalId.get(goalId) ?? []
-        })
+        normalizeGoalBundleResponsibilities(
+          GoalBundleSchema.parse({
+            goal,
+            workflow,
+            tasks: tasksByGoalId.get(goalId) ?? [],
+            artifacts: artifactsByGoalId.get(goalId) ?? [],
+            approvals: approvalsByGoalId.get(goalId) ?? [],
+            watchers: watchersByGoalId.get(goalId) ?? [],
+            actionLogs: logsByGoalId.get(goalId) ?? []
+          })
+        )
       ];
     });
   }
@@ -5364,7 +4809,7 @@ class PostgresRepository implements AgenticRepository {
   }
 
   private async upsertGoalBundle(client: PoolClient, bundle: GoalBundle): Promise<void> {
-    const validated = GoalBundleSchema.parse(bundle);
+    const validated = normalizeGoalBundleResponsibilities(GoalBundleSchema.parse(bundle));
 
     await client.query(
       `
@@ -5392,8 +4837,10 @@ class PostgresRepository implements AgenticRepository {
 
     await client.query(
       `
-        insert into goals (id, user_id, workspace_id, workflow_id, title, request, intent, status, confidence, explanation, created_at, updated_at)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        insert into goals (
+          id, user_id, workspace_id, workflow_id, title, request, intent, status, confidence, explanation, goal_contract, created_at, updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
         on conflict (id) do update
         set user_id = excluded.user_id,
             workspace_id = excluded.workspace_id,
@@ -5404,6 +4851,7 @@ class PostgresRepository implements AgenticRepository {
             status = excluded.status,
             confidence = excluded.confidence,
             explanation = excluded.explanation,
+            goal_contract = excluded.goal_contract,
             updated_at = excluded.updated_at
       `,
       [
@@ -5417,6 +4865,11 @@ class PostgresRepository implements AgenticRepository {
         validated.goal.status,
         validated.goal.confidence,
         validated.goal.explanation,
+        JSON.stringify({
+          wedge: validated.goal.wedge,
+          completionContract: validated.goal.completionContract,
+          responsibility: validated.goal.responsibility
+        }),
         validated.goal.createdAt,
         validated.goal.updatedAt
       ]
@@ -5428,14 +4881,14 @@ class PostgresRepository implements AgenticRepository {
     await client.query("delete from watchers where goal_id = $1", [validated.goal.id]);
     await client.query("delete from tasks where goal_id = $1", [validated.goal.id]);
 
-    for (const task of validated.tasks) {
+    for (const [sortOrder, task] of validated.tasks.entries()) {
       await client.query(
         `
           insert into tasks (
             id, goal_id, workflow_id, title, summary, assigned_agent, state, risk_class, requires_approval,
-            depends_on, tool_capabilities, artifact_ids, created_at, updated_at
+            depends_on, tool_capabilities, artifact_ids, team_responsibility, sort_order, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14)
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15, $16)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               workflow_id = excluded.workflow_id,
@@ -5448,6 +4901,8 @@ class PostgresRepository implements AgenticRepository {
               depends_on = excluded.depends_on,
               tool_capabilities = excluded.tool_capabilities,
               artifact_ids = excluded.artifact_ids,
+              team_responsibility = excluded.team_responsibility,
+              sort_order = excluded.sort_order,
               updated_at = excluded.updated_at
         `,
         [
@@ -5463,24 +4918,27 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(task.dependsOn),
           JSON.stringify(task.toolCapabilities),
           JSON.stringify(task.artifactIds),
+          JSON.stringify(task.responsibility),
+          sortOrder,
           task.createdAt,
           task.updatedAt
         ]
       );
     }
 
-    for (const artifact of validated.artifacts) {
+    for (const [sortOrder, artifact] of validated.artifacts.entries()) {
       await client.query(
         `
-          insert into artifacts (id, goal_id, task_id, artifact_type, title, content, metadata, created_at)
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+          insert into artifacts (id, goal_id, task_id, artifact_type, title, content, metadata, sort_order, created_at)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               task_id = excluded.task_id,
               artifact_type = excluded.artifact_type,
               title = excluded.title,
               content = excluded.content,
-              metadata = excluded.metadata
+              metadata = excluded.metadata,
+              sort_order = excluded.sort_order
         `,
         [
           artifact.id,
@@ -5490,19 +4948,20 @@ class PostgresRepository implements AgenticRepository {
           artifact.title,
           artifact.content,
           JSON.stringify(artifact.metadata),
+          sortOrder,
           artifact.createdAt
         ]
       );
     }
 
-    for (const approval of validated.approvals) {
+    for (const [sortOrder, approval] of validated.approvals.entries()) {
       await client.query(
         `
           insert into approval_requests (
             id, goal_id, task_id, title, rationale, risk_class, decision, requested_action, action_intent, preview,
-            decision_scope, decision_rationale, history, created_at, expiry_at, responded_at
+            decision_scope, decision_rationale, history, team_responsibility, sort_order, created_at, expiry_at, responded_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13::jsonb, $14, $15, $16)
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17, $18)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               task_id = excluded.task_id,
@@ -5516,6 +4975,8 @@ class PostgresRepository implements AgenticRepository {
               decision_scope = excluded.decision_scope,
               decision_rationale = excluded.decision_rationale,
               history = excluded.history,
+              team_responsibility = excluded.team_responsibility,
+              sort_order = excluded.sort_order,
               expiry_at = excluded.expiry_at,
               responded_at = excluded.responded_at
         `,
@@ -5533,6 +4994,8 @@ class PostgresRepository implements AgenticRepository {
           approval.decisionScope,
           approval.decisionRationale,
           JSON.stringify(approval.history),
+          JSON.stringify(approval.responsibility),
+          sortOrder,
           approval.createdAt,
           approval.expiryAt,
           approval.respondedAt
@@ -5540,13 +5003,13 @@ class PostgresRepository implements AgenticRepository {
       );
     }
 
-    for (const watcher of validated.watchers) {
+    for (const [sortOrder, watcher] of validated.watchers.entries()) {
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, schedule, last_evaluation, escalation_policy, actor_context, team_responsibility, sort_order, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11, $12)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, $17)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -5556,7 +5019,12 @@ class PostgresRepository implements AgenticRepository {
               source_systems = excluded.source_systems,
               status = excluded.status,
               expiry_at = excluded.expiry_at,
+              schedule = excluded.schedule,
+              last_evaluation = excluded.last_evaluation,
+              escalation_policy = excluded.escalation_policy,
               actor_context = excluded.actor_context,
+              team_responsibility = excluded.team_responsibility,
+              sort_order = excluded.sort_order,
               updated_at = excluded.updated_at
         `,
         [
@@ -5569,18 +5037,23 @@ class PostgresRepository implements AgenticRepository {
           JSON.stringify(watcher.sourceSystems),
           watcher.status,
           watcher.expiryAt,
+          JSON.stringify(watcher.schedule),
+          JSON.stringify(watcher.lastEvaluation),
+          JSON.stringify(watcher.escalationPolicy),
           JSON.stringify(watcher.actorContext),
+          JSON.stringify(watcher.responsibility),
+          sortOrder,
           watcher.createdAt,
           watcher.updatedAt
         ]
       );
     }
 
-    for (const log of validated.actionLogs) {
+    for (const [sortOrder, log] of validated.actionLogs.entries()) {
       await client.query(
         `
-          insert into action_logs (id, goal_id, task_id, workflow_id, actor, kind, message, details, created_at)
-          values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+          insert into action_logs (id, goal_id, task_id, workflow_id, actor, kind, message, details, sort_order, created_at)
+          values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
           on conflict (id) do nothing
         `,
         [
@@ -5592,6 +5065,7 @@ class PostgresRepository implements AgenticRepository {
           log.kind,
           log.message,
           JSON.stringify(log.details),
+          sortOrder,
           log.createdAt
         ]
       );
@@ -6365,10 +5839,8 @@ class PostgresRepository implements AgenticRepository {
         throw new Error(`Workspace ${workspaceId} was not found.`);
       }
 
-      const [governance, members] = await Promise.all([
-        this.getWorkspaceGovernanceWithClient(client, workspaceId),
-        this.listWorkspaceMembersForWorkspaceWithClient(client, workspaceId)
-      ]);
+      const governance = await this.getWorkspaceGovernanceWithClient(client, workspaceId);
+      const members = await this.listWorkspaceMembersForWorkspaceWithClient(client, workspaceId);
       const goalValues: unknown[] = [workspaceId];
       const goalPredicates = ["workspace_id = $1"];
 
@@ -6386,11 +5858,15 @@ class PostgresRepository implements AgenticRepository {
         `,
         goalValues
       );
-      const goals = (
-        await Promise.all(goalsResult.rows.map((row) => this.mapGoalBundleWithClient(client, row.id as string)))
-      )
-        .filter((bundle): bundle is GoalBundle => bundle !== null)
-        .map((bundle) => GoalBundleSchema.parse(clone(bundle)));
+      const goals: GoalBundle[] = [];
+
+      for (const row of goalsResult.rows) {
+        const bundle = await this.mapGoalBundleWithClient(client, row.id as string);
+
+        if (bundle) {
+          goals.push(GoalBundleSchema.parse(clone(bundle)));
+        }
+      }
       const goalIds = goals.map((bundle) => bundle.goal.id);
       const goalShares =
         goalIds.length > 0
@@ -6417,8 +5893,7 @@ class PostgresRepository implements AgenticRepository {
           [workspaceId]
         )
       ).rows.map((row) => this.mapPrivacyOperationRow(row));
-
-      return buildWorkspaceAuditExport({
+      const auditExport = buildWorkspaceAuditExport({
         workspace,
         governance,
         members,
@@ -6426,13 +5901,35 @@ class PostgresRepository implements AgenticRepository {
         goalShares,
         privacyOperations
       });
+
+      await this.savePrivacyOperation({
+        id: `privacy-export-${crypto.randomUUID()}`,
+        workspaceId,
+        userId,
+        kind: "workspace_export",
+        status: "completed",
+        requestedBy: userId,
+        actorContext: createSystemActorContext(userId),
+        jobId: null,
+        details: {},
+        result: {
+          fileName: auditExport.fileName
+        },
+        startedAt: auditExport.generatedAt,
+        completedAt: auditExport.generatedAt,
+        error: null,
+        createdAt: auditExport.generatedAt,
+        updatedAt: auditExport.generatedAt
+      });
+
+      return auditExport;
     } finally {
       client.release();
     }
   }
 
   async saveGoalBundle(bundle: GoalBundle): Promise<GoalBundle> {
-    const validated = GoalBundleSchema.parse(bundle);
+    const validated = normalizeGoalBundleResponsibilities(GoalBundleSchema.parse(bundle));
     await this.withTransaction(async (client) => {
       if (validated.goal.workspaceId) {
         const workspace = await this.getWorkspaceByIdWithClient(client, validated.goal.workspaceId);
@@ -6445,6 +5942,10 @@ class PostgresRepository implements AgenticRepository {
       await this.upsertGoalBundle(client, validated);
     });
     return GoalBundleSchema.parse(clone(validated));
+  }
+
+  async appendGoalActionLogs(goalId: string, logs: ActionLog[]): Promise<ActionLog[]> {
+    return this.withTransaction((client) => appendGoalActionLogsWithClient(client, goalId, logs));
   }
 
   async respondToApproval(params: {
@@ -6460,7 +5961,7 @@ class PostgresRepository implements AgenticRepository {
     return this.withTransaction(async (client) => {
       const approvalResult = await client.query(
         `
-          select a.id, a.goal_id, a.decision, a.expiry_at
+          select a.id, a.goal_id, a.decision, a.expiry_at, g.workspace_id, wm.role as workspace_role
           from approval_requests a
           join goals g on g.id = a.goal_id
           left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $2
@@ -6469,7 +5970,7 @@ class PostgresRepository implements AgenticRepository {
               (g.workspace_id is null and g.user_id = $2)
               or wm.user_id is not null
             )
-          for update
+          for update of a
         `,
         [params.approvalId, userId]
       );
@@ -6494,13 +5995,12 @@ class PostgresRepository implements AgenticRepository {
         throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
       }
 
-      const originalApproval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
-
-      if (!originalApproval) {
-        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
-      }
-
-      const updatedBundle = applyApprovalResponse({
+      this.assertSharedApprovalResponderWithRow({
+        approvalId: params.approvalId,
+        workspaceId: approvalRow.workspace_id ?? null,
+        workspaceRole: approvalRow.workspace_role ?? null
+      });
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
         bundle,
         approvalId: params.approvalId,
         decision: params.decision,
@@ -6508,16 +6008,108 @@ class PostgresRepository implements AgenticRepository {
         scope: params.scope,
         rationale: params.rationale
       });
-      const evidenceRecord = buildApprovalEvidenceRecord({
-        actor,
-        previousBundle: bundle,
-        updatedBundle,
-        originalApproval
-      });
 
       await this.upsertGoalBundle(client, updatedBundle);
       await this.saveEvidenceRecordWithClient(client, evidenceRecord);
-      return GoalBundleSchema.parse(clone(updatedBundle));
+      return parsedBundle;
+    });
+  }
+
+  async respondToApprovalAndEnqueueJob(params: {
+    approvalId: string;
+    decision: Exclude<ApprovalDecision, "pending">;
+    actor: ActorContext;
+    scope?: ApprovalDecisionScope;
+    rationale?: string | null;
+    buildJob: (bundle: GoalBundle) => JobRecord;
+  }): Promise<{ bundle: GoalBundle; job: JobRecord }> {
+    const actor = parseActorContext(params.actor);
+    const userId = subjectUserIdForActor(actor);
+
+    return this.withTransaction(async (client) => {
+      const approvalResult = await client.query(
+        `
+          select a.id, a.goal_id, a.decision, a.expiry_at, g.workspace_id, wm.role as workspace_role
+          from approval_requests a
+          join goals g on g.id = a.goal_id
+          left join workspace_members wm on wm.workspace_id = g.workspace_id and wm.user_id = $2
+          where a.id = $1
+            and (
+              (g.workspace_id is null and g.user_id = $2)
+              or wm.user_id is not null
+            )
+          for update of a
+        `,
+        [params.approvalId, userId]
+      );
+
+      if (Number(approvalResult.rowCount ?? 0) === 0) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      const approvalRow = approvalResult.rows[0];
+
+      if (approvalRow.decision !== "pending") {
+        throw new ApprovalMutationError("already_handled", `Approval ${params.approvalId} has already been handled.`);
+      }
+
+      if (new Date(approvalRow.expiry_at).getTime() <= Date.now()) {
+        throw new ApprovalMutationError("expired", `Approval ${params.approvalId} has expired and can no longer be actioned.`);
+      }
+
+      const bundle = await this.mapGoalBundleWithClient(client, approvalRow.goal_id);
+
+      if (!bundle) {
+        throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
+      }
+
+      this.assertSharedApprovalResponderWithRow({
+        approvalId: params.approvalId,
+        workspaceId: approvalRow.workspace_id ?? null,
+        workspaceRole: approvalRow.workspace_role ?? null
+      });
+      const { updatedBundle, parsedBundle, evidenceRecord } = buildApprovalResponseMutation({
+        bundle,
+        approvalId: params.approvalId,
+        decision: params.decision,
+        actor,
+        scope: params.scope,
+        rationale: params.rationale
+      });
+      const validatedJob = JobRecordSchema.parse(params.buildJob(parsedBundle));
+      assertApprovalFollowUpJobOwner(validatedJob, userId);
+      const trimmedKey = validatedJob.idempotencyKey?.trim() || null;
+      let savedJob = JobRecordSchema.parse({ ...validatedJob, idempotencyKey: trimmedKey });
+      let shouldSaveJob = true;
+
+      if (trimmedKey) {
+        await client.query("select pg_advisory_xact_lock(hashtext($1))", [`job:${validatedJob.userId}:${trimmedKey}`]);
+        const existing = await client.query(
+          `
+            select *
+            from jobs
+            where user_id = $1 and idempotency_key = $2
+            limit 1
+          `,
+          [validatedJob.userId, trimmedKey]
+        );
+
+        if (existing.rows[0]) {
+          savedJob = this.mapJobRow(existing.rows[0]);
+          shouldSaveJob = false;
+        }
+      }
+
+      await this.upsertGoalBundle(client, updatedBundle);
+      await this.saveEvidenceRecordWithClient(client, evidenceRecord);
+
+      if (shouldSaveJob) {
+        await this.saveJobWithClient(client, savedJob);
+      }
+      return {
+        bundle: parsedBundle,
+        job: JobRecordSchema.parse(clone(savedJob))
+      };
     });
   }
 
@@ -6639,13 +6231,15 @@ class PostgresRepository implements AgenticRepository {
 
       return GoalBundlePageSchema.parse({
         items,
+        limit,
         nextCursor:
           result.rows.length > limit && lastRow
             ? encodeCollectionCursor({
                 createdAt: new Date(lastRow.created_at).toISOString(),
                 id: String(lastRow.id)
               })
-            : null
+            : null,
+        generatedAt: nowIso()
       });
     } finally {
       client.release();
@@ -6670,16 +6264,13 @@ class PostgresRepository implements AgenticRepository {
     return result.rows.map((row) => this.mapApprovalRow(row as Record<string, unknown>));
   }
 
-  async listEvidenceRecords(params?: {
-    userId?: string;
-    goalId?: string;
-    approvalId?: string;
-  }): Promise<EvidenceRecord[]> {
+  async listEvidenceRecords(params?: { userId?: string; goalId?: string; approvalId?: string; limit?: number }): Promise<EvidenceRecord[]> {
     await this.ready;
     const userId = params?.userId ?? SYSTEM_USER_ID;
-    const values: string[] = [userId];
+    const values: unknown[] = [userId];
     let index = values.length + 1;
     let filters = "";
+    const limit = normalizeProvenanceCollectionLimit(params?.limit);
 
     if (params?.goalId) {
       values.push(params.goalId);
@@ -6689,6 +6280,11 @@ class PostgresRepository implements AgenticRepository {
     if (params?.approvalId) {
       values.push(params.approvalId);
       filters += ` and er.approval_id = $${index++}`;
+    }
+
+    const limitClause = limit === null ? "" : `limit $${index}`;
+    if (limit !== null) {
+      values.push(limit);
     }
 
     const result = await this.pool.query(
@@ -6703,6 +6299,7 @@ class PostgresRepository implements AgenticRepository {
         )
         ${filters}
         order by er.created_at desc
+        ${limitClause}
       `,
       values
     );
@@ -6924,13 +6521,15 @@ class PostgresRepository implements AgenticRepository {
 
     return AutopilotEventPageSchema.parse({
       items,
+      limit,
       nextCursor:
         result.rows.length > limit && last
           ? encodeCollectionCursor({
               createdAt: last.createdAt,
               id: last.id
             })
-          : null
+          : null,
+      generatedAt: nowIso()
     });
   }
 
@@ -6941,12 +6540,15 @@ class PostgresRepository implements AgenticRepository {
     idempotencyKey?: string | null;
     mode: AutopilotMode;
     summary: string;
-    details?: Record<string, unknown>;
+    details?: AutopilotEventDetails | Record<string, unknown>;
     actorContext?: ActorContext | null;
     debounceMinutes: number;
+    reliabilityControls?: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim> {
     const userId = params.userId ?? SYSTEM_USER_ID;
     const trimmedKey = params.idempotencyKey?.trim() || null;
+    const normalizedDetails = normalizeAutopilotEventDetails(params.details);
+    const reliabilityControls = params.reliabilityControls ?? DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS;
 
     return this.withTransaction(async (client) => {
       await client.query("select pg_advisory_xact_lock(hashtext($1))", [
@@ -6972,23 +6574,74 @@ class PostgresRepository implements AgenticRepository {
         }
       }
 
-      const debounceCutoff = new Date(Date.now() - params.debounceMinutes * 60 * 1000).toISOString();
-      const recentResult = await client.query(
+      const windowCutoff = new Date(Date.now() - Math.max(params.debounceMinutes, reliabilityControls.budgetWindowMinutes) * 60 * 1000).toISOString();
+      const recentEventsResult = await client.query(
         `
           select *
           from autopilot_events
           where user_id = $1
-            and kind = $2
-            and source_id = $3
-            and created_at >= $4
+            and created_at >= $2
           order by created_at desc
-          limit 1
         `,
-        [userId, params.kind, params.sourceId, debounceCutoff]
+        [userId, windowCutoff]
       );
+      const recentEvents = recentEventsResult.rows.map((row) => this.mapAutopilotEventRow(row));
+      const budget = normalizedDetails.budget ? AutopilotEventBudgetSchema.parse(normalizedDetails.budget) : null;
+      if (budget) {
+        const budgetCutoff = new Date(Date.now() - budget.windowMinutes * 60 * 1000).toISOString();
+        const observedCount = recentEvents.filter((event) =>
+          autopilotEventMatchesBudget({
+            event,
+            userId,
+            sourceId: params.sourceId,
+            budget,
+            cutoffMs: Date.parse(budgetCutoff)
+          })
+        ).length;
 
-      if (recentResult.rows.length > 0) {
-        const recent = this.mapAutopilotEventRow(recentResult.rows[0]);
+        if (observedCount >= budget.maxEvents) {
+          const ignoredEvent = AutopilotEventSchema.parse({
+            ...buildPendingAutopilotEvent({
+              userId,
+              kind: params.kind,
+              sourceId: params.sourceId,
+              idempotencyKey: trimmedKey,
+              mode: params.mode,
+              summary: params.summary,
+              actorContext: params.actorContext,
+              details: withAutopilotSuppression(normalizedDetails, {
+                outcome: "budget_exhausted",
+                reason: `Budget ${budget.key} exhausted in the active window.`,
+                budgetKey: budget.key,
+                observedCount
+              })
+            }),
+            status: "ignored",
+            processedAt: nowIso()
+          });
+
+          await this.saveAutopilotEventWithClient(client, ignoredEvent);
+          return {
+            outcome: "ignored",
+            event: AutopilotEventSchema.parse(clone(ignoredEvent))
+          };
+        }
+      }
+
+      const debounceCutoff = new Date(Date.now() - params.debounceMinutes * 60 * 1000).toISOString();
+      const recent = recentEvents.find((event) => {
+        if (event.kind !== params.kind || event.sourceId !== params.sourceId) {
+          return false;
+        }
+
+        if (!countsTowardAutopilotBudget(event.status) && event.status !== "debounced") {
+          return false;
+        }
+
+        return event.createdAt >= debounceCutoff;
+      });
+
+      if (recent) {
         const debouncedEvent = AutopilotEventSchema.parse({
           ...buildPendingAutopilotEvent({
             userId,
@@ -6998,10 +6651,17 @@ class PostgresRepository implements AgenticRepository {
             mode: params.mode,
             summary: params.summary,
             actorContext: params.actorContext,
-            details: {
-              ...(params.details ?? {}),
-              debouncedByEventId: recent.id
-            }
+            details: withAutopilotSuppression(
+              {
+                ...normalizedDetails,
+                debouncedByEventId: recent.id
+              },
+              {
+                outcome: "debounced",
+                reason: "Suppressed by debounce window.",
+                relatedEventId: recent.id
+              }
+            )
           }),
           status: "debounced",
           processedAt: nowIso()
@@ -7014,6 +6674,42 @@ class PostgresRepository implements AgenticRepository {
         };
       }
 
+      const controlDecision = evaluateAutopilotClaimControls({
+        recentEvents: recentEvents.filter(
+          (event) => event.createdAt >= new Date(Date.now() - reliabilityControls.budgetWindowMinutes * 60 * 1000).toISOString()
+        ),
+        reliabilityControls
+      });
+
+      if (controlDecision.outcome === "suppress") {
+        const suppressedEvent = buildSuppressedAutopilotEvent({
+          userId,
+          kind: params.kind,
+          sourceId: params.sourceId,
+          idempotencyKey: trimmedKey,
+          mode: params.mode,
+          summary: params.summary,
+          actorContext: params.actorContext,
+          details: params.details,
+          suppression: {
+            reason: controlDecision.reason,
+            budgetWindowMinutes: reliabilityControls.budgetWindowMinutes,
+            recentBudgetedEventCount: controlDecision.recentBudgetedEventCount,
+            maxEventsPerWindow: reliabilityControls.maxEventsPerWindow,
+            pendingEventCount: controlDecision.pendingEventCount,
+            maxPendingEvents: reliabilityControls.maxPendingEvents,
+            consecutiveFailureCount: controlDecision.consecutiveFailureCount,
+            maxConsecutiveFailures: reliabilityControls.maxConsecutiveFailures
+          }
+        });
+
+        await this.saveAutopilotEventWithClient(client, suppressedEvent);
+        return {
+          outcome: "suppressed",
+          event: AutopilotEventSchema.parse(clone(suppressedEvent))
+        };
+      }
+
       const claimed = buildPendingAutopilotEvent({
         userId,
         kind: params.kind,
@@ -7022,7 +6718,9 @@ class PostgresRepository implements AgenticRepository {
         mode: params.mode,
         summary: params.summary,
         actorContext: params.actorContext,
-        details: params.details
+        details: withAutopilotSuppression(normalizedDetails, {
+          outcome: "allowed"
+        })
       });
 
       await this.saveAutopilotEventWithClient(client, claimed);
@@ -7039,19 +6737,72 @@ class PostgresRepository implements AgenticRepository {
     return AutopilotEventSchema.parse(clone(validated));
   }
 
-  async listJobs(params?: {
-    userId?: string;
-    kinds?: JobKind[];
-    statuses?: JobStatus[];
-  }): Promise<JobRecord[]> {
+  async listJobs(params?: { userId?: string; kinds?: JobKind[]; statuses?: JobStatus[]; limit?: number }): Promise<JobRecord[]> {
     await this.ready;
+    const limit = normalizeProvenanceCollectionLimit(params?.limit);
+    if (params?.userId) {
+      const values: unknown[] = [params.userId];
+      const predicates = [
+        `(
+          j.user_id = $1
+          or direct_wm.user_id is not null
+          or (
+            g.id is not null
+            and (
+              (g.workspace_id is null and g.user_id = $1)
+              or goal_wm.user_id is not null
+            )
+          )
+          or watcher_wm.user_id is not null
+        )`
+      ];
+
+      if (params.kinds?.length) {
+        values.push(params.kinds.map((kind) => JobKindSchema.parse(kind)));
+        predicates.push(`j.kind = any($${values.length}::text[])`);
+      }
+
+      if (params.statuses?.length) {
+        values.push(params.statuses.map((status) => JobStatusSchema.parse(status)));
+        predicates.push(`j.status = any($${values.length}::text[])`);
+      }
+
+      const limitClause = limit === null ? "" : `limit $${values.length + 1}`;
+      if (limit !== null) {
+        values.push(limit);
+      }
+
+      const result = await this.pool.query(
+        `
+          select distinct j.*
+          from jobs j
+          left join workspace_members direct_wm
+            on direct_wm.workspace_id = j.payload ->> 'workspaceId'
+            and direct_wm.user_id = $1
+          left join goals g
+            on g.id = j.payload ->> 'goalId'
+          left join workspace_members goal_wm
+            on goal_wm.workspace_id = g.workspace_id
+            and goal_wm.user_id = $1
+          left join watchers w
+            on w.id = j.payload ->> 'sourceId'
+          left join goals watcher_goal
+            on watcher_goal.id = w.goal_id
+          left join workspace_members watcher_wm
+            on watcher_wm.workspace_id = watcher_goal.workspace_id
+            and watcher_wm.user_id = $1
+          where ${predicates.join(" and ")}
+          order by j.created_at desc
+          ${limitClause}
+        `,
+        values
+      );
+
+      return result.rows.map((row) => this.mapJobRow(row));
+    }
+
     const values: unknown[] = [];
     const predicates: string[] = [];
-
-    if (params?.userId) {
-      values.push(params.userId);
-      predicates.push(`user_id = $${values.length}`);
-    }
 
     if (params?.kinds?.length) {
       values.push(params.kinds.map((kind) => JobKindSchema.parse(kind)));
@@ -7063,6 +6814,11 @@ class PostgresRepository implements AgenticRepository {
       predicates.push(`status = any($${values.length}::text[])`);
     }
 
+    const limitClause = limit === null ? "" : `limit $${values.length + 1}`;
+    if (limit !== null) {
+      values.push(limit);
+    }
+
     const whereClause = predicates.length > 0 ? `where ${predicates.join(" and ")}` : "";
     const result = await this.pool.query(
       `
@@ -7070,6 +6826,7 @@ class PostgresRepository implements AgenticRepository {
         from jobs
         ${whereClause}
         order by created_at desc
+        ${limitClause}
       `,
       values
     );
@@ -7079,7 +6836,42 @@ class PostgresRepository implements AgenticRepository {
 
   async getJob(jobId: string, userId = SYSTEM_USER_ID): Promise<JobRecord | null> {
     await this.ready;
-    const result = await this.pool.query("select * from jobs where id = $1 and user_id = $2 limit 1", [jobId, userId]);
+    const result = await this.pool.query(
+      `
+        select distinct j.*
+        from jobs j
+        left join workspace_members direct_wm
+          on direct_wm.workspace_id = j.payload ->> 'workspaceId'
+          and direct_wm.user_id = $1
+        left join goals g
+          on g.id = j.payload ->> 'goalId'
+        left join workspace_members goal_wm
+          on goal_wm.workspace_id = g.workspace_id
+          and goal_wm.user_id = $1
+        left join watchers w
+          on w.id = j.payload ->> 'sourceId'
+        left join goals watcher_goal
+          on watcher_goal.id = w.goal_id
+        left join workspace_members watcher_wm
+          on watcher_wm.workspace_id = watcher_goal.workspace_id
+          and watcher_wm.user_id = $1
+        where j.id = $2
+          and (
+            j.user_id = $1
+            or direct_wm.user_id is not null
+            or (
+              g.id is not null
+              and (
+                (g.workspace_id is null and g.user_id = $1)
+                or goal_wm.user_id is not null
+              )
+            )
+            or watcher_wm.user_id is not null
+          )
+        limit 1
+      `,
+      [userId, jobId]
+    );
     return result.rows[0] ? this.mapJobRow(result.rows[0]) : null;
   }
 
@@ -7121,51 +6913,20 @@ class PostgresRepository implements AgenticRepository {
   async claimNextJob(params: {
     userId?: string;
     kinds?: JobKind[];
+    queue?: string;
     runnerId: string;
     leaseMs: number;
     now?: string;
+    concurrencyLimits?: JobConcurrencyLimits;
   }): Promise<JobRecord | null> {
-    return this.withTransaction(async (client) => {
-      const claimedAt = params.now ?? nowIso();
-      const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
-      const values: unknown[] = [claimedAt];
-      const predicates = [
-        `(
-          (status in ('queued', 'retrying') and available_at <= $1)
-          or (status = 'running' and lease_expires_at is not null and lease_expires_at <= $1)
-        )`
-      ];
-
-      if (params.userId) {
-        values.push(params.userId);
-        predicates.push(`user_id = $${values.length}`);
-      }
-
-      if (kinds.length > 0) {
-        values.push(kinds);
-        predicates.push(`kind = any($${values.length}::text[])`);
-      }
-
-      const result = await client.query(
-        `
-          select *
-          from jobs
-          where ${predicates.join(" and ")}
-          order by available_at asc, created_at asc
-          limit 1
-          for update skip locked
-        `,
-        values
-      );
-
-      if (!result.rows[0]) {
-        return null;
-      }
-
-      const claimed = claimJobRecord(this.mapJobRow(result.rows[0]), params.runnerId, params.leaseMs, claimedAt);
-      await this.saveJobWithClient(client, claimed);
-      return JobRecordSchema.parse(clone(claimed));
-    });
+    return this.withTransaction((client) =>
+      claimNextJobWithClient(
+        client,
+        params,
+        (row) => this.mapJobRow(row),
+        (transactionClient, job) => this.saveJobWithClient(transactionClient, job)
+      )
+    );
   }
 
   async completeJob(params: {
@@ -7188,6 +6949,12 @@ class PostgresRepository implements AgenticRepository {
         status: "completed",
         leaseExpiresAt: null,
         completedAt,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "completed",
+          at: completedAt,
+          summary: `Job completed successfully on attempt ${existing.attemptCount}.`
+        }),
         updatedAt: completedAt
       });
       await this.saveJobWithClient(client, completed);
@@ -7210,6 +6977,8 @@ class PostgresRepository implements AgenticRepository {
 
       const existing = this.mapJobRow(result.rows[0]);
       assertRunningJobOwner(existing, params.runnerId);
+      const updatedAt = nowIso();
+      const trimmedError = params.error.trim().slice(0, 1000);
       const retried = JobRecordSchema.parse({
         ...existing,
         status: "retrying",
@@ -7217,8 +6986,19 @@ class PostgresRepository implements AgenticRepository {
         claimedAt: null,
         leaseExpiresAt: null,
         availableAt: params.availableAt,
-        lastError: params.error.trim().slice(0, 1000),
-        updatedAt: nowIso()
+        lastError: trimmedError,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "retrying",
+          at: updatedAt,
+          summary: `Attempt ${existing.attemptCount} failed and retry ${existing.attemptCount + 1} was scheduled.`,
+          error: trimmedError,
+          metadata: {
+            nextAvailableAt: params.availableAt
+          },
+          retryCount: existing.attemptCount
+        }),
+        updatedAt
       });
       await this.saveJobWithClient(client, retried);
       return JobRecordSchema.parse(clone(retried));
@@ -7241,12 +7021,21 @@ class PostgresRepository implements AgenticRepository {
       const existing = this.mapJobRow(result.rows[0]);
       assertRunningJobOwner(existing, params.runnerId);
       const deadLetteredAt = params.deadLetteredAt ?? nowIso();
+      const trimmedError = params.error.trim().slice(0, 1000);
       const deadLettered = JobRecordSchema.parse({
         ...existing,
         status: "dead_letter",
         leaseExpiresAt: null,
         deadLetteredAt,
-        lastError: params.error.trim().slice(0, 1000),
+        lastError: trimmedError,
+        journal: buildJobLifecycleJournal({
+          job: existing,
+          status: "dead_letter",
+          at: deadLetteredAt,
+          summary: `Job dead-lettered after ${existing.attemptCount}/${existing.maxAttempts} attempts.`,
+          error: trimmedError,
+          retryCount: existing.attemptCount
+        }),
         updatedAt: deadLetteredAt
       });
       await this.saveJobWithClient(client, deadLettered);
@@ -7257,7 +7046,6 @@ class PostgresRepository implements AgenticRepository {
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
     await this.ready;
     const result = await this.pool.query("select * from memory_records where user_id = $1 order by created_at desc, id desc", [userId]);
-
     return result.rows.map((row) =>
       MemoryRecordSchema.parse({
         id: row.id,
@@ -7270,12 +7058,25 @@ class PostgresRepository implements AgenticRepository {
         sensitivity: row.sensitivity,
         permissions: row.permissions ?? [],
         actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        contextPacketConsent: row.context_packet_consent ?? null,
         reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString()
       })
     );
+  }
+
+  async listContextPacketMemory(params: {
+    userId: string;
+    agent?: AgentName;
+    includeExpired?: boolean;
+    allowedSensitivities?: string[];
+    limit?: number;
+    now?: number;
+  }): Promise<MemoryRecord[]> {
+    await this.ready;
+    return listContextPacketMemoryWithPool(this.pool, params);
   }
 
   async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
@@ -7317,6 +7118,7 @@ class PostgresRepository implements AgenticRepository {
         sensitivity: row.sensitivity,
         permissions: row.permissions ?? [],
         actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
+        contextPacketConsent: row.context_packet_consent ?? null,
         reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
         createdAt: new Date(row.created_at).toISOString(),
@@ -7324,16 +7126,17 @@ class PostgresRepository implements AgenticRepository {
       })
     );
     const last = items.at(-1);
-
     return MemoryRecordPageSchema.parse({
       items,
+      limit,
       nextCursor:
         result.rows.length > limit && last
           ? encodeCollectionCursor({
               createdAt: last.createdAt,
               id: last.id
             })
-          : null
+          : null,
+      generatedAt: nowIso()
     });
   }
 
@@ -7397,22 +7200,7 @@ class PostgresRepository implements AgenticRepository {
       values
     );
 
-    return result.rows.map((row) =>
-      WatcherSchema.parse({
-        id: row.id,
-        goalId: row.goal_id,
-        targetEntity: row.target_entity,
-        condition: row.condition,
-        frequency: row.frequency,
-        triggerAction: row.trigger_action,
-        sourceSystems: row.source_systems ?? [],
-        status: row.status,
-        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-        createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
-      })
-    );
+    return result.rows.map((row) => this.mapWatcherRow(row));
   }
 
   async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
@@ -7459,32 +7247,41 @@ class PostgresRepository implements AgenticRepository {
 
     return WatcherPageSchema.parse({
       items,
+      limit,
       nextCursor:
         result.rows.length > limit && last
           ? encodeCollectionCursor({
               createdAt: last.createdAt,
               id: last.id
             })
-          : null
+          : null,
+      generatedAt: nowIso()
     });
+  }
+
+  async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
+    await this.ready;
+    return this.withTransaction((client) => claimWatcherLeaseWithPostgresClient({ client, userId: params.userId ?? SYSTEM_USER_ID, lease: params, mapWatcherRow: (row) => this.mapWatcherRow(row) }));
   }
 
   async saveWatcher(watcher: Watcher): Promise<Watcher> {
     const validated = WatcherSchema.parse(watcher);
 
     await this.withTransaction(async (client) => {
-      const goalResult = await client.query("select 1 from goals where id = $1 limit 1", [validated.goalId]);
+      const goalBundle = await this.mapGoalBundleWithClient(client, validated.goalId);
 
-      if (Number(goalResult.rowCount ?? 0) === 0) {
+      if (!goalBundle) {
         throw new Error(`Goal ${validated.goalId} was not found.`);
       }
+
+      const normalized = normalizeWatcherForGoal(goalBundle.goal, validated);
 
       await client.query(
         `
           insert into watchers (
-            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, actor_context, created_at, updated_at
+            id, goal_id, target_entity, condition, frequency, trigger_action, source_systems, status, expiry_at, schedule, last_evaluation, escalation_policy, actor_context, team_responsibility, created_at, updated_at
           )
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11, $12)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16)
           on conflict (id) do update
           set goal_id = excluded.goal_id,
               target_entity = excluded.target_entity,
@@ -7494,27 +7291,41 @@ class PostgresRepository implements AgenticRepository {
               source_systems = excluded.source_systems,
               status = excluded.status,
               expiry_at = excluded.expiry_at,
+              schedule = excluded.schedule,
+              last_evaluation = excluded.last_evaluation,
+              escalation_policy = excluded.escalation_policy,
               actor_context = excluded.actor_context,
+              team_responsibility = excluded.team_responsibility,
               updated_at = excluded.updated_at
         `,
         [
-          validated.id,
-          validated.goalId,
-          validated.targetEntity,
-          validated.condition,
-          validated.frequency,
-          validated.triggerAction,
-          JSON.stringify(validated.sourceSystems),
-          validated.status,
-          validated.expiryAt,
-          JSON.stringify(validated.actorContext),
-          validated.createdAt,
-          validated.updatedAt
+          normalized.id,
+          normalized.goalId,
+          normalized.targetEntity,
+          normalized.condition,
+          normalized.frequency,
+          normalized.triggerAction,
+          JSON.stringify(normalized.sourceSystems),
+          normalized.status,
+          normalized.expiryAt,
+          JSON.stringify(normalized.schedule),
+          JSON.stringify(normalized.lastEvaluation),
+          JSON.stringify(normalized.escalationPolicy),
+          JSON.stringify(normalized.actorContext),
+          JSON.stringify(normalized.responsibility),
+          normalized.createdAt,
+          normalized.updatedAt
         ]
       );
+
+      return normalized;
     });
 
-    return WatcherSchema.parse(clone(validated));
+    const goalBundle = await this.mapGoalBundle(validated.goalId);
+    const goal = goalBundle?.goal;
+    const normalized = goal ? normalizeWatcherForGoal(goal, validated) : validated;
+
+    return WatcherSchema.parse(clone(normalized));
   }
 
   async listIntegrations(userId = SYSTEM_USER_ID): Promise<IntegrationAccount[]> {
@@ -7584,13 +7395,15 @@ class PostgresRepository implements AgenticRepository {
 
     return IntegrationAccountPageSchema.parse({
       items,
+      limit,
       nextCursor:
         result.rows.length > limit && last
           ? encodeCollectionCursor({
               createdAt: last.createdAt,
               id: last.id
             })
-          : null
+          : null,
+      generatedAt: nowIso()
     });
   }
 
@@ -8010,14 +7823,12 @@ class PostgresRepository implements AgenticRepository {
           : [];
 
       if (activeWorkspace) {
-        [workspaceMembers, workspaceGovernance, privacyOperations] = await Promise.all([
-          this.listWorkspaceMembersForWorkspaceWithClient(client, activeWorkspace.id),
-          this.getWorkspaceGovernanceWithClient(client, activeWorkspace.id),
-          this.listPrivacyOperationsWithClient(client, {
-            userId,
-            workspaceId: activeWorkspace.id
-          })
-        ]);
+        workspaceMembers = await this.listWorkspaceMembersForWorkspaceWithClient(client, activeWorkspace.id);
+        workspaceGovernance = await this.getWorkspaceGovernanceWithClient(client, activeWorkspace.id);
+        privacyOperations = await this.listPrivacyOperationsWithClient(client, {
+          userId,
+          workspaceId: activeWorkspace.id
+        });
       }
     } finally {
       client.release();
@@ -8059,7 +7870,12 @@ class PostgresRepository implements AgenticRepository {
 }
 
 export function createRepository(options?: { storePath?: string; databaseUrl?: string }): AgenticRepository {
-  const databaseUrl = options?.databaseUrl ?? process.env.DATABASE_URL;
+  assertWorkspaceGovernanceStartupConfig();
+
+  // Explicit file-backed test stores must win over an ambient DATABASE_URL so
+  // unrelated Postgres-backed suites do not leak pools and state into file mode.
+  const databaseUrl =
+    options?.databaseUrl ?? (options?.storePath === undefined ? process.env.DATABASE_URL : undefined);
 
   if (databaseUrl) {
     return new PostgresRepository(databaseUrl);

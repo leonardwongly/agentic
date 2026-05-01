@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { NextResponse } from "next/server";
 import { AGENTIC_SESSION_COOKIE, checkSessionRateLimit, clearSessionCookie, createSessionCookie, getAuthMode, recordSessionSuccess, revokeSessionToken, verifyAccessKey } from "../../../lib/auth";
 import {
   authenticatedError,
@@ -33,7 +32,7 @@ export async function POST(request: Request) {
       const rateLimit = await checkSessionRateLimit(rateLimitKey);
 
       if (!rateLimit.allowed) {
-        return NextResponse.json(
+        return authenticatedJson(
           { error: "Too many login attempts. Please try again later." },
           {
             status: 429,

@@ -12,6 +12,7 @@ import { buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-h
 describe("governance simulate route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
+  const originalGovernanceDefaultProfile = process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
 
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
@@ -25,6 +26,11 @@ describe("governance simulate route", () => {
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
+    if (originalGovernanceDefaultProfile === undefined) {
+      delete process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
+    } else {
+      process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE = originalGovernanceDefaultProfile;
+    }
     Reflect.set(globalThis, "__agenticRepository", undefined);
     resetAuthSessionStateStoreForTesting();
   });
@@ -33,10 +39,17 @@ describe("governance simulate route", () => {
     const response = await governanceSimulatePostRoute(
       buildAuthorizedJsonRequest("http://localhost/api/governance/simulate", {
         governance: {
+          approvalMode: "risk_based",
           requireAuditExports: true,
           externalSendRequiresApproval: false,
           calendarWriteRequiresApproval: true,
-          maxAutoRunRiskClass: "R3"
+          maxAutoRunRiskClass: "R3",
+          shadowReplayPolicy: {
+            enabled: false,
+            promotionMode: "shadow_only",
+            rollbackOutcome: "allowed_with_confirmation",
+            minimumMatchedEpisodes: 6
+          }
         },
         scenarios: [
           {
@@ -53,6 +66,22 @@ describe("governance simulate route", () => {
       governance: {
         requireAuditExports: boolean;
         externalSendRequiresApproval: boolean;
+        shadowReplayPolicy: {
+          enabled: boolean;
+          promotionMode: string;
+          rollbackOutcome: string;
+          minimumMatchedEpisodes: number;
+          minimumPrecision: number;
+        };
+      };
+      autonomyBudget: {
+        governanceCeilingRiskClass: string;
+        r3AutonomyEligible: boolean;
+        requiresExplicitApprovalCapabilities: string[];
+        shadowReplay: {
+          enabled: boolean;
+          required: boolean;
+        };
       };
       conformance: {
         status: string;
@@ -69,12 +98,39 @@ describe("governance simulate route", () => {
           };
         };
       }>;
+      calibration: {
+        status: string;
+        autonomyExpansionAllowed: boolean;
+        metrics: {
+          totalScenarios: number;
+          expectedScenarioCount: number;
+          scenarioCoverageRate: number;
+        };
+      };
     };
 
     expect(response.status).toBe(200);
     expect(payload.governance).toMatchObject({
       requireAuditExports: true,
-      externalSendRequiresApproval: false
+      externalSendRequiresApproval: false,
+      shadowReplayPolicy: {
+        enabled: false,
+        promotionMode: "shadow_only",
+        rollbackOutcome: "allowed_with_confirmation",
+        minimumMatchedEpisodes: 6,
+        minimumPrecision: 0.8
+      }
+    });
+    expect(payload.autonomyBudget).toMatchObject({
+      governanceCeilingRiskClass: "R3",
+      r3AutonomyEligible: true,
+      requiresExplicitApprovalCapabilities: ["schedule"],
+      shadowReplay: {
+        enabled: false,
+        required: true,
+        promotionMode: "shadow_only",
+        rollbackOutcome: "allowed_with_confirmation"
+      }
     });
     expect(payload.conformance).toMatchObject({
       status: "non_conformant"
@@ -93,7 +149,63 @@ describe("governance simulate route", () => {
         })
       })
     ]);
+    expect(payload.calibration).toMatchObject({
+      status: "degraded",
+      autonomyExpansionAllowed: false,
+      metrics: {
+        totalScenarios: 1,
+        expectedScenarioCount: 0,
+        scenarioCoverageRate: 0
+      }
+    });
     expectNoStoreHeaders(response);
+  });
+
+  it("resolves missing governance fallback from the runtime default profile", async () => {
+    process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE = "demo";
+    Reflect.set(globalThis, "__agenticRepository", {
+      seedDefaults: async () => {},
+      getDashboardData: async () => ({
+        activeWorkspace: {
+          id: "workspace-demo-fallback",
+          ownerUserId: "user-system",
+          slug: "demo-fallback",
+          name: "Demo Fallback",
+          description: null,
+          isPersonal: true,
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z"
+        },
+        workspaceGovernance: null
+      }),
+      getWorkspaceGovernance: async () => null
+    });
+
+    const response = await governanceSimulatePostRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/governance/simulate", {
+        scenarios: [
+          {
+            title: "Read current workspace docs",
+            capabilities: ["read"],
+            confidence: 0.95
+          }
+        ]
+      })
+    );
+    const payload = (await response.json()) as {
+      governance: {
+        approvalMode: string;
+        publicSharingEnabled: boolean;
+        retentionDays: number;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.governance).toMatchObject({
+      approvalMode: "risk_based",
+      publicSharingEnabled: true,
+      retentionDays: 365
+    });
   });
 
   it("rate limits repeated governance simulation requests before evaluating scenarios", async () => {

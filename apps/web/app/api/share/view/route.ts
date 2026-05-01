@@ -12,7 +12,7 @@ import { getRequestClientKey } from "../../../../lib/request-client-identity";
 import {
   SHARE_VIEW_DEDUP_WINDOW_MS,
   fingerprintGoalShareToken,
-  verifyGoalShareToken
+  inspectGoalShareToken
 } from "../../../../lib/share";
 import { getSeededRepository } from "../../../../lib/server";
 
@@ -97,9 +97,13 @@ export async function POST(request: Request) {
         });
       }
 
-      const verifiedToken = verifyGoalShareToken(token);
+      const tokenInspection = inspectGoalShareToken(token);
 
-      if (!verifiedToken) {
+      if (!tokenInspection.valid) {
+        return acceptedNoOp();
+      }
+
+      if (tokenInspection.expired) {
         return acceptedNoOp();
       }
 
@@ -117,13 +121,15 @@ export async function POST(request: Request) {
       const repository = await getSeededRepository();
       const share = await repository.getGoalShareByTokenFingerprint(tokenFingerprint);
 
-      if (
-        !share ||
-        share.id !== verifiedToken.shareId ||
-        share.goalId !== verifiedToken.goalId ||
-        share.status !== "active" ||
-        Date.parse(share.expiresAt) <= Date.now()
-      ) {
+      if (!share || share.id !== tokenInspection.payload.shareId || share.goalId !== tokenInspection.payload.goalId) {
+        return acceptedNoOp();
+      }
+
+      if (share.status !== "active") {
+        return acceptedNoOp();
+      }
+
+      if (tokenInspection.expired || Date.parse(share.expiresAt) <= Date.now()) {
         return acceptedNoOp();
       }
       const viewedAt = new Date().toISOString();

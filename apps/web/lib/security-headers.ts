@@ -24,3 +24,15 @@ export const BASE_SECURITY_HEADERS = [
     value: "same-origin"
   }
 ] as const;
+
+export function applyBaseSecurityHeaders(headers: Headers): Headers {
+  for (const { key, value } of BASE_SECURITY_HEADERS) {
+    headers.set(key, value);
+  }
+
+  return headers;
+}
+
+export function withBaseSecurityHeaders(init?: HeadersInit): Headers {
+  return applyBaseSecurityHeaders(new Headers(init));
+}

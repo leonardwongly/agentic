@@ -94,9 +94,12 @@ create table if not exists tasks (
   depends_on jsonb not null default '[]'::jsonb,
   tool_capabilities jsonb not null default '[]'::jsonb,
   artifact_ids jsonb not null default '[]'::jsonb,
+  team_responsibility jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
+
+alter table tasks add column if not exists team_responsibility jsonb;
 
 create table if not exists memory_records (
   id text primary key,
@@ -109,6 +112,7 @@ create table if not exists memory_records (
   sensitivity text not null,
   permissions jsonb not null default '[]'::jsonb,
   actor_context jsonb,
+  context_packet_consent jsonb,
   review_at timestamptz,
   expiry_at timestamptz,
   created_at timestamptz not null,
@@ -139,6 +143,7 @@ create table if not exists approval_requests (
   decision_scope text,
   decision_rationale text,
   history jsonb not null default '[]'::jsonb,
+  team_responsibility jsonb,
   created_at timestamptz not null,
   expiry_at timestamptz not null,
   responded_at timestamptz
@@ -149,6 +154,7 @@ alter table approval_requests add column if not exists preview jsonb not null de
 alter table approval_requests add column if not exists decision_scope text;
 alter table approval_requests add column if not exists decision_rationale text;
 alter table approval_requests add column if not exists history jsonb not null default '[]'::jsonb;
+alter table approval_requests add column if not exists team_responsibility jsonb;
 
 create table if not exists commitments (
   id text primary key,
@@ -328,6 +334,7 @@ create table if not exists autopilot_events (
   status text not null,
   details jsonb not null default '{}'::jsonb,
   actor_context jsonb,
+  team_responsibility jsonb,
   created_at timestamptz not null,
   processed_at timestamptz,
   result_goal_id text,
@@ -343,6 +350,10 @@ create table if not exists jobs (
   user_id text not null,
   kind text not null,
   status text not null,
+  priority text not null default 'normal',
+  queue_name text not null default 'default',
+  concurrency_key text,
+  timeout_ms integer,
   idempotency_key text,
   payload jsonb not null default '{}'::jsonb,
   actor_context jsonb,
@@ -369,6 +380,13 @@ create index if not exists jobs_user_status_available_at_idx
 
 create index if not exists jobs_kind_status_available_at_idx
   on jobs (kind, status, available_at);
+
+create index if not exists jobs_queue_status_priority_available_at_idx
+  on jobs (queue_name, status, priority, available_at);
+
+create index if not exists jobs_concurrency_key_status_idx
+  on jobs (concurrency_key, status)
+  where concurrency_key is not null;
 
 create index if not exists jobs_lease_expires_at_idx
   on jobs (lease_expires_at);
@@ -422,6 +440,7 @@ create table if not exists watchers (
   status text not null,
   expiry_at timestamptz,
   actor_context jsonb,
+  team_responsibility jsonb,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -430,9 +449,12 @@ alter table goal_templates add column if not exists actor_context jsonb;
 alter table workflow_templates add column if not exists actor_context jsonb;
 alter table autopilot_settings add column if not exists actor_context jsonb;
 alter table autopilot_events add column if not exists actor_context jsonb;
+alter table autopilot_events add column if not exists team_responsibility jsonb;
 alter table watchers add column if not exists actor_context jsonb;
+alter table watchers add column if not exists team_responsibility jsonb;
 alter table workspace_selections add column if not exists actor_context jsonb;
 alter table memory_records add column if not exists actor_context jsonb;
+alter table memory_records add column if not exists context_packet_consent jsonb;
 alter table commitments add column if not exists actor_context jsonb;
 alter table briefing_preferences add column if not exists actor_context jsonb;
 alter table agent_definitions add column if not exists actor_context jsonb;

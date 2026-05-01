@@ -1,9 +1,10 @@
-import crypto from "node:crypto";
 import { runDocsBuild } from "@agentic/docs-runtime";
 import {
+  AutopilotProcessJobPayloadSchema,
+  buildApprovalNotificationDeliveryTarget,
   createSystemActorContext,
-  type BriefingCreateJobPayload,
-  type DocsRenderJobPayload,
+  type ApprovalNotificationJobPayload,
+  type ApprovalFollowUpJobPayload,
   GoalTemplateSchema,
   nowIso,
   type ActorContext,
@@ -11,14 +12,10 @@ import {
   type AutopilotProcessJobPayload,
   type BriefingType,
   type GoalBundle,
-  type GoalCreateJobPayload,
-  type GoalRefineJobPayload,
   type GoalTemplate,
   type JobKind,
   type JobRecord,
   type PrivacyOperationJobPayload,
-  type PublicShareViewJobPayload,
-  type TemplateRunJobPayload,
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
@@ -28,23 +25,38 @@ import {
   createJobRecord,
   processNextDurableJob,
   type ClaimNextJobParams,
+  type JobConcurrencyLimits,
   type JobHandlerMap,
   type JobRetryPolicy
 } from "@agentic/execution";
 import {
-  createActionLog,
+  assessManagedGoogleCredential,
+  createCalendarAdapter,
+  createGmailAdapter,
+  createLocalNote,
+  createProviderCredentialSecretStore,
+  googleWorkspaceRequiredScopes,
+  isSlackReady,
+  isTelegramReady,
   logError,
   logInfo,
   logWarn,
   recordCounter,
+  sendNotification,
+  updateMessage,
+  updateTelegramMessage,
   withSpan,
   withTelemetryContext
-} from "@agentic/observability";
+} from "@agentic/integrations";
 import {
+  captureExecutionOutcomeSignals,
+  type CapturedMemories,
   captureMemoriesFromBundle,
   computeNextRun,
+  executeApprovedTasks,
   generateBriefing,
   interpolateTemplate,
+  reconcileExecutionResults,
   refineGoal,
   processUserRequest
 } from "@agentic/orchestrator";
@@ -53,19 +65,97 @@ import {
   SelfImprovementConflictError,
   type SelfImprovementRepository
 } from "@agentic/self-improvement-memory";
+import {
+  buildAutopilotEventFabricRequest,
+  getAutopilotEventFabricEnvelope,
+  isEventFabricAutopilotKind,
+  resolveAutopilotEventFabricExecutionContext
+} from "./autopilot-event-fabric";
+import {
+  buildAutopilotGoalId,
+  buildAutopilotProcessJobIdempotencyKey,
+  buildAutopilotProcessPayload,
+  buildAutopilotWorkflowId,
+  buildBriefingCreateJobIdempotencyKey,
+  buildBriefingCreatePayload,
+  buildDocsRenderJobIdempotencyKey,
+  buildDocsRenderPayload,
+  buildGoalCreatePayload,
+  buildGoalRefinePayload,
+  buildPrivacyOperationJobIdempotencyKey,
+  buildPrivacyOperationPayload,
+  buildPublicShareViewPayload,
+  buildTemplateRunPayload
+} from "./job-payloads";
+import {
+  enqueueApprovalFollowUpJob,
+  enqueueApprovalNotificationJob,
+  respondToApprovalAndEnqueueFollowUpJob
+} from "./job-dispatch";
+import {
+  createPolicyReplayValidationResolver,
+  executeBriefingCreateJob,
+  executeDocsRenderJob,
+  executeGoalCreateJob,
+  executeGoalRefineJob,
+  isBriefingCreateJob,
+  isDocsRenderJob,
+  isGoalCreateJob,
+  isGoalRefineJob,
+  isTemplateRunJob,
+  executeTemplateRunJob,
+  persistCapturedMemories,
+} from "./job-executors-core";
+import {
+  executePrivacyOperationJob,
+  executePublicShareViewJob
+} from "./privacy-share-executors";
+import { createPublicShareViewedLog } from "./public-share-log";
 
-export const workerJobKindValues = ["goal_create", "goal_refine", "briefing_create", "template_run", "docs_render", "autopilot_process", "privacy_operation", "public_share_view"] as const;
+export {
+  enqueueApprovalFollowUpJob,
+  enqueueApprovalNotificationJob,
+  respondToApprovalAndEnqueueFollowUpJob,
+  enqueueAutopilotProcessJob,
+  enqueueBriefingCreateJob,
+  enqueueDocsRenderJob,
+  enqueueGoalCreateJob,
+  enqueueGoalRefineJob,
+  enqueuePrivacyOperationJob,
+  enqueuePublicShareViewJob,
+  enqueueTemplateRunJob
+} from "./job-dispatch";
+export {
+  buildGoalJobResultSummary,
+  createPolicyReplayValidationResolver,
+  executeBriefingCreateJob,
+  executeDocsRenderJob,
+  executeGoalCreateJob,
+  executeGoalRefineJob,
+  isBriefingCreateJob,
+  isDocsRenderJob,
+  isGoalCreateJob,
+  isGoalRefineJob,
+  isTemplateRunJob,
+  executeTemplateRunJob,
+  persistCapturedMemories
+} from "./job-executors-core";
+export type { GoalJobResultSummary } from "./job-executors-core";
+export { executePrivacyOperationJob, executePublicShareViewJob } from "./privacy-share-executors";
+export { runWatcherSchedulerOnce, type WatcherSchedulerResult, type WatcherSchedulerDecision } from "./watcher-scheduler";
 
-export type GoalJobResultSummary = {
-  goalId: string;
-  goalStatus: GoalBundle["goal"]["status"];
-  taskCount: number;
-  completedTaskCount: number;
-  pendingApprovalCount: number;
-  artifactCount: number;
-  watcherCount: number;
-  requiresReview: boolean;
-};
+export const workerJobKindValues = [
+  "goal_create",
+  "goal_refine",
+  "briefing_create",
+  "template_run",
+  "docs_render",
+  "autopilot_process",
+  "approval_follow_up",
+  "approval_notification",
+  "privacy_operation",
+  "public_share_view"
+] as const;
 
 export type WorkerRuntimeResult = {
   processedCount: number;
@@ -80,244 +170,43 @@ export type WorkerRuntimeOptions = {
   pollIntervalMs?: number;
   leaseMs?: number;
   retryPolicy?: Partial<JobRetryPolicy>;
+  concurrencyLimits?: JobConcurrencyLimits;
+  retryJitterRatio?: number;
+  requireIdempotencyForRetry?: boolean;
   maxJobs?: number;
   claim?: ClaimNextJobParams;
+};
+
+export type WorkerQueueHealthSummary = {
+  queuedDepth: number;
+  retryingDepth: number;
+  deadLetterDepth: number;
+  activeLeaseCount: number;
+  expiredLeaseCount: number;
+  queuedByPriority: Partial<Record<JobRecord["priority"], number>>;
+  runningByKind: Partial<Record<JobKind, number>>;
 };
 
 class AutopilotExecutionError extends Error {
   readonly safeForUsers = true;
 }
 
-const SHARE_VIEW_DEDUP_WINDOW_MS = 1000 * 60 * 15;
-
-function createPublicShareViewedLog(
-  bundle: GoalBundle,
-  shareId: string,
-  tokenFingerprint: string,
-  now = Date.now()
-) {
-  const dedupeThreshold = now - SHARE_VIEW_DEDUP_WINDOW_MS;
-  const alreadyTracked = bundle.actionLogs.some((log) => {
-    if (log.kind !== "share.page_viewed") {
-      return false;
-    }
-
-    const createdAt = Date.parse(log.createdAt);
-    const loggedFingerprint = typeof log.details.tokenFingerprint === "string" ? log.details.tokenFingerprint : null;
-
-    return loggedFingerprint === tokenFingerprint && Number.isFinite(createdAt) && createdAt >= dedupeThreshold;
-  });
-
-  if (alreadyTracked) {
-    return null;
-  }
-
-  return createActionLog({
-    goalId: bundle.goal.id,
-    taskId: null,
-    workflowId: bundle.workflow.id,
-    actor: "public-share",
-    kind: "share.page_viewed",
-    message: `Opened the public share page for "${bundle.goal.title}".`,
-    details: {
-      shareId,
-      tokenFingerprint
-    }
-  });
-}
-
-function buildGoalCreatePayload(params: {
-  request: string;
-  workspaceId: string | null;
-  agentId: string | null;
-}): GoalCreateJobPayload {
-  return {
-    type: "goal_create",
-    goalId: crypto.randomUUID(),
-    workflowId: crypto.randomUUID(),
-    request: params.request,
-    workspaceId: params.workspaceId,
-    agentId: params.agentId,
-    metadata: {}
-  };
-}
-
-function buildGoalRefinePayload(params: {
-  goalId: string;
-  workflowId: string;
-  refinement: string;
-  workspaceId: string | null;
-}): GoalRefineJobPayload {
-  return {
-    type: "goal_refine",
-    goalId: params.goalId,
-    workflowId: params.workflowId,
-    refinement: params.refinement,
-    workspaceId: params.workspaceId,
-    metadata: {}
-  };
-}
-
-function buildAutopilotProcessPayload(params: {
-  autopilotEvent: AutopilotEvent;
-}): AutopilotProcessJobPayload {
-  return {
-    type: "autopilot_process",
-    autopilotEventId: params.autopilotEvent.id,
-    kind: params.autopilotEvent.kind,
-    sourceId: params.autopilotEvent.sourceId,
-    mode: params.autopilotEvent.mode,
-    metadata: {}
-  };
-}
-
-function buildBriefingCreatePayload(params: {
-  goalId: string;
-  workflowId: string;
-  briefingType: BriefingType;
-  workspaceId: string | null;
-}): BriefingCreateJobPayload {
-  return {
-    type: "briefing_create",
-    goalId: params.goalId,
-    workflowId: params.workflowId,
-    briefingType: params.briefingType,
-    workspaceId: params.workspaceId,
-    metadata: {}
-  };
-}
-
-function buildTemplateRunPayload(params: {
-  templateId: string;
-  goalId: string;
-  workflowId: string;
-  workspaceId: string | null;
-}): TemplateRunJobPayload {
-  return {
-    type: "template_run",
-    templateId: params.templateId,
-    goalId: params.goalId,
-    workflowId: params.workflowId,
-    workspaceId: params.workspaceId,
-    metadata: {}
-  };
-}
-
-function buildDocsRenderPayload(): DocsRenderJobPayload {
-  return {
-    type: "docs_render",
-    metadata: {}
-  };
-}
-
-function buildAutopilotGoalId(eventId: string): string {
-  return `autopilot-goal-${eventId}`;
-}
-
-function buildAutopilotWorkflowId(eventId: string): string {
-  return `autopilot-workflow-${eventId}`;
-}
-
-function buildAutopilotProcessJobIdempotencyKey(eventId: string): string {
-  return `autopilot-process:${eventId}`;
-}
-
-function buildPrivacyOperationPayload(params: {
-  operationId: string;
-  workspaceId: string;
-  kind: PrivacyOperationJobPayload["kind"];
-}): PrivacyOperationJobPayload {
-  return {
-    type: "privacy_operation",
-    operationId: params.operationId,
-    workspaceId: params.workspaceId,
-    kind: params.kind,
-    metadata: {}
-  };
-}
-
-function buildPublicShareViewPayload(params: {
-  shareId: string;
-  goalId: string;
-  tokenFingerprint: string;
-  viewedAt: string;
-}): PublicShareViewJobPayload {
-  return {
-    type: "public_share_view",
-    shareId: params.shareId,
-    goalId: params.goalId,
-    tokenFingerprint: params.tokenFingerprint,
-    viewedAt: params.viewedAt,
-    metadata: {}
-  };
-}
-
-function buildPrivacyOperationJobIdempotencyKey(operationId: string): string {
-  return `privacy-operation:${operationId}`;
-}
-
-function buildBriefingCreateJobIdempotencyKey(goalId: string, briefingType: BriefingType): string {
-  return `briefing-create:${briefingType}:${goalId}`;
-}
-
-function buildDocsRenderJobIdempotencyKey(userId: string): string {
-  return `docs-render:${userId}`;
-}
-
-async function resolveGoalCreateGovernance(
-  repository: AgenticRepository,
-  userId: string,
-  workspaceId: string | null
-): Promise<WorkspaceGovernance | null> {
-  if (!workspaceId) {
-    return null;
-  }
-
-  return repository.getWorkspaceGovernance(workspaceId, userId);
-}
-
-async function resolveGoalCreateAgentDefinition(
-  repository: AgenticRepository,
-  userId: string,
-  agentId: string | null
-) {
-  if (!agentId) {
-    return undefined;
-  }
-
-  try {
-    return (await repository.getAgent(agentId, userId)) ?? undefined;
-  } catch {
-    logWarn("goal_job.agent_override_missing", {
-      agentId,
-      userId
-    });
-    return undefined;
-  }
-}
-
-async function persistCapturedMemories(params: {
+async function persistCapturedSignals(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
+  captured: CapturedMemories;
   userId: string;
-  actorContext: ActorContext | null;
   jobId: string;
-  bundle: GoalBundle;
+  label: string;
 }) {
-  if (params.bundle.goal.status !== "completed") {
-    return;
+  if (params.captured.memories.length === 0 && params.captured.episodes.length === 0) {
+    return [];
   }
 
   try {
-    const captured = captureMemoriesFromBundle(
-      params.bundle,
-      params.userId,
-      params.actorContext ?? createSystemActorContext(params.userId)
-    );
+    await Promise.all(params.captured.memories.map((memory) => params.repository.saveMemory(memory)));
 
-    await Promise.all(captured.memories.map((memory) => params.repository.saveMemory(memory)));
-
-    for (const episode of captured.episodes) {
+    for (const episode of params.captured.episodes) {
       try {
         await params.selfImprovementRepository.appendEpisode(episode);
       } catch (error) {
@@ -328,13 +217,156 @@ async function persistCapturedMemories(params: {
         throw error;
       }
     }
+
+    return params.captured.memories.map((memory) => memory.id);
   } catch (error) {
-    logError("goal_job.memory_capture_failed", error, {
+    logError("approval_follow_up.memory_capture_failed", error, {
       jobId: params.jobId,
-      userId: params.userId
+      userId: params.userId,
+      label: params.label
     });
-    throw error;
+    return [];
   }
+}
+
+function listGoogleCredentialCandidatesForWorkspace(
+  credentials: Awaited<ReturnType<AgenticRepository["listProviderCredentials"]>>,
+  workspaceId: string | null | undefined
+) {
+  const connected = credentials
+    .filter((credential) => credential.provider === "google" && credential.status === "connected")
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+
+  if (workspaceId) {
+    const exact = connected.filter((credential) => credential.workspaceId === workspaceId);
+
+    if (exact.length > 0) {
+      return exact;
+    }
+  }
+
+  return connected.filter((credential) => credential.workspaceId === null);
+}
+
+async function resolveGoogleWorkspaceAdapters(params: {
+  repository: AgenticRepository;
+  userId: string;
+  workspaceId?: string | null;
+}) {
+  const candidates = listGoogleCredentialCandidatesForWorkspace(
+    await params.repository.listProviderCredentials(params.userId),
+    params.workspaceId ?? null
+  );
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const candidateFailures: string[] = [];
+
+  for (const credential of candidates) {
+    const secretRecord = await params.repository.getProviderCredentialSecret(
+      credential.id,
+      "oauth_refresh_token",
+      params.userId
+    );
+    const assessment = assessManagedGoogleCredential({
+      account: {
+        id: "google-workspace",
+        name: "Google workspace adapters",
+        metadata: {
+          provider: "google",
+          managed: true,
+          providerCredentialId: credential.id
+        }
+      },
+      credential,
+      hasRefreshTokenSecret: Boolean(secretRecord)
+    });
+
+    const missingWorkspaceScopes = googleWorkspaceRequiredScopes.filter((scope) => !credential.scopes.includes(scope));
+    const blockedByWorkspaceScopes = missingWorkspaceScopes.length > 0;
+    const workspaceIssues = blockedByWorkspaceScopes
+      ? [`missing required Google scopes: ${missingWorkspaceScopes.join(", ")}`]
+      : [];
+
+    if (!assessment?.ready || blockedByWorkspaceScopes) {
+      candidateFailures.push(
+        `${credential.id}: ${[...(assessment?.issues.map((issue) => issue.message) ?? []), ...workspaceIssues].join("; ")}`
+      );
+      continue;
+    }
+
+    try {
+      const refreshToken = createProviderCredentialSecretStore().decrypt(secretRecord!.secret);
+
+      return {
+        credential,
+        gmail: createGmailAdapter({ refreshToken }),
+        calendar: createCalendarAdapter({ refreshToken })
+      };
+    } catch (error) {
+      candidateFailures.push(
+        `${credential.id}: ${error instanceof Error ? error.message : "failed to decrypt refresh token"}`
+      );
+    }
+  }
+
+  throw new Error(
+    `No approval-safe Google credential is available for workspace adapters. ${candidateFailures.join(" | ")}`
+  );
+}
+
+function mergeIds(...groups: Array<string[] | undefined>): string[] {
+  return Array.from(new Set(groups.flatMap((group) => group ?? [])));
+}
+
+async function finalizeApprovalEvidenceRecord(params: {
+  repository: AgenticRepository;
+  bundle: GoalBundle;
+  userId: string;
+  approvalId: string;
+  memoryIds: string[];
+}) {
+  const { repository, bundle, userId, approvalId, memoryIds } = params;
+  const approval = bundle.approvals.find((candidate) => candidate.id === approvalId);
+
+  if (!approval || approval.decision === "pending") {
+    return;
+  }
+
+  const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
+  const evidenceRecord =
+    (await repository.listEvidenceRecords({ userId, approvalId }))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .at(0) ?? null;
+
+  if (!evidenceRecord) {
+    return;
+  }
+
+  const relatedActionLogIds = bundle.actionLogs
+    .filter(
+      (log) => log.taskId === approval.taskId || (typeof log.details.approvalId === "string" && log.details.approvalId === approvalId)
+    )
+    .map((log) => log.id);
+  const relatedArtifactIds = bundle.artifacts
+    .filter((artifact) => artifact.taskId === approval.taskId)
+    .map((artifact) => artifact.id);
+
+  await repository.saveEvidenceRecord({
+    ...evidenceRecord,
+    resultingTaskState: task?.state ?? evidenceRecord.resultingTaskState,
+    resultingGoalStatus: bundle.goal.status,
+    actionLogIds: mergeIds(evidenceRecord.actionLogIds, relatedActionLogIds),
+    artifactIds: mergeIds(
+      evidenceRecord.artifactIds,
+      relatedArtifactIds,
+      approval.actionIntent?.type === "manual_review" ? approval.actionIntent.artifactIds : undefined
+    ),
+    memoryIds: mergeIds(evidenceRecord.memoryIds, memoryIds),
+    updatedAt: new Date().toISOString()
+  });
 }
 
 async function resolveDashboardWorkspaceContext(repository: AgenticRepository, userId: string) {
@@ -418,6 +450,157 @@ function buildWatcherAutopilotRequest(watcher: Watcher): string {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+type GenericAutopilotExecutionKind = Exclude<AutopilotEvent["kind"], "watcher_triggered" | "template_due" | "briefing_due">;
+
+function normalizeAutopilotText(value: unknown, maxLength = 160): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/\s+/g, " ");
+
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.slice(0, maxLength);
+}
+
+function readAutopilotDetail(details: AutopilotEvent["details"], keys: readonly string[], maxLength = 160): string | null {
+  for (const key of keys) {
+    const direct = normalizeAutopilotText(details[key], maxLength);
+
+    if (direct) {
+      return direct;
+    }
+
+    const value = details[key];
+
+    if (Array.isArray(value)) {
+      const items = value
+        .map((candidate) => normalizeAutopilotText(candidate, Math.min(80, maxLength)))
+        .filter((candidate): candidate is string => Boolean(candidate))
+        .slice(0, 4);
+
+      if (items.length > 0) {
+        return items.join(", ");
+      }
+    }
+  }
+
+  return null;
+}
+
+function appendAutopilotDetail(lines: string[], label: string, value: string | null) {
+  if (value) {
+    lines.push(`${label}: ${value}.`);
+  }
+}
+
+function buildGenericAutopilotRequest(event: AutopilotEvent): string {
+  const summary = normalizeAutopilotText(event.summary, 240) ?? "No summary provided";
+  const sourceId = normalizeAutopilotText(event.sourceId, 120) ?? "unknown-source";
+  const lines = [`Autopilot trigger "${event.kind}" needs follow-up.`, `Summary: ${summary}.`, `Source reference: ${sourceId}.`];
+
+  switch (event.kind as GenericAutopilotExecutionKind) {
+    case "communication_received":
+      appendAutopilotDetail(lines, "Sender", readAutopilotDetail(event.details, ["sender", "from", "contact", "customer"], 80));
+      appendAutopilotDetail(lines, "Channel", readAutopilotDetail(event.details, ["channel", "provider", "service"], 80));
+      appendAutopilotDetail(lines, "Subject", readAutopilotDetail(event.details, ["subject", "threadSubject", "title"], 140));
+      appendAutopilotDetail(lines, "Message excerpt", readAutopilotDetail(event.details, ["snippet", "message", "bodyPreview"], 220));
+      lines.push("Triage urgency, identify the required next response, and draft the safest follow-up workflow.");
+      break;
+    case "deadline_drift_detected":
+      appendAutopilotDetail(lines, "Workflow", readAutopilotDetail(event.details, ["workflowName", "goalTitle", "title"], 140));
+      appendAutopilotDetail(lines, "Deadline", readAutopilotDetail(event.details, ["deadline", "deadlineAt", "dueAt"], 100));
+      appendAutopilotDetail(lines, "Owner", readAutopilotDetail(event.details, ["owner", "assignee"], 100));
+      appendAutopilotDetail(lines, "Risk signal", readAutopilotDetail(event.details, ["reason", "status", "risk"], 180));
+      lines.push("Assess the slip risk, identify blockers, and produce a recovery workflow that gets execution back on track.");
+      break;
+    case "workflow_stalled":
+      appendAutopilotDetail(lines, "Workflow", readAutopilotDetail(event.details, ["workflowName", "goalTitle", "title"], 140));
+      appendAutopilotDetail(lines, "Blocked step", readAutopilotDetail(event.details, ["blockedStep", "pendingTasks", "blockedTasks"], 140));
+      appendAutopilotDetail(lines, "Owner", readAutopilotDetail(event.details, ["owner", "assignee"], 100));
+      appendAutopilotDetail(lines, "Stall reason", readAutopilotDetail(event.details, ["reason", "status", "risk"], 180));
+      lines.push("Diagnose the stall, recommend the next unblock path, and create a governed recovery workflow.");
+      break;
+    case "approval_sla_breached":
+      appendAutopilotDetail(lines, "Approval", readAutopilotDetail(event.details, ["approvalTitle", "title", "queue"], 140));
+      appendAutopilotDetail(lines, "Approver", readAutopilotDetail(event.details, ["approver", "owner"], 100));
+      appendAutopilotDetail(lines, "Escalation channel", readAutopilotDetail(event.details, ["channel", "escalationPath"], 120));
+      appendAutopilotDetail(lines, "Current status", readAutopilotDetail(event.details, ["status", "reason"], 180));
+      lines.push("Prepare the safest escalation, document the overdue approval risk, and recommend the next governed action.");
+      break;
+    case "connector_failed":
+      appendAutopilotDetail(lines, "Connector", readAutopilotDetail(event.details, ["connector", "provider", "service"], 120));
+      appendAutopilotDetail(lines, "Failure mode", readAutopilotDetail(event.details, ["error", "failureMode", "reason"], 180));
+      appendAutopilotDetail(lines, "Impact", readAutopilotDetail(event.details, ["impact", "workflowName", "goalTitle"], 180));
+      appendAutopilotDetail(lines, "Retry posture", readAutopilotDetail(event.details, ["retryAfter", "retryWindow", "nextRetryAt"], 120));
+      lines.push("Assess blast radius, recommend the safest recovery plan, and capture any manual fallback steps operators should take.");
+      break;
+    case "dormant_workflow_review_due":
+      appendAutopilotDetail(lines, "Workflow", readAutopilotDetail(event.details, ["workflowName", "goalTitle", "title"], 140));
+      appendAutopilotDetail(lines, "Dormant since", readAutopilotDetail(event.details, ["inactiveSince", "lastUpdatedAt", "lastActivityAt"], 120));
+      appendAutopilotDetail(lines, "Pending work", readAutopilotDetail(event.details, ["pendingTasks", "blockedTasks", "openApprovals"], 140));
+      appendAutopilotDetail(lines, "Review reason", readAutopilotDetail(event.details, ["reason", "status"], 180));
+      lines.push("Review whether the workflow should be reactivated, closed, or re-scoped, and produce the appropriate follow-up plan.");
+      break;
+  }
+
+  return lines.join(" ");
+}
+
+async function executeGenericAutopilotEvent(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  userId: string;
+  actorContext: ActorContext | null;
+  event: AutopilotEvent;
+  jobId: string;
+}) {
+  const requestedWorkspaceId = normalizeAutopilotText(params.event.details.workspaceId, 200);
+  let workspaceId = requestedWorkspaceId;
+  let workspaceGovernance = requestedWorkspaceId
+    ? await params.repository.getWorkspaceGovernance(requestedWorkspaceId, params.userId)
+    : null;
+
+  if (!workspaceId) {
+    const dashboardContext = await resolveDashboardWorkspaceContext(params.repository, params.userId);
+    workspaceId = dashboardContext.workspaceId;
+    workspaceGovernance = dashboardContext.workspaceGovernance;
+  }
+
+  const [memories, integrations, episodes] = await Promise.all([
+    params.repository.listMemory(params.userId),
+    params.repository.listIntegrations(params.userId),
+    params.selfImprovementRepository.listEpisodes()
+  ]);
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
+  const bundle = await processUserRequest({
+    userId: params.userId,
+    workspaceId,
+    governance: workspaceGovernance,
+    request: buildGenericAutopilotRequest(params.event),
+    memories,
+    integrations,
+    goalId: buildAutopilotGoalId(params.event.id),
+    workflowId: buildAutopilotWorkflowId(params.event.id),
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId),
+    resolvePolicyReplayValidation
+  });
+
+  await params.repository.saveGoalBundle(bundle);
+  await persistCapturedMemories({
+    repository: params.repository,
+    selfImprovementRepository: params.selfImprovementRepository,
+    userId: params.userId,
+    actorContext: params.actorContext,
+    jobId: params.jobId,
+    bundle
+  });
+  return bundle;
 }
 
 function measureProcessingLatencyMs(createdAt: string, processedAt: string): number {
@@ -517,13 +700,15 @@ async function executeWatcherEvent(params: {
   eventId: string;
   jobId: string;
 }) {
-  const [memories, integrations] = await Promise.all([
+  const [memories, integrations, episodes] = await Promise.all([
     params.repository.listMemory(params.userId),
-    params.repository.listIntegrations(params.userId)
+    params.repository.listIntegrations(params.userId),
+    params.selfImprovementRepository.listEpisodes()
   ]);
   const governance = params.goal.goal.workspaceId
     ? await params.repository.getWorkspaceGovernance(params.goal.goal.workspaceId, params.userId)
     : null;
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
   const bundle = await processUserRequest({
     userId: params.userId,
     workspaceId: params.goal.goal.workspaceId,
@@ -533,7 +718,8 @@ async function executeWatcherEvent(params: {
     integrations,
     goalId: buildAutopilotGoalId(params.eventId),
     workflowId: buildAutopilotWorkflowId(params.eventId),
-    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId),
+    resolvePolicyReplayValidation
   });
 
   await params.repository.saveGoalBundle(bundle);
@@ -560,10 +746,12 @@ async function runTemplateExecution(params: {
   workspaceGovernance: WorkspaceGovernance | null;
   jobId: string;
 }) {
-  const [memories, integrations] = await Promise.all([
+  const [memories, integrations, episodes] = await Promise.all([
     params.repository.listMemory(params.userId),
-    params.repository.listIntegrations(params.userId)
+    params.repository.listIntegrations(params.userId),
+    params.selfImprovementRepository.listEpisodes()
   ]);
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
   const bundle = await processUserRequest({
     userId: params.userId,
     workspaceId: params.workspaceId,
@@ -573,7 +761,8 @@ async function runTemplateExecution(params: {
     integrations,
     goalId: params.goalId,
     workflowId: params.workflowId,
-    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId),
+    resolvePolicyReplayValidation
   });
 
   await params.repository.saveGoalBundle(bundle);
@@ -639,17 +828,19 @@ async function executeBriefingEvent(params: {
   eventId: string;
   jobId: string;
 }) {
-  const [preferences, memories, integrations, approvals, watchers] = await Promise.all([
+  const [preferences, memories, integrations, approvals, watchers, episodes] = await Promise.all([
     params.repository.getBriefingPreferences(params.userId),
     params.repository.listMemory(params.userId),
     params.repository.listIntegrations(params.userId),
     params.repository.listApprovals(params.userId),
-    params.repository.listWatchers({ userId: params.userId })
+    params.repository.listWatchers({ userId: params.userId }),
+    params.selfImprovementRepository.listEpisodes()
   ]);
   const { workspaceId, workspaceGovernance } = await resolveDashboardWorkspaceContext(
     params.repository,
     params.userId
   );
+  const resolvePolicyReplayValidation = createPolicyReplayValidationResolver(episodes);
   const bundle = await generateBriefing({
     type: params.type,
     userId: params.userId,
@@ -662,7 +853,8 @@ async function executeBriefingEvent(params: {
     activeWatchers: watchers.filter((watcher) => watcher.status === "active"),
     goalId: buildAutopilotGoalId(params.eventId),
     workflowId: buildAutopilotWorkflowId(params.eventId),
-    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId),
+    resolvePolicyReplayValidation
   });
 
   await params.repository.saveGoalBundle(bundle);
@@ -677,581 +869,76 @@ async function executeBriefingEvent(params: {
   return bundle;
 }
 
-export function isGoalCreateJob(job: JobRecord | null): job is JobRecord & { payload: GoalCreateJobPayload } {
-  return job?.kind === "goal_create" && job.payload.type === "goal_create";
+async function executeEventFabricEvent(params: {
+  repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
+  userId: string;
+  actorContext: ActorContext | null;
+  event: AutopilotEvent;
+  eventId: string;
+  jobId: string;
+}) {
+  const envelope = getAutopilotEventFabricEnvelope(params.event);
+  if (!envelope) {
+    throw new AutopilotExecutionError(`Autopilot event ${params.event.id} is missing a valid fabric envelope.`);
+  }
+  const executionContext = await resolveAutopilotEventFabricExecutionContext({
+    repository: params.repository,
+    userId: params.userId,
+    envelope
+  });
+  if ("missingReason" in executionContext) {
+    throw new AutopilotExecutionError(executionContext.missingReason);
+  }
+  const [memories, integrations] = await Promise.all([
+    params.repository.listMemory(params.userId),
+    params.repository.listIntegrations(params.userId)
+  ]);
+  const bundle = await processUserRequest({
+    userId: params.userId,
+    workspaceId: executionContext.workspaceId,
+    governance: executionContext.workspaceGovernance,
+    request: buildAutopilotEventFabricRequest({
+      event: params.event,
+      envelope,
+      goalBundle: executionContext.goalBundle,
+      approval: executionContext.approval
+    }),
+    memories,
+    integrations,
+    goalId: buildAutopilotGoalId(params.eventId),
+    workflowId: buildAutopilotWorkflowId(params.eventId),
+    resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
+  });
+  await params.repository.saveGoalBundle(bundle);
+  await persistCapturedMemories({
+    repository: params.repository,
+    selfImprovementRepository: params.selfImprovementRepository,
+    userId: params.userId,
+    actorContext: params.actorContext,
+    jobId: params.jobId,
+    bundle
+  });
+  return bundle;
 }
-
-export function isGoalRefineJob(job: JobRecord | null): job is JobRecord & { payload: GoalRefineJobPayload } {
-  return job?.kind === "goal_refine" && job.payload.type === "goal_refine";
-}
-
-export function isBriefingCreateJob(
-  job: JobRecord | null
-): job is JobRecord & { payload: BriefingCreateJobPayload } {
-  return job?.kind === "briefing_create" && job.payload.type === "briefing_create";
-}
-
-export function isTemplateRunJob(job: JobRecord | null): job is JobRecord & { payload: TemplateRunJobPayload } {
-  return job?.kind === "template_run" && job.payload.type === "template_run";
-}
-
-export function isDocsRenderJob(job: JobRecord | null): job is JobRecord & { payload: DocsRenderJobPayload } {
-  return job?.kind === "docs_render" && job.payload.type === "docs_render";
-}
-
 export function isAutopilotProcessJob(
   job: JobRecord | null
 ): job is JobRecord & { payload: AutopilotProcessJobPayload } {
   return job?.kind === "autopilot_process" && job.payload.type === "autopilot_process";
 }
 
-export function isPrivacyOperationJob(
+export function isApprovalFollowUpJob(
   job: JobRecord | null
-): job is JobRecord & { payload: PrivacyOperationJobPayload } {
-  return job?.kind === "privacy_operation" && job.payload.type === "privacy_operation";
+): job is JobRecord & { payload: ApprovalFollowUpJobPayload } {
+  return job?.kind === "approval_follow_up" && job.payload.type === "approval_follow_up";
 }
 
-export function isPublicShareViewJob(
+export function isApprovalNotificationJob(
   job: JobRecord | null
-): job is JobRecord & { payload: PublicShareViewJobPayload } {
-  return job?.kind === "public_share_view" && job.payload.type === "public_share_view";
+): job is JobRecord & { payload: ApprovalNotificationJobPayload } {
+  return job?.kind === "approval_notification" && job.payload.type === "approval_notification";
 }
 
-export async function enqueueGoalCreateJob(params: {
-  repository: AgenticRepository;
-  userId: string;
-  request: string;
-  workspaceId: string | null;
-  agentId: string | null;
-  actorContext: ActorContext | null;
-  idempotencyKey?: string | null;
-}): Promise<JobRecord & { payload: GoalCreateJobPayload }> {
-  const payload = buildGoalCreatePayload({
-    request: params.request,
-    workspaceId: params.workspaceId,
-    agentId: params.agentId
-  });
-
-  return withSpan(
-    "worker.job.enqueue.goal_create",
-    {
-      jobKind: "goal_create",
-      userId: params.userId,
-      workspaceId: params.workspaceId
-    },
-    async () => {
-      const job = await params.repository.enqueueJob(createJobRecord({
-        userId: params.userId,
-        kind: "goal_create",
-        payload,
-        actorContext: params.actorContext,
-        idempotencyKey: params.idempotencyKey ?? null,
-        maxAttempts: 3
-      })) as JobRecord & { payload: GoalCreateJobPayload };
-
-      logInfo("worker.job.enqueued", {
-        jobId: job.id,
-        jobKind: job.kind,
-        userId: job.userId,
-        workspaceId: params.workspaceId
-      });
-      recordCounter("worker.job.enqueued.total", 1, {
-        jobKind: job.kind
-      });
-      return job;
-    }
-  );
-}
-
-export async function enqueueGoalRefineJob(params: {
-  repository: AgenticRepository;
-  userId: string;
-  goalId: string;
-  workflowId: string;
-  refinement: string;
-  workspaceId: string | null;
-  actorContext: ActorContext | null;
-  idempotencyKey?: string | null;
-}): Promise<JobRecord & { payload: GoalRefineJobPayload }> {
-  const payload = buildGoalRefinePayload({
-    goalId: params.goalId,
-    workflowId: params.workflowId,
-    refinement: params.refinement,
-    workspaceId: params.workspaceId
-  });
-
-  return withSpan(
-    "worker.job.enqueue.goal_refine",
-    {
-      jobKind: "goal_refine",
-      userId: params.userId,
-      goalId: params.goalId,
-      workspaceId: params.workspaceId
-    },
-    async () => {
-      const job = await params.repository.enqueueJob(createJobRecord({
-        userId: params.userId,
-        kind: "goal_refine",
-        payload,
-        actorContext: params.actorContext,
-        idempotencyKey: params.idempotencyKey ?? null,
-        maxAttempts: 3
-      })) as JobRecord & { payload: GoalRefineJobPayload };
-
-      logInfo("worker.job.enqueued", {
-        jobId: job.id,
-        jobKind: job.kind,
-        userId: job.userId,
-        goalId: params.goalId,
-        workspaceId: params.workspaceId
-      });
-      recordCounter("worker.job.enqueued.total", 1, {
-        jobKind: job.kind
-      });
-      return job;
-    }
-  );
-}
-
-export async function enqueueBriefingCreateJob(params: {
-  repository: AgenticRepository;
-  userId: string;
-  goalId: string;
-  workflowId: string;
-  briefingType: BriefingType;
-  workspaceId: string | null;
-  actorContext: ActorContext | null;
-  idempotencyKey?: string | null;
-}): Promise<JobRecord & { payload: BriefingCreateJobPayload }> {
-  const payload = buildBriefingCreatePayload({
-    goalId: params.goalId,
-    workflowId: params.workflowId,
-    briefingType: params.briefingType,
-    workspaceId: params.workspaceId
-  });
-
-  return withSpan(
-    "worker.job.enqueue.briefing_create",
-    {
-      jobKind: "briefing_create",
-      userId: params.userId,
-      workspaceId: params.workspaceId,
-      briefingType: params.briefingType
-    },
-    async () => {
-      const job = await params.repository.enqueueJob(createJobRecord({
-        userId: params.userId,
-        kind: "briefing_create",
-        payload,
-        actorContext: params.actorContext,
-        idempotencyKey:
-          params.idempotencyKey ?? buildBriefingCreateJobIdempotencyKey(params.goalId, params.briefingType),
-        maxAttempts: 3
-      })) as JobRecord & { payload: BriefingCreateJobPayload };
-
-      logInfo("worker.job.enqueued", {
-        jobId: job.id,
-        jobKind: job.kind,
-        userId: job.userId,
-        workspaceId: params.workspaceId,
-        briefingType: params.briefingType
-      });
-      recordCounter("worker.job.enqueued.total", 1, {
-        jobKind: job.kind
-      });
-      return job;
-    }
-  );
-}
-
-export async function enqueueTemplateRunJob(params: {
-  repository: AgenticRepository;
-  userId: string;
-  templateId: string;
-  goalId: string;
-  workflowId: string;
-  workspaceId: string | null;
-  actorContext: ActorContext | null;
-  idempotencyKey?: string | null;
-}): Promise<JobRecord & { payload: TemplateRunJobPayload }> {
-  const payload = buildTemplateRunPayload({
-    templateId: params.templateId,
-    goalId: params.goalId,
-    workflowId: params.workflowId,
-    workspaceId: params.workspaceId
-  });
-
-  return withSpan(
-    "worker.job.enqueue.template_run",
-    {
-      jobKind: "template_run",
-      userId: params.userId,
-      workspaceId: params.workspaceId,
-      templateId: params.templateId
-    },
-    async () => {
-      const job = await params.repository.enqueueJob(createJobRecord({
-        userId: params.userId,
-        kind: "template_run",
-        payload,
-        actorContext: params.actorContext,
-        idempotencyKey: params.idempotencyKey ?? null,
-        maxAttempts: 3
-      })) as JobRecord & { payload: TemplateRunJobPayload };
-
-      logInfo("worker.job.enqueued", {
-        jobId: job.id,
-        jobKind: job.kind,
-        userId: job.userId,
-        workspaceId: params.workspaceId,
-        templateId: params.templateId
-      });
-      recordCounter("worker.job.enqueued.total", 1, {
-        jobKind: job.kind
-      });
-      return job;
-    }
-  );
-}
-
-export async function enqueueDocsRenderJob(params: {
-  repository: AgenticRepository;
-  userId: string;
-  actorContext: ActorContext | null;
-  idempotencyKey?: string | null;
-}): Promise<JobRecord & { payload: DocsRenderJobPayload }> {
-  const payload = buildDocsRenderPayload();
-
-  return withSpan(
-    "worker.job.enqueue.docs_render",
-    {
-      jobKind: "docs_render",
-      userId: params.userId
-    },
-    async () => {
-      const job = await params.repository.enqueueJob(createJobRecord({
-        userId: params.userId,
-        kind: "docs_render",
-        payload,
-        actorContext: params.actorContext,
-        idempotencyKey: params.idempotencyKey ?? buildDocsRenderJobIdempotencyKey(params.userId),
-        maxAttempts: 3
-      })) as JobRecord & { payload: DocsRenderJobPayload };
-
-      logInfo("worker.job.enqueued", {
-        jobId: job.id,
-        jobKind: job.kind,
-        userId: job.userId
-      });
-      recordCounter("worker.job.enqueued.total", 1, {
-        jobKind: job.kind
-      });
-      return job;
-    }
-  );
-}
-
-export async function enqueueAutopilotProcessJob(params: {
-  repository: AgenticRepository;
-  autopilotEvent: AutopilotEvent;
-}): Promise<JobRecord & { payload: AutopilotProcessJobPayload }> {
-  const payload = buildAutopilotProcessPayload({
-    autopilotEvent: params.autopilotEvent
-  });
-
-  return withSpan(
-    "worker.job.enqueue.autopilot_process",
-    {
-      jobKind: "autopilot_process",
-      userId: params.autopilotEvent.userId
-    },
-    async () => {
-      const job = await params.repository.enqueueJob(createJobRecord({
-        userId: params.autopilotEvent.userId,
-        kind: "autopilot_process",
-        payload,
-        actorContext: params.autopilotEvent.actorContext,
-        idempotencyKey: buildAutopilotProcessJobIdempotencyKey(params.autopilotEvent.id),
-        maxAttempts: 3
-      })) as JobRecord & { payload: AutopilotProcessJobPayload };
-
-      logInfo("worker.job.enqueued", {
-        jobId: job.id,
-        jobKind: job.kind,
-        userId: job.userId
-      });
-      recordCounter("worker.job.enqueued.total", 1, {
-        jobKind: job.kind
-      });
-      return job;
-    }
-  );
-}
-
-export async function enqueuePrivacyOperationJob(params: {
-  repository: AgenticRepository;
-  operation: {
-    id: string;
-    workspaceId: string;
-    userId: string;
-    kind: PrivacyOperationJobPayload["kind"];
-    actorContext: ActorContext | null;
-  };
-}): Promise<JobRecord & { payload: PrivacyOperationJobPayload }> {
-  const payload = buildPrivacyOperationPayload({
-    operationId: params.operation.id,
-    workspaceId: params.operation.workspaceId,
-    kind: params.operation.kind
-  });
-
-  return withSpan(
-    "worker.job.enqueue.privacy_operation",
-    {
-      jobKind: "privacy_operation",
-      userId: params.operation.userId,
-      workspaceId: params.operation.workspaceId
-    },
-    async () => {
-      const job = await params.repository.enqueueJob(createJobRecord({
-        userId: params.operation.userId,
-        kind: "privacy_operation",
-        payload,
-        actorContext: params.operation.actorContext,
-        idempotencyKey: buildPrivacyOperationJobIdempotencyKey(params.operation.id),
-        maxAttempts: 3
-      })) as JobRecord & { payload: PrivacyOperationJobPayload };
-
-      logInfo("worker.job.enqueued", {
-        jobId: job.id,
-        jobKind: job.kind,
-        userId: job.userId,
-        workspaceId: params.operation.workspaceId
-      });
-      recordCounter("worker.job.enqueued.total", 1, {
-        jobKind: job.kind
-      });
-      return job;
-    }
-  );
-}
-
-export async function enqueuePublicShareViewJob(params: {
-  repository: AgenticRepository;
-  userId: string;
-  shareId: string;
-  goalId: string;
-  tokenFingerprint: string;
-  viewedAt: string;
-  actorContext: ActorContext | null;
-  idempotencyKey: string;
-}): Promise<JobRecord & { payload: PublicShareViewJobPayload }> {
-  const payload = buildPublicShareViewPayload({
-    shareId: params.shareId,
-    goalId: params.goalId,
-    tokenFingerprint: params.tokenFingerprint,
-    viewedAt: params.viewedAt
-  });
-
-  return withSpan(
-    "worker.job.enqueue.public_share_view",
-    {
-      jobKind: "public_share_view",
-      userId: params.userId,
-      goalId: params.goalId,
-      shareId: params.shareId
-    },
-    async () => {
-      const job = await params.repository.enqueueJob(createJobRecord({
-        userId: params.userId,
-        kind: "public_share_view",
-        payload,
-        actorContext: params.actorContext,
-        idempotencyKey: params.idempotencyKey,
-        maxAttempts: 3
-      })) as JobRecord & { payload: PublicShareViewJobPayload };
-
-      logInfo("worker.job.enqueued", {
-        jobId: job.id,
-        jobKind: job.kind,
-        userId: job.userId,
-        goalId: params.goalId,
-        shareId: params.shareId
-      });
-      recordCounter("worker.job.enqueued.total", 1, {
-        jobKind: job.kind
-      });
-      return job;
-    }
-  );
-}
-
-export async function executeGoalCreateJob(params: {
-  repository: AgenticRepository;
-  selfImprovementRepository: SelfImprovementRepository;
-  job: JobRecord;
-}) {
-  const { job, repository } = params;
-
-  if (!isGoalCreateJob(job)) {
-    throw new Error(`Expected a goal_create payload for job ${job.id}.`);
-  }
-
-  const governance = await resolveGoalCreateGovernance(repository, job.userId, job.payload.workspaceId);
-  const [memories, integrations, agentDefinition] = await Promise.all([
-    repository.listMemory(job.userId),
-    repository.listIntegrations(job.userId),
-    resolveGoalCreateAgentDefinition(repository, job.userId, job.payload.agentId)
-  ]);
-  const bundle = await processUserRequest({
-    userId: job.userId,
-    request: job.payload.request,
-    workspaceId: job.payload.workspaceId,
-    governance,
-    memories,
-    integrations,
-    agentDefinition,
-    goalId: job.payload.goalId,
-    workflowId: job.payload.workflowId,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId)
-  });
-
-  await repository.saveGoalBundle(bundle);
-  await persistCapturedMemories({
-    repository,
-    selfImprovementRepository: params.selfImprovementRepository,
-    userId: job.userId,
-    actorContext: job.actorContext,
-    jobId: job.id,
-    bundle
-  });
-}
-
-export async function executeGoalRefineJob(params: {
-  repository: AgenticRepository;
-  selfImprovementRepository: SelfImprovementRepository;
-  job: JobRecord;
-}) {
-  const { job, repository } = params;
-
-  if (!isGoalRefineJob(job)) {
-    throw new Error(`Expected a goal_refine payload for job ${job.id}.`);
-  }
-
-  const bundle = await repository.getGoalBundleForUser(job.payload.goalId, job.userId);
-
-  if (!bundle) {
-    throw new Error(`Goal ${job.payload.goalId} was not found.`);
-  }
-
-  const [memories, governance] = await Promise.all([
-    repository.listMemory(job.userId),
-    job.payload.workspaceId
-      ? repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
-      : Promise.resolve(null)
-  ]);
-  const updatedBundle = await refineGoal({
-    bundle,
-    refinement: job.payload.refinement,
-    memories,
-    actorContext: job.actorContext,
-    governance,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId)
-  });
-
-  await repository.saveGoalBundle(updatedBundle);
-}
-
-export async function executeBriefingCreateJob(params: {
-  repository: AgenticRepository;
-  selfImprovementRepository: SelfImprovementRepository;
-  job: JobRecord;
-}) {
-  const { job, repository } = params;
-
-  if (!isBriefingCreateJob(job)) {
-    throw new Error(`Expected a briefing_create payload for job ${job.id}.`);
-  }
-
-  const governance = job.payload.workspaceId
-    ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
-    : null;
-  const [preferences, memories, integrations, approvals, watchers] = await Promise.all([
-    repository.getBriefingPreferences(job.userId),
-    repository.listMemory(job.userId),
-    repository.listIntegrations(job.userId),
-    repository.listApprovals(job.userId),
-    repository.listWatchers({ userId: job.userId })
-  ]);
-  const bundle = await generateBriefing({
-    type: job.payload.briefingType,
-    userId: job.userId,
-    workspaceId: job.payload.workspaceId,
-    governance,
-    preferences,
-    memories,
-    integrations,
-    pendingApprovals: approvals.filter((approval) => approval.decision === "pending"),
-    activeWatchers: watchers.filter((watcher) => watcher.status === "active"),
-    goalId: job.payload.goalId,
-    workflowId: job.payload.workflowId,
-    resolveAgentMetrics: (agentIdOrName) => repository.getAgentMetrics(agentIdOrName, "all", job.userId)
-  });
-
-  await repository.saveGoalBundle(bundle);
-  await persistCapturedMemories({
-    repository,
-    selfImprovementRepository: params.selfImprovementRepository,
-    userId: job.userId,
-    actorContext: job.actorContext,
-    jobId: job.id,
-    bundle
-  });
-}
-
-export async function executeTemplateRunJob(params: {
-  repository: AgenticRepository;
-  selfImprovementRepository: SelfImprovementRepository;
-  job: JobRecord;
-}) {
-  const { job, repository } = params;
-
-  if (!isTemplateRunJob(job)) {
-    throw new Error(`Expected a template_run payload for job ${job.id}.`);
-  }
-
-  const templates = await repository.listTemplates(job.userId);
-  const template = templates.find((candidate) => candidate.id === job.payload.templateId);
-
-  if (!template) {
-    throw new Error(`Template ${job.payload.templateId} was not found.`);
-  }
-
-  await runTemplateExecution({
-    repository,
-    selfImprovementRepository: params.selfImprovementRepository,
-    userId: job.userId,
-    actorContext: job.actorContext,
-    template,
-    goalId: job.payload.goalId,
-    workflowId: job.payload.workflowId,
-    workspaceId: job.payload.workspaceId,
-    workspaceGovernance:
-      job.payload.workspaceId ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId) : null,
-    jobId: job.id
-  });
-}
-
-export async function executeDocsRenderJob(params: {
-  job: JobRecord;
-}) {
-  const { job } = params;
-
-  if (!isDocsRenderJob(job)) {
-    throw new Error(`Expected a docs_render payload for job ${job.id}.`);
-  }
-
-  await runDocsBuild();
-}
 
 export async function executeAutopilotProcessJob(params: {
   repository: AgenticRepository;
@@ -1261,21 +948,26 @@ export async function executeAutopilotProcessJob(params: {
 }) {
   const { job, repository } = params;
 
-  if (!isAutopilotProcessJob(job)) {
+  if (job.kind !== "autopilot_process" || job.payload.type !== "autopilot_process") {
     throw new Error(`Expected an autopilot_process payload for job ${job.id}.`);
   }
 
-  const event = await findAutopilotEvent(repository, job.userId, job.payload.autopilotEventId);
+  const autopilotPayload = AutopilotProcessJobPayloadSchema.parse(job.payload);
+  const autopilotJob = {
+    ...job,
+    payload: autopilotPayload
+  } satisfies JobRecord & { payload: AutopilotProcessJobPayload };
+  const event = await findAutopilotEvent(repository, job.userId, autopilotPayload.autopilotEventId);
 
   if (!event) {
-    throw new AutopilotExecutionError(`Autopilot event ${job.payload.autopilotEventId} was not found.`);
+    throw new AutopilotExecutionError(`Autopilot event ${autopilotPayload.autopilotEventId} was not found.`);
   }
 
   try {
     let bundle: GoalBundle;
 
-    if (job.payload.kind === "watcher_triggered") {
-      const { watcher, goal } = await resolveWatcherExecutionSource(repository, job.payload.sourceId, job.userId);
+    if (autopilotPayload.kind === "watcher_triggered") {
+      const { watcher, goal } = await resolveWatcherExecutionSource(repository, autopilotPayload.sourceId, job.userId);
       bundle = await executeWatcherEvent({
         repository,
         selfImprovementRepository: params.selfImprovementRepository,
@@ -1286,8 +978,8 @@ export async function executeAutopilotProcessJob(params: {
         eventId: event.id,
         jobId: job.id
       });
-    } else if (job.payload.kind === "template_due") {
-      const { template } = await resolveTemplateExecutionSource(repository, job.payload.sourceId, job.userId);
+    } else if (autopilotPayload.kind === "template_due") {
+      const { template } = await resolveTemplateExecutionSource(repository, autopilotPayload.sourceId, job.userId);
       bundle = await executeTemplateEvent({
         repository,
         selfImprovementRepository: params.selfImprovementRepository,
@@ -1297,8 +989,8 @@ export async function executeAutopilotProcessJob(params: {
         eventId: event.id,
         jobId: job.id
       });
-    } else {
-      const { type } = await resolveBriefingExecutionSource(repository, job.payload.sourceId, job.userId);
+    } else if (autopilotPayload.kind === "briefing_due") {
+      const { type } = await resolveBriefingExecutionSource(repository, autopilotPayload.sourceId, job.userId);
       bundle = await executeBriefingEvent({
         repository,
         selfImprovementRepository: params.selfImprovementRepository,
@@ -1306,6 +998,25 @@ export async function executeAutopilotProcessJob(params: {
         actorContext: job.actorContext,
         type,
         eventId: event.id,
+        jobId: job.id
+      });
+    } else if (isEventFabricAutopilotKind(autopilotPayload.kind)) {
+      bundle = await executeEventFabricEvent({
+        repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        userId: job.userId,
+        actorContext: job.actorContext,
+        event,
+        eventId: event.id,
+        jobId: job.id
+      });
+    } else {
+      bundle = await executeGenericAutopilotEvent({
+        repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        userId: job.userId,
+        actorContext: job.actorContext,
+        event,
         jobId: job.id
       });
     }
@@ -1337,7 +1048,7 @@ export async function executeAutopilotProcessJob(params: {
         ...summarizeExecutionFailure({
           createdAt: event.createdAt,
           processedAt,
-          job,
+          job: autopilotJob,
           retryPolicy: params.retryPolicy
         })
       },
@@ -1347,184 +1058,239 @@ export async function executeAutopilotProcessJob(params: {
   }
 }
 
-function sanitizePrivacyOperationError(kind: PrivacyOperationJobPayload["kind"]): string {
-  switch (kind) {
-    case "workspace_export":
-      return "Workspace export failed.";
-    case "workspace_delete":
-      return "Workspace deletion failed.";
-    case "retention_enforcement":
-      return "Retention enforcement failed.";
-    default:
-      return "Privacy operation failed.";
-  }
-}
-
-export async function executePrivacyOperationJob(params: {
+export async function executeApprovalFollowUpJob(params: {
   repository: AgenticRepository;
+  selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
 }) {
   const { job, repository } = params;
 
-  if (!isPrivacyOperationJob(job)) {
-    throw new Error(`Expected a privacy_operation payload for job ${job.id}.`);
+  if (!isApprovalFollowUpJob(job)) {
+    throw new Error(`Expected an approval_follow_up payload for job ${job.id}.`);
   }
 
-  const operation = await repository.getPrivacyOperation(job.payload.operationId, job.userId);
-
-  if (!operation) {
-    throw new Error(`Privacy operation ${job.payload.operationId} was not found.`);
-  }
-
-  if (operation.kind !== job.payload.kind || operation.workspaceId !== job.payload.workspaceId) {
-    throw new Error(`Privacy operation ${operation.id} no longer matches the queued job payload.`);
-  }
-
-  const startedAt = nowIso();
-  const runningOperation = await repository.savePrivacyOperation({
-    ...operation,
-    status: "running",
-    startedAt,
-    completedAt: null,
-    error: null,
-    updatedAt: startedAt
-  });
-
-  try {
-    let result: Record<string, unknown>;
-
-    switch (job.payload.kind) {
-      case "workspace_export": {
-        const audit = await repository.exportWorkspaceAudit(job.payload.workspaceId, job.userId);
-        result = {
-          workspaceId: audit.workspaceId,
-          fileName: audit.fileName,
-          contentType: audit.contentType,
-          generatedAt: audit.generatedAt,
-          contentLength: Buffer.byteLength(audit.content, "utf8")
-        };
-        break;
-      }
-      case "retention_enforcement": {
-        const retentionDays = operation.details.retentionDays;
-
-        if (typeof retentionDays !== "number" || !Number.isInteger(retentionDays) || retentionDays < 0) {
-          throw new Error(`Privacy operation ${operation.id} is missing a valid retention policy.`);
-        }
-
-        result = await repository.enforceWorkspaceRetention({
-          workspaceId: job.payload.workspaceId,
-          userId: job.userId,
-          retentionDays,
-          now: startedAt
-        });
-        break;
-      }
-      case "workspace_delete":
-        result = await repository.deleteWorkspaceData({
-          workspaceId: job.payload.workspaceId,
-          userId: job.userId,
-          operationId: operation.id,
-          now: startedAt
-        });
-        break;
-    }
-
-    const completedAt = nowIso();
-    await repository.savePrivacyOperation({
-      ...runningOperation,
-      status: "completed",
-      result,
-      completedAt,
-      error: null,
-      updatedAt: completedAt
-    });
-  } catch (error) {
-    const completedAt = nowIso();
-
-    await repository.savePrivacyOperation({
-      ...runningOperation,
-      status: "failed",
-      completedAt,
-      error: sanitizePrivacyOperationError(job.payload.kind),
-      updatedAt: completedAt
-    });
-
-    throw error;
-  }
-}
-
-function shouldAdvanceLastViewedAt(current: string | null, candidate: string): boolean {
-  if (!current) {
-    return true;
-  }
-
-  const currentTimestamp = Date.parse(current);
-  const candidateTimestamp = Date.parse(candidate);
-
-  if (!Number.isFinite(currentTimestamp) || !Number.isFinite(candidateTimestamp)) {
-    return true;
-  }
-
-  return candidateTimestamp >= currentTimestamp;
-}
-
-export async function executePublicShareViewJob(params: {
-  repository: AgenticRepository;
-  job: JobRecord;
-}) {
-  const { job, repository } = params;
-
-  if (!isPublicShareViewJob(job)) {
-    throw new Error(`Expected a public_share_view payload for job ${job.id}.`);
-  }
-
-  const share = await repository.getGoalShare(job.payload.shareId, job.userId);
-
-  if (!share || share.goalId !== job.payload.goalId || share.status !== "active" || Date.parse(share.expiresAt) <= Date.now()) {
-    return;
-  }
-
-  const bundle = await repository.getGoalBundle(job.payload.goalId);
+  const bundle = await repository.getGoalBundleForUser(job.payload.goalId, job.userId);
 
   if (!bundle) {
-    return;
+    throw new Error(`Goal ${job.payload.goalId} was not found.`);
   }
 
-  const viewedLog = createPublicShareViewedLog(
-    bundle,
-    job.payload.shareId,
-    job.payload.tokenFingerprint,
-    Date.parse(job.payload.viewedAt)
-  );
-  const shouldUpdateShare = shouldAdvanceLastViewedAt(share.lastViewedAt, job.payload.viewedAt);
+  const approval = bundle.approvals.find((candidate) => candidate.id === job.payload.approvalId);
 
-  if (!viewedLog && !shouldUpdateShare) {
-    return;
+  if (!approval) {
+    throw new Error(`Approval ${job.payload.approvalId} was not found.`);
   }
 
-  const writes: Array<Promise<unknown>> = [];
+  if (approval.taskId !== job.payload.taskId) {
+    throw new Error(`Approval ${approval.id} no longer matches queued task ${job.payload.taskId}.`);
+  }
 
-  if (shouldUpdateShare) {
-    writes.push(
-      repository.saveGoalShare({
-        ...share,
-        lastViewedAt: job.payload.viewedAt,
-        updatedAt: nowIso()
-      })
+  if (approval.decision !== job.payload.decision) {
+    throw new Error(
+      `Approval ${approval.id} decision changed from ${job.payload.decision} to ${approval.decision}.`
     );
   }
 
-  if (viewedLog) {
-    writes.push(
-      repository.saveGoalBundle({
-        ...bundle,
-        actionLogs: [...bundle.actionLogs, viewedLog]
-      })
+  const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
+
+  if (!task) {
+    throw new Error(`Task ${approval.taskId} was not found for approval ${approval.id}.`);
+  }
+
+  let updatedBundle = bundle;
+  const shouldExecuteApprovedTask = job.payload.decision === "approved" && task.state === "queued";
+
+  if (shouldExecuteApprovedTask) {
+    const googleAdapters = await resolveGoogleWorkspaceAdapters({
+      repository,
+      userId: job.userId,
+      workspaceId: job.payload.workspaceId
+    });
+    const { results, logs } = await executeApprovedTasks({
+      bundle,
+      approvedTaskIds: [approval.taskId],
+      adapters: {
+        gmail: googleAdapters?.gmail,
+        calendar: googleAdapters?.calendar,
+        notes: { createLocalNote }
+      },
+      governance: job.payload.workspaceId
+        ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
+        : null
+    });
+    updatedBundle = reconcileExecutionResults({
+      bundle,
+      results,
+      logs
+    });
+    await repository.saveGoalBundle(updatedBundle);
+
+    const capturedMemoryIds = await persistCapturedSignals({
+      repository,
+      selfImprovementRepository: params.selfImprovementRepository,
+      captured: captureExecutionOutcomeSignals(
+        updatedBundle,
+        job.userId,
+        results,
+        job.actorContext ?? createSystemActorContext(job.userId)
+      ),
+      userId: job.userId,
+      jobId: job.id,
+      label: "approval-execution-capture"
+    });
+
+    await finalizeApprovalEvidenceRecord({
+      repository,
+      bundle: updatedBundle,
+      userId: job.userId,
+      approvalId: approval.id,
+      memoryIds: capturedMemoryIds
+    });
+  }
+
+  if (updatedBundle.goal.status === "completed") {
+    const capturedMemoryIds = await persistCapturedSignals({
+      repository,
+      selfImprovementRepository: params.selfImprovementRepository,
+      captured: captureMemoriesFromBundle(
+        updatedBundle,
+        job.userId,
+        job.actorContext ?? createSystemActorContext(job.userId)
+      ),
+      userId: job.userId,
+      jobId: job.id,
+      label: "approval-auto-capture"
+    });
+
+    if (capturedMemoryIds.length > 0) {
+      await finalizeApprovalEvidenceRecord({
+        repository,
+        bundle: updatedBundle,
+        userId: job.userId,
+        approvalId: approval.id,
+        memoryIds: capturedMemoryIds
+      });
+    }
+  } else if (!shouldExecuteApprovedTask) {
+    await finalizeApprovalEvidenceRecord({
+      repository,
+      bundle: updatedBundle,
+      userId: job.userId,
+      approvalId: approval.id,
+      memoryIds: []
+    });
+  }
+
+  if (isSlackReady()) {
+    await enqueueApprovalNotificationJob({
+      repository,
+      userId: job.userId,
+      approvalId: approval.id,
+      goalId: updatedBundle.goal.id,
+      taskId: task.id,
+      decision: job.payload.decision,
+      channel: "slack",
+      workspaceId: job.payload.workspaceId,
+      actorContext: job.actorContext,
+      replayedFromJobId: null
+    });
+  }
+}
+
+export async function executeApprovalNotificationJob(params: {
+  repository: AgenticRepository;
+  job: JobRecord;
+}) {
+  const { job, repository } = params;
+
+  if (!isApprovalNotificationJob(job)) {
+    throw new Error(`Expected an approval_notification payload for job ${job.id}.`);
+  }
+
+  const bundle = await repository.getGoalBundleForUser(job.payload.goalId, job.userId);
+
+  if (!bundle) {
+    throw new Error(`Goal ${job.payload.goalId} was not found.`);
+  }
+
+  const approval = bundle.approvals.find((candidate) => candidate.id === job.payload.approvalId);
+
+  if (!approval) {
+    throw new Error(`Approval ${job.payload.approvalId} was not found.`);
+  }
+
+  if (approval.taskId !== job.payload.taskId) {
+    throw new Error(`Approval ${approval.id} no longer matches queued task ${job.payload.taskId}.`);
+  }
+
+  if (approval.decision !== job.payload.decision) {
+    throw new Error(
+      `Approval ${approval.id} decision changed from ${job.payload.decision} to ${approval.decision}.`
     );
   }
 
-  await Promise.all(writes);
+  const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
+
+  if (!task) {
+    throw new Error(`Task ${approval.taskId} was not found for approval ${approval.id}.`);
+  }
+
+  const statusEmoji = job.payload.decision === "approved" ? "\u2713" : "\u2717";
+  const statusLabel = job.payload.decision === "approved" ? "Approved" : "Rejected";
+  const receiptLabel = job.payload.decision === "approved" ? "Approved" : "Rejected";
+
+  switch (job.payload.channel) {
+    case "slack":
+      if (!isSlackReady()) {
+        throw new Error("Slack integration is not configured.");
+      }
+
+      await sendNotification({
+        channel: process.env.SLACK_DEFAULT_CHANNEL ?? "#approvals",
+        text: `${statusEmoji} ${statusLabel}: ${task.title}`
+      });
+      return;
+    case "slack_receipt":
+      if (!isSlackReady()) {
+        throw new Error("Slack integration is not configured.");
+      }
+
+      await updateMessage({
+        channel: job.payload.slackChannelId,
+        ts: job.payload.slackMessageTs,
+        text: `${statusEmoji} ${receiptLabel}: ${task.title}`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `${statusEmoji} *${receiptLabel}:* ${task.title}`
+            }
+          },
+          {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: `Decision recorded via Slack worker for approval ${approval.id}.`
+              }
+            ]
+          }
+        ]
+      });
+      return;
+    case "telegram_receipt":
+      if (!isTelegramReady()) {
+        throw new Error("Telegram integration is not configured.");
+      }
+
+      await updateTelegramMessage({
+        chatId: job.payload.telegramChatId,
+        messageId: job.payload.telegramMessageId,
+        text: `${job.payload.decision === "approved" ? "\u2705" : "\u274c"} ${receiptLabel}: ${task.title}`
+      });
+      return;
+  }
 }
 
 export function createWorkerJobHandlers(params: {
@@ -1625,6 +1391,17 @@ export function createWorkerJobHandlers(params: {
         job,
         retryPolicy: params.retryPolicy
       })),
+    approval_follow_up: wrapHandler("approval_follow_up", (job) =>
+      executeApprovalFollowUpJob({
+        repository: params.repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        job
+      })),
+    approval_notification: wrapHandler("approval_notification", (job) =>
+      executeApprovalNotificationJob({
+        repository: params.repository,
+        job
+      })),
     privacy_operation: wrapHandler("privacy_operation", (job) =>
       executePrivacyOperationJob({
         repository: params.repository,
@@ -1638,24 +1415,6 @@ export function createWorkerJobHandlers(params: {
   };
 }
 
-export function buildGoalJobResultSummary(bundle: GoalBundle): GoalJobResultSummary {
-  const completedTaskCount = bundle.tasks.filter((task) => task.state === "completed").length;
-  const pendingApprovalCount = bundle.approvals.filter((approval) => approval.decision === "pending").length;
-  const requiresReview =
-    pendingApprovalCount > 0 ||
-    bundle.tasks.some((task) => task.state === "blocked" || task.state === "failed");
-
-  return {
-    goalId: bundle.goal.id,
-    goalStatus: bundle.goal.status,
-    taskCount: bundle.tasks.length,
-    completedTaskCount,
-    pendingApprovalCount,
-    artifactCount: bundle.artifacts.length,
-    watcherCount: bundle.watchers.length,
-    requiresReview
-  };
-}
 
 function shouldClaimJob(jobKind: JobKind, filters: readonly JobKind[] | undefined): boolean {
   return !filters || filters.length === 0 || filters.includes(jobKind);
@@ -1691,7 +1450,10 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
       const queue = createDurableJobQueue(options.repository, {
         runnerId: options.runnerId,
         leaseMs: options.leaseMs,
-        retryPolicy: options.retryPolicy
+        retryPolicy: options.retryPolicy,
+        concurrencyLimits: options.concurrencyLimits,
+        retryJitterRatio: options.retryJitterRatio,
+        requireIdempotencyForRetry: options.requireIdempotencyForRetry
       });
       const handlers = createWorkerJobHandlers({
         repository: options.repository,
@@ -1737,6 +1499,49 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
         processedCount,
         stopReason: "aborted"
       };
+    }
+  );
+}
+
+export function summarizeWorkerQueueHealth(jobs: JobRecord[], now = nowIso()): WorkerQueueHealthSummary {
+  const nowMs = Date.parse(now);
+
+  return jobs.reduce<WorkerQueueHealthSummary>(
+    (summary, job) => {
+      if (job.status === "queued") {
+        summary.queuedDepth += 1;
+        summary.queuedByPriority[job.priority] = (summary.queuedByPriority[job.priority] ?? 0) + 1;
+      }
+
+      if (job.status === "retrying") {
+        summary.retryingDepth += 1;
+      }
+
+      if (job.status === "dead_letter") {
+        summary.deadLetterDepth += 1;
+      }
+
+      if (job.status === "running") {
+        summary.runningByKind[job.kind] = (summary.runningByKind[job.kind] ?? 0) + 1;
+
+        const leaseExpiresAt = job.leaseExpiresAt ? Date.parse(job.leaseExpiresAt) : Number.NaN;
+        if (Number.isFinite(leaseExpiresAt) && leaseExpiresAt <= nowMs) {
+          summary.expiredLeaseCount += 1;
+        } else {
+          summary.activeLeaseCount += 1;
+        }
+      }
+
+      return summary;
+    },
+    {
+      queuedDepth: 0,
+      retryingDepth: 0,
+      deadLetterDepth: 0,
+      activeLeaseCount: 0,
+      expiredLeaseCount: 0,
+      queuedByPriority: {},
+      runningByKind: {}
     }
   );
 }

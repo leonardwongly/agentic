@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { AGENTIC_SESSION_COOKIE, clearSessionCookie, revokeSessionToken } from "../../lib/auth";
+import { authenticatedRedirect } from "../../lib/api-response";
 
 const LOGOUT_REDIRECT_CACHE_CONTROL = "no-store, max-age=0, must-revalidate";
 
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
     await revokeSessionToken(existingToken);
   }
 
-  const response = NextResponse.redirect(new URL("/", request.url));
+  const response = authenticatedRedirect(new URL("/", request.url));
   const cookie = clearSessionCookie();
 
   response.cookies.set(cookie.name, cookie.value, cookie.options);

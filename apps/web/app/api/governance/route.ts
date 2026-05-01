@@ -1,14 +1,15 @@
 import { z } from "zod";
-import { WorkspaceGovernanceSchema } from "@agentic/contracts";
+import { WorkspaceGovernanceSchema, WorkspaceShadowReplayPolicySchema } from "@agentic/contracts";
+import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import {
   assessWorkspaceGovernanceConformance,
+  buildAutonomyBudget,
   buildGovernanceSimulationScenarios,
   simulateGovernanceScenarios
 } from "@agentic/policy";
 import { requireApiSession } from "../../../lib/auth";
-import { createActorContextFromPrincipal } from "../../../lib/actor-context";
-import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
-import { requireJsonContentType } from "../../../lib/api-errors";
+import { ApiRouteError, authenticatedJson, handleApiError } from "../../../lib/api-response";
+import { createGovernedMutationRoute } from "../../../lib/governed-route";
 import { getSeededRepository } from "../../../lib/server";
 
 const GovernanceUpdateSchema = z
@@ -16,8 +17,12 @@ const GovernanceUpdateSchema = z
     approvalMode: WorkspaceGovernanceSchema.shape.approvalMode.optional(),
     requireAuditExports: z.boolean().optional(),
     maxAutoRunRiskClass: WorkspaceGovernanceSchema.shape.maxAutoRunRiskClass.optional(),
+    publicSharingEnabled: z.boolean().optional(),
+    providerAccessRequiresApproval: z.boolean().optional(),
+    escalationRequiresApproval: z.boolean().optional(),
     externalSendRequiresApproval: z.boolean().optional(),
     calendarWriteRequiresApproval: z.boolean().optional(),
+    shadowReplayPolicy: WorkspaceShadowReplayPolicySchema.partial().strict().optional(),
     retentionDays: WorkspaceGovernanceSchema.shape.retentionDays.optional()
   })
   .strict();
@@ -34,9 +39,16 @@ async function resolveWorkspaceContext(userId: string) {
   return { repository, dashboard, activeWorkspace };
 }
 
+function assertOwnerCanEditGovernance(activeWorkspace: { ownerUserId: string }, userId: string) {
+  if (activeWorkspace.ownerUserId !== userId) {
+    throw new ApiRouteError(403, "Only the workspace owner can update governance.");
+  }
+}
+
 function buildGovernanceResponse(governance: z.infer<typeof WorkspaceGovernanceSchema> | null, dashboard: unknown) {
   return {
     governance,
+    autonomyBudget: buildAutonomyBudget(governance),
     conformance: assessWorkspaceGovernanceConformance(governance),
     simulations: simulateGovernanceScenarios({
       governance,
@@ -58,23 +70,25 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
-  try {
-    requireJsonContentType(request);
-    const principal = await requireApiSession(request);
-    const actor = createActorContextFromPrincipal(principal);
+export const POST = createGovernedMutationRoute(
+  {
+    route: "api.governance.update",
+    fallbackError: "Failed to update workspace governance.",
+    bodySchema: GovernanceUpdateSchema,
+    rateLimit: {
+      namespace: "governance-update",
+      error: "Too many governance update requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ principal, actorContext, body }) => {
     const { repository, activeWorkspace } = await resolveWorkspaceContext(principal.userId);
-    const body = await parseJsonBody(request, GovernanceUpdateSchema);
+    assertOwnerCanEditGovernance(activeWorkspace, principal.userId);
     const current =
       (await repository.getWorkspaceGovernance(activeWorkspace.id, principal.userId)) ??
       WorkspaceGovernanceSchema.parse({
         workspaceId: activeWorkspace.id,
-        approvalMode: "risk_based",
-        requireAuditExports: false,
-        maxAutoRunRiskClass: "R1",
-        externalSendRequiresApproval: true,
-        calendarWriteRequiresApproval: true,
-        retentionDays: 365,
+        ...resolveWorkspaceGovernanceDefaultsFromEnv(),
         updatedBy: principal.userId,
         createdAt: activeWorkspace.createdAt,
         updatedAt: activeWorkspace.updatedAt
@@ -83,14 +97,16 @@ export async function POST(request: Request) {
     const updated = WorkspaceGovernanceSchema.parse({
       ...current,
       ...body,
+      shadowReplayPolicy: {
+        ...current.shadowReplayPolicy,
+        ...(body.shadowReplayPolicy ?? {})
+      },
       updatedBy: principal.userId,
       updatedAt: new Date().toISOString()
     });
 
-    await repository.saveWorkspaceGovernance(updated, actor);
+    await repository.saveWorkspaceGovernance(updated, actorContext);
 
     return authenticatedJson(buildGovernanceResponse(updated, await repository.getDashboardData(principal.userId)));
-  } catch (error) {
-    return handleApiError(error, "Failed to update workspace governance.");
   }
-}
+);

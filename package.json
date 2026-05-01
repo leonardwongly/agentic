@@ -13,16 +13,21 @@
     "dev": "npm run dev -w @agentic/web",
     "build": "npm run build -w @agentic/web && npm run build -w @agentic/worker",
     "db:migrate": "tsx scripts/db-migrate.ts",
+    "db:check-migrations": "tsx scripts/check-migration-discipline.ts",
     "db:status": "tsx scripts/db-status.ts",
+    "governance:simulate": "tsx scripts/governance-simulation-suite.ts",
     "security:audit-runtime": "tsx scripts/runtime-vulnerability-gate.ts",
     "security:sbom": "tsx scripts/generate-sbom.ts",
+    "ci:validate-provenance": "tsx scripts/validate-github-actions-provenance.ts",
     "security:collect-evidence": "tsx scripts/collect-compliance-evidence.ts",
+    "compliance:validate-registry": "tsx scripts/validate-compliance-registry.ts",
     "test": "vitest run",
     "test:security:regression": "tsx scripts/security-regression-suite.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "deploy:staging:provider": "tsx scripts/staging-provider-deploy.ts",
-    "test:architecture:fitness": "tsx scripts/check-architecture-fitness.ts && tsx scripts/check-parallel-worktree-fitness.ts",
+    "test:architecture:fitness": "tsx scripts/check-architecture-fitness.ts",
+    "test:parallel-worktree:fitness": "tsx scripts/check-parallel-worktree-fitness.ts",
     "test:performance:fitness": "tsx scripts/check-performance-fitness.ts && vitest run tests/performance-fitness.test.ts",
     "test:smoke:capabilities": "tsx scripts/feature-capability-report.ts",
     "test:smoke:observability": "tsx scripts/observability-smoke.ts",
@@ -32,6 +37,8 @@
     "test:load:observability": "tsx scripts/observability-load.ts",
     "test:failure:observability": "tsx scripts/observability-failure-injection.ts",
     "telemetry:rollout-gate": "tsx scripts/observability-rollout-gate.ts",
+    "remediation:dashboard": "tsx scripts/aos-remediation-dashboard.ts --include-git-snapshot",
+    "remediation:verify": "tsx scripts/aos-remediation-dashboard.ts --verify-issue-query --include-git-snapshot",
     "start:web:prod": "tsx scripts/start-web.ts",
     "start:worker:prod": "tsx scripts/start-worker.ts",
     "worker:start": "npm run start -w @agentic/worker",
@@ -43,7 +50,7 @@
     "worktree:cleanup": "tsx scripts/cleanup-parallel-worktrees.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.82.0",
+    "@anthropic-ai/sdk": "0.91.1",
     "drizzle-orm": "^0.45.2",
     "googleapis": "^171.4.0",
     "jszip": "^3.10.1",
@@ -53,6 +60,9 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.1.12"
+  },
+  "overrides": {
+    "postcss": "8.5.12"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",
@@ -64,5 +74,8 @@
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^4.0.2"
+  },
+  "overrides": {
+    "postcss": "8.5.12"
   }
 }

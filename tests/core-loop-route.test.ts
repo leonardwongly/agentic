@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository, type AgenticRepository } from "@agentic/repository";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -37,6 +38,7 @@ describe("core loop telemetry route", () => {
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 
   beforeEach(async () => {
+    resetTelemetrySnapshot();
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
       await mkdtemp(path.join(os.tmpdir(), "agentic-core-loop-route-")),
@@ -49,6 +51,7 @@ describe("core loop telemetry route", () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    resetTelemetrySnapshot();
   });
 
   it("records a dashboard view summary from persisted governed work", async () => {
@@ -88,6 +91,114 @@ describe("core loop telemetry route", () => {
     expect(payload.summary.hasActivation).toBe(true);
     expect(payload.summary.hasValueRealization).toBe(true);
     expect(payload.summary.counts.completedGoals).toBe(1);
+    expectNoStoreHeaders(response);
+  });
+
+  it("records command-center decision and recovery-start telemetry", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await coreLoopRoute(
+      buildCoreLoopRequest({
+        event: "command_center_action",
+        role: "communications",
+        source: "priority",
+        targetSection: "approvals",
+        elapsedMs: 1_250,
+        severity: "critical"
+      })
+    );
+    const payload = (await response.json()) as { accepted: boolean };
+    const snapshot = getTelemetrySnapshot();
+    const actionMetric = snapshot.metrics.find((entry) => entry.name === "product.command_center.action.total");
+    const decisionTimingMetric = snapshot.metrics.find((entry) => entry.name === "product.command_center.time_to_decision_ms");
+    const recoveryMetric = snapshot.metrics.find((entry) => entry.name === "product.command_center.recovery_start.total");
+    const recoveryTimingMetric = snapshot.metrics.find(
+      (entry) => entry.name === "product.command_center.time_to_recovery_start_ms"
+    );
+    const actionLog = snapshot.logs.find((entry) => entry.message === "product.command_center.action");
+
+    expect(response.status).toBe(200);
+    expect(payload.accepted).toBe(true);
+    expect(actionMetric).toMatchObject({
+      kind: "counter",
+      name: "product.command_center.action.total",
+      value: 1,
+      attributes: expect.objectContaining({
+        role: "communications",
+        source: "priority",
+        targetSection: "approvals"
+      })
+    });
+    expect(decisionTimingMetric).toMatchObject({
+      kind: "histogram",
+      name: "product.command_center.time_to_decision_ms",
+      value: 1_250
+    });
+    expect(recoveryMetric).toMatchObject({
+      kind: "counter",
+      name: "product.command_center.recovery_start.total",
+      value: 1
+    });
+    expect(recoveryTimingMetric).toMatchObject({
+      kind: "histogram",
+      name: "product.command_center.time_to_recovery_start_ms",
+      value: 1_250
+    });
+    expect(actionLog).toMatchObject({
+      message: "product.command_center.action",
+      attributes: expect.objectContaining({
+        role: "communications",
+        source: "priority",
+        targetSection: "approvals",
+        elapsedMs: 1_250,
+        isRecoveryAction: true
+      })
+    });
+    expectNoStoreHeaders(response);
+  });
+
+  it("records command-center role changes without treating them as recovery actions", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await coreLoopRoute(
+      buildCoreLoopRequest({
+        event: "command_center_role_change",
+        role: "executive",
+        elapsedMs: 480
+      })
+    );
+    const payload = (await response.json()) as { accepted: boolean };
+    const snapshot = getTelemetrySnapshot();
+    const roleMetric = snapshot.metrics.find((entry) => entry.name === "product.command_center.role_change.total");
+    const timingMetric = snapshot.metrics.find((entry) => entry.name === "product.command_center.time_to_role_change_ms");
+    const recoveryMetric = snapshot.metrics.find((entry) => entry.name === "product.command_center.recovery_start.total");
+
+    expect(response.status).toBe(200);
+    expect(payload.accepted).toBe(true);
+    expect(roleMetric).toMatchObject({
+      kind: "counter",
+      name: "product.command_center.role_change.total",
+      value: 1,
+      attributes: expect.objectContaining({
+        role: "executive"
+      })
+    });
+    expect(timingMetric).toMatchObject({
+      kind: "histogram",
+      name: "product.command_center.time_to_role_change_ms",
+      value: 480
+    });
+    expect(recoveryMetric).toBeUndefined();
     expectNoStoreHeaders(response);
   });
 

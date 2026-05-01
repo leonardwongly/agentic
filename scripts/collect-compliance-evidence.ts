@@ -90,6 +90,13 @@ export interface ComplianceEvidenceBundle {
   controls: ComplianceControlEvidence[];
 }
 
+export interface ComplianceRegistryReferenceIssue {
+  controlId: string;
+  kind: "codePath" | "runbook" | "automatedCheckSource";
+  path: string;
+  checkId?: string;
+}
+
 function expectedGeneratedArtifactPaths(outputDir: string): string[] {
   return [
     path.posix.join(outputDir, "control-matrix.json"),
@@ -205,6 +212,53 @@ export function loadComplianceControlRegistry(filePath: string): ComplianceContr
   }
 
   return raw;
+}
+
+export function findMissingComplianceRegistryReferences(
+  registry: ComplianceControlRegistry,
+  options?: {
+    cwd?: string;
+  }
+): ComplianceRegistryReferenceIssue[] {
+  const cwd = options?.cwd ?? process.cwd();
+  const issues: ComplianceRegistryReferenceIssue[] = [];
+
+  for (const control of registry.controls) {
+    for (const codePath of control.codePaths) {
+      if (!inspectReference(cwd, codePath).exists) {
+        issues.push({
+          controlId: control.id,
+          kind: "codePath",
+          path: codePath
+        });
+      }
+    }
+
+    for (const runbook of control.runbooks) {
+      if (!inspectReference(cwd, runbook).exists) {
+        issues.push({
+          controlId: control.id,
+          kind: "runbook",
+          path: runbook
+        });
+      }
+    }
+
+    for (const check of control.automatedChecks) {
+      for (const sourcePath of check.sourcePaths) {
+        if (!inspectReference(cwd, sourcePath).exists) {
+          issues.push({
+            controlId: control.id,
+            kind: "automatedCheckSource",
+            path: sourcePath,
+            checkId: check.id
+          });
+        }
+      }
+    }
+  }
+
+  return issues;
 }
 
 export function buildComplianceEvidenceBundle(

@@ -15,6 +15,7 @@ import { vi } from "vitest";
 function buildBundle(params: {
   taskCapabilities: Array<"send" | "schedule" | "create" | "draft" | "read">;
   actionIntent: ReturnType<typeof ActionIntentSchema.parse>;
+  assignedAgent?: "workflow" | "communications" | "calendar";
 }) {
   const goalId = "goal-exec";
   const workflowId = "workflow-exec";
@@ -50,7 +51,7 @@ function buildBundle(params: {
         workflowId,
         title: "Dispatch task",
         summary: "Execute a typed intent.",
-        assignedAgent: "workflow",
+        assignedAgent: params.assignedAgent ?? "workflow",
         state: "waiting",
         riskClass: "R3",
         requiresApproval: true,
@@ -111,6 +112,7 @@ function buildGovernance(overrides: Partial<WorkspaceGovernance> = {}): Workspac
 describe("execution dispatch", () => {
   it("uses typed send_message intents instead of placeholder recipients", async () => {
     const bundle = buildBundle({
+      assignedAgent: "communications",
       taskCapabilities: ["read", "send"],
       actionIntent: ActionIntentSchema.parse({
         type: "send_message",
@@ -136,6 +138,13 @@ describe("execution dispatch", () => {
     expect(result.success).toBe(true);
     expect(result.action).toBe("send_message");
     expect(result.kind).toBe("execution.completed");
+    expect(result.outcome).toBe("completed");
+    expect(result.retryable).toBe(false);
+    expect(result.providerRef).toBe("draft-1");
+    expect(result.idempotencyKey).toMatch(/^task:task-exec:/);
+    expect(result.sideEffectTarget).toMatch(/^gmail:draft:client@example\.com:[0-9a-f]{16}$/);
+    expect(result.recoveryStrategy).toBe("none");
+    expect(result.dryRunSummary).toBe("Draft an email to client@example.com: Follow-up");
     expect(createDraft).toHaveBeenCalledWith({
       to: "client@example.com",
       subject: "Follow-up",
@@ -170,6 +179,97 @@ describe("execution dispatch", () => {
     expect(createLocalNote).toHaveBeenCalledWith({
       title: "Weekly plan",
       content: "Focus blocks and follow-up items."
+    });
+  });
+
+  it("executes typed schedule_event intents with the validated calendar payload", async () => {
+    const bundle = buildBundle({
+      assignedAgent: "calendar",
+      taskCapabilities: ["read", "schedule"],
+      actionIntent: ActionIntentSchema.parse({
+        type: "schedule_event",
+        summary: "Customer handoff",
+        start: "2026-04-20T09:00:00.000Z",
+        end: "2026-04-20T09:30:00.000Z",
+        description: "Share next steps and owners.",
+        attendees: ["owner@example.com", "client@example.com"]
+      })
+    });
+    const createEvent = vi.fn().mockResolvedValue({
+      id: "event-1",
+      htmlLink: "https://calendar.example.com/event-1"
+    });
+
+    const { result, log } = await executeApprovedTask({
+      task: bundle.tasks[0],
+      bundle,
+      adapters: {
+        calendar: {
+          createEvent,
+          updateEvent: vi.fn(),
+          listUpcomingEvents: vi.fn()
+        }
+      }
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe("schedule_event");
+    expect(result.kind).toBe("execution.completed");
+    expect(createEvent).toHaveBeenCalledWith({
+      summary: "Customer handoff",
+      start: "2026-04-20T09:00:00.000Z",
+      end: "2026-04-20T09:30:00.000Z",
+      description: "Share next steps and owners.",
+      attendees: ["owner@example.com", "client@example.com"]
+    });
+    expect(log.kind).toBe("execution.completed");
+  });
+
+  it("records partial-success metadata when draft creation succeeds but delivery fails", async () => {
+    const bundle = buildBundle({
+      assignedAgent: "communications",
+      taskCapabilities: ["read", "send"],
+      actionIntent: ActionIntentSchema.parse({
+        type: "send_message",
+        to: "client@example.com",
+        subject: "Follow-up",
+        body: "Here is the approved response.",
+        mode: "send"
+      })
+    });
+    const timeoutError = new Error("gmail send timed out");
+    timeoutError.name = "TimeoutError";
+
+    const { result, log } = await executeApprovedTask({
+      task: bundle.tasks[0],
+      bundle,
+      adapters: {
+        gmail: {
+          createDraft: vi.fn().mockResolvedValue({ id: "draft-2" }),
+          sendDraft: vi.fn().mockRejectedValue(timeoutError),
+          listRecentEmails: vi.fn()
+        }
+      }
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.action).toBe("send_message");
+    expect(result.kind).toBe("execution.failed");
+    expect(result.outcome).toBe("partial_success");
+    expect(result.retryable).toBe(true);
+    expect(result.providerRef).toBe("draft-2");
+    expect(result.idempotencyKey).toMatch(/^task:task-exec:/);
+    expect(result.sideEffectTarget).toMatch(/^gmail:send:client@example\.com:[0-9a-f]{16}$/);
+    expect(result.recoveryStrategy).toBe("retry");
+    expect(result.compensationHints).toContain("Review draft draft-2 before retrying delivery.");
+    expect(result.dryRunSummary).toBe("Draft and send email to client@example.com: Follow-up");
+    expect(result.detail).toContain("Draft draft-2 was created but delivery failed");
+    expect(log.kind).toBe("execution.failed");
+    expect(log.details).toMatchObject({
+      outcome: "partial_success",
+      retryable: true,
+      providerRef: "draft-2",
+      recoveryStrategy: "retry"
     });
   });
 
@@ -209,6 +309,7 @@ describe("execution dispatch", () => {
   it("re-checks governance and skips external sends when no approved approval is present", async () => {
     const bundle = GoalBundleSchema.parse({
       ...buildBundle({
+        assignedAgent: "communications",
         taskCapabilities: ["read", "send"],
         actionIntent: ActionIntentSchema.parse({
           type: "send_message",
@@ -243,6 +344,7 @@ describe("execution dispatch", () => {
 
   it("allows execution when governance would require approval but a matching approval is already approved", async () => {
     const bundle = buildBundle({
+      assignedAgent: "communications",
       taskCapabilities: ["read", "send"],
       actionIntent: ActionIntentSchema.parse({
         type: "send_message",
@@ -269,6 +371,120 @@ describe("execution dispatch", () => {
     expect(result.success).toBe(true);
     expect(result.kind).toBe("execution.completed");
     expect(createDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to manual review when no approved typed approval is present", async () => {
+    const bundle = GoalBundleSchema.parse({
+      ...buildBundle({
+        taskCapabilities: ["read", "create"],
+        actionIntent: ActionIntentSchema.parse({
+          type: "create_note",
+          title: "Weekly plan",
+          content: "Focus blocks and follow-up items."
+        })
+      }),
+      approvals: []
+    });
+    const createLocalNote = vi.fn().mockResolvedValue({ slug: "weekly-plan" });
+
+    const { result, log } = await executeApprovedTask({
+      task: bundle.tasks[0],
+      bundle,
+      adapters: {
+        notes: {
+          createLocalNote
+        }
+      }
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.kind).toBe("execution.skipped");
+    expect(result.detail).toContain("cannot be executed automatically");
+    expect(createLocalNote).not.toHaveBeenCalled();
+    expect(log.kind).toBe("execution.skipped");
+  });
+
+  it("skips execution when the typed intent exceeds the task capability grant", async () => {
+    const bundle = buildBundle({
+      taskCapabilities: ["read"],
+      actionIntent: ActionIntentSchema.parse({
+        type: "create_note",
+        title: "Weekly plan",
+        content: "Focus blocks and follow-up items."
+      })
+    });
+    const createLocalNote = vi.fn().mockResolvedValue({ slug: "weekly-plan" });
+
+    const { result, log } = await executeApprovedTask({
+      task: bundle.tasks[0],
+      bundle,
+      adapters: {
+        notes: {
+          createLocalNote
+        }
+      }
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.kind).toBe("execution.skipped");
+    expect(result.detail).toContain("require one of [create]");
+    expect(createLocalNote).not.toHaveBeenCalled();
+    expect(log.kind).toBe("execution.skipped");
+  });
+
+  it("skips expanded typed intents when the intent risk exceeds the task grant", async () => {
+    const bundle = buildBundle({
+      assignedAgent: "workflow",
+      taskCapabilities: ["read", "update"],
+      actionIntent: ActionIntentSchema.parse({
+        type: "update_record",
+        riskClass: "R4",
+        targetType: "goal",
+        targetId: "goal-exec",
+        patch: { status: "running" },
+        reason: "Attempt to update a high-risk record without matching grant."
+      })
+    });
+
+    const { result, log } = await executeApprovedTask({
+      task: bundle.tasks[0],
+      bundle,
+      adapters: {}
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.kind).toBe("execution.skipped");
+    expect(result.detail).toContain("risk R4 exceeds task risk grant R3");
+    expect(log.kind).toBe("execution.skipped");
+  });
+
+  it("skips execution when the task capability grant violates the agent allowlist", async () => {
+    const bundle = buildBundle({
+      assignedAgent: "communications",
+      taskCapabilities: ["read", "create"],
+      actionIntent: ActionIntentSchema.parse({
+        type: "create_note",
+        title: "Weekly plan",
+        content: "Focus blocks and follow-up items."
+      })
+    });
+    const createLocalNote = vi.fn().mockResolvedValue({ slug: "weekly-plan" });
+
+    const { result, log } = await executeApprovedTask({
+      task: bundle.tasks[0],
+      bundle,
+      adapters: {
+        notes: {
+          createLocalNote
+        }
+      }
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.kind).toBe("execution.skipped");
+    expect(result.detail).toContain('granted disallowed capability "create"');
+    expect(createLocalNote).not.toHaveBeenCalled();
+    expect(log.kind).toBe("execution.skipped");
   });
 
   it("reconciles successful execution into completed task state and completed workflow status", () => {
