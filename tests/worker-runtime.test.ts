@@ -1269,6 +1269,112 @@ describe("worker runtime", () => {
     });
   });
 
+  it("opens a circuit breaker for repeatedly failing job kinds to stop thrashing", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const controller = new AbortController();
+
+    runDocsBuildMock.mockImplementation(async () => {
+      throw new Error("Synthetic docs failure with secret-like marker");
+    });
+
+    const failingJob = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "docs_render",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      maxAttempts: 10,
+      idempotencyKey: "worker-runtime-docs-circuit-breaker",
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      }
+    });
+
+    await repository.enqueueJob(failingJob);
+
+    setTimeout(() => controller.abort(), 60);
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-circuit-breaker-test",
+      pollIntervalMs: 1,
+      retryPolicy: {
+        baseDelayMs: 0,
+        factor: 1,
+        maxDelayMs: 0
+      },
+      claim: {
+        userId: SYSTEM_USER_ID,
+        kinds: ["docs_render"]
+      },
+      immuneSystem: {
+        enabled: true,
+        maxConsecutiveFailures: 2,
+        coolDownMs: 10_000
+      },
+      signal: controller.signal
+    });
+
+    const persistedJob = await repository.getJob(failingJob.id, SYSTEM_USER_ID);
+
+    expect(result.stopReason).toBe("aborted");
+    expect(persistedJob?.attemptCount).toBe(2);
+    expect(persistedJob?.status).toBe("retrying");
+  });
+
+  it("recovers automatically by closing the circuit breaker after the cooldown", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const controller = new AbortController();
+
+    runDocsBuildMock.mockImplementation(async () => {
+      throw new Error("Synthetic docs failure");
+    });
+
+    const failingJob = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "docs_render",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      maxAttempts: 25,
+      idempotencyKey: "worker-runtime-docs-circuit-breaker-recover",
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      }
+    });
+
+    await repository.enqueueJob(failingJob);
+
+    setTimeout(() => controller.abort(), 220);
+
+    await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-circuit-breaker-recover-test",
+      pollIntervalMs: 1,
+      retryPolicy: {
+        baseDelayMs: 0,
+        factor: 1,
+        maxDelayMs: 0
+      },
+      claim: {
+        userId: SYSTEM_USER_ID,
+        kinds: ["docs_render"]
+      },
+      immuneSystem: {
+        enabled: true,
+        maxConsecutiveFailures: 2,
+        coolDownMs: 40
+      },
+      signal: controller.signal
+    });
+
+    const persistedJob = await repository.getJob(failingJob.id, SYSTEM_USER_ID);
+
+    expect(persistedJob?.attemptCount).toBeGreaterThan(2);
+    expect(persistedJob?.attemptCount).toBeLessThan(25);
+    expect(persistedJob?.status).toBe("retrying");
+  });
+
   it("keeps docs-render execution idempotent across retries", async () => {
     const job = createJobRecord({
       userId: SYSTEM_USER_ID,
