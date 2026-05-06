@@ -1,5 +1,11 @@
-import { SYSTEM_USER_ID, WorkspaceGovernanceSchema, createHumanActorContext, nowIso } from "@agentic/contracts";
-import { generateBriefing, generateMorningBriefing, respondToApproval, processUserRequest } from "@agentic/orchestrator";
+import { SYSTEM_USER_ID, SubAgentPlanSchema, WorkspaceGovernanceSchema, createHumanActorContext, nowIso } from "@agentic/contracts";
+import {
+  generateBriefing,
+  generateMorningBriefing,
+  respondToApproval,
+  processUserRequest,
+  validateSubAgentPlan
+} from "@agentic/orchestrator";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord } from "@agentic/memory";
 
@@ -132,6 +138,73 @@ describe("orchestrator", () => {
       subAgentRoleName: "Core Implementation Agent"
     });
     expect(bundle.actionLogs.filter((log) => log.kind === "agent.completed").length).toBeGreaterThanOrEqual(subAgentTasks.length);
+  });
+
+  it("keeps specific inbox triage routing ahead of broad delegation language", async () => {
+    const bundle = await processUserRequest({
+      ...buildContext(),
+      request: "Delegate my inbox triage and prepare reply drafts for the most important client messages."
+    });
+
+    expect(bundle.goal.intent).toBe("communications-triage");
+    expect(bundle.tasks.some((task) => task.title.startsWith("Sub-agent:"))).toBe(false);
+  });
+
+  it("rejects invalid sub-agent dependency graphs", () => {
+    const planWithUnknownDependency = SubAgentPlanSchema.parse({
+      id: "subagents-goal-1",
+      goalId: "goal-1",
+      anchorTaskId: null,
+      parentAgent: "orchestrator",
+      coordinationStrategy: "hybrid",
+      roles: [
+        {
+          id: "core",
+          name: "Core Agent",
+          agent: "workflow",
+          role: "Implement the bounded change.",
+          responsibilities: ["Implement the bounded change."],
+          allowedCapabilities: ["read", "update"],
+          inputContracts: ["Recon output."],
+          expectedOutputs: ["Patch."],
+          dependsOn: ["missing-recon"],
+          riskClass: "R2",
+          handoffCriteria: ["Patch is test-backed."],
+          guardrails: ["Keep diffs scoped."]
+        }
+      ],
+      successCriteria: ["Dependencies are valid."],
+      createdAt: nowIso()
+    });
+
+    expect(() => validateSubAgentPlan(planWithUnknownDependency)).toThrow(/unknown role "missing-recon"/i);
+
+    const cyclicPlan = SubAgentPlanSchema.parse({
+      ...planWithUnknownDependency,
+      roles: [
+        {
+          ...planWithUnknownDependency.roles[0],
+          id: "core",
+          dependsOn: ["test"]
+        },
+        {
+          id: "test",
+          name: "Test Agent",
+          agent: "knowledge",
+          role: "Validate the bounded change.",
+          responsibilities: ["Validate the bounded change."],
+          allowedCapabilities: ["read", "create"],
+          inputContracts: ["Core output."],
+          expectedOutputs: ["Regression tests."],
+          dependsOn: ["core"],
+          riskClass: "R2",
+          handoffCriteria: ["Tests are deterministic."],
+          guardrails: ["Do not hide failures."]
+        }
+      ]
+    });
+
+    expect(() => validateSubAgentPlan(cyclicPlan)).toThrow(/dependency cycle/i);
   });
 
   it("promotes explicit communications cues into typed send approvals for inbox triage", async () => {

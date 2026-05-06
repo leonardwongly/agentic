@@ -261,10 +261,6 @@ const scenarioCatalog: Record<
 function detectScenarioRegex(request: string): ScenarioKey {
   const normalized = request.toLowerCase();
 
-  if (/(sub-?agents?|delegate|delegation|parallel workstreams?|multi[- ]agent|specialist agents?|complex task)/.test(normalized)) {
-    return "complex-delegation";
-  }
-
   if (/(inbox|email|reply|triage|messages?)/.test(normalized)) {
     return "inbox-triage";
   }
@@ -275,6 +271,14 @@ function detectScenarioRegex(request: string): ScenarioKey {
 
   if (/(travel|trip|flight|hotel|itinerary)/.test(normalized)) {
     return "travel-preparation";
+  }
+
+  if (
+    /(sub-?agents?|spawn (?:bounded )?(?:sub-?)?agents?|parallel (?:agents?|workstreams?)|multi[- ]agent|specialist agents?|delegate (?:to|across) (?:agents?|sub-?agents?|roles|workstreams?)|complex task)/.test(
+      normalized
+    )
+  ) {
+    return "complex-delegation";
   }
 
   return "general-coordination";
@@ -508,7 +512,7 @@ function buildSubAgentPlan(params: {
     };
   });
 
-  return SubAgentPlanSchema.parse({
+  return validateSubAgentPlan(SubAgentPlanSchema.parse({
     id: `subagents-${params.goalId}`,
     goalId: params.goalId,
     anchorTaskId: null,
@@ -521,7 +525,63 @@ function buildSubAgentPlan(params: {
       "External side effects remain gated by the existing task policy and approval workflow."
     ],
     createdAt: params.createdAt
-  });
+  }));
+}
+
+export function validateSubAgentPlan(plan: SubAgentPlan): SubAgentPlan {
+  const roleIds = new Set<string>();
+
+  for (const role of plan.roles) {
+    if (roleIds.has(role.id)) {
+      throw new Error(`Sub-agent plan ${plan.id} contains duplicate role id "${role.id}".`);
+    }
+
+    roleIds.add(role.id);
+  }
+
+  for (const role of plan.roles) {
+    for (const dependencyRoleId of role.dependsOn) {
+      if (!roleIds.has(dependencyRoleId)) {
+        throw new Error(
+          `Sub-agent role "${role.id}" depends on unknown role "${dependencyRoleId}" in plan ${plan.id}.`
+        );
+      }
+    }
+  }
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const rolesById = new Map(plan.roles.map((role) => [role.id, role]));
+
+  function visit(roleId: string, path: string[]): void {
+    if (visited.has(roleId)) {
+      return;
+    }
+
+    if (visiting.has(roleId)) {
+      throw new Error(`Sub-agent plan ${plan.id} contains a dependency cycle: ${[...path, roleId].join(" -> ")}.`);
+    }
+
+    visiting.add(roleId);
+
+    const role = rolesById.get(roleId);
+    if (!role) {
+      throw new Error(`Sub-agent role "${roleId}" was not found while validating plan ${plan.id}.`);
+    }
+
+    for (const dependencyRoleId of role.dependsOn) {
+      visit(dependencyRoleId, [...path, roleId]);
+    }
+
+    visiting.delete(roleId);
+    visited.add(roleId);
+  }
+
+  for (const role of plan.roles) {
+    visit(role.id, []);
+  }
+
+  return plan;
 }
 
 function formatSubAgentPlan(plan: SubAgentPlan): string {
@@ -556,7 +616,7 @@ function expandPlannedTasks(params: {
     return params.baseTasks;
   }
 
-  const subAgentPlan = params.subAgentPlan;
+  const subAgentPlan = validateSubAgentPlan(params.subAgentPlan);
   const spawnedTasks = subAgentPlan.roles.map((role) => {
     const template = subAgentRoleTemplates.find((candidate) => candidate.id === role.id);
 
@@ -746,6 +806,7 @@ export async function processUserRequest(params: {
     subAgentPlan
   });
   const subAgentTaskIds = new Map<string, string>();
+  const subAgentTaskDependencyRoleIds = new Map<string, string[]>();
   const confidenceBias = Math.min(0.08, relevantMemories.length * 0.01);
 
   function appendLog(input: Parameters<typeof createActionLog>[0]): ActionLog {
@@ -836,9 +897,6 @@ export async function processUserRequest(params: {
         ...requestCapabilities.filter((capability) => plannedTask.capabilities.includes(capability))
       ])
     );
-    const dependsOn = plannedTask.dependsOnRoleIds
-      ?.map((roleId) => subAgentTaskIds.get(roleId))
-      .filter((taskId): taskId is string => Boolean(taskId));
     const policyRiskClass = riskFromCapabilities(capabilities);
     const scorecard = await params.resolveAgentMetrics?.(plannedTask.assignedAgent);
     const learningValidation = await params.resolvePolicyReplayValidation?.({
@@ -868,7 +926,7 @@ export async function processUserRequest(params: {
       requiresApproval: decision.requiresApproval,
       toolCapabilities: capabilities,
       state,
-      dependsOn,
+      dependsOn: plannedTask.subAgentRole ? [] : undefined,
       responsibility: deriveTaskResponsibility({
         assignedAgent: plannedTask.assignedAgent,
         requiresApproval: decision.requiresApproval,
@@ -908,6 +966,7 @@ export async function processUserRequest(params: {
     artifacts.push(...agentArtifacts);
     if (plannedTask.subAgentRole) {
       subAgentTaskIds.set(plannedTask.subAgentRole.id, nextTask.id);
+      subAgentTaskDependencyRoleIds.set(nextTask.id, plannedTask.dependsOnRoleIds ?? []);
     }
     appendLog({
       goalId,
@@ -995,6 +1054,30 @@ export async function processUserRequest(params: {
         }
       });
     }
+  }
+
+  for (let index = 0; index < tasks.length; index += 1) {
+    const dependencyRoleIds = subAgentTaskDependencyRoleIds.get(tasks[index].id);
+
+    if (!dependencyRoleIds) {
+      continue;
+    }
+
+    const dependsOn = dependencyRoleIds.map((roleId) => {
+      const taskId = subAgentTaskIds.get(roleId);
+
+      if (!taskId) {
+        throw new Error(`Sub-agent task dependency "${roleId}" was not resolved for task ${tasks[index].id}.`);
+      }
+
+      return taskId;
+    });
+
+    tasks[index] = TaskSchema.parse({
+      ...tasks[index],
+      dependsOn,
+      updatedAt: nowIso()
+    });
   }
 
   const watchers = catalog.watcherFactory(goalId);
