@@ -31,7 +31,7 @@ export type DashboardOperationsTarget = {
 };
 
 export type DashboardOperationsRemediation = {
-  kind: "open_target" | "replay_job";
+  kind: "open_target" | "replay_job" | "release_expired_lease" | "cancel_job";
   label: string;
   note: string;
   permission: "owner";
@@ -80,6 +80,14 @@ export type DashboardConnectorHealthIssue = {
   linkedIntegrationIds: string[];
   linkedIntegrationNames: string[];
   meetingReadinessTarget: boolean | null;
+  remediation: DashboardConnectorRemediation | null;
+};
+
+export type DashboardConnectorRemediation = {
+  kind: "revalidate_connector_credential" | "mark_connector_reconnect_required" | "open_target";
+  label: string;
+  note: string;
+  permission: "owner";
 };
 
 export type DashboardConnectorHealthSummary = {
@@ -637,7 +645,11 @@ function buildJobTarget(job: JobRecord, goalTitleById: Map<string, string>): Das
   }
 }
 
-function buildJobRemediation(job: JobRecord, target: DashboardOperationsTarget | null): DashboardOperationsRemediation | null {
+function buildJobRemediation(
+  job: JobRecord,
+  target: DashboardOperationsTarget | null,
+  recoveryKind?: "expired_lease" | "stale_pending" | "retrying"
+): DashboardOperationsRemediation | null {
   if (job.status === "dead_letter" && job.journal.recovery?.strategy === "replay_job") {
     return {
       kind: "replay_job",
@@ -645,6 +657,26 @@ function buildJobRemediation(job: JobRecord, target: DashboardOperationsTarget |
       note: job.journal.recovery.note,
       permission: "owner",
       statusUrl: job.journal.recovery.statusUrl ?? `/api/jobs/${job.id}`
+    };
+  }
+
+  if (recoveryKind === "expired_lease") {
+    return {
+      kind: "release_expired_lease",
+      label: "Release lease",
+      note: "Release the expired worker lease so another worker can claim the job.",
+      permission: "owner",
+      statusUrl: `/api/jobs/${job.id}`
+    };
+  }
+
+  if (recoveryKind === "stale_pending" || recoveryKind === "retrying") {
+    return {
+      kind: "cancel_job",
+      label: "Cancel job",
+      note: "Cancel the queued job and preserve an operator recovery audit trail.",
+      permission: "owner",
+      statusUrl: `/api/jobs/${job.id}`
     };
   }
 
@@ -687,13 +719,14 @@ function buildAsyncIssueForJob(params: {
     status: job.status,
     updatedAt: job.updatedAt,
     target,
-    remediation: buildJobRemediation(job, target)
+    remediation: null
   } satisfies Omit<DashboardAsyncExecutionIssue, "summary" | "severity">;
 
   if (job.status === "dead_letter") {
     return {
       issue: {
         ...base,
+        remediation: buildJobRemediation(job, target),
         severity: "critical",
         summary: `Dead-lettered after ${job.attemptCount}/${job.maxAttempts} attempts.`
       },
@@ -706,6 +739,7 @@ function buildAsyncIssueForJob(params: {
     return {
       issue: {
         ...base,
+        remediation: buildJobRemediation(job, target, "expired_lease"),
         severity: "critical",
         summary: `Lease expired ${formatAgeAgo(job.leaseExpiresAt ?? job.updatedAt, now)} while the job still reads as running.`
       },
@@ -718,6 +752,7 @@ function buildAsyncIssueForJob(params: {
     return {
       issue: {
         ...base,
+        remediation: buildJobRemediation(job, target, "stale_pending"),
         severity: "critical",
         summary: `Pending since ${formatAgeAgo(job.availableAt, now)} without a worker claim.`
       },
@@ -730,6 +765,7 @@ function buildAsyncIssueForJob(params: {
     return {
       issue: {
         ...base,
+        remediation: buildJobRemediation(job, target, "retrying"),
         severity: "attention",
         summary: `Retry ${job.attemptCount}/${job.maxAttempts} is queued after the last worker failure.`
       },
@@ -779,13 +815,20 @@ function buildConnectorIssueForCredential(
       section: "integrations",
       itemId: linkedIntegrations.length === 1 ? linkedIntegrations[0]!.id : undefined,
       label: `Open ${credential.provider} integrations`
-    }
+    },
+    remediation: null
   } satisfies Omit<DashboardConnectorHealthIssue, "summary" | "severity">;
 
   if (credential.status === "reconnect_required") {
     return {
       issue: {
         ...base,
+        remediation: {
+          kind: "open_target",
+          label: "Reconnect",
+          note: "Open the integration setup and complete provider re-authentication.",
+          permission: "owner"
+        },
         severity: "critical",
         summary: "Re-authentication is required before provider actions can resume."
       },
@@ -798,6 +841,12 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        remediation: {
+          kind: "mark_connector_reconnect_required",
+          label: "Require reconnect",
+          note: "Convert this revoked credential into an explicit reconnect-required state for operators.",
+          permission: "owner"
+        },
         severity: "critical",
         summary: "Credential access was revoked and provider actions are blocked."
       },
@@ -810,6 +859,12 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        remediation: {
+          kind: "mark_connector_reconnect_required",
+          label: "Require reconnect",
+          note: "Mark the expired credential as requiring provider reconnect before automation resumes.",
+          permission: "owner"
+        },
         severity: "critical",
         summary: `Credential expired ${formatAgeAgo(credential.expiresAt ?? credential.updatedAt, now)} and needs rotation or re-authentication.`
       },
@@ -822,6 +877,12 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        remediation: {
+          kind: "revalidate_connector_credential",
+          label: "Revalidate",
+          note: "Re-check the credential and clear refresh failure state if provider access is healthy.",
+          permission: "owner"
+        },
         severity: "attention",
         summary: "Token refresh failed, so the connector may stop working until it is revalidated."
       },
@@ -834,6 +895,12 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        remediation: {
+          kind: "revalidate_connector_credential",
+          label: "Revalidate",
+          note: "Refresh validation evidence before using this connector for automation decisions.",
+          permission: "owner"
+        },
         severity: "attention",
         summary: `Credential has not been validated since ${formatAgeAgo(credential.lastValidatedAt ?? credential.updatedAt, now)}.`
       },
