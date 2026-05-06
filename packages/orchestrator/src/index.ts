@@ -39,7 +39,13 @@ import { createTask, createWorkflowState, recomputeWorkflowStatuses, transitionT
 import { inferCapabilitiesFromRequest, planActionExecution } from "@agentic/integrations";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
 import { createActionLog } from "@agentic/observability";
-import { buildPolicyDecisionTrace, riskFromCapabilities, simulateTaskPolicy, type PolicyReplayValidation } from "@agentic/policy";
+import {
+  buildPolicyDecisionTrace,
+  detectAgentPoisoningAttempt,
+  riskFromCapabilities,
+  simulateTaskPolicy,
+  type PolicyReplayValidation
+} from "@agentic/policy";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
@@ -425,6 +431,15 @@ export async function processUserRequest(params: {
 
   if (request.length > 2_000) {
     throw new Error("The request exceeds the 2000 character safety limit.");
+  }
+
+  const poisoningAttempt = detectAgentPoisoningAttempt(request);
+  if (poisoningAttempt) {
+    throw new Error(
+      `Request rejected by Agentic International Law: agent poisoning attempts (bribery, corruption, collusion, or intent override) are blocked. (${poisoningAttempt.matchedTerms.join(
+        ", "
+      )})`
+    );
   }
 
   const contextPack = buildWorkflowContextPack({
