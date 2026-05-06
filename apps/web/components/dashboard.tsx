@@ -36,6 +36,10 @@ import {
   type RecommendationLoadState
 } from "./dashboard-goals-card";
 import { DashboardAdvancedSurface } from "./dashboard-advanced-surface";
+import { DashboardTraceabilityCard } from "./dashboard-traceability-card";
+import { DashboardDetailDrawer } from "./dashboard-detail-drawer";
+import { createEmptyTraceability } from "./dashboard-traceability-fallback";
+import { useDashboardDetailSelection } from "./use-dashboard-detail-selection";
 import type {
   GoalRecommendationsApiResponse,
   OperatorProductPayload,
@@ -113,7 +117,6 @@ import {
   FaviconBadge,
   toast,
   ToastContainer,
-  SlideOutPanel,
   QuickActionsBar,
   FloatingActionsBar,
   NoApprovalsEmpty,
@@ -321,7 +324,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [recommendationState, setRecommendationState] = useState<RequestState>({ kind: "idle", message: "" });
   const [recommendationResultsByGoal, setRecommendationResultsByGoal] = useState<Record<string, RecommendationLoadState>>({});
   const [recommendationPendingByGoal, setRecommendationPendingByGoal] = useState<Record<string, boolean>>({});
-  const [slideOutPanel, setSlideOutPanel] = useState<{ type: string; data: unknown } | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
   const [commandCenterRole, setCommandCenterRole] = useState<CommandCenterRole>("command");
@@ -368,6 +370,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle])),
     [data.goals]
   );
+  const cockpitVariant = data.cockpitRollout?.variant ?? "legacy";
+  const traceability = data.traceability ?? createEmptyTraceability(data.activeWorkspace?.id ?? null);
+  const detailSelection = useDashboardDetailSelection(data.approvals, goalBundleById);
+  const { detailPanel, selectedGoalDetailBundle, selectedApprovalDetail, selectedApprovalGoalBundle, openGoalDetails, openApprovalDetails, closeDetails } =
+    detailSelection;
   const goalConfidenceById = useMemo(
     () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.confidence])),
     [data.goals]
@@ -2251,7 +2258,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       />
 
       <main className={`dashboard-shell ${theme.mode === 'dark' ? 'dark-mode' : ''}`}>
-        <CoreLoopViewTracker workspaceId={data.activeWorkspace?.id ?? null} />
+        <CoreLoopViewTracker workspaceId={data.activeWorkspace?.id ?? null} cockpitVariant={cockpitVariant} />
         {/* Stats Bar with Theme Toggle */}
         <div className="stats-bar-wrapper">
           <StatsBar {...statsBar.props} />
@@ -2266,6 +2273,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         />
 
         <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openView={openView} />
+
+        <DashboardTraceabilityCard traceability={traceability} openTarget={navigateToSection} />
 
         {/* Recent Actions */}
         {recentActions.recentActions.length > 0 && (
@@ -3021,6 +3030,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           confirmGoalShare={confirmGoalShare}
           cancelGoalShareReview={cancelGoalShareReview}
           saveAsTemplate={saveAsTemplate}
+          openGoalDetails={openGoalDetails}
           shareStatsByGoal={shareStatsByGoal}
           highlightedItemId={highlightedItemId}
           getItemAnchorId={getDashboardItemAnchorId}
@@ -3123,6 +3133,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                                 isPinned={pinnedItems.isPinned(approval.id, "approval")}
                                 onToggle={pinnedItems.togglePin}
                               />
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                onClick={() => openApprovalDetails(approval.id)}
+                                disabled={isPending}
+                              >
+                                Open details
+                              </button>
                               <button type="button" onClick={() => respondApproval(approval.id, "approved", { scope: "once" })} disabled={isPending}>
                                 Approve once
                               </button>
@@ -3196,6 +3214,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                       isPinned={pinnedItems.isPinned(approval.id, "approval")}
                       onToggle={pinnedItems.togglePin}
                     />
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => openApprovalDetails(approval.id)}
+                      disabled={isPending}
+                    >
+                      Open details
+                    </button>
                     <button type="button" onClick={() => respondApproval(approval.id, "approved", { scope: "once" })} disabled={isPending}>
                       Approve once
                     </button>
@@ -3340,6 +3366,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           runTemplate={runTemplate}
           deleteTemplate={deleteTemplate}
         />
+
+        <DashboardDetailDrawer
+          isOpen={detailPanel !== null}
+          goalBundle={selectedGoalDetailBundle} approval={selectedApprovalDetail}
+          relatedGoal={selectedApprovalGoalBundle} onClose={closeDetails}
+          onShareGoal={shareGoal} onSaveAsTemplate={saveAsTemplate}
+          onRespondApproval={respondApproval} isPending={isPending}
+        />
       </section>
 
       <FloatingActionsBar position="bottom">
@@ -3356,6 +3390,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         onNavigateToSection={navigateToSection}
         onLogout={logout}
         isPending={isPending}
+        cockpitVariant={cockpitVariant}
       />
     </main>
     </KeyboardShortcutsProvider>

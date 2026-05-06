@@ -54,12 +54,25 @@ describe("execution provenance graph", () => {
     });
 
     expect(graph.nodes.some((node) => node.id === `goal:${bundle.goal.id}`)).toBe(true);
+    expect(graph.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: `task:${bundle.tasks[0]?.id}`,
+          type: "task",
+          metadata: expect.objectContaining({
+            assignedAgent: bundle.tasks[0]?.assignedAgent,
+            state: bundle.tasks[0]?.state
+          })
+        })
+      ])
+    );
     expect(graph.nodes.some((node) => node.id === "job:dead-letter-job")).toBe(true);
     expect(graph.nodes.some((node) => node.id === "failure:dead-letter-job")).toBe(true);
     expect(graph.nodes.some((node) => node.id === "context_packet:ctx_memory-1")).toBe(true);
     expect(graph.edges).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "queued", to: "job:dead-letter-job" }),
+        expect.objectContaining({ type: "created", from: `goal:${bundle.goal.id}`, to: `task:${bundle.tasks[0]?.id}` }),
         expect.objectContaining({ type: "failed", to: "failure:dead-letter-job" }),
         expect.objectContaining({ type: "derived_from", to: "context_packet:ctx_memory-1" })
       ])

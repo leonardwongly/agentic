@@ -8,7 +8,15 @@
   --line: rgba(31, 42, 46, 0.12);
   --danger: #8d2b2b;
   --success: #176343;
+  --warning: #8a5a00;
+  --border: var(--line);
+  --surface: var(--panel);
+  --surface-muted: rgba(255, 255, 255, 0.58);
+  --brand: var(--accent);
+  --text: var(--ink);
+  --text-secondary: var(--muted);
   --radius: 24px;
+  --ui-radius: 8px;
   --shadow: 0 18px 50px rgba(12, 27, 35, 0.12);
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
 }
@@ -66,6 +74,206 @@ select:focus-visible {
 button:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@layer dashboard-ui {
+  .ui-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--ui-radius);
+    padding: 1rem;
+    background: var(--surface);
+    box-shadow: 0 10px 24px rgba(12, 27, 35, 0.08);
+  }
+
+  .ui-panel-header,
+  .ui-section-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .ui-panel-header h2,
+  .ui-section-header h3 {
+    margin: 0;
+    letter-spacing: 0;
+  }
+
+  .ui-panel-header p,
+  .ui-section-header p {
+    margin: 0.25rem 0 0;
+    color: var(--text-secondary);
+  }
+
+  .ui-eyebrow {
+    color: var(--brand);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .ui-panel-actions,
+  .ui-section-actions,
+  .ui-action-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  .ui-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .ui-metric-card {
+    display: grid;
+    gap: 0.25rem;
+    min-height: 92px;
+    border: 1px solid var(--border);
+    border-radius: var(--ui-radius);
+    padding: 0.8rem;
+    background: var(--surface-muted);
+  }
+
+  .ui-metric-card span,
+  .ui-metric-card small {
+    color: var(--text-secondary);
+  }
+
+  .ui-metric-card strong {
+    font-size: 1.45rem;
+    letter-spacing: 0;
+  }
+
+  .ui-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.8rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.22rem 0.6rem;
+    background: var(--surface-muted);
+    color: var(--text);
+    font-size: 0.82rem;
+    line-height: 1.2;
+  }
+
+  .link-button {
+    border-radius: var(--ui-radius);
+    padding: 0;
+    background: transparent;
+    color: var(--brand);
+    text-align: left;
+    text-decoration: underline;
+    text-underline-offset: 0.2rem;
+  }
+
+  .link-button:hover:not(:disabled) {
+    box-shadow: none;
+    transform: none;
+  }
+
+  .ui-pill.healthy,
+  .ui-metric-card.healthy {
+    border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  }
+
+  .ui-pill.attention,
+  .ui-metric-card.attention {
+    border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  }
+
+  .ui-pill.critical,
+  .ui-metric-card.critical {
+    border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  }
+
+  .ui-data-table-wrap {
+    overflow-x: auto;
+  }
+
+  .ui-data-table {
+    width: 100%;
+    min-width: 680px;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+  }
+
+  .ui-data-table caption {
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .ui-data-table th,
+  .ui-data-table td {
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .ui-data-table th {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+  }
+
+  .traceability-memory-list {
+    display: grid;
+    gap: 0.65rem;
+  }
+
+  .traceability-memory-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--ui-radius);
+    padding: 0.7rem;
+    background: var(--surface-muted);
+  }
+
+  .traceability-memory-empty {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  @media (max-width: 640px) {
+    .ui-panel-header,
+    .ui-section-header,
+    .traceability-memory-row {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .ui-data-table {
+      min-width: 560px;
+    }
+  }
 }
 
 .primary-button {
