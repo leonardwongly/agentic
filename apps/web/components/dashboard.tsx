@@ -36,6 +36,11 @@ import {
   type RecommendationLoadState
 } from "./dashboard-goals-card";
 import { DashboardAdvancedSurface } from "./dashboard-advanced-surface";
+import {
+  DashboardCockpitLanes,
+  DashboardDetailDrawer,
+  type DashboardDetailSelection
+} from "./dashboard-cockpit";
 import type {
   GoalRecommendationsApiResponse,
   OperatorProductPayload,
@@ -81,7 +86,6 @@ import {
   type DocsRenderJobStatusApiResponse,
   type GoalJobStatusApiResponse,
   type GoalQueuedApiResponse,
-  loadDashboardSnapshot as fetchDashboardSnapshot,
   loadTemplatesSnapshot as fetchTemplatesSnapshot,
   type NLIntentApiResponse,
   pollJobStatusUntilSettled,
@@ -91,6 +95,14 @@ import {
 } from "./dashboard-async";
 import { DashboardOperatingSectionsCard } from "./dashboard-operating-sections";
 import { DashboardOperationsSections } from "./dashboard-operations-sections";
+import { useDashboardSnapshot } from "./dashboard-hooks";
+import {
+  ActivityTimeline,
+  ArtifactsPanel,
+  DashboardHeroPanel,
+  NowQueueCard,
+  ReliabilityCard
+} from "./dashboard-primary-sections";
 import { useGoalShareReview } from "./use-goal-share-review";
 import {
   StatusBadge,
@@ -102,27 +114,20 @@ import {
   executionModeFilterOptions,
   extractArtifactExecutionMode,
   getExecutionModeFilterOption,
-  getImplementationTierPresentation,
-  getExecutionModePresentation,
   matchesExecutionModeFilter,
-  CopyButton,
-  CopyableText,
   RelativeTime,
   KeyboardShortcutsProvider,
   useShortcut,
   FaviconBadge,
   toast,
   ToastContainer,
-  SlideOutPanel,
   QuickActionsBar,
   FloatingActionsBar,
   NoApprovalsEmpty,
-  NoArtifactsEmpty,
   // 10x Components Phase 1
   StatsBar,
   useStatsBar,
   CollapsibleSection,
-  ArtifactPreview,
   ApprovalPreview,
   useSmartDefaults,
   useRecentActions,
@@ -136,9 +141,7 @@ import {
   UnifiedFeed,
   useUnifiedFeed,
   RiskClassHelp,
-  FeatureHelp,
   useDeepLink,
-  ShareLinkButton,
   usePinnedItems,
   PinButton,
   sortWithPins,
@@ -157,12 +160,9 @@ import {
   ThemeToggle,
   NLFloatingBar,
   useNLExecutor,
-  TimelineFilter,
   useFilteredTimeline,
-  HealthIndicator,
   InlineGoalProgress,
   useGoalProgress,
-  formatConfidencePercentage,
   type ExecutionModeFilterValue
 } from "./ui";
 
@@ -280,7 +280,7 @@ export function Dashboard(props: DashboardProps) {
 }
 
 function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }: DashboardProps) {
-  const [data, setData] = useState(initialData);
+  const { data, setData, loadDashboardSnapshot } = useDashboardSnapshot(initialData);
   const [notes, setNotes] = useState(initialNotes);
   const [request, setRequest] = useState("");
   const [memoryContent, setMemoryContent] = useState("");
@@ -321,7 +321,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [recommendationState, setRecommendationState] = useState<RequestState>({ kind: "idle", message: "" });
   const [recommendationResultsByGoal, setRecommendationResultsByGoal] = useState<Record<string, RecommendationLoadState>>({});
   const [recommendationPendingByGoal, setRecommendationPendingByGoal] = useState<Record<string, boolean>>({});
-  const [slideOutPanel, setSlideOutPanel] = useState<{ type: string; data: unknown } | null>(null);
+  const [detailSelection, setDetailSelection] = useState<DashboardDetailSelection | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
   const [commandCenterRole, setCommandCenterRole] = useState<CommandCenterRole>("command");
@@ -917,10 +917,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       setIsPending(false);
     }
   }, [statsBar]);
-
-  const loadDashboardSnapshot = useCallback(async () => {
-    return fetchDashboardSnapshot();
-  }, []);
 
   const loadPrivacyControls = useCallback(async () => {
     try {
@@ -2265,6 +2261,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           openTarget={navigateToSection}
         />
 
+        <DashboardCockpitLanes
+          data={data}
+          openView={openView}
+          openDiagnosticTarget={openDiagnosticTarget}
+          openDetail={setDetailSelection}
+        />
+
         <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openView={openView} />
 
         {/* Recent Actions */}
@@ -2292,209 +2295,36 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           </article>
         )}
 
-        <section className="hero-panel">
-          <div>
-            <p className="eyebrow">Trusted execution control plane</p>
-            <h1>Run commitments, approvals, and automations from one governed loop.</h1>
-            <p className="lede">
-              Start with what needs attention now, resolve what is blocked, confirm what can run safely, and review what
-              changed recently. The reproducible document export stays available as an evidence snapshot instead of
-              driving the main operating flow.
-            </p>
-            <div className="advanced-operations-summary" aria-label="Governed loop summary">
-              <span className="pill">Decide: {coreLoopSummary.counts.commitments} commitments</span>
-              <span className="pill">Approve: {coreLoopSummary.counts.pendingApprovals} pending</span>
-              <span className="pill">Execute: {coreLoopSummary.counts.activeGoals} active</span>
-              <span className="pill">Observe: {coreLoopSummary.counts.recentActivity} events</span>
-              <span className="pill">Improve: {coreLoopSummary.counts.memories} memories</span>
-            </div>
-          </div>
-          <div className="hero-actions">
-            <div className="hero-button-row">
-              <button type="button" className="primary-button" onClick={focusRequestComposer} disabled={isPending}>
-                Request work
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void generateBriefing("startup")} disabled={isPending}>
-                Startup briefing
-              </button>
-              <button type="button" className="secondary-button" onClick={renderDocs} disabled={isPending}>
-                Rebuild `agentic.docx`
-              </button>
-              <button type="button" className="secondary-button" onClick={logout} disabled={isPending}>
-                Lock session
-              </button>
-              <ShareLinkButton getUrl={deepLink.getShareableUrl} label="Share view" />
-            </div>
-            <p className="palette-hint">Press <kbd>⌘K</kbd> to open command palette · <kbd>?</kbd> for shortcuts</p>
-            <p className={`status-chip ${docsState.kind}`}>
-              {docsState.message || "The governed document snapshot is ready whenever you need an exportable record."}
-            </p>
-            <p className={`status-chip ${coreLoopSummary.health === "idle" ? "idle" : "success"}`}>{coreLoopHealthCopy}</p>
-          </div>
-        </section>
+        <DashboardHeroPanel
+          coreLoopSummary={coreLoopSummary}
+          coreLoopHealthCopy={coreLoopHealthCopy}
+          docsState={docsState}
+          isPending={isPending}
+          focusRequestComposer={focusRequestComposer}
+          generateStartupBriefing={() => void generateBriefing("startup")}
+          renderDocs={() => void renderDocs()}
+          logout={logout}
+          getShareableUrl={deepLink.getShareableUrl}
+        />
 
-        <article className="card reliability-card">
-          <div className="card-header reliability-card-header">
-            <div className="reliability-heading">
-              <HealthIndicator health={reliabilityHealth} size="lg" showScore />
-              <div>
-                <h2>Reliability</h2>
-                <p className="reliability-summary">{reliabilitySummary}</p>
-              </div>
-            </div>
-            <span>
-              Checked <RelativeTime date={data.diagnostics.generatedAt} />
-            </span>
-          </div>
-          {data.diagnostics.items.length === 0 ? (
-            <p className="empty-state">
-              The dashboard is clear. New reliability issues will appear here as soon as approvals expire, memories go stale,
-              context signals conflict, queues degrade, connectors lose health, workflows block, or watchers outlive their goals.
-            </p>
-          ) : (
-            <div className="diagnostic-grid">
-              {data.diagnostics.items.map((item) => (
-                <div className={`diagnostic-item ${item.severity}`} key={item.kind}>
-                  <div className="diagnostic-item-header">
-                    <strong>{item.title}</strong>
-                    <span className={`pill diagnostic-pill ${item.severity}`}>{item.count}</span>
-                  </div>
-                  <div className="diagnostic-reasons">
-                    {item.reasons.map((reason) => (
-                      <p key={`${item.kind}-${reason}`}>{reason}</p>
-                    ))}
-                  </div>
-                  {item.targets.length > 0 ? (
-                    <div className="diagnostic-targets">
-                      {item.targets.map((target) => (
-                        <div
-                          className="diagnostic-target-row"
-                          key={`${item.kind}-${target.section}-${target.itemId ?? target.label}`}
-                        >
-                          <button
-                            type="button"
-                            className="secondary-button diagnostic-target-button"
-                            onClick={() => openDiagnosticTarget(target)}
-                          >
-                            {target.label}
-                          </button>
-                          {target.action ? (
-                            <button
-                              type="button"
-                              className="secondary-button diagnostic-action-button"
-                              onClick={() => void runDiagnosticAction(target)}
-                              disabled={isPending}
-                            >
-                              {target.actionLabel ?? "Resolve"}
-                            </button>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          )}
-        </article>
+        <ReliabilityCard
+          data={data}
+          reliabilityHealth={reliabilityHealth}
+          reliabilitySummary={reliabilitySummary}
+          isPending={isPending}
+          openDiagnosticTarget={openDiagnosticTarget}
+          runDiagnosticAction={(target) => void runDiagnosticAction(target)}
+        />
 
-        <article className="card now-queue-card" id="section-now">
-          <div className="card-header">
-            <h2>Now queue</h2>
-            <span>
-              {data.nowQueue.items.length} of {data.nowQueue.totalCount} ready now
-            </span>
-          </div>
-          <p className="empty-state">
-            Server-derived sequencing keeps the next few commitments bounded, urgency-aware, and aligned with reliability
-            signals already present in the control plane.
-          </p>
-          <div className="list-stack">
-            {data.nowQueue.items.length === 0 ? (
-              <p className="empty-state">No commitments are currently ready for immediate action.</p>
-            ) : null}
-            {data.nowQueue.items.map((item) => {
-              const suggestedNextAction = item.suggestedNextAction;
-
-              return (
-                <div
-                  className={`list-item vertical ${highlightedItemId === item.commitmentId ? "selection-highlight" : ""}`}
-                  id={getDashboardItemAnchorId(item.commitmentId)}
-                  key={item.commitmentId}
-                >
-                  <div>
-                    <strong>{item.title}</strong>
-                    <p>{item.summary}</p>
-                  </div>
-                  <div className="approval-actions">
-                    <StatusBadge status={item.status} />
-                    <span className={`pill now-queue-urgency urgency-${item.urgency}`}>
-                      {formatCommitmentUrgencyLabel(item.urgency)}
-                    </span>
-                    {item.riskClass ? <RiskBadge riskClass={item.riskClass} /> : null}
-                    <span className="pill">{Math.round(item.confidence * 100)}%</span>
-                    {item.dueAt ? <RelativeTime date={item.dueAt} /> : null}
-                    {item.status === "completed" || item.status === "dismissed" ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => {
-                          const currentCommitment = data.commitments.find((candidate) => candidate.id === item.commitmentId);
-
-                          if (!currentCommitment) {
-                            return;
-                          }
-
-                          void updateCommitment(item.commitmentId, currentCommitment.updatedAt, "reopen");
-                        }}
-                        disabled={isPending}
-                      >
-                        Reopen
-                      </button>
-                    ) : (
-                      <>
-                        {suggestedNextAction ? (
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={() => openDiagnosticTarget(suggestedNextAction)}
-                          >
-                            {suggestedNextAction.label}
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => {
-                            const currentCommitment = data.commitments.find((candidate) => candidate.id === item.commitmentId);
-
-                            if (!currentCommitment) {
-                              return;
-                            }
-
-                            void updateCommitment(item.commitmentId, currentCommitment.updatedAt, "complete");
-                          }}
-                          disabled={isPending}
-                        >
-                          Complete
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  {item.reasons.length > 0 ? (
-                    <div className="now-queue-reasons">
-                      {item.reasons.map((reason) => (
-                        <span className="pill" key={`${item.commitmentId}-${reason}`}>
-                          {reason}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </article>
+        <NowQueueCard
+          data={data}
+          highlightedItemId={highlightedItemId}
+          getItemAnchorId={getDashboardItemAnchorId}
+          formatCommitmentUrgencyLabel={formatCommitmentUrgencyLabel}
+          isPending={isPending}
+          openDiagnosticTarget={openDiagnosticTarget}
+          updateCommitment={(commitmentId, updatedAt, action) => void updateCommitment(commitmentId, updatedAt, action)}
+        />
 
         <section className="grid">
           <DashboardAdvancedOperationsCard
@@ -3227,78 +3057,17 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           )}
         </article>
 
-        <article className="card" id="section-artifacts">
-          <div className="card-header">
-            <FeatureHelp feature="artifacts">
-              <h2>Artifacts</h2>
-            </FeatureHelp>
-            <span>{filteredLatestArtifacts.length} / {data.latestArtifacts.length} recent</span>
-          </div>
-          <div className="artifact-stack">
-            {filteredLatestArtifacts.length === 0 ? (
-              data.latestArtifacts.length === 0 ? (
-                <NoArtifactsEmpty />
-              ) : (
-                <p className="status-chip idle">No artifacts match the current execution-mode filter.</p>
-              )
-            ) : null}
-            {filteredLatestArtifacts.map((artifact) => {
-              const executionMode = extractArtifactExecutionMode(artifact);
-              const goalConfidence = goalConfidenceById.get(artifact.goalId);
+        <ArtifactsPanel
+          artifacts={filteredLatestArtifacts}
+          totalArtifactCount={data.latestArtifacts.length}
+          goalConfidenceById={goalConfidenceById}
+        />
 
-              return (
-                <div className="artifact-card" key={artifact.id}>
-                  <div className="card-header">
-                    <ArtifactPreview artifact={artifact}>
-                      <strong>{artifact.title}</strong>
-                    </ArtifactPreview>
-                    <div className="detail-list-badges">
-                      <StatusBadge status={artifact.artifactType} />
-                      <ImplementationTierBadge mode={executionMode} />
-                      <ExecutionModeBadge mode={executionMode} />
-                    </div>
-                  </div>
-                  <div className="detail-list-meta">
-                    <span>Implementation tier: <strong>{getImplementationTierPresentation(executionMode).label}</strong></span>
-                  </div>
-                  <div className="detail-list-meta">
-                    <span>Execution mode: <strong>{getExecutionModePresentation(executionMode).label}</strong></span>
-                    <span>
-                      Goal confidence: <strong>{typeof goalConfidence === "number" ? formatConfidencePercentage(goalConfidence) : "Unavailable"}</strong>
-                    </span>
-                  </div>
-                  <pre>{artifact.content}</pre>
-                  <div className="artifact-actions">
-                    <CopyButton value={artifact.content} label="Copy content" />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="card-header">
-            <h2>Activity timeline</h2>
-            <span>{timelineFilters.filteredLogs.length} / {data.actionLogs.length} events</span>
-          </div>
-          <TimelineFilter
-            logs={data.actionLogs}
-            onFilterChange={timelineFilters.setFilters}
-          />
-          <div className="timeline">
-            {timelineFilters.filteredLogs.map((log) => (
-              <div className="timeline-row" key={log.id}>
-                <div className="timeline-dot" />
-                <div>
-                  <strong>{log.kind}</strong>
-                  <p>{log.message}</p>
-                  <RelativeTime date={log.createdAt} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
+        <ActivityTimeline
+          logs={data.actionLogs}
+          filteredLogs={timelineFilters.filteredLogs}
+          setFilters={timelineFilters.setFilters}
+        />
 
         <DashboardAdvancedSurface
           showAdvancedOperations={showAdvancedOperations}
@@ -3345,6 +3114,12 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       <FloatingActionsBar position="bottom">
         <QuickActionsBar actions={quickActions} />
       </FloatingActionsBar>
+
+      <DashboardDetailDrawer
+        detail={detailSelection}
+        onClose={() => setDetailSelection(null)}
+        openView={openView}
+      />
 
       <CommandPalette
         onCreateGoal={async (req) => {
