@@ -51,17 +51,24 @@ jobs:
             core.info(`Scanning ${owner}/${repo} artifacts older than ${cutoff.toISOString()}.`);
             core.info(`Dry run: ${dryRun}`);
 
-            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+            const artifacts = (await github.paginate(github.rest.actions.listArtifactsForRepo, {
               owner,
               repo,
               per_page: 100
-            }, (response) => response.data.artifacts);
+            }, (response) => response.data.artifacts ?? [])).filter(Boolean);
 
             let eligible = 0;
             let deleted = 0;
             let skippedInvalidDates = 0;
+            let skippedMalformedArtifacts = 0;
 
             for (const artifact of artifacts) {
+              if (!artifact || typeof artifact !== "object" || !artifact.id || !artifact.created_at) {
+                skippedMalformedArtifacts += 1;
+                core.warning(`Skipping malformed artifact payload: ${JSON.stringify(artifact)}`);
+                continue;
+              }
+
               const createdAt = new Date(artifact.created_at);
 
               if (Number.isNaN(createdAt.getTime())) {
@@ -108,6 +115,7 @@ jobs:
                 [{ data: "Artifacts scanned", header: true }, String(artifacts.length)],
                 [{ data: "Artifacts eligible", header: true }, String(eligible)],
                 [{ data: "Artifacts deleted", header: true }, dryRun ? "0 (dry run)" : String(deleted)],
-                [{ data: "Invalid timestamps skipped", header: true }, String(skippedInvalidDates)]
+                [{ data: "Invalid timestamps skipped", header: true }, String(skippedInvalidDates)],
+                [{ data: "Malformed artifacts skipped", header: true }, String(skippedMalformedArtifacts)]
               ])
               .write();
