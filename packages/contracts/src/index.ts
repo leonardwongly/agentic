@@ -123,6 +123,7 @@ export const jobKindValues = [
   "template_run",
   "docs_render",
   "autopilot_process",
+  "github_issue_intake",
   "approval_follow_up",
   "approval_notification",
   "privacy_operation",
@@ -2073,6 +2074,54 @@ export const AutopilotProcessJobPayloadSchema = z
   })
   .strict();
 
+export const GitHubIssueIntakeJobPayloadSchema = z
+  .object({
+    type: z.literal("github_issue_intake"),
+    goalId: z.string().min(1),
+    workflowId: z.string().min(1),
+    workspaceId: z.string().min(1).max(160).nullable().default(null),
+    agentId: z.string().min(1).max(120).nullable().default(null),
+    repository: z
+      .object({
+        fullName: z.string().trim().min(3).max(150).regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u),
+        htmlUrl: z.string().url().max(500),
+        defaultBranch: z.string().trim().min(1).max(200),
+        private: z.boolean()
+      })
+      .strict(),
+    issue: z
+      .object({
+        number: z.number().int().positive().max(1_000_000_000),
+        nodeId: z.string().trim().min(1).max(200).nullable().default(null),
+        title: z.string().trim().min(1).max(300),
+        body: z.string().max(10_000).nullable().default(null),
+        url: z.string().url().max(500),
+        authorLogin: z.string().trim().min(1).max(120).nullable().default(null),
+        labels: z.array(z.string().trim().min(1).max(80)).max(50).default([]),
+        assignees: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
+        createdAt: z.string().datetime(),
+        updatedAt: z.string().datetime()
+      })
+      .strict(),
+    deliveryId: z.string().trim().min(1).max(120),
+    receivedAt: z.string().datetime(),
+    metadata: z
+      .object({
+        event: z.literal("issues").default("issues"),
+        action: z.literal("opened").default("opened"),
+        senderLogin: z.string().trim().min(1).max(120).nullable().default(null),
+        riskTags: z.array(z.string().trim().min(1).max(64)).max(20).default(["untrusted_external_input"])
+      })
+      .catchall(z.unknown())
+      .default({
+        event: "issues",
+        action: "opened",
+        senderLogin: null,
+        riskTags: ["untrusted_external_input"]
+      })
+  })
+  .strict();
+
 export const ApprovalFollowUpJobPayloadSchema = z
   .object({
     type: z.literal("approval_follow_up"),
@@ -2163,6 +2212,7 @@ export const JobPayloadSchema = z.discriminatedUnion("type", [
   TemplateRunJobPayloadSchema,
   DocsRenderJobPayloadSchema,
   AutopilotProcessJobPayloadSchema,
+  GitHubIssueIntakeJobPayloadSchema,
   ApprovalFollowUpJobPayloadSchema,
   ApprovalNotificationJobPayloadSchema,
   PrivacyOperationJobPayloadSchema,
@@ -2236,6 +2286,10 @@ function deriveJobExecutionSideEffectTarget(payload: JobPayload): string | null 
     return `autopilot-event:${payload.autopilotEventId}`;
   }
 
+  if (payload.type === "github_issue_intake") {
+    return `github-issue:${payload.repository.fullName.toLowerCase()}#${payload.issue.number}`;
+  }
+
   if ("goalId" in payload && typeof payload.goalId === "string" && payload.goalId.trim()) {
     return `goal:${payload.goalId}`;
   }
@@ -2294,7 +2348,9 @@ export function deriveJobRecoveryState(params: {
     const statusUrl =
       params.payload.type === "approval_follow_up"
         ? `/api/approvals/jobs/${params.jobId}`
-        : params.payload.type === "approval_notification" || params.payload.type === "autopilot_process"
+        : params.payload.type === "approval_notification" ||
+            params.payload.type === "autopilot_process" ||
+            params.payload.type === "github_issue_intake"
           ? `/api/jobs/${params.jobId}`
           : null;
     return JobRecoveryStateSchema.parse({
@@ -2326,6 +2382,20 @@ export function deriveJobRecoveryState(params: {
       statusUrl: `/api/jobs/${params.jobId}`,
       replayedFromJobId,
       compensationHints: [`Inspect autopilot event ${params.payload.autopilotEventId}`]
+    });
+  }
+
+  if (params.status === "dead_letter" && params.payload.type === "github_issue_intake") {
+    return JobRecoveryStateSchema.parse({
+      strategy: "replay_job",
+      note: "Replay the GitHub issue intake job to rebuild the governed Agentic work item without reopening the GitHub issue.",
+      operatorActionLabel: "Replay issue intake",
+      statusUrl: `/api/jobs/${params.jobId}`,
+      replayedFromJobId,
+      compensationHints: [
+        `Inspect ${params.payload.repository.fullName}#${params.payload.issue.number}`,
+        "Verify the issue is still open before replaying"
+      ]
     });
   }
 
@@ -2581,6 +2651,14 @@ export const JobRecordSchema = JobRecordBaseSchema
         code: z.ZodIssueCode.custom,
         path: ["payload", "type"],
         message: 'Autopilot jobs must carry an "autopilot_process" payload.'
+      });
+    }
+
+    if (value.kind === "github_issue_intake" && value.payload.type !== "github_issue_intake") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'GitHub issue intake jobs must carry a "github_issue_intake" payload.'
       });
     }
 
@@ -3728,6 +3806,7 @@ export type BriefingCreateJobPayload = z.infer<typeof BriefingCreateJobPayloadSc
 export type TemplateRunJobPayload = z.infer<typeof TemplateRunJobPayloadSchema>;
 export type DocsRenderJobPayload = z.infer<typeof DocsRenderJobPayloadSchema>;
 export type AutopilotProcessJobPayload = z.infer<typeof AutopilotProcessJobPayloadSchema>;
+export type GitHubIssueIntakeJobPayload = z.infer<typeof GitHubIssueIntakeJobPayloadSchema>;
 export type ApprovalFollowUpJobPayload = z.infer<typeof ApprovalFollowUpJobPayloadSchema>;
 export type ApprovalNotificationJobPayload = z.infer<typeof ApprovalNotificationJobPayloadSchema>;
 export type PrivacyOperationJobPayload = z.infer<typeof PrivacyOperationJobPayloadSchema>;

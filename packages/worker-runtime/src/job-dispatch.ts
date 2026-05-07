@@ -13,6 +13,7 @@ import {
   type DocsRenderJobPayload,
   type GoalCreateJobPayload,
   type GoalRefineJobPayload,
+  type GitHubIssueIntakeJobPayload,
   type JobRecord,
   type PrivacyOperationJobPayload,
   type PublicShareViewJobPayload,
@@ -29,12 +30,16 @@ import {
   buildBriefingCreatePayload,
   buildDocsRenderJobIdempotencyKey,
   buildDocsRenderPayload,
+  buildGitHubIssueIntakeConcurrencyKey,
+  buildGitHubIssueIntakeJobIdempotencyKey,
+  buildGitHubIssueIntakePayload,
   buildGoalCreatePayload,
   buildGoalRefinePayload,
   buildPrivacyOperationJobIdempotencyKey,
   buildPrivacyOperationPayload,
   buildPublicShareViewPayload,
-  buildTemplateRunPayload
+  buildTemplateRunPayload,
+  type GitHubIssueIntakePayloadParams
 } from "./job-payloads";
 
 function stableSerialize(value: unknown, seen = new WeakSet<object>()): string {
@@ -478,6 +483,50 @@ export async function enqueueAutopilotProcessJob(params: {
       });
       recordCounter("worker.job.enqueued.total", 1, {
         jobKind: job.kind
+      });
+      return job;
+    }
+  );
+}
+
+export async function enqueueGitHubIssueIntakeJob(params: {
+  repository: AgenticRepository;
+  userId: string;
+  actorContext: ActorContext | null;
+  payload: GitHubIssueIntakePayloadParams;
+  idempotencyKey?: string | null;
+}): Promise<JobRecord & { payload: GitHubIssueIntakeJobPayload }> {
+  const payload = buildGitHubIssueIntakePayload(params.payload);
+  const identity = {
+    repositoryFullName: payload.repository.fullName,
+    issueNumber: payload.issue.number
+  };
+
+  return withSpan(
+    "worker.job.enqueue.github_issue_intake",
+    {
+      jobKind: "github_issue_intake",
+      userId: params.userId,
+      repository: payload.repository.fullName,
+      issueNumber: payload.issue.number
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "github_issue_intake",
+        priority: "high",
+        queue: "github-issue-intake",
+        concurrencyKey: buildGitHubIssueIntakeConcurrencyKey(identity),
+        timeoutMs: 10 * 60_000,
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey: params.idempotencyKey ?? buildGitHubIssueIntakeJobIdempotencyKey(identity),
+        maxAttempts: 3
+      })) as JobRecord & { payload: GitHubIssueIntakeJobPayload };
+
+      logEnqueuedJob(job, {
+        repository: payload.repository.fullName,
+        issueNumber: payload.issue.number
       });
       return job;
     }

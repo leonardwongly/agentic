@@ -7,12 +7,90 @@ import type {
   DocsRenderJobPayload,
   GoalCreateJobPayload,
   GoalRefineJobPayload,
+  GitHubIssueIntakeJobPayload,
   PrivacyOperationJobPayload,
   PublicShareViewJobPayload,
   RecommendationRefinementSource,
   TemplateRunJobPayload
 } from "@agentic/contracts";
 import { RecommendationRefinementSourceSchema } from "@agentic/contracts";
+
+export type GitHubIssueIntakePayloadParams = {
+  repository: {
+    fullName: string;
+    htmlUrl: string;
+    defaultBranch: string;
+    private: boolean;
+  };
+  issue: {
+    number: number;
+    nodeId: string | null;
+    title: string;
+    body: string | null;
+    url: string;
+    authorLogin: string | null;
+    labels: string[];
+    assignees: string[];
+    createdAt: string;
+    updatedAt: string;
+  };
+  deliveryId: string;
+  receivedAt: string;
+  senderLogin: string | null;
+  workspaceId?: string | null;
+  agentId?: string | null;
+};
+
+function buildGitHubIssueIdentity(params: {
+  repositoryFullName: string;
+  issueNumber: number;
+}): string {
+  return `${params.repositoryFullName.trim().toLowerCase()}#${params.issueNumber}`;
+}
+
+function hashGitHubIssueIdentity(params: {
+  repositoryFullName: string;
+  issueNumber: number;
+}): string {
+  return crypto.createHash("sha256").update(buildGitHubIssueIdentity(params)).digest("hex");
+}
+
+function normalizeIdempotencySegment(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._/-]+/gu, "-")
+    .slice(0, 140);
+}
+
+export function buildGitHubIssueIntakeGoalId(params: {
+  repositoryFullName: string;
+  issueNumber: number;
+}): string {
+  return `github-issue-goal-${hashGitHubIssueIdentity(params).slice(0, 24)}`;
+}
+
+export function buildGitHubIssueIntakeWorkflowId(params: {
+  repositoryFullName: string;
+  issueNumber: number;
+}): string {
+  return `github-issue-workflow-${hashGitHubIssueIdentity(params).slice(0, 24)}`;
+}
+
+export function buildGitHubIssueIntakeJobIdempotencyKey(params: {
+  repositoryFullName: string;
+  issueNumber: number;
+}): string {
+  const readable = normalizeIdempotencySegment(params.repositoryFullName);
+  return `github-issue-intake:${readable}#${params.issueNumber}:${hashGitHubIssueIdentity(params).slice(0, 16)}`;
+}
+
+export function buildGitHubIssueIntakeConcurrencyKey(params: {
+  repositoryFullName: string;
+  issueNumber: number;
+}): string {
+  return `github-issue-intake:${hashGitHubIssueIdentity(params).slice(0, 32)}`;
+}
 
 export function buildGoalCreatePayload(params: {
   request: string;
@@ -27,6 +105,47 @@ export function buildGoalCreatePayload(params: {
     workspaceId: params.workspaceId,
     agentId: params.agentId,
     metadata: {}
+  };
+}
+
+export function buildGitHubIssueIntakePayload(params: GitHubIssueIntakePayloadParams): GitHubIssueIntakeJobPayload {
+  const identity = {
+    repositoryFullName: params.repository.fullName,
+    issueNumber: params.issue.number
+  };
+
+  return {
+    type: "github_issue_intake",
+    goalId: buildGitHubIssueIntakeGoalId(identity),
+    workflowId: buildGitHubIssueIntakeWorkflowId(identity),
+    workspaceId: params.workspaceId ?? null,
+    agentId: params.agentId ?? null,
+    repository: {
+      fullName: params.repository.fullName,
+      htmlUrl: params.repository.htmlUrl,
+      defaultBranch: params.repository.defaultBranch,
+      private: params.repository.private
+    },
+    issue: {
+      number: params.issue.number,
+      nodeId: params.issue.nodeId,
+      title: params.issue.title,
+      body: params.issue.body,
+      url: params.issue.url,
+      authorLogin: params.issue.authorLogin,
+      labels: params.issue.labels,
+      assignees: params.issue.assignees,
+      createdAt: params.issue.createdAt,
+      updatedAt: params.issue.updatedAt
+    },
+    deliveryId: params.deliveryId,
+    receivedAt: params.receivedAt,
+    metadata: {
+      event: "issues",
+      action: "opened",
+      senderLogin: params.senderLogin,
+      riskTags: ["untrusted_external_input", "github_issue_opened"]
+    }
   };
 }
 

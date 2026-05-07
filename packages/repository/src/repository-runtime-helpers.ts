@@ -102,6 +102,8 @@ export function isJobScopedToWorkspace(
       return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
     case "autopilot_process":
       return params.watcherIds.has(job.payload.sourceId);
+    case "github_issue_intake":
+      return job.payload.workspaceId === params.workspaceId || params.goalIds.has(job.payload.goalId);
     case "privacy_operation":
       return (
         job.payload.workspaceId === params.workspaceId &&

@@ -929,6 +929,8 @@ function isJobVisibleToUserInStore(
       const goal = watcher ? goalByIdFromStore(store, watcher.goalId) : null;
       return goal?.workspaceId ? workspaceIds.has(goal.workspaceId) : false;
     }
+    case "github_issue_intake":
+      return job.payload.workspaceId ? workspaceIds.has(job.payload.workspaceId) : false;
     case "docs_render":
       return false;
   }
