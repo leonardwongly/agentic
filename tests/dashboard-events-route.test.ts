@@ -6,6 +6,7 @@ import { createJobRecord } from "@agentic/execution";
 import { processUserRequest } from "@agentic/orchestrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GET as dashboardEventsRoute } from "../apps/web/app/api/dashboard/events/route";
+import { buildDashboardEventBatch } from "../apps/web/lib/dashboard-events";
 import { buildAuthorizedGetRequest, createRouteTestRepository, expectBaseSecurityHeaders } from "./route-test-helpers";
 
 describe("dashboard events route", () => {
@@ -101,5 +102,36 @@ describe("dashboard events route", () => {
     expect(text).toContain('"kind":"connector.updated"');
     expect(text).toContain(job.id);
     expect(text).not.toContain(hiddenJob.id);
+  });
+
+  it("bounds burst batches with monotonic sequence ids for client dedupe", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const jobs = Array.from({ length: 125 }, (_, index) =>
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "docs_render",
+        payload: {
+          type: "docs_render",
+          metadata: {}
+        },
+        availableAt: `2026-05-06T00:${String(index % 60).padStart(2, "0")}:00.000Z`
+      })
+    );
+
+    const batch = buildDashboardEventBatch({
+      dashboard,
+      jobs,
+      principalUserId: SYSTEM_USER_ID,
+      lastEventId: 9,
+      observedAt: "2026-05-06T01:00:00.000Z",
+      limit: 25
+    });
+
+    expect(batch.events).toHaveLength(25);
+    expect(batch.events[0]?.sequence).toBe(10);
+    expect(batch.events.at(-1)?.sequence).toBe(34);
+    expect(new Set(batch.events.map((event) => event.id)).size).toBe(25);
   });
 });

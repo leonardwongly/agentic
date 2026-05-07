@@ -240,6 +240,36 @@ describe("dashboard async helpers", () => {
         }
       ]
     });
+    FakeEventSource.instances[0]?.emit("dashboard.events", {
+      schemaVersion: 1,
+      principalUserId: "system",
+      workspaceId: null,
+      observedAt: "2026-05-06T00:00:00.000Z",
+      freshness: {
+        state: "live",
+        staleAfterMs: 5_000,
+        fallbackAfterMs: 10_000
+      },
+      events: [
+        {
+          schemaVersion: 1,
+          sequence: 7,
+          id: "7",
+          kind: "job.updated",
+          domain: "job",
+          principalUserId: "system",
+          workspaceId: null,
+          resourceId: "job-1",
+          summary: "Job updated.",
+          severity: "info",
+          observedAt: "2026-05-06T00:00:00.000Z",
+          updatedAt: "2026-05-06T00:00:00.000Z",
+          dedupeKey: "job.updated:personal:job-1",
+          target: null,
+          metadata: {}
+        }
+      ]
+    });
     FakeEventSource.instances[0]?.emit("error");
 
     close();

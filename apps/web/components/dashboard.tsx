@@ -91,6 +91,8 @@ import {
 } from "./dashboard-async";
 import { DashboardOperatingSectionsCard } from "./dashboard-operating-sections";
 import { DashboardOperationsSections } from "./dashboard-operations-sections";
+import { useApprovalBatchActions } from "./use-approval-batch-actions";
+import { formatDashboardFreshnessLabel, useDashboardEventStreamSync } from "./use-dashboard-event-stream";
 import { useGoalShareReview } from "./use-goal-share-review";
 import {
   StatusBadge,
@@ -493,6 +495,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   
   // Batch selection for approvals
   const approvalBatch = useBatchSelection(filteredPendingApprovals, "approval");
+  const { approvalBatchState, respondApprovalBatch } = useApprovalBatchActions({
+    setData,
+    setIsPending,
+    updateStats: statsBar.updateSync,
+    deselectAll: approvalBatch.deselectAll,
+    addRecentAction: recentActions.addAction
+  });
   const nlCapabilitySummary = useMemo(
     () =>
       buildNlCapabilitySummary({
@@ -921,6 +930,12 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const loadDashboardSnapshot = useCallback(async () => {
     return fetchDashboardSnapshot();
   }, []);
+
+  const { streamState: dashboardEventStreamState, summary: dashboardEventSummary } = useDashboardEventStreamSync({
+    loadDashboardSnapshot,
+    setData,
+    updateStats: statsBar.updateSync
+  });
 
   const loadPrivacyControls = useCallback(async () => {
     try {
@@ -1498,34 +1513,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       return;
     }
 
-    setIsPending(true);
-    let approved = 0;
-
-    for (const approval of r2Approvals) {
-      try {
-        await fetch(`/api/approvals/${approval.id}/respond`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ decision: "approved", scope: "once" })
-        });
-        approved++;
-      } catch {
-        // Continue with other approvals
-      }
-    }
-
-    // Refresh dashboard
-    try {
-      const payload = await readJson<{ dashboard: DashboardData }>(await fetch("/api/goals"));
-      startTransition(() => {
-        setData(payload.dashboard);
-      });
-    } catch {
-      // Ignore refresh errors
-    }
-
-    setIsPending(false);
-    toast.success(`Approved ${approved} R2 items`);
+    await respondApprovalBatch(r2Approvals, "approved", "once");
   };
 
   const createGoal = async () => {
@@ -1645,41 +1633,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
   // Batch approve selected approvals
   const batchApproveSelected = async () => {
-    if (approvalBatch.selectedCount === 0) return;
-    
-    setIsPending(true);
-    let count = 0;
-    
-    for (const approval of approvalBatch.selectedItems) {
-      try {
-        await fetch(`/api/approvals/${approval.id}/respond`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ decision: "approved", scope: "once" })
-        });
-        count++;
-      } catch {
-        // Continue with others
-      }
-    }
-    
-    try {
-      const payload = await readJson<{ dashboard: DashboardData }>(
-        await fetch("/api/goals")
-      );
-      setData(payload.dashboard);
-    } catch {
-      // Ignore
-    }
-    
-    setIsPending(false);
-    approvalBatch.deselectAll();
-    toast.success(`Approved ${count} items`);
-    recentActions.addAction({
-      type: "approve",
-      label: `${count} approvals`,
-      undoable: false
-    });
+    await respondApprovalBatch(approvalBatch.selectedItems, "approved", "once");
+  };
+
+  const batchRejectSelected = async () => {
+    await respondApprovalBatch(approvalBatch.selectedItems, "rejected");
   };
 
   const refineGoal = async (goalId: string) => {
@@ -2307,6 +2265,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               <span className="pill">Execute: {coreLoopSummary.counts.activeGoals} active</span>
               <span className="pill">Observe: {coreLoopSummary.counts.recentActivity} events</span>
               <span className="pill">Improve: {coreLoopSummary.counts.memories} memories</span>
+              <span className="pill">Events: {formatDashboardFreshnessLabel(dashboardEventStreamState)}</span>
+              <span className="pill">{dashboardEventSummary}</span>
             </div>
           </div>
           <div className="hero-actions">
@@ -3070,8 +3030,19 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               >
                 Approve Selected
               </button>
+              <button
+                type="button"
+                className="secondary-button batch-action-button"
+                onClick={batchRejectSelected}
+                disabled={isPending}
+              >
+                Reject Selected
+              </button>
             </BatchActionsBar>
           )}
+          {approvalBatchState.message ? (
+            <p className={`status-chip ${approvalBatchState.kind}`}>{approvalBatchState.message}</p>
+          ) : null}
           
           {/* Grouped or Flat View */}
           {approvalGroupBy !== "none" ? (
@@ -3081,10 +3052,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                   key={group.key}
                   group={group}
                   defaultExpanded
-                  onApproveAll={async (approvals) => {
-                    for (const a of approvals) {
-                      await respondApproval(a.id, "approved", { scope: "once" });
-                    }
+                  onApproveAll={(approvals) => {
+                    void respondApprovalBatch(approvals, "approved", "once");
                   }}
                 >
                   {group.approvals.map((approval, idx) => {

@@ -236,6 +236,8 @@ export function connectDashboardEventStream(options: DashboardEventStreamOptions
   }
 
   const now = options.now ?? (() => Date.now());
+  const staleAfterMs = options.staleAfterMs ?? 10_000;
+  const fallbackAfterMs = options.fallbackAfterMs ?? 30_000;
   const eventSource = eventSourceFactory(options.endpoint ?? DASHBOARD_EVENTS_ENDPOINT);
   let state = createInitialDashboardEventStreamState();
   let closed = false;
@@ -259,6 +261,10 @@ export function connectDashboardEventStream(options: DashboardEventStreamOptions
     }
 
     const lastSequence = batch.events.at(-1)?.sequence ?? state.lastSequence;
+    if (batch.events.length > 0 && lastSequence <= state.lastSequence) {
+      return;
+    }
+
     updateState({
       freshness: "live",
       lastSequence,
@@ -281,15 +287,27 @@ export function connectDashboardEventStream(options: DashboardEventStreamOptions
           reconnectAttempts: state.reconnectAttempts + 1
         },
         now(),
-        options.staleAfterMs ?? 10_000,
-        options.fallbackAfterMs ?? 30_000
+        staleAfterMs,
+        fallbackAfterMs
       ),
       reconnectAttempts: state.reconnectAttempts + 1
     });
   });
 
+  const freshnessTimer = globalThis.setInterval(() => {
+    if (closed) {
+      return;
+    }
+
+    const freshness = deriveDashboardFreshnessState(state, now(), staleAfterMs, fallbackAfterMs);
+    if (freshness !== state.freshness) {
+      updateState({ freshness });
+    }
+  }, Math.max(1_000, Math.min(staleAfterMs, fallbackAfterMs, 5_000)));
+
   return () => {
     closed = true;
+    globalThis.clearInterval(freshnessTimer);
     eventSource.close();
   };
 }
