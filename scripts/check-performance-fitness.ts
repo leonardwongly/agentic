@@ -26,6 +26,9 @@ function main() {
   const publicShareViewRoutePath = "apps/web/app/api/share/view/route.ts";
   const dashboardPath = "apps/web/components/dashboard.tsx";
   const dashboardAsyncPath = "apps/web/components/dashboard-async.ts";
+  const dashboardCollectionPath = "apps/web/lib/dashboard-collection.ts";
+  const dashboardMemoriesRoutePath = "apps/web/app/api/dashboard/memories/route.ts";
+  const dashboardCollectionsRouteTestPath = "tests/dashboard-collections-route.test.ts";
   const validationMatrixPath = "docs/security/validation-matrix.md";
   const deploymentRunbookPath = "docs/runbooks/deployment.md";
   const goalsStatusRoutePath = "apps/web/app/api/goals/jobs/[id]/route.ts";
@@ -41,6 +44,9 @@ function main() {
   const publicShareViewRoute = readRepoFile(publicShareViewRoutePath);
   const dashboard = readRepoFile(dashboardPath);
   const dashboardAsync = readRepoFile(dashboardAsyncPath);
+  const dashboardCollection = readRepoFile(dashboardCollectionPath);
+  const dashboardMemoriesRoute = readRepoFile(dashboardMemoriesRoutePath);
+  const dashboardCollectionsRouteTest = readRepoFile(dashboardCollectionsRouteTestPath);
   const validationMatrix = readRepoFile(validationMatrixPath);
   const deploymentRunbook = readRepoFile(deploymentRunbookPath);
 
@@ -144,6 +150,30 @@ function main() {
     dashboardAsync,
     "export async function pollJobStatusUntilSettled",
     `${dashboardAsyncPath} must own bounded polling for queued dashboard mutations.`
+  );
+  assertContains(
+    dashboardCollection,
+    "MAX_COLLECTION_PAGE_LIMIT",
+    `${dashboardCollectionPath} must cap dashboard collection page sizes.`
+  );
+  assertContains(
+    dashboardCollection,
+    "DASHBOARD_CURSOR_MAX_OFFSET",
+    `${dashboardCollectionPath} must bound cursor offsets for collection paging.`
+  );
+  assertContains(
+    dashboardMemoriesRoute,
+    "buildDashboardCollectionPage",
+    `${dashboardMemoriesRoutePath} must return bounded memory pages instead of full memory payloads.`
+  );
+  assertFileExists(
+    dashboardCollectionsRouteTestPath,
+    `${dashboardCollectionsRouteTestPath} must cover dashboard collection pagination and large fixtures.`
+  );
+  assertContains(
+    dashboardCollectionsRouteTest,
+    "toBeLessThan(12_000)",
+    `${dashboardCollectionsRouteTestPath} must include a response-size sanity assertion for large dashboard collections.`
   );
   assertContains(
     dashboard,

@@ -47,6 +47,18 @@ function main() {
   const runtimeReadinessPath = "apps/web/lib/runtime-readiness.ts";
   const dashboardPath = "apps/web/components/dashboard.tsx";
   const dashboardAsyncPath = "apps/web/components/dashboard-async.ts";
+  const dashboardCockpitPath = "apps/web/components/dashboard-cockpit.tsx";
+  const dashboardHooksPath = "apps/web/components/dashboard-hooks.ts";
+  const dashboardPrimarySectionsPath = "apps/web/components/dashboard-primary-sections.tsx";
+  const dashboardShellPath = "apps/web/components/dashboard-shell.tsx";
+  const dashboardCollectionPath = "apps/web/lib/dashboard-collection.ts";
+  const dashboardSummaryRoutePath = "apps/web/app/api/dashboard/summary/route.ts";
+  const dashboardApprovalsRoutePath = "apps/web/app/api/dashboard/approvals/route.ts";
+  const dashboardCommitmentsRoutePath = "apps/web/app/api/dashboard/commitments/route.ts";
+  const dashboardJobsRoutePath = "apps/web/app/api/dashboard/jobs/route.ts";
+  const dashboardActivityRoutePath = "apps/web/app/api/dashboard/activity/route.ts";
+  const dashboardMemoriesRoutePath = "apps/web/app/api/dashboard/memories/route.ts";
+  const dashboardArtifactsRoutePath = "apps/web/app/api/dashboard/artifacts/route.ts";
   const dashboardSurfacePath = "apps/web/lib/dashboard-surface.ts";
   const repositoryTypesPath = "packages/repository/src/repository-types.ts";
   const workerRuntimePath = "packages/worker-runtime/src/index.ts";
@@ -72,6 +84,18 @@ function main() {
   const runtimeReadiness = readRepoFile(runtimeReadinessPath);
   const dashboard = readRepoFile(dashboardPath);
   const dashboardAsync = readRepoFile(dashboardAsyncPath);
+  const dashboardCockpit = readRepoFile(dashboardCockpitPath);
+  const dashboardHooks = readRepoFile(dashboardHooksPath);
+  const dashboardPrimarySections = readRepoFile(dashboardPrimarySectionsPath);
+  const dashboardShell = readRepoFile(dashboardShellPath);
+  const dashboardCollection = readRepoFile(dashboardCollectionPath);
+  const dashboardSummaryRoute = readRepoFile(dashboardSummaryRoutePath);
+  const dashboardApprovalsRoute = readRepoFile(dashboardApprovalsRoutePath);
+  const dashboardCommitmentsRoute = readRepoFile(dashboardCommitmentsRoutePath);
+  const dashboardJobsRoute = readRepoFile(dashboardJobsRoutePath);
+  const dashboardActivityRoute = readRepoFile(dashboardActivityRoutePath);
+  const dashboardMemoriesRoute = readRepoFile(dashboardMemoriesRoutePath);
+  const dashboardArtifactsRoute = readRepoFile(dashboardArtifactsRoutePath);
   const dashboardSurface = readRepoFile(dashboardSurfacePath);
   const repositoryTypes = readRepoFile(repositoryTypesPath);
   const workerRuntime = readRepoFile(workerRuntimePath);
@@ -283,6 +307,130 @@ function main() {
     `${dashboardAsyncPath} must own bounded async polling helpers.`
   );
   assertContains(
+    dashboard,
+    'from "./dashboard-hooks";',
+    `${dashboardPath} must source dashboard data hooks from ${dashboardHooksPath}.`
+  );
+  assertContains(
+    dashboard,
+    'from "./dashboard-cockpit";',
+    `${dashboardPath} must source cockpit IA surfaces from ${dashboardCockpitPath}.`
+  );
+  assertContains(
+    dashboard,
+    'from "./dashboard-primary-sections";',
+    `${dashboardPath} must source extracted operating cards from ${dashboardPrimarySectionsPath}.`
+  );
+  assertContains(
+    dashboard,
+    'from "./dashboard-shell";',
+    `${dashboardPath} must source dashboard providers and shell chrome from ${dashboardShellPath}.`
+  );
+  assertNotContains(
+    dashboard,
+    "KeyboardShortcutsProvider",
+    `${dashboardPath} must not own dashboard providers after shell extraction.`
+  );
+  assertContains(
+    dashboardHooks,
+    "useDashboardSnapshot",
+    `${dashboardHooksPath} must own the dashboard snapshot state hook.`
+  );
+  for (const hook of [
+    "useDashboardGoalActionsState",
+    "useDashboardApprovalActionsState",
+    "useDashboardCommitmentActionsState",
+    "useDashboardBriefingActionsState",
+    "useDashboardTemplateActionsState",
+    "useDashboardWorkspaceActionsState",
+    "useDashboardNotesActionsState"
+  ]) {
+    assertContains(
+      dashboardHooks,
+      hook,
+      `${dashboardHooksPath} must expose ${hook} for dashboard action/data state boundaries.`
+    );
+  }
+  for (const shellConcern of [
+    "ApprovalNavigationProvider",
+    "KeyboardShortcutsProvider",
+    "NLFloatingBar",
+    "StatsBar",
+    "ToastContainer",
+    "CommandPalette",
+    "QuickActionsBar"
+  ]) {
+    assertContains(
+      dashboardShell,
+      shellConcern,
+      `${dashboardShellPath} must own ${shellConcern} dashboard shell wiring.`
+    );
+  }
+  assertContains(
+    dashboardCockpit,
+    "DashboardCockpitLanes",
+    `${dashboardCockpitPath} must own exception-first cockpit lane rendering.`
+  );
+  assertContains(
+    dashboardCockpit,
+    "DashboardDetailDrawer",
+    `${dashboardCockpitPath} must own the canonical detail drawer.`
+  );
+  assertContains(
+    dashboardPrimarySections,
+    "ReliabilityCard",
+    `${dashboardPrimarySectionsPath} must own the reliability card boundary.`
+  );
+  assertContains(
+    dashboardPrimarySections,
+    "NowQueueCard",
+    `${dashboardPrimarySectionsPath} must own the now queue card boundary.`
+  );
+  assertContains(
+    repository,
+    'from "./dashboard-summary";',
+    `${repositoryPath} must re-export the bounded dashboard summary contract.`
+  );
+  assertContains(
+    dashboardSummaryRoute,
+    "buildDashboardSummary",
+    `${dashboardSummaryRoutePath} must serve the bounded first-paint dashboard summary.`
+  );
+  assertContains(
+    dashboardCollection,
+    "MAX_COLLECTION_PAGE_LIMIT",
+    `${dashboardCollectionPath} must enforce the shared collection page-size ceiling.`
+  );
+  assertContains(
+    dashboardCollection,
+    "Unknown dashboard query parameter",
+    `${dashboardCollectionPath} must reject unknown collection query parameters.`
+  );
+  for (const route of [
+    [dashboardApprovalsRoutePath, dashboardApprovalsRoute],
+    [dashboardCommitmentsRoutePath, dashboardCommitmentsRoute],
+    [dashboardJobsRoutePath, dashboardJobsRoute],
+    [dashboardActivityRoutePath, dashboardActivityRoute],
+    [dashboardMemoriesRoutePath, dashboardMemoriesRoute],
+    [dashboardArtifactsRoutePath, dashboardArtifactsRoute]
+  ] as const) {
+    assertContains(
+      route[1],
+      "parseDashboardCollectionQuery",
+      `${route[0]} must validate dashboard collection query parameters.`
+    );
+    assertContains(
+      route[1],
+      "buildDashboardCollectionPage",
+      `${route[0]} must return bounded dashboard collection pages.`
+    );
+    assertContains(
+      route[1],
+      "principal.userId",
+      `${route[0]} must scope collection data to the authenticated principal.`
+    );
+  }
+  assertContains(
     decompositionDoc,
     "## Repository Boundary",
     `${decompositionDocPath} must document the repository boundary.`
@@ -304,7 +452,12 @@ function main() {
   );
   assertMaxLines(repository, 7900, repositoryPath);
   assertMaxLines(workerRuntime, 1650, workerRuntimePath);
-  assertMaxLines(dashboard, 3400, dashboardPath);
+  assertMaxLines(dashboard, 3150, dashboardPath);
+  assertMaxLines(dashboardCockpit, 450, dashboardCockpitPath);
+  assertMaxLines(dashboardPrimarySections, 500, dashboardPrimarySectionsPath);
+  assertMaxLines(dashboardShell, 180, dashboardShellPath);
+  assertMaxLines(dashboardHooks, 280, dashboardHooksPath);
+  assertMaxLines(dashboardCollection, 230, dashboardCollectionPath);
   assertContains(
     dashboardSurface,
     "\"operations\"",

@@ -247,6 +247,7 @@ type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 export { CommitmentInboxQueryError, CollectionPageQueryError };
 export { ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters, type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
 export { buildExecutionProvenanceGraph } from "./provenance-graph";
+export { buildDashboardSummary, type DashboardSummary, type DashboardSummaryLane } from "./dashboard-summary";
 
 const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 

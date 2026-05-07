@@ -132,6 +132,7 @@ type UseUnifiedFeedOptions = {
   approvals: ApprovalRequest[];
   artifacts: Artifact[];
   actionLogs: ActionLog[];
+  referenceTime: string;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onViewGoal: (id: string) => void;
@@ -143,6 +144,7 @@ export function useUnifiedFeed({
   approvals,
   artifacts,
   actionLogs,
+  referenceTime,
   onApprove,
   onReject,
   onViewGoal,
@@ -210,10 +212,11 @@ export function useUnifiedFeed({
     }
 
     // Detect insights from recent activity
+    const referenceTimeMs = Date.parse(referenceTime);
+    const recentCutoffMs = (Number.isFinite(referenceTimeMs) ? referenceTimeMs : 0) - 60 * 60 * 1000;
     const recentLogs = actionLogs.filter((log) => {
-      const logDate = new Date(log.createdAt);
-      const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
-      return logDate > hourAgo;
+      const logTimeMs = Date.parse(log.createdAt);
+      return Number.isFinite(logTimeMs) && logTimeMs > recentCutoffMs;
     });
 
     // Add insight if many approvals recently
@@ -225,11 +228,11 @@ export function useUnifiedFeed({
         priority: 4,
         title: "High approval activity",
         subtitle: `${recentApprovals.length} approvals processed in the last hour`,
-        timestamp: new Date().toISOString(),
+        timestamp: referenceTime,
         data: { type: "activity-spike", count: recentApprovals.length }
       });
     }
 
     return items;
-  }, [goals, approvals, artifacts, actionLogs, onApprove, onReject, onViewGoal, onViewArtifact]);
+  }, [goals, approvals, artifacts, actionLogs, referenceTime, onApprove, onReject, onViewGoal, onViewArtifact]);
 }
