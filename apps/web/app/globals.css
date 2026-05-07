@@ -206,6 +206,8 @@ button:disabled {
   }
 
   .ui-data-table-wrap {
+    min-width: 0;
+    max-width: 100%;
     overflow-x: auto;
   }
 
@@ -271,7 +273,48 @@ button:disabled {
     }
 
     .ui-data-table {
-      min-width: 560px;
+      display: block;
+      min-width: 0;
+      width: 100%;
+    }
+
+    .ui-data-table thead {
+      display: none;
+    }
+
+    .ui-data-table tbody {
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    .ui-data-table tr {
+      display: grid;
+      gap: 0.6rem;
+      border: 1px solid var(--border);
+      border-radius: var(--ui-radius);
+      padding: 0.75rem;
+      background: var(--surface-muted);
+    }
+
+    .ui-data-table td {
+      display: grid;
+      gap: 0.2rem;
+      border-bottom: 0;
+      padding: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .ui-data-table td::before {
+      content: attr(data-label);
+      color: var(--text-secondary);
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .ui-data-table td[colspan]::before {
+      content: "";
+      display: none;
     }
   }
 }
@@ -622,6 +665,10 @@ select {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
+}
+
+.card.advanced-operations-expanded {
+  display: block;
 }
 
 .advanced-surface-hidden {
@@ -1050,6 +1097,7 @@ select {
 
   .command-center-priority-header,
   .command-center-focus-header,
+  .card-header,
   .command-center-role-tabs,
   .command-center-role-actions {
     flex-direction: column;
@@ -1895,8 +1943,10 @@ select {
 
 .detail-list-badges {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.35rem;
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .detail-list-summary {

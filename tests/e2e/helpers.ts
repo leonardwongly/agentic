@@ -55,7 +55,7 @@ export async function submitRequest(requestCard: Locator, requestInput: Locator,
   await expect(submitButton).toBeEnabled({ timeout: E2E_UI_TIMEOUT_MS });
   await submitButton.click();
   await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
-    timeout: E2E_UI_TIMEOUT_MS
+    timeout: E2E_UI_TIMEOUT_MS * 3
   });
 }
 

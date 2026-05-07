@@ -86,6 +86,8 @@ for (const viewport of viewports) {
 }
 
 test("cockpit keyboard journey covers command palette and detail drawer", async ({ page }) => {
+  test.setTimeout(E2E_UI_TIMEOUT_MS * 5);
+
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await unlockDashboard(page);

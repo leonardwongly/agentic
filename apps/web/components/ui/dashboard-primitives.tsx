@@ -134,7 +134,7 @@ export function DataTable<T>({ caption, columns, rows, getRowKey, emptyLabel = "
             rows.map((row) => (
               <tr key={getRowKey(row)}>
                 {columns.map((column) => (
-                  <td key={`${getRowKey(row)}-${column.key}`}>{column.render(row)}</td>
+                  <td data-label={column.header} key={`${getRowKey(row)}-${column.key}`}>{column.render(row)}</td>
                 ))}
               </tr>
             ))
