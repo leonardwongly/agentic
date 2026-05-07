@@ -51,7 +51,9 @@ import type {
 } from "@agentic/contracts";
 import type { JobConcurrencyLimits as ExecutionJobConcurrencyLimits } from "@agentic/execution";
 import type { GovernanceConformanceReport } from "@agentic/policy";
+import type { DashboardCockpitRollout } from "./dashboard-cockpit-rollout";
 import type { DashboardOperationsTower } from "./dashboard-operations";
+import type { DashboardTraceability } from "./dashboard-traceability";
 import type { WatcherLeaseClaimParams } from "./watcher-lease-helpers";
 
 export type JobConcurrencyLimits = ExecutionJobConcurrencyLimits;
@@ -81,6 +83,8 @@ export type DashboardData = {
   latestArtifacts: Artifact[];
   actionLogs: ActionLog[];
   diagnostics: DashboardDiagnostics;
+  traceability: DashboardTraceability;
+  cockpitRollout: DashboardCockpitRollout;
   operations?: DashboardOperationsTower;
 };
 

@@ -23,6 +23,7 @@ export { EmptyState, NoApprovalsEmpty, NoGoalsEmpty, NoMemoriesEmpty, NoArtifact
 export { FaviconBadge, useFaviconBadge } from "./favicon-badge";
 export { toast, ToastContainer, useToasts, type Toast, type ToastType } from "./toast";
 export { SlideOutPanel } from "./slide-out-panel";
+export { Panel, SectionHeader, MetricCard, StatusPill, RiskPill, ActionGroup, DataTable, type DataTableColumn } from "./dashboard-primitives";
 export { SmartFilters, useSmartFilters, type FilterConfig, type FilterOption, type FilterValues } from "./smart-filters";
 export { QuickActionsBar, FloatingActionsBar } from "./quick-actions";
 export { useRealtime, useLiveCounter, useLiveIndicator, usePolling, LiveDot, type RealtimeEvent, type LiveCounter } from "./realtime";

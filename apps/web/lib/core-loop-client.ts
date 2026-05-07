@@ -1,10 +1,34 @@
 import type { CommandCenterPriority, CommandCenterRole } from "./command-center";
 
 export type CommandCenterTelemetrySource = "next_best_action" | "priority" | "role_action" | "focus_area";
+export type DashboardCockpitTelemetryVariant = "legacy" | "redesigned";
 
 export type DashboardCoreLoopEvent =
   | {
       event: "dashboard_view";
+    }
+  | {
+      event: "dashboard_first_meaningful_render";
+      elapsedMs: number;
+      cockpitVariant: DashboardCockpitTelemetryVariant;
+    }
+  | {
+      event: "dashboard_event_reconnect";
+      reconnectCount: number;
+      cockpitVariant: DashboardCockpitTelemetryVariant;
+    }
+  | {
+      event: "command_palette_usage";
+      action: "opened" | "selected";
+      category?: "quick-goal" | "navigate" | "action";
+      cockpitVariant: DashboardCockpitTelemetryVariant;
+    }
+  | {
+      event: "cockpit_feedback";
+      surface: "traceability" | "approvals" | "command_palette" | "memory" | "summary";
+      sentiment: "helpful" | "unhelpful";
+      reason: "clear" | "stale" | "missing_context" | "wrong_priority" | "too_noisy";
+      cockpitVariant: DashboardCockpitTelemetryVariant;
     }
   | {
       event: "command_center_role_change";

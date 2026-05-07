@@ -1,18 +1,15 @@
 import { expect, test } from "@playwright/test";
-import { openRequestComposer, unlockDashboard } from "./helpers";
+import { openRequestComposer, submitRequest, unlockDashboard } from "./helpers";
 
 test("operating loop cards deep-link operators into the active queue", async ({ page }) => {
   await unlockDashboard(page);
 
   const { requestCard, requestInput } = await openRequestComposer(page);
-  await requestInput.fill(
+  await submitRequest(
+    requestCard,
+    requestInput,
     "Review my inbox and send one external reply."
   );
-  await requestCard.locator(".hero-button-row").getByRole("button", { name: "Submit request" }).click();
-
-  await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
-    timeout: 15000
-  });
 
   const operatingLoop = page.locator(".control-plane-card");
   const nowCard = operatingLoop.locator('.control-plane-section:has(strong:text-is("Now"))');

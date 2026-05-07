@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { TelemetryExportBatch } from "@agentic/observability";
 import {
   evaluateRolloutGateManifest,
@@ -275,5 +276,54 @@ describe("observability rollout gate evaluator", () => {
         })
       ])
     );
+  });
+
+  it("defines cockpit rollout thresholds as critical gates in the checked-in manifest", async () => {
+    const checkedInManifest = JSON.parse(
+      await readFile(new URL("../config/observability/alerts.json", import.meta.url), "utf8")
+    ) as RolloutGateManifest;
+    const cockpitKeys = checkedInManifest.alerts
+      .filter((alert) => alert.key.startsWith("cockpit-"))
+      .map((alert) => alert.key)
+      .sort();
+
+    expect(cockpitKeys).toEqual([
+      "cockpit-approval-latency",
+      "cockpit-dead-letter-recovery",
+      "cockpit-event-reconnects",
+      "cockpit-first-meaningful-render",
+      "cockpit-summary-latency",
+      "cockpit-table-latency"
+    ]);
+
+    const evaluation = evaluateRolloutGateManifest(checkedInManifest, [
+      createBatch([
+        {
+          kind: "metric",
+          entry: {
+            timestamp: "2026-04-17T00:00:00.000Z",
+            kind: "histogram",
+            name: "product.dashboard.first_meaningful_render_ms",
+            value: 3200,
+            attributes: {
+              variant: "redesigned"
+            },
+            context: {}
+          }
+        }
+      ])
+    ]);
+
+    expect(evaluation.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "cockpit-first-meaningful-render",
+          passed: false,
+          actual: 3200,
+          rolloutGate: true
+        })
+      ])
+    );
+    expect(evaluation.passed).toBe(false);
   });
 });

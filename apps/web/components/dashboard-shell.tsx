@@ -34,6 +34,7 @@ type DashboardShellProps = {
   nlExecute: ComponentProps<typeof NLFloatingBar>["onExecute"];
   nlCapabilitySummary: ComponentProps<typeof NLFloatingBar>["capabilitySummary"];
   activeWorkspaceId: string | null;
+  cockpitVariant: NonNullable<ComponentProps<typeof CommandPalette>["cockpitVariant"]>;
   themeMode: string;
   statsBarProps: ComponentProps<typeof StatsBar>;
   quickActions: ComponentProps<typeof QuickActionsBar>["actions"];
@@ -56,6 +57,7 @@ export function DashboardShell({
   nlExecute,
   nlCapabilitySummary,
   activeWorkspaceId,
+  cockpitVariant,
   themeMode,
   statsBarProps,
   quickActions,
@@ -109,7 +111,7 @@ export function DashboardShell({
         <NLFloatingBar onExecute={nlExecute} capabilitySummary={nlCapabilitySummary} />
 
         <main className={`dashboard-shell ${themeMode === "dark" ? "dark-mode" : ""}`}>
-          <CoreLoopViewTracker workspaceId={activeWorkspaceId} />
+          <CoreLoopViewTracker workspaceId={activeWorkspaceId} cockpitVariant={cockpitVariant} />
           <div className="stats-bar-wrapper">
             <StatsBar {...statsBarProps} />
             <ThemeToggle />
@@ -129,6 +131,7 @@ export function DashboardShell({
             onNavigateToSection={onNavigateToSection}
             onLogout={onLogout}
             isPending={isPending}
+            cockpitVariant={cockpitVariant}
           />
         </main>
       </KeyboardShortcutsProvider>

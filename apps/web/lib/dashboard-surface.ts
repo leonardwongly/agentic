@@ -4,6 +4,7 @@ const advancedDashboardSections = [
   "autopilot",
   "operator-products",
   "operations",
+  "provenance",
   "memory",
   "integrations",
   "notes",
@@ -83,9 +84,9 @@ const dashboardOsSurfaces = [
   {
     id: "provenance",
     label: "Provenance",
-    routeBoundary: "#section-artifacts",
+    routeBoundary: "#section-provenance",
     componentBoundary: "DashboardProvenanceSurface",
-    sections: ["artifacts", "notes"],
+    sections: ["provenance", "artifacts", "notes"],
     states: {
       loading: "Loading provenance state.",
       empty: "No provenance records are available.",

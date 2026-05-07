@@ -167,6 +167,7 @@ export function computeTrustFromMemories(memories: MemoryRecord[], taskTitle: st
   for (const memory of memories) {
     if (memory.source !== "auto-capture") continue;
     if (memory.category !== "preferences") continue;
+    if (memory.memoryType === "inferred") continue;
     if (getMemoryFreshness(memory) !== "fresh") continue;
 
     const content = memory.content.toLowerCase();

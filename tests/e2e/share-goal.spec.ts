@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
+  createPublicShareBrowserContext,
   enablePublicSharingForE2E,
   E2E_UI_TIMEOUT_MS,
   expectShareLinkReady,
@@ -148,30 +149,42 @@ test("renders a valid public share page in a fresh unauthenticated context and d
 
   expect(shareUrl).toBeTruthy();
 
-  const publicContext = await browser.newContext();
+  const publicContext = await createPublicShareBrowserContext(browser);
   const publicPage = await publicContext.newPage();
   const viewedCountBeforePublicView = await sumVisibleViewedCounts(page);
-  const firstViewTracked = publicPage.waitForResponse((response) =>
-    isPublicShareViewRequest(response.url(), response.request().method())
-  );
+  const [firstViewResponse] = await Promise.all([
+    publicPage.waitForResponse(
+      (response) => isPublicShareViewRequest(response.url(), response.request().method()),
+      { timeout: E2E_UI_TIMEOUT_MS }
+    ),
+    publicPage.goto(shareUrl!, {
+      timeout: E2E_UI_TIMEOUT_MS,
+      waitUntil: "domcontentloaded"
+    })
+  ]);
 
-  await publicPage.goto(shareUrl!);
   await expect(publicPage.getByText("Shared from Agentic")).toBeVisible();
   await expect(publicPage.getByRole("heading", { name: "Inbox triage and follow-up prep" })).toBeVisible();
   await expect(publicPage.getByText("Read-only shared goal")).toBeVisible();
   await expect(publicPage.getByText("This read-only page shows a reviewed public projection.")).toBeVisible();
-  expect((await firstViewTracked).status()).toBe(202);
+  expect(firstViewResponse.status()).toBe(202);
 
   const publicHtml = await publicPage.content();
   expect(publicHtml).not.toContain("Approvals inbox");
   expect(publicHtml).not.toContain("Integration controls");
   expect(publicHtml).not.toContain("Recent activity");
 
-  const refreshTracked = publicPage.waitForResponse((response) =>
-    isPublicShareViewRequest(response.url(), response.request().method())
-  );
-  await publicPage.reload();
-  expect((await refreshTracked).status()).toBe(202);
+  const [refreshResponse] = await Promise.all([
+    publicPage.waitForResponse(
+      (response) => isPublicShareViewRequest(response.url(), response.request().method()),
+      { timeout: E2E_UI_TIMEOUT_MS }
+    ),
+    publicPage.reload({
+      timeout: E2E_UI_TIMEOUT_MS,
+      waitUntil: "domcontentloaded"
+    })
+  ]);
+  expect(refreshResponse.status()).toBe(202);
   await publicContext.close();
 
   await expect

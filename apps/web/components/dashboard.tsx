@@ -32,9 +32,13 @@ import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations
 import { DashboardCommandCenter } from "./dashboard-command-center";
 import { DashboardGoalsCard } from "./dashboard-goals-card";
 import { DashboardAdvancedSurface } from "./dashboard-advanced-surface";
+import { DashboardTraceabilityCard } from "./dashboard-traceability-card";
+import { DashboardDetailDrawer as DashboardWorkflowDetailDrawer } from "./dashboard-detail-drawer";
+import { createEmptyTraceability } from "./dashboard-traceability-fallback";
+import { useDashboardDetailSelection } from "./use-dashboard-detail-selection";
 import {
   DashboardCockpitLanes,
-  type DashboardDetailSelection
+  type DashboardDetailSelection as DashboardCockpitDetailSelection
 } from "./dashboard-cockpit";
 import type {
   GoalRecommendationsApiResponse,
@@ -342,7 +346,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const [operatorProductAgents, setOperatorProductAgents] = useState<AgentDefinition[]>([]);
   const [operatorProductTemplates, setOperatorProductTemplates] = useState<GoalTemplate[]>([]);
   const [operatorProductState, setOperatorProductState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [detailSelection, setDetailSelection] = useState<DashboardDetailSelection | null>(null);
+  const [cockpitDetailSelection, setCockpitDetailSelection] = useState<DashboardCockpitDetailSelection | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
   const [commandCenterRole, setCommandCenterRole] = useState<CommandCenterRole>("command");
@@ -416,6 +420,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle])),
     [data.goals]
   );
+  const cockpitVariant = data.cockpitRollout?.variant ?? "legacy";
+  const traceability = data.traceability ?? createEmptyTraceability(data.activeWorkspace?.id ?? null);
+  const workflowDetailSelection = useDashboardDetailSelection(data.approvals, goalBundleById);
+  const { detailPanel, selectedGoalDetailBundle, selectedApprovalDetail, selectedApprovalGoalBundle, openGoalDetails, openApprovalDetails, closeDetails } =
+    workflowDetailSelection;
   const goalConfidenceById = useMemo(
     () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.confidence])),
     [data.goals]
@@ -2190,11 +2199,12 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       nlExecute={nlExecutor.execute}
       nlCapabilitySummary={nlCapabilitySummary}
       activeWorkspaceId={data.activeWorkspace?.id ?? null}
+      cockpitVariant={cockpitVariant}
       themeMode={theme.mode}
       statsBarProps={statsBar.props}
       quickActions={quickActions}
-      detailSelection={detailSelection}
-      closeDetail={() => setDetailSelection(null)}
+      detailSelection={cockpitDetailSelection}
+      closeDetail={() => setCockpitDetailSelection(null)}
       openView={openView}
       onCreateGoal={async (req) => {
         setRequest(req);
@@ -2216,10 +2226,12 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           data={data}
           openView={openView}
           openDiagnosticTarget={openDiagnosticTarget}
-          openDetail={setDetailSelection}
+          openDetail={setCockpitDetailSelection}
         />
 
         <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openView={openView} />
+
+        <DashboardTraceabilityCard traceability={traceability} openTarget={navigateToSection} />
 
         {/* Recent Actions */}
         {recentActions.recentActions.length > 0 && (
@@ -2804,6 +2816,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           confirmGoalShare={confirmGoalShare}
           cancelGoalShareReview={cancelGoalShareReview}
           saveAsTemplate={saveAsTemplate}
+          openGoalDetails={openGoalDetails}
           shareStatsByGoal={shareStatsByGoal}
           highlightedItemId={highlightedItemId}
           getItemAnchorId={getDashboardItemAnchorId}
@@ -2915,6 +2928,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                                 isPinned={pinnedItems.isPinned(approval.id, "approval")}
                                 onToggle={pinnedItems.togglePin}
                               />
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                onClick={() => openApprovalDetails(approval.id)}
+                                disabled={isPending}
+                              >
+                                Open details
+                              </button>
                               <button type="button" onClick={() => respondApproval(approval.id, "approved", { scope: "once" })} disabled={isPending}>
                                 Approve once
                               </button>
@@ -2988,6 +3009,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                       isPinned={pinnedItems.isPinned(approval.id, "approval")}
                       onToggle={pinnedItems.togglePin}
                     />
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => openApprovalDetails(approval.id)}
+                      disabled={isPending}
+                    >
+                      Open details
+                    </button>
                     <button type="button" onClick={() => respondApproval(approval.id, "approved", { scope: "once" })} disabled={isPending}>
                       Approve once
                     </button>
@@ -3070,6 +3099,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           loadTemplates={loadTemplates}
           runTemplate={runTemplate}
           deleteTemplate={deleteTemplate}
+        />
+
+        <DashboardWorkflowDetailDrawer
+          isOpen={detailPanel !== null}
+          goalBundle={selectedGoalDetailBundle} approval={selectedApprovalDetail}
+          relatedGoal={selectedApprovalGoalBundle} onClose={closeDetails}
+          onShareGoal={shareGoal} onSaveAsTemplate={saveAsTemplate}
+          onRespondApproval={respondApproval} isPending={isPending}
         />
       </section>
     </DashboardShell>

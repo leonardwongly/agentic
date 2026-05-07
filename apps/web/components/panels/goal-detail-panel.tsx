@@ -40,6 +40,12 @@ type ContextPackSummary = {
   }>;
   evidenceSummary: {
     selectedCount: number;
+    confirmedCount: number;
+    observedCount: number;
+    inferredCount: number;
+    freshCount: number;
+    expiredCount: number;
+    lowConfidenceCount: number;
     reviewRequiredCount: number;
     conflictCount: number;
   };
@@ -295,6 +301,15 @@ function parseContextPackSummary(bundle: GoalBundle): ContextPackSummary | null 
         typeof evidenceSummaryCandidate?.selectedCount === "number"
           ? evidenceSummaryCandidate.selectedCount
           : selectedMemoryIds.length,
+      confirmedCount: typeof evidenceSummaryCandidate?.confirmedCount === "number" ? evidenceSummaryCandidate.confirmedCount : 0,
+      observedCount: typeof evidenceSummaryCandidate?.observedCount === "number" ? evidenceSummaryCandidate.observedCount : 0,
+      inferredCount: typeof evidenceSummaryCandidate?.inferredCount === "number" ? evidenceSummaryCandidate.inferredCount : 0,
+      freshCount: typeof evidenceSummaryCandidate?.freshCount === "number" ? evidenceSummaryCandidate.freshCount : 0,
+      expiredCount: typeof evidenceSummaryCandidate?.expiredCount === "number" ? evidenceSummaryCandidate.expiredCount : 0,
+      lowConfidenceCount:
+        typeof evidenceSummaryCandidate?.lowConfidenceCount === "number"
+          ? evidenceSummaryCandidate.lowConfidenceCount
+          : 0,
       reviewRequiredCount:
         typeof evidenceSummaryCandidate?.reviewRequiredCount === "number"
           ? evidenceSummaryCandidate.reviewRequiredCount
@@ -715,8 +730,20 @@ export function GoalDetailPanel({ bundle, onClose, onRefine, onShare, onSaveAsTe
               <strong>Needs review:</strong> {contextPack.evidenceSummary.reviewRequiredCount}
             </span>
             <span className="detail-meta-item">
+              <strong>Fresh:</strong> {contextPack.evidenceSummary.freshCount}
+            </span>
+            <span className="detail-meta-item">
+              <strong>Inferred:</strong> {contextPack.evidenceSummary.inferredCount} advisory
+            </span>
+            <span className="detail-meta-item">
               <strong>Conflicts:</strong> {contextPack.evidenceSummary.conflictCount}
             </span>
+          </div>
+          <div className="detail-list-meta">
+            <span>Confirmed: <strong>{contextPack.evidenceSummary.confirmedCount}</strong></span>
+            <span>Observed: <strong>{contextPack.evidenceSummary.observedCount}</strong></span>
+            <span>Expired: <strong>{contextPack.evidenceSummary.expiredCount}</strong></span>
+            <span>Low confidence: <strong>{contextPack.evidenceSummary.lowConfidenceCount}</strong></span>
           </div>
           <div className="detail-list">
             {contextPack.conflicts.length > 0 ? (
