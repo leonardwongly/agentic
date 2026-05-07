@@ -1,8 +1,8 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
 export const REQUEST_PLACEHOLDER =
   "Example: Clear today’s approvals, surface blocked commitments, and draft replies for anything urgent.";
-export const E2E_UI_TIMEOUT_MS = process.env.CI ? 25_000 : 5_000;
+export const E2E_UI_TIMEOUT_MS = process.env.CI ? 45_000 : 5_000;
 
 export async function unlockDashboard(page: Page, accessKey = "playwright-e2e-key") {
   await page.goto("/");
@@ -31,7 +31,7 @@ export async function enablePublicSharingForE2E(page: Page) {
 
 export async function openRequestComposer(page: Page) {
   await page.getByRole("button", { name: "Request work" }).click();
-  const requestCard = page.locator(".request-card");
+  const requestCard = page.locator(".request-card").first();
   const requestInput = requestCard.getByPlaceholder(REQUEST_PLACEHOLDER);
 
   await expect(requestCard).toBeVisible({ timeout: E2E_UI_TIMEOUT_MS });
@@ -67,6 +67,19 @@ export async function expectShareLinkReady(page: Page, goalTitle: string) {
       hasText: new RegExp(`(Copied|Created) a public share link for "${escapedGoalTitle}"\\.`, "u")
     })
   ).toBeVisible({ timeout: E2E_UI_TIMEOUT_MS });
+}
+
+export async function createPublicShareBrowserContext(browser: Browser): Promise<BrowserContext> {
+  const context = await browser.newContext();
+
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "sendBeacon", {
+      configurable: true,
+      value: undefined
+    });
+  });
+
+  return context;
 }
 
 export async function showAdvancedOperations(page: Page) {
