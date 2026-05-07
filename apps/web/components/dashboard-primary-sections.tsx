@@ -43,6 +43,8 @@ type DashboardHeroPanelProps = {
     health: string;
   };
   coreLoopHealthCopy: string;
+  eventFreshnessLabel: string;
+  eventSummary: string;
   docsState: {
     kind: string;
     message: string;
@@ -93,6 +95,8 @@ function resolveCommitment(data: DashboardData, item: NowQueueItem): Commitment 
 export function DashboardHeroPanel({
   coreLoopSummary,
   coreLoopHealthCopy,
+  eventFreshnessLabel,
+  eventSummary,
   docsState,
   isPending,
   focusRequestComposer,
@@ -117,6 +121,8 @@ export function DashboardHeroPanel({
           <span className="pill">Execute: {coreLoopSummary.counts.activeGoals} active</span>
           <span className="pill">Observe: {coreLoopSummary.counts.recentActivity} events</span>
           <span className="pill">Improve: {coreLoopSummary.counts.memories} memories</span>
+          <span className="pill">Events: {eventFreshnessLabel}</span>
+          <span className="pill">{eventSummary}</span>
         </div>
       </div>
       <div className="hero-actions">

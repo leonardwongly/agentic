@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildClientIdempotencyKey,
+  connectDashboardEventStream,
+  createInitialDashboardEventStreamState,
+  deriveDashboardFreshnessState,
   pollJobStatusUntilSettled,
   readJson
 } from "../apps/web/components/dashboard-async";
@@ -194,6 +197,99 @@ describe("dashboard async helpers", () => {
       error: null
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("tracks dashboard event stream freshness and falls back after stale reconnects", () => {
+    const states: string[] = [];
+    const batches: unknown[] = [];
+    const close = connectDashboardEventStream({
+      eventSourceFactory: (url) => new FakeEventSource(url),
+      now: () => 1_000,
+      onBatch: (batch) => batches.push(batch),
+      onFreshnessChange: (state) => states.push(state.freshness)
+    });
+
+    expect(FakeEventSource.instances[0]?.url).toBe("/api/dashboard/events");
+    FakeEventSource.instances[0]?.emit("dashboard.events", {
+      schemaVersion: 1,
+      principalUserId: "system",
+      workspaceId: null,
+      observedAt: "2026-05-06T00:00:00.000Z",
+      freshness: {
+        state: "live",
+        staleAfterMs: 5_000,
+        fallbackAfterMs: 10_000
+      },
+      events: [
+        {
+          schemaVersion: 1,
+          sequence: 7,
+          id: "7",
+          kind: "job.updated",
+          domain: "job",
+          principalUserId: "system",
+          workspaceId: null,
+          resourceId: "job-1",
+          summary: "Job updated.",
+          severity: "info",
+          observedAt: "2026-05-06T00:00:00.000Z",
+          updatedAt: "2026-05-06T00:00:00.000Z",
+          dedupeKey: "job.updated:personal:job-1",
+          target: null,
+          metadata: {}
+        }
+      ]
+    });
+    FakeEventSource.instances[0]?.emit("dashboard.events", {
+      schemaVersion: 1,
+      principalUserId: "system",
+      workspaceId: null,
+      observedAt: "2026-05-06T00:00:00.000Z",
+      freshness: {
+        state: "live",
+        staleAfterMs: 5_000,
+        fallbackAfterMs: 10_000
+      },
+      events: [
+        {
+          schemaVersion: 1,
+          sequence: 7,
+          id: "7",
+          kind: "job.updated",
+          domain: "job",
+          principalUserId: "system",
+          workspaceId: null,
+          resourceId: "job-1",
+          summary: "Job updated.",
+          severity: "info",
+          observedAt: "2026-05-06T00:00:00.000Z",
+          updatedAt: "2026-05-06T00:00:00.000Z",
+          dedupeKey: "job.updated:personal:job-1",
+          target: null,
+          metadata: {}
+        }
+      ]
+    });
+    FakeEventSource.instances[0]?.emit("error");
+
+    close();
+
+    expect(batches).toHaveLength(1);
+    expect(states).toContain("live");
+    expect(states).toContain("reconnecting");
+    expect(FakeEventSource.instances[0]?.closed).toBe(true);
+    expect(
+      deriveDashboardFreshnessState(
+        {
+          ...createInitialDashboardEventStreamState(),
+          freshness: "live",
+          lastEventAt: 1_000
+        },
+        12_000,
+        5_000,
+        10_000
+      )
+    ).toBe("fallback");
   });
 
   it("returns null when the polling window is exhausted before the first request", async () => {
