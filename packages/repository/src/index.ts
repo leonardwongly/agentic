@@ -911,7 +911,6 @@ function isJobVisibleToUserInStore(
   if (job.userId === userId) {
     return true;
   }
-
   switch (job.payload.type) {
     case "goal_create":
     case "goal_refine":
@@ -926,14 +925,13 @@ function isJobVisibleToUserInStore(
     case "public_share_view":
       return isGoalIdVisibleToUser(store, job.payload.goalId, workspaceIds, userId);
     case "privacy_operation":
+    case "github_issue_intake":
       return job.payload.workspaceId ? workspaceIds.has(job.payload.workspaceId) : false;
     case "autopilot_process": {
       const watcher = watcherByIdFromStore(store, job.payload.sourceId);
       const goal = watcher ? goalByIdFromStore(store, watcher.goalId) : null;
       return goal?.workspaceId ? workspaceIds.has(goal.workspaceId) : false;
     }
-    case "github_issue_intake":
-      return job.payload.workspaceId ? workspaceIds.has(job.payload.workspaceId) : false;
     case "docs_render":
       return false;
   }
