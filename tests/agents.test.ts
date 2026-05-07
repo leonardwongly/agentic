@@ -214,6 +214,32 @@ describe("runAgent", () => {
     expect(result.artifacts[0]?.content).toMatch(/planning material only/i);
   });
 
+  it("falls back to a manual-review artifact when the runner throws, without leaking the error message", () => {
+    const runner: AgentRunner = {
+      contract: AgentRunnerContractSchema.parse({
+        id: "agentic.test.throwing-runner",
+        version: "v1",
+        agentNames: ["communications"],
+        declaredCapabilities: [],
+        outputModes: ["governed_specialist"],
+        timeoutMs: 1000,
+        telemetryEvents: ["agent.started", "agent.completed", "agent.failed"],
+        failureCodes: ["dependency_failure"]
+      }),
+      run() {
+        throw new Error("Synthetic runner failure with secret-token-like value");
+      }
+    };
+
+    const result = runAgent(buildTask("communications"), "Triage the inbox.", { runner });
+
+    expect(result.executionMode).toBe("manual_review_required");
+    expect(result.artifacts[0]?.metadata.requiresManualReview).toBe(true);
+    expect(result.summary).toMatch(/manual-review fallback/i);
+    expect(result.artifacts[0]?.content).toContain("Failure code: unknown_error");
+    expect(result.artifacts[0]?.content).not.toContain("secret-token-like");
+  });
+
   it("supports orchestrator coordination scaffolds without claiming external execution", () => {
     const result = runAgent(buildTask("orchestrator"), "Coordinate specialist agents.");
 
