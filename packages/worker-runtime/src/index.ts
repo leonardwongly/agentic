@@ -175,6 +175,13 @@ export type WorkerRuntimeOptions = {
   requireIdempotencyForRetry?: boolean;
   maxJobs?: number;
   claim?: ClaimNextJobParams;
+  immuneSystem?: Partial<WorkerRuntimeImmuneSystemControls>;
+};
+
+export type WorkerRuntimeImmuneSystemControls = {
+  enabled: boolean;
+  maxConsecutiveFailures: number;
+  coolDownMs: number;
 };
 
 export type WorkerQueueHealthSummary = {
@@ -1463,17 +1470,82 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
       });
       const pollIntervalMs = Math.max(50, options.pollIntervalMs ?? 1_000);
       let processedCount = 0;
+      const immuneSystem: WorkerRuntimeImmuneSystemControls = {
+        enabled: true,
+        maxConsecutiveFailures: 6,
+        coolDownMs: 30_000,
+        ...(options.immuneSystem ?? {})
+      };
+      const breaker = new Map<JobKind, { consecutiveFailures: number; openUntilMs: number | null }>();
+
+      function currentAllowedKinds(): JobKind[] | null {
+        const requestedKinds = options.claim?.kinds ?? workerJobKindValues;
+
+        if (!immuneSystem.enabled) {
+          return requestedKinds.slice();
+        }
+
+        const nowMs = Date.now();
+        const allowed = requestedKinds.filter((kind) => {
+          const entry = breaker.get(kind);
+          return !entry?.openUntilMs || entry.openUntilMs <= nowMs;
+        });
+
+        return allowed.length > 0 ? allowed : null;
+      }
+
+      function recordJobOutcome(kind: JobKind, status: JobRecord["status"]) {
+        if (!immuneSystem.enabled) {
+          return;
+        }
+
+        const existing = breaker.get(kind) ?? { consecutiveFailures: 0, openUntilMs: null };
+
+        if (status === "completed") {
+          if (existing.consecutiveFailures > 0 || existing.openUntilMs) {
+            breaker.set(kind, { consecutiveFailures: 0, openUntilMs: null });
+          }
+          return;
+        }
+
+        const nextFailures = existing.consecutiveFailures + 1;
+
+        if (nextFailures >= immuneSystem.maxConsecutiveFailures) {
+          breaker.set(kind, { consecutiveFailures: 0, openUntilMs: Date.now() + immuneSystem.coolDownMs });
+          recordCounter("worker.immunity.circuit_breaker.opened.total", 1, {
+            runnerId: options.runnerId,
+            jobKind: kind
+          });
+          return;
+        }
+
+        breaker.set(kind, { consecutiveFailures: nextFailures, openUntilMs: null });
+      }
 
       while (!options.signal?.aborted) {
+        const allowedKinds = currentAllowedKinds();
+
+        if (allowedKinds === null) {
+          await delay(pollIntervalMs, options.signal);
+          continue;
+        }
+
         const result = await processNextDurableJob({
           queue,
           handlers,
-          claim: options.claim
+          claim: {
+            ...(options.claim ?? {}),
+            kinds: allowedKinds
+          }
         });
 
         if (result.claimedJob) {
           if (!shouldClaimJob(result.claimedJob.kind, options.claim?.kinds)) {
             throw new Error(`Worker claimed unexpected job kind "${result.claimedJob.kind}".`);
+          }
+
+          if (result.finalJob) {
+            recordJobOutcome(result.claimedJob.kind, result.finalJob.status);
           }
 
           processedCount += 1;
