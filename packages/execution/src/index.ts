@@ -193,6 +193,10 @@ function deriveJobSideEffectTarget(payload: JobPayload): string | null {
     return `autopilot-event:${payload.autopilotEventId}`;
   }
 
+  if (payload.type === "github_issue_intake") {
+    return `github-issue:${payload.repository.fullName.toLowerCase()}#${payload.issue.number}`;
+  }
+
   if ("goalId" in payload && typeof payload.goalId === "string" && payload.goalId.trim()) {
     return `goal:${payload.goalId}`;
   }

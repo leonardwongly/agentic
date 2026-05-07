@@ -1,4 +1,3 @@
-import { runDocsBuild } from "@agentic/docs-runtime";
 import {
   AutopilotProcessJobPayloadSchema,
   buildApprovalNotificationDeliveryTarget,
@@ -90,8 +89,10 @@ import {
 import {
   enqueueApprovalFollowUpJob,
   enqueueApprovalNotificationJob,
+  enqueueGitHubIssueIntakeJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "./job-dispatch";
+import { executeGitHubIssueIntakeJob } from "./github-issue-intake-executor";
 import {
   createPolicyReplayValidationResolver,
   executeBriefingCreateJob,
@@ -119,6 +120,7 @@ export {
   enqueueAutopilotProcessJob,
   enqueueBriefingCreateJob,
   enqueueDocsRenderJob,
+  enqueueGitHubIssueIntakeJob,
   enqueueGoalCreateJob,
   enqueueGoalRefineJob,
   enqueuePrivacyOperationJob,
@@ -141,6 +143,7 @@ export {
   persistCapturedMemories
 } from "./job-executors-core";
 export type { GoalJobResultSummary } from "./job-executors-core";
+export { executeGitHubIssueIntakeJob, isGitHubIssueIntakeJob } from "./github-issue-intake-executor";
 export { executePrivacyOperationJob, executePublicShareViewJob } from "./privacy-share-executors";
 export { runWatcherSchedulerOnce, type WatcherSchedulerResult, type WatcherSchedulerDecision } from "./watcher-scheduler";
 
@@ -151,6 +154,7 @@ export const workerJobKindValues = [
   "template_run",
   "docs_render",
   "autopilot_process",
+  "github_issue_intake",
   "approval_follow_up",
   "approval_notification",
   "privacy_operation",
@@ -946,7 +950,6 @@ export function isApprovalNotificationJob(
   return job?.kind === "approval_notification" && job.payload.type === "approval_notification";
 }
 
-
 export async function executeAutopilotProcessJob(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
@@ -1397,6 +1400,12 @@ export function createWorkerJobHandlers(params: {
         selfImprovementRepository: params.selfImprovementRepository,
         job,
         retryPolicy: params.retryPolicy
+      })),
+    github_issue_intake: wrapHandler("github_issue_intake", (job) =>
+      executeGitHubIssueIntakeJob({
+        repository: params.repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        job
       })),
     approval_follow_up: wrapHandler("approval_follow_up", (job) =>
       executeApprovalFollowUpJob({

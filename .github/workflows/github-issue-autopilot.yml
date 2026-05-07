@@ -1,0 +1,84 @@
+name: GitHub Issue Autopilot
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: github-issue-autopilot-${{ github.event.issue.node_id || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  enqueue:
+    name: Enqueue governed Agentic job
+    if: ${{ github.event.issue.pull_request == null }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      AGENTIC_GITHUB_ISSUE_WEBHOOK_URL: ${{ vars.AGENTIC_GITHUB_ISSUE_WEBHOOK_URL }}
+      AGENTIC_GITHUB_WEBHOOK_SECRET: ${{ secrets.AGENTIC_GITHUB_WEBHOOK_SECRET }}
+    steps:
+      - name: Forward signed issue-opened event
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          import { createHash, createHmac } from "node:crypto";
+
+          const url = (process.env.AGENTIC_GITHUB_ISSUE_WEBHOOK_URL ?? "").trim();
+          const secret = (process.env.AGENTIC_GITHUB_WEBHOOK_SECRET ?? "").trim();
+
+          if (!url || !secret) {
+            console.log("::notice title=Agentic issue autopilot not configured::Set vars.AGENTIC_GITHUB_ISSUE_WEBHOOK_URL and secrets.AGENTIC_GITHUB_WEBHOOK_SECRET to enable issue intake.");
+            process.exit(0);
+          }
+
+          if (!url.startsWith("https://")) {
+            console.log("::error title=Invalid Agentic webhook URL::AGENTIC_GITHUB_ISSUE_WEBHOOK_URL must use https.");
+            process.exit(1);
+          }
+
+          if (secret.length < 32) {
+            console.log("::error title=Invalid Agentic webhook secret::AGENTIC_GITHUB_WEBHOOK_SECRET must be at least 32 characters.");
+            process.exit(1);
+          }
+
+          const eventPath = process.env.GITHUB_EVENT_PATH;
+
+          if (!eventPath) {
+            console.log("::error title=Missing GitHub event path::GITHUB_EVENT_PATH was not provided by the runner.");
+            process.exit(1);
+          }
+
+          const body = await readFile(eventPath, "utf8");
+          const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
+          const deliveryId = `actions-${process.env.GITHUB_RUN_ID ?? "run"}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}-${digest}`;
+          const signature = `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+
+          const response = await fetch(url, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "user-agent": "agentic-github-issue-autopilot",
+              "x-github-event": "issues",
+              "x-github-delivery": deliveryId,
+              "x-hub-signature-256": signature
+            },
+            body
+          });
+
+          const responseText = await response.text();
+
+          if (!response.ok) {
+            console.log(`::error title=Agentic enqueue failed::Agentic returned HTTP ${response.status}.`);
+            console.log(responseText.slice(0, 1000));
+            process.exit(1);
+          }
+
+          console.log(`Agentic issue intake accepted: HTTP ${response.status}`);
+          console.log(responseText.slice(0, 1000));
+          NODE

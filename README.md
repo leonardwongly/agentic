@@ -16,6 +16,7 @@ The current product surface includes:
 
 - a commitment-first dashboard and core-loop API
 - async goal creation and briefing generation with durable job polling
+- GitHub issue-open intake that enqueues governed Agentic worker jobs
 - agents, templates, workflow templates, watchers, and operator products
 - approvals, autopilot events, and governance-aware execution paths
 - memories and self-improving outcome capture
@@ -28,7 +29,7 @@ The current product surface includes:
 ## Architecture At A Glance
 
 - `apps/web`: Next.js UI, JSON API routes, session handling, readiness endpoints, and dashboard surfaces
-- `apps/worker`: durable worker process for queued goal, briefing, template, docs, autopilot, and privacy jobs
+- `apps/worker`: durable worker process for queued goal, briefing, template, docs, autopilot, GitHub issue intake, and privacy jobs
 - `packages/contracts`: shared schemas and runtime contracts
 - `packages/db`: Postgres schema, migrations, and schema-readiness checks
 - `packages/orchestrator`: workflow assembly, routing, approvals, and execution coordination
@@ -156,6 +157,7 @@ Run the worker for:
 - template runs
 - docs render jobs
 - autopilot events
+- GitHub issue intake jobs
 - privacy retention, export, and deletion jobs
 
 Without the worker, those job APIs will enqueue work but it will remain pending.
@@ -535,4 +537,5 @@ Security and compliance supporting material lives in:
 
 - [`docs/specs/agentic.md`](docs/specs/agentic.md)
 - [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)
+- [`docs/runbooks/github-issue-autopilot.md`](docs/runbooks/github-issue-autopilot.md)
 - [`docs/templates/reference.docx`](docs/templates/reference.docx)

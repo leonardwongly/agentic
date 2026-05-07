@@ -575,6 +575,7 @@ function isJobVisibleInScope(
       return scopedGoalIds.has(job.payload.goalId);
     case "autopilot_process":
     case "docs_render":
+    case "github_issue_intake":
       return true;
   }
 }
@@ -597,6 +598,8 @@ function buildJobLabel(job: JobRecord, goalTitleById: Map<string, string>, activ
       return `${humanizeSnakeCase(job.payload.kind)} · ${activeWorkspace?.name ?? "workspace privacy"}`;
     case "autopilot_process":
       return `Autopilot event · ${humanizeSnakeCase(job.payload.kind)}`;
+    case "github_issue_intake":
+      return `GitHub issue · ${job.payload.repository.fullName}#${job.payload.issue.number}`;
     case "public_share_view":
       return `Share analytics · ${goalTitleById.get(job.payload.goalId) ?? "shared goal"}`;
     case "docs_render":
@@ -633,6 +636,12 @@ function buildJobTarget(job: JobRecord, goalTitleById: Map<string, string>): Das
         section: "autopilot",
         itemId: job.payload.autopilotEventId,
         label: "Open autopilot event"
+      };
+    case "github_issue_intake":
+      return {
+        section: "goals",
+        itemId: job.payload.goalId,
+        label: goalTitleById.get(job.payload.goalId) ?? "Open GitHub issue intake goal"
       };
     case "public_share_view":
       return {
