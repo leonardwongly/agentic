@@ -268,6 +268,34 @@ export const AgentResultSchema = z.object({
   explanation: z.string().min(1)
 });
 
+export const SubAgentCoordinationStrategySchema = z.enum(["parallel", "sequential", "hybrid"]);
+
+export const SubAgentRoleSchema = z.object({
+  id: z.string().min(1).max(80),
+  name: z.string().min(1).max(120),
+  agent: AgentNameSchema,
+  role: z.string().min(1).max(160),
+  responsibilities: z.array(z.string().min(1).max(300)).min(1).max(8),
+  allowedCapabilities: z.array(CapabilitySchema).default([]),
+  inputContracts: z.array(z.string().min(1).max(300)).default([]),
+  expectedOutputs: z.array(z.string().min(1).max(300)).min(1).max(8),
+  dependsOn: z.array(z.string().min(1).max(80)).default([]),
+  riskClass: RiskClassSchema,
+  handoffCriteria: z.array(z.string().min(1).max(300)).min(1).max(8),
+  guardrails: z.array(z.string().min(1).max(300)).min(1).max(8)
+});
+
+export const SubAgentPlanSchema = z.object({
+  id: z.string().min(1).max(120),
+  goalId: z.string().min(1),
+  anchorTaskId: z.string().min(1).nullable().default(null),
+  parentAgent: AgentNameSchema,
+  coordinationStrategy: SubAgentCoordinationStrategySchema,
+  roles: z.array(SubAgentRoleSchema).min(1).max(8),
+  successCriteria: z.array(z.string().min(1).max(300)).min(1).max(8),
+  createdAt: z.string().datetime()
+});
+
 export const WorkflowStateSchema = z.object({
   id: z.string().min(1),
   goalId: z.string().min(1),
@@ -898,6 +926,7 @@ export const ContextPacketSchema = z
 
 export const executionProvenanceNodeTypeValues = [
   "goal",
+  "task",
   "decision",
   "approval",
   "action",
@@ -3591,6 +3620,9 @@ export type AgentName = z.infer<typeof AgentNameSchema>;
 export type ToolInvocation = z.infer<typeof ToolInvocationSchema>;
 export type Artifact = z.infer<typeof ArtifactSchema>;
 export type AgentResult = z.infer<typeof AgentResultSchema>;
+export type SubAgentCoordinationStrategy = z.infer<typeof SubAgentCoordinationStrategySchema>;
+export type SubAgentRole = z.infer<typeof SubAgentRoleSchema>;
+export type SubAgentPlan = z.infer<typeof SubAgentPlanSchema>;
 export type WorkflowState = z.infer<typeof WorkflowStateSchema>;
 export type Goal = z.infer<typeof GoalSchema>;
 export type Task = z.infer<typeof TaskSchema>;

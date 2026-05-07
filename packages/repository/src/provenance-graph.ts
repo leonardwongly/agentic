@@ -11,7 +11,8 @@ import {
   type GoalBundle,
   type JobPayload,
   type JobRecord,
-  type MemoryRecord
+  type MemoryRecord,
+  type Task
 } from "@agentic/contracts";
 import { buildContextPacketFromMemory } from "@agentic/memory";
 
@@ -52,6 +53,30 @@ function putEdge(edges: Map<string, ExecutionProvenanceEdge>, edge: ExecutionPro
 
 function goalIdFromPayload(payload: JobPayload): string | null {
   return "goalId" in payload && typeof payload.goalId === "string" ? payload.goalId : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function contextMemoryIdsFromAction(action: ActionLog): string[] {
+  const details = isRecord(action.details) ? action.details : null;
+  const contextPack = isRecord(details?.contextPack) ? details.contextPack : null;
+
+  if (!contextPack) {
+    return [];
+  }
+
+  return [
+    ...readStringArray(contextPack.selectedMemoryIds),
+    ...readStringArray(contextPack.staleMemoryIds),
+    ...readStringArray(contextPack.reviewRequiredMemoryIds),
+    ...readStringArray(contextPack.conflictingMemoryIds)
+  ];
 }
 
 function buildNode(params: {
@@ -119,6 +144,10 @@ function addGoalBundle(
     })
   );
 
+  for (const task of bundle.tasks) {
+    addTask(bundle.goal.userId, task, nodes, edges, goalNodeId);
+  }
+
   for (const approval of bundle.approvals) {
     const approvalNodeId = nodeId("approval", approval.id);
     putNode(
@@ -148,6 +177,20 @@ function addGoalBundle(
         createdAt: approval.createdAt
       })
     );
+
+    putEdge(
+      edges,
+      buildEdge({
+        type: "created",
+        from: nodeId("task", approval.taskId),
+        to: approvalNodeId,
+        label: "Task created approval request",
+        createdAt: approval.createdAt,
+        metadata: {
+          riskClass: approval.riskClass
+        }
+      })
+    );
   }
 
   for (const action of bundle.actionLogs) {
@@ -156,6 +199,61 @@ function addGoalBundle(
 
   for (const artifact of bundle.artifacts) {
     addArtifact(bundle.goal.userId, artifact, nodes, edges, goalNodeId);
+  }
+}
+
+function addTask(
+  userId: string,
+  task: Task,
+  nodes: Map<string, ExecutionProvenanceNode>,
+  edges: Map<string, ExecutionProvenanceEdge>,
+  goalNodeId: string
+): void {
+  const taskNodeId = nodeId("task", task.id);
+  putNode(
+    nodes,
+    buildNode({
+      id: taskNodeId,
+      type: "task",
+      ownerUserId: userId,
+      label: task.title,
+      summary: task.summary,
+      sensitivity: task.riskClass,
+      createdAt: task.createdAt,
+      metadata: {
+        goalId: task.goalId,
+        workflowId: task.workflowId,
+        assignedAgent: task.assignedAgent,
+        state: task.state,
+        riskClass: task.riskClass,
+        requiresApproval: task.requiresApproval,
+        dependsOn: task.dependsOn,
+        artifactIds: task.artifactIds
+      }
+    })
+  );
+  putEdge(
+    edges,
+    buildEdge({
+      type: "created",
+      from: goalNodeId,
+      to: taskNodeId,
+      label: "Goal created workflow task",
+      createdAt: task.createdAt
+    })
+  );
+
+  for (const dependencyId of task.dependsOn) {
+    putEdge(
+      edges,
+      buildEdge({
+        type: "created",
+        from: nodeId("task", dependencyId),
+        to: taskNodeId,
+        label: "Task depends on prior task",
+        createdAt: task.createdAt
+      })
+    );
   }
 }
 
@@ -193,6 +291,32 @@ function addActionLog(
       createdAt: action.createdAt
     })
   );
+
+  if (action.taskId) {
+    putEdge(
+      edges,
+      buildEdge({
+        type: "executed",
+        from: nodeId("task", action.taskId),
+        to: actionNodeId,
+        label: "Task emitted execution event",
+        createdAt: action.createdAt
+      })
+    );
+  }
+
+  for (const memoryId of new Set(contextMemoryIdsFromAction(action))) {
+    putEdge(
+      edges,
+      buildEdge({
+        type: "uses_context",
+        from: actionNodeId,
+        to: nodeId("context_packet", `ctx_${memoryId}`),
+        label: "Action used scoped memory context",
+        createdAt: action.createdAt
+      })
+    );
+  }
 }
 
 function addArtifact(
@@ -228,6 +352,19 @@ function addArtifact(
       createdAt: artifact.createdAt
     })
   );
+
+  if (artifact.taskId) {
+    putEdge(
+      edges,
+      buildEdge({
+        type: "produced",
+        from: nodeId("task", artifact.taskId),
+        to: outputNodeId,
+        label: "Task produced output",
+        createdAt: artifact.createdAt
+      })
+    );
+  }
 }
 
 function addEvidenceRecord(
@@ -266,6 +403,47 @@ function addEvidenceRecord(
       createdAt: evidence.respondedAt
     })
   );
+
+  putEdge(
+    edges,
+    buildEdge({
+      type: "decided",
+      from: nodeId("task", evidence.taskId),
+      to: decisionNodeId,
+      label: "Task state changed after approval decision",
+      createdAt: evidence.respondedAt,
+      metadata: {
+        resultingTaskState: evidence.resultingTaskState,
+        resultingGoalStatus: evidence.resultingGoalStatus
+      }
+    })
+  );
+
+  for (const memoryId of evidence.memoryIds) {
+    putEdge(
+      edges,
+      buildEdge({
+        type: "uses_context",
+        from: decisionNodeId,
+        to: nodeId("context_packet", `ctx_${memoryId}`),
+        label: "Decision used linked memory evidence",
+        createdAt: evidence.respondedAt
+      })
+    );
+  }
+
+  for (const artifactId of evidence.artifactIds) {
+    putEdge(
+      edges,
+      buildEdge({
+        type: "captured",
+        from: decisionNodeId,
+        to: nodeId("output", artifactId),
+        label: "Decision captured output evidence",
+        createdAt: evidence.respondedAt
+      })
+    );
+  }
 }
 
 function addJob(
@@ -372,7 +550,8 @@ function addMemory(
       createdAt: memory.createdAt,
       metadata: {
         memoryType: memory.memoryType,
-        permissions: memory.permissions
+        permissions: memory.permissions,
+        advisoryOnly: memory.memoryType === "inferred"
       }
     })
   );
@@ -388,7 +567,9 @@ function addMemory(
       createdAt: packet.createdAt,
       metadata: {
         freshness: packet.freshness.status,
-        sourceMemoryIds: packet.lineage.sourceMemoryIds
+        sourceMemoryIds: packet.lineage.sourceMemoryIds,
+        memoryType: packet.memoryType,
+        advisoryOnly: packet.memoryType === "inferred"
       }
     })
   );

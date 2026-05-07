@@ -1,10 +1,9 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import {
   commitmentInboxBucketValues,
   privacyOperationKindValues,
-  workspaceRoleValues,
   defaultWorkspaceShadowReplayPolicy,
   enterpriseWorkspaceGovernanceDefaults,
   DEFAULT_COMMITMENT_INBOX_LIMIT,
@@ -31,21 +30,24 @@ import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/reposito
 import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
 import { DashboardCommandCenter } from "./dashboard-command-center";
-import {
-  DashboardGoalsCard,
-  type RecommendationLoadState
-} from "./dashboard-goals-card";
+import { DashboardGoalsCard } from "./dashboard-goals-card";
 import { DashboardAdvancedSurface } from "./dashboard-advanced-surface";
+import { DashboardTraceabilityCard } from "./dashboard-traceability-card";
+import { DashboardDetailDrawer as DashboardWorkflowDetailDrawer } from "./dashboard-detail-drawer";
+import { createEmptyTraceability } from "./dashboard-traceability-fallback";
+import { useDashboardDetailSelection } from "./use-dashboard-detail-selection";
+import {
+  DashboardCockpitLanes,
+  type DashboardDetailSelection as DashboardCockpitDetailSelection
+} from "./dashboard-cockpit";
 import type {
   GoalRecommendationsApiResponse,
   OperatorProductPayload,
   PrivacyControlsApiResponse,
-  PrivacyControlSummary,
   RecommendationFeedbackApiResponse,
   RequestState
 } from "./dashboard-types";
 import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
-import { CoreLoopViewTracker } from "./core-loop-view-tracker";
 import {
   buildDashboardCommandCenterModel,
   getPreferredCommandCenterRole,
@@ -69,10 +71,8 @@ import {
 import {
   buildGoalRecommendationQuery,
   buildRecommendationFeedbackPayload,
-  buildRecommendationRefinementSource,
-  type RecommendationRefinementSource
+  buildRecommendationRefinementSource
 } from "../lib/workflow-recommendations";
-import { CommandPalette } from "./command-palette";
 import {
   buildClientIdempotencyKey,
   type BriefingCreateApiResponse,
@@ -81,7 +81,6 @@ import {
   type DocsRenderJobStatusApiResponse,
   type GoalJobStatusApiResponse,
   type GoalQueuedApiResponse,
-  loadDashboardSnapshot as fetchDashboardSnapshot,
   loadTemplatesSnapshot as fetchTemplatesSnapshot,
   type NLIntentApiResponse,
   pollJobStatusUntilSettled,
@@ -89,8 +88,28 @@ import {
   type TemplateRunJobStatusApiResponse,
   readJson
 } from "./dashboard-async";
+import { DashboardShell } from "./dashboard-shell";
 import { DashboardOperatingSectionsCard } from "./dashboard-operating-sections";
 import { DashboardOperationsSections } from "./dashboard-operations-sections";
+import { useApprovalBatchActions } from "./use-approval-batch-actions";
+import { formatDashboardFreshnessLabel, useDashboardEventStreamSync } from "./use-dashboard-event-stream";
+import {
+  useDashboardApprovalActionsState,
+  useDashboardBriefingActionsState,
+  useDashboardCommitmentActionsState,
+  useDashboardGoalActionsState,
+  useDashboardNotesActionsState,
+  useDashboardSnapshot,
+  useDashboardTemplateActionsState,
+  useDashboardWorkspaceActionsState
+} from "./dashboard-hooks";
+import {
+  ActivityTimeline,
+  ArtifactsPanel,
+  DashboardHeroPanel,
+  NowQueueCard,
+  ReliabilityCard
+} from "./dashboard-primary-sections";
 import { useGoalShareReview } from "./use-goal-share-review";
 import {
   StatusBadge,
@@ -102,27 +121,14 @@ import {
   executionModeFilterOptions,
   extractArtifactExecutionMode,
   getExecutionModeFilterOption,
-  getImplementationTierPresentation,
-  getExecutionModePresentation,
   matchesExecutionModeFilter,
-  CopyButton,
-  CopyableText,
   RelativeTime,
-  KeyboardShortcutsProvider,
   useShortcut,
-  FaviconBadge,
   toast,
-  ToastContainer,
-  SlideOutPanel,
-  QuickActionsBar,
-  FloatingActionsBar,
   NoApprovalsEmpty,
-  NoArtifactsEmpty,
   // 10x Components Phase 1
-  StatsBar,
   useStatsBar,
   CollapsibleSection,
-  ArtifactPreview,
   ApprovalPreview,
   useSmartDefaults,
   useRecentActions,
@@ -130,20 +136,16 @@ import {
   useBatchSelection,
   BatchActionsBar,
   SelectableItem,
-  FocusMode,
   useFocusMode,
   FocusModeButton,
   UnifiedFeed,
   useUnifiedFeed,
   RiskClassHelp,
-  FeatureHelp,
   useDeepLink,
-  ShareLinkButton,
   usePinnedItems,
   PinButton,
   sortWithPins,
   // 10x Components Phase 2
-  ApprovalNavigationProvider,
   useApprovalNavigation,
   KeyboardApprovalItem,
   ApprovalKeyboardHints,
@@ -152,17 +154,11 @@ import {
   useApprovalGroups,
   ApprovalGroupSelector,
   ApprovalGroupView,
-  type GroupBy,
   useTheme,
-  ThemeToggle,
-  NLFloatingBar,
   useNLExecutor,
-  TimelineFilter,
   useFilteredTimeline,
-  HealthIndicator,
   InlineGoalProgress,
   useGoalProgress,
-  formatConfidencePercentage,
   type ExecutionModeFilterValue
 } from "./ui";
 
@@ -280,26 +276,62 @@ export function Dashboard(props: DashboardProps) {
 }
 
 function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }: DashboardProps) {
-  const [data, setData] = useState(initialData);
-  const [notes, setNotes] = useState(initialNotes);
-  const [request, setRequest] = useState("");
-  const [memoryContent, setMemoryContent] = useState("");
-  const [memoryCategory, setMemoryCategory] = useState("working-style");
-  const [noteQuery, setNoteQuery] = useState("");
-  const [noteTitle, setNoteTitle] = useState("");
-  const [noteContent, setNoteContent] = useState("");
-  const [selectedNoteSlug, setSelectedNoteSlug] = useState<string | null>(null);
-  const [selectedNoteTitle, setSelectedNoteTitle] = useState("");
-  const [selectedNoteContent, setSelectedNoteContent] = useState("");
-  const [docsState, setDocsState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [submitState, setSubmitState] = useState<RequestState>({ kind: "idle", message: "" });
+  const { data, setData, loadDashboardSnapshot } = useDashboardSnapshot(initialData);
+  const {
+    notes,
+    setNotes,
+    memoryContent,
+    setMemoryContent,
+    memoryCategory,
+    setMemoryCategory,
+    noteQuery,
+    setNoteQuery,
+    noteTitle,
+    setNoteTitle,
+    noteContent,
+    setNoteContent,
+    selectedNoteSlug,
+    selectedNoteTitle,
+    selectedNoteContent,
+    noteState,
+    setNoteState,
+    selectedNoteTitleRef,
+    selectedNoteContentRef,
+    setSelectedNoteTitleDraft,
+    setSelectedNoteContentDraft,
+    loadSelectedNoteDraft,
+    clearSelectedNoteDraft
+  } = useDashboardNotesActionsState(initialNotes);
+  const {
+    request,
+    setRequest,
+    submitState,
+    setSubmitState,
+    selectedAgentId,
+    setSelectedAgentId,
+    refinementInputs,
+    setRefinementInputs,
+    refinementSourceByGoal,
+    setRefinementSourceByGoal,
+    refinementState,
+    setRefinementState,
+    recommendationState,
+    setRecommendationState,
+    recommendationResultsByGoal,
+    setRecommendationResultsByGoal,
+    recommendationPendingByGoal,
+    setRecommendationPendingByGoal,
+    recommendationQueriesRef
+  } = useDashboardGoalActionsState();
+  const {
+    docsState,
+    setDocsState,
+    briefingState,
+    setBriefingState,
+    briefingPreferencesDraft,
+    setBriefingPreferencesDraft
+  } = useDashboardBriefingActionsState(initialData);
   const [shareState, setShareState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [noteState, setNoteState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [briefingState, setBriefingState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [autopilotState, setAutopilotState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [privacyState, setPrivacyState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [privacyInventoryState, setPrivacyInventoryState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [privacyControls, setPrivacyControls] = useState<PrivacyControlSummary | null>(null);
   const [isPending, setIsPending] = useState(false);
   const {
     lastShareUrl,
@@ -308,44 +340,65 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     confirmGoalShare,
     cancelGoalShareReview
   } = useGoalShareReview({ setData, setIsPending, setShareState });
-  const [templates, setTemplates] = useState<GoalTemplate[]>([]);
-  const [templateState, setTemplateState] = useState<RequestState>({ kind: "idle", message: "" });
+  const { templates, setTemplates, templateState, setTemplateState } = useDashboardTemplateActionsState();
   const [operatorProducts, setOperatorProducts] = useState<OperatorProduct[]>([]);
   const [operatorProductSelection, setOperatorProductSelection] = useState<OperatorProductSelection | null>(null);
   const [operatorProductAgents, setOperatorProductAgents] = useState<AgentDefinition[]>([]);
   const [operatorProductTemplates, setOperatorProductTemplates] = useState<GoalTemplate[]>([]);
   const [operatorProductState, setOperatorProductState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [refinementInputs, setRefinementInputs] = useState<Record<string, string>>({});
-  const [refinementSourceByGoal, setRefinementSourceByGoal] = useState<Record<string, RecommendationRefinementSource>>({});
-  const [refinementState, setRefinementState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [recommendationState, setRecommendationState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [recommendationResultsByGoal, setRecommendationResultsByGoal] = useState<Record<string, RecommendationLoadState>>({});
-  const [recommendationPendingByGoal, setRecommendationPendingByGoal] = useState<Record<string, boolean>>({});
-  const [slideOutPanel, setSlideOutPanel] = useState<{ type: string; data: unknown } | null>(null);
+  const [cockpitDetailSelection, setCockpitDetailSelection] = useState<DashboardCockpitDetailSelection | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
   const [commandCenterRole, setCommandCenterRole] = useState<CommandCenterRole>("command");
-  const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(undefined);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
-  const [commitmentBucket, setCommitmentBucket] = useState<CommitmentInboxBucket>(initialCommitmentInbox.bucket);
-  const [commitmentInbox, setCommitmentInbox] = useState(initialCommitmentInbox);
-  const [commitmentInboxState, setCommitmentInboxState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
-  const [executionModeFilter, setExecutionModeFilter] = useState<ExecutionModeFilterValue>("all");
-  const [briefingPreferencesDraft, setBriefingPreferencesDraft] = useState<BriefingPreferences>(initialData.briefingPreferences);
-  const [autopilotDraft, setAutopilotDraft] = useState<AutopilotSettings>(initialData.autopilotSettings);
-  const [workspaceName, setWorkspaceName] = useState("");
-  const [workspaceSlug, setWorkspaceSlug] = useState("");
-  const [workspaceDescription, setWorkspaceDescription] = useState("");
-  const [workspaceMemberUserId, setWorkspaceMemberUserId] = useState("");
-  const [workspaceMemberRole, setWorkspaceMemberRole] = useState<(typeof workspaceRoleValues)[number]>("viewer");
-  const [workspaceState, setWorkspaceState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [governanceState, setGovernanceState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [governanceDraft, setGovernanceDraft] = useState(() => buildWorkspaceGovernanceDraft(initialData.workspaceGovernance));
-  const selectedNoteTitleRef = useRef("");
-  const selectedNoteContentRef = useRef("");
-  const commitmentInboxRequestIdRef = useRef(0);
-  const recommendationQueriesRef = useRef<Record<string, string | null>>({});
+  const {
+    commitmentBucket,
+    setCommitmentBucket,
+    commitmentInbox,
+    setCommitmentInbox,
+    commitmentInboxState,
+    setCommitmentInboxState,
+    commitmentInboxRequestIdRef
+  } = useDashboardCommitmentActionsState(initialCommitmentInbox);
+  const {
+    approvalNotes,
+    setApprovalNotes,
+    approvalGroupBy,
+    setApprovalGroupBy,
+    executionModeFilter,
+    setExecutionModeFilter
+  } = useDashboardApprovalActionsState();
+  const {
+    autopilotState,
+    setAutopilotState,
+    privacyState,
+    setPrivacyState,
+    privacyInventoryState,
+    setPrivacyInventoryState,
+    privacyControls,
+    setPrivacyControls,
+    autopilotDraft,
+    setAutopilotDraft,
+    workspaceName,
+    setWorkspaceName,
+    workspaceSlug,
+    setWorkspaceSlug,
+    workspaceDescription,
+    setWorkspaceDescription,
+    workspaceMemberUserId,
+    setWorkspaceMemberUserId,
+    workspaceMemberRole,
+    setWorkspaceMemberRole,
+    workspaceState,
+    setWorkspaceState,
+    governanceState,
+    setGovernanceState,
+    governanceDraft,
+    setGovernanceDraft
+  } = useDashboardWorkspaceActionsState({
+    initialAutopilotDraft: initialData.autopilotSettings,
+    initialGovernanceDraft: buildWorkspaceGovernanceDraft(initialData.workspaceGovernance)
+  });
 
   // 10x Dashboard Hooks - Phase 1
   const statsBar = useStatsBar(data);
@@ -358,7 +411,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   
   // 10x Dashboard Hooks - Phase 2
   const undo = useUndo();
-  const [approvalGroupBy, setApprovalGroupBy] = useState<GroupBy>("none");
   const timelineFilters = useFilteredTimeline(data.actionLogs);
   const pendingApprovals = useMemo(
     () => data.approvals.filter((approval) => approval.decision === "pending"),
@@ -368,6 +420,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle])),
     [data.goals]
   );
+  const cockpitVariant = data.cockpitRollout?.variant ?? "legacy";
+  const traceability = data.traceability ?? createEmptyTraceability(data.activeWorkspace?.id ?? null);
+  const workflowDetailSelection = useDashboardDetailSelection(data.approvals, goalBundleById);
+  const { detailPanel, selectedGoalDetailBundle, selectedApprovalDetail, selectedApprovalGoalBundle, openGoalDetails, openApprovalDetails, closeDetails } =
+    workflowDetailSelection;
   const goalConfidenceById = useMemo(
     () => new Map(data.goals.map((bundle) => [bundle.goal.id, bundle.goal.confidence])),
     [data.goals]
@@ -493,6 +550,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   
   // Batch selection for approvals
   const approvalBatch = useBatchSelection(filteredPendingApprovals, "approval");
+  const { approvalBatchState, respondApprovalBatch } = useApprovalBatchActions({
+    setData,
+    setIsPending,
+    updateStats: statsBar.updateSync,
+    deselectAll: approvalBatch.deselectAll,
+    addRecentAction: recentActions.addAction
+  });
   const nlCapabilitySummary = useMemo(
     () =>
       buildNlCapabilitySummary({
@@ -861,34 +925,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     setCommandCenterRole(getPreferredCommandCenterRole(selectedOperatorProduct));
   }, [selectedOperatorProduct]);
 
-  const setSelectedNoteTitleDraft = (value: string) => {
-    selectedNoteTitleRef.current = value;
-    setSelectedNoteTitle(value);
-  };
-
-  const setSelectedNoteContentDraft = (value: string) => {
-    selectedNoteContentRef.current = value;
-    setSelectedNoteContent(value);
-  };
-
-  const loadSelectedNoteDraft = (note: LocalNoteDocument) => {
-    setSelectedNoteSlug(note.slug);
-    setSelectedNoteTitleDraft(note.title);
-    setSelectedNoteContentDraft(note.content.replace(/^#\s+.*\n\n?/u, "").trim());
-  };
-
-  const clearSelectedNoteDraft = () => {
-    setSelectedNoteSlug(null);
-    setSelectedNoteTitleDraft("");
-    setSelectedNoteContentDraft("");
-  };
-
   // Unified Feed setup
   const unifiedFeedItems = useUnifiedFeed({
     goals: data.goals,
     approvals: data.approvals,
     artifacts: data.latestArtifacts,
     actionLogs: data.actionLogs,
+    referenceTime: data.diagnostics.generatedAt,
     onApprove: (id) => respondApproval(id, "approved", { scope: "once" }),
     onReject: (id) => respondApproval(id, "rejected"),
     onViewGoal: (id) => deepLink.setItem(id, "goal"),
@@ -918,9 +961,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     }
   }, [statsBar]);
 
-  const loadDashboardSnapshot = useCallback(async () => {
-    return fetchDashboardSnapshot();
-  }, []);
+  const { streamState: dashboardEventStreamState, summary: dashboardEventSummary } = useDashboardEventStreamSync({
+    loadDashboardSnapshot,
+    setData,
+    updateStats: statsBar.updateSync
+  });
 
   const loadPrivacyControls = useCallback(async () => {
     try {
@@ -1498,34 +1543,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       return;
     }
 
-    setIsPending(true);
-    let approved = 0;
-
-    for (const approval of r2Approvals) {
-      try {
-        await fetch(`/api/approvals/${approval.id}/respond`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ decision: "approved", scope: "once" })
-        });
-        approved++;
-      } catch {
-        // Continue with other approvals
-      }
-    }
-
-    // Refresh dashboard
-    try {
-      const payload = await readJson<{ dashboard: DashboardData }>(await fetch("/api/goals"));
-      startTransition(() => {
-        setData(payload.dashboard);
-      });
-    } catch {
-      // Ignore refresh errors
-    }
-
-    setIsPending(false);
-    toast.success(`Approved ${approved} R2 items`);
+    await respondApprovalBatch(r2Approvals, "approved", "once");
   };
 
   const createGoal = async () => {
@@ -1645,41 +1663,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
   // Batch approve selected approvals
   const batchApproveSelected = async () => {
-    if (approvalBatch.selectedCount === 0) return;
-    
-    setIsPending(true);
-    let count = 0;
-    
-    for (const approval of approvalBatch.selectedItems) {
-      try {
-        await fetch(`/api/approvals/${approval.id}/respond`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ decision: "approved", scope: "once" })
-        });
-        count++;
-      } catch {
-        // Continue with others
-      }
-    }
-    
-    try {
-      const payload = await readJson<{ dashboard: DashboardData }>(
-        await fetch("/api/goals")
-      );
-      setData(payload.dashboard);
-    } catch {
-      // Ignore
-    }
-    
-    setIsPending(false);
-    approvalBatch.deselectAll();
-    toast.success(`Approved ${count} items`);
-    recentActions.addAction({
-      type: "approve",
-      label: `${count} approvals`,
-      undoable: false
-    });
+    await respondApprovalBatch(approvalBatch.selectedItems, "approved", "once");
+  };
+
+  const batchRejectSelected = async () => {
+    await respondApprovalBatch(approvalBatch.selectedItems, "rejected");
   };
 
   const refineGoal = async (goalId: string) => {
@@ -2202,62 +2190,31 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   ];
 
   return (
-    <ApprovalNavigationProvider
-      approvals={pendingApprovals}
-      onApprove={(id) => respondApproval(id, "approved", { scope: "once" })}
-      onReject={(id) => respondApproval(id, "rejected")}
+    <DashboardShell
+      pendingApprovals={pendingApprovals}
+      onApprove={(id) => void respondApproval(id, "approved", { scope: "once" })}
+      onReject={(id) => void respondApproval(id, "rejected")}
+      isPending={isPending}
+      focusMode={focusMode}
+      nlExecute={nlExecutor.execute}
+      nlCapabilitySummary={nlCapabilitySummary}
+      activeWorkspaceId={data.activeWorkspace?.id ?? null}
+      cockpitVariant={cockpitVariant}
+      themeMode={theme.mode}
+      statsBarProps={statsBar.props}
+      quickActions={quickActions}
+      detailSelection={cockpitDetailSelection}
+      closeDetail={() => setCockpitDetailSelection(null)}
+      openView={openView}
+      onCreateGoal={async (req) => {
+        setRequest(req);
+        await submitGoalRequest(req);
+        setRequest("");
+      }}
+      onFocusRequestComposer={focusRequestComposer}
+      onNavigateToSection={navigateToSection}
+      onLogout={logout}
     >
-    <KeyboardShortcutsProvider>
-      <FaviconBadge count={pendingApprovals.length} />
-      <ToastContainer />
-
-      {/* Focus Mode Overlay */}
-      <FocusMode
-        isActive={focusMode.isInFocusMode}
-        sectionId={focusMode.focusedSection?.id || ""}
-        title={focusMode.focusedSection?.title || ""}
-        onClose={focusMode.exitFocus}
-      >
-        {focusMode.focusedSection?.id === "approvals" && (
-          <div className="focus-approvals">
-            {pendingApprovals.map((approval) => (
-              <div className="list-item vertical" key={approval.id}>
-                <div>
-                  <strong>{approval.title}</strong>
-                  <p>{approval.rationale}</p>
-                </div>
-                <div className="approval-actions">
-                  <RiskClassHelp riskClass={approval.riskClass}>
-                    <RiskBadge riskClass={approval.riskClass} />
-                  </RiskClassHelp>
-                  <RelativeTime date={approval.createdAt} />
-                  <button type="button" onClick={() => respondApproval(approval.id, "approved", { scope: "once" })} disabled={isPending}>
-                    Approve
-                  </button>
-                  <button type="button" className="secondary-button" onClick={() => respondApproval(approval.id, "rejected")} disabled={isPending}>
-                    Reject
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </FocusMode>
-      
-      {/* NL Floating Bar - Press / to toggle */}
-      <NLFloatingBar
-        onExecute={nlExecutor.execute}
-        capabilitySummary={nlCapabilitySummary}
-      />
-
-      <main className={`dashboard-shell ${theme.mode === 'dark' ? 'dark-mode' : ''}`}>
-        <CoreLoopViewTracker workspaceId={data.activeWorkspace?.id ?? null} />
-        {/* Stats Bar with Theme Toggle */}
-        <div className="stats-bar-wrapper">
-          <StatsBar {...statsBar.props} />
-          <ThemeToggle />
-        </div>
-
         <DashboardCommandCenter
           model={commandCenterModel}
           role={commandCenterRole}
@@ -2265,7 +2222,16 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           openTarget={navigateToSection}
         />
 
+        <DashboardCockpitLanes
+          data={data}
+          openView={openView}
+          openDiagnosticTarget={openDiagnosticTarget}
+          openDetail={setCockpitDetailSelection}
+        />
+
         <DashboardOperatingSectionsCard operatingSections={data.operatingSections} openView={openView} />
+
+        <DashboardTraceabilityCard traceability={traceability} openTarget={navigateToSection} />
 
         {/* Recent Actions */}
         {recentActions.recentActions.length > 0 && (
@@ -2292,209 +2258,38 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           </article>
         )}
 
-        <section className="hero-panel">
-          <div>
-            <p className="eyebrow">Trusted execution control plane</p>
-            <h1>Run commitments, approvals, and automations from one governed loop.</h1>
-            <p className="lede">
-              Start with what needs attention now, resolve what is blocked, confirm what can run safely, and review what
-              changed recently. The reproducible document export stays available as an evidence snapshot instead of
-              driving the main operating flow.
-            </p>
-            <div className="advanced-operations-summary" aria-label="Governed loop summary">
-              <span className="pill">Decide: {coreLoopSummary.counts.commitments} commitments</span>
-              <span className="pill">Approve: {coreLoopSummary.counts.pendingApprovals} pending</span>
-              <span className="pill">Execute: {coreLoopSummary.counts.activeGoals} active</span>
-              <span className="pill">Observe: {coreLoopSummary.counts.recentActivity} events</span>
-              <span className="pill">Improve: {coreLoopSummary.counts.memories} memories</span>
-            </div>
-          </div>
-          <div className="hero-actions">
-            <div className="hero-button-row">
-              <button type="button" className="primary-button" onClick={focusRequestComposer} disabled={isPending}>
-                Request work
-              </button>
-              <button type="button" className="secondary-button" onClick={() => void generateBriefing("startup")} disabled={isPending}>
-                Startup briefing
-              </button>
-              <button type="button" className="secondary-button" onClick={renderDocs} disabled={isPending}>
-                Rebuild `agentic.docx`
-              </button>
-              <button type="button" className="secondary-button" onClick={logout} disabled={isPending}>
-                Lock session
-              </button>
-              <ShareLinkButton getUrl={deepLink.getShareableUrl} label="Share view" />
-            </div>
-            <p className="palette-hint">Press <kbd>⌘K</kbd> to open command palette · <kbd>?</kbd> for shortcuts</p>
-            <p className={`status-chip ${docsState.kind}`}>
-              {docsState.message || "The governed document snapshot is ready whenever you need an exportable record."}
-            </p>
-            <p className={`status-chip ${coreLoopSummary.health === "idle" ? "idle" : "success"}`}>{coreLoopHealthCopy}</p>
-          </div>
-        </section>
+        <DashboardHeroPanel
+          coreLoopSummary={coreLoopSummary}
+          coreLoopHealthCopy={coreLoopHealthCopy}
+          eventFreshnessLabel={formatDashboardFreshnessLabel(dashboardEventStreamState)}
+          eventSummary={dashboardEventSummary}
+          docsState={docsState}
+          isPending={isPending}
+          focusRequestComposer={focusRequestComposer}
+          generateStartupBriefing={() => void generateBriefing("startup")}
+          renderDocs={() => void renderDocs()}
+          logout={logout}
+          getShareableUrl={deepLink.getShareableUrl}
+        />
 
-        <article className="card reliability-card">
-          <div className="card-header reliability-card-header">
-            <div className="reliability-heading">
-              <HealthIndicator health={reliabilityHealth} size="lg" showScore />
-              <div>
-                <h2>Reliability</h2>
-                <p className="reliability-summary">{reliabilitySummary}</p>
-              </div>
-            </div>
-            <span>
-              Checked <RelativeTime date={data.diagnostics.generatedAt} />
-            </span>
-          </div>
-          {data.diagnostics.items.length === 0 ? (
-            <p className="empty-state">
-              The dashboard is clear. New reliability issues will appear here as soon as approvals expire, memories go stale,
-              context signals conflict, queues degrade, connectors lose health, workflows block, or watchers outlive their goals.
-            </p>
-          ) : (
-            <div className="diagnostic-grid">
-              {data.diagnostics.items.map((item) => (
-                <div className={`diagnostic-item ${item.severity}`} key={item.kind}>
-                  <div className="diagnostic-item-header">
-                    <strong>{item.title}</strong>
-                    <span className={`pill diagnostic-pill ${item.severity}`}>{item.count}</span>
-                  </div>
-                  <div className="diagnostic-reasons">
-                    {item.reasons.map((reason) => (
-                      <p key={`${item.kind}-${reason}`}>{reason}</p>
-                    ))}
-                  </div>
-                  {item.targets.length > 0 ? (
-                    <div className="diagnostic-targets">
-                      {item.targets.map((target) => (
-                        <div
-                          className="diagnostic-target-row"
-                          key={`${item.kind}-${target.section}-${target.itemId ?? target.label}`}
-                        >
-                          <button
-                            type="button"
-                            className="secondary-button diagnostic-target-button"
-                            onClick={() => openDiagnosticTarget(target)}
-                          >
-                            {target.label}
-                          </button>
-                          {target.action ? (
-                            <button
-                              type="button"
-                              className="secondary-button diagnostic-action-button"
-                              onClick={() => void runDiagnosticAction(target)}
-                              disabled={isPending}
-                            >
-                              {target.actionLabel ?? "Resolve"}
-                            </button>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          )}
-        </article>
+        <ReliabilityCard
+          data={data}
+          reliabilityHealth={reliabilityHealth}
+          reliabilitySummary={reliabilitySummary}
+          isPending={isPending}
+          openDiagnosticTarget={openDiagnosticTarget}
+          runDiagnosticAction={(target) => void runDiagnosticAction(target)}
+        />
 
-        <article className="card now-queue-card" id="section-now">
-          <div className="card-header">
-            <h2>Now queue</h2>
-            <span>
-              {data.nowQueue.items.length} of {data.nowQueue.totalCount} ready now
-            </span>
-          </div>
-          <p className="empty-state">
-            Server-derived sequencing keeps the next few commitments bounded, urgency-aware, and aligned with reliability
-            signals already present in the control plane.
-          </p>
-          <div className="list-stack">
-            {data.nowQueue.items.length === 0 ? (
-              <p className="empty-state">No commitments are currently ready for immediate action.</p>
-            ) : null}
-            {data.nowQueue.items.map((item) => {
-              const suggestedNextAction = item.suggestedNextAction;
-
-              return (
-                <div
-                  className={`list-item vertical ${highlightedItemId === item.commitmentId ? "selection-highlight" : ""}`}
-                  id={getDashboardItemAnchorId(item.commitmentId)}
-                  key={item.commitmentId}
-                >
-                  <div>
-                    <strong>{item.title}</strong>
-                    <p>{item.summary}</p>
-                  </div>
-                  <div className="approval-actions">
-                    <StatusBadge status={item.status} />
-                    <span className={`pill now-queue-urgency urgency-${item.urgency}`}>
-                      {formatCommitmentUrgencyLabel(item.urgency)}
-                    </span>
-                    {item.riskClass ? <RiskBadge riskClass={item.riskClass} /> : null}
-                    <span className="pill">{Math.round(item.confidence * 100)}%</span>
-                    {item.dueAt ? <RelativeTime date={item.dueAt} /> : null}
-                    {item.status === "completed" || item.status === "dismissed" ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => {
-                          const currentCommitment = data.commitments.find((candidate) => candidate.id === item.commitmentId);
-
-                          if (!currentCommitment) {
-                            return;
-                          }
-
-                          void updateCommitment(item.commitmentId, currentCommitment.updatedAt, "reopen");
-                        }}
-                        disabled={isPending}
-                      >
-                        Reopen
-                      </button>
-                    ) : (
-                      <>
-                        {suggestedNextAction ? (
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={() => openDiagnosticTarget(suggestedNextAction)}
-                          >
-                            {suggestedNextAction.label}
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => {
-                            const currentCommitment = data.commitments.find((candidate) => candidate.id === item.commitmentId);
-
-                            if (!currentCommitment) {
-                              return;
-                            }
-
-                            void updateCommitment(item.commitmentId, currentCommitment.updatedAt, "complete");
-                          }}
-                          disabled={isPending}
-                        >
-                          Complete
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  {item.reasons.length > 0 ? (
-                    <div className="now-queue-reasons">
-                      {item.reasons.map((reason) => (
-                        <span className="pill" key={`${item.commitmentId}-${reason}`}>
-                          {reason}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </article>
+        <NowQueueCard
+          data={data}
+          highlightedItemId={highlightedItemId}
+          getItemAnchorId={getDashboardItemAnchorId}
+          formatCommitmentUrgencyLabel={formatCommitmentUrgencyLabel}
+          isPending={isPending}
+          openDiagnosticTarget={openDiagnosticTarget}
+          updateCommitment={(commitmentId, updatedAt, action) => void updateCommitment(commitmentId, updatedAt, action)}
+        />
 
         <section className="grid">
           <DashboardAdvancedOperationsCard
@@ -3021,6 +2816,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           confirmGoalShare={confirmGoalShare}
           cancelGoalShareReview={cancelGoalShareReview}
           saveAsTemplate={saveAsTemplate}
+          openGoalDetails={openGoalDetails}
           shareStatsByGoal={shareStatsByGoal}
           highlightedItemId={highlightedItemId}
           getItemAnchorId={getDashboardItemAnchorId}
@@ -3070,8 +2866,19 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               >
                 Approve Selected
               </button>
+              <button
+                type="button"
+                className="secondary-button batch-action-button"
+                onClick={batchRejectSelected}
+                disabled={isPending}
+              >
+                Reject Selected
+              </button>
             </BatchActionsBar>
           )}
+          {approvalBatchState.message ? (
+            <p className={`status-chip ${approvalBatchState.kind}`}>{approvalBatchState.message}</p>
+          ) : null}
           
           {/* Grouped or Flat View */}
           {approvalGroupBy !== "none" ? (
@@ -3081,10 +2888,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                   key={group.key}
                   group={group}
                   defaultExpanded
-                  onApproveAll={async (approvals) => {
-                    for (const a of approvals) {
-                      await respondApproval(a.id, "approved", { scope: "once" });
-                    }
+                  onApproveAll={(approvals) => {
+                    void respondApprovalBatch(approvals, "approved", "once");
                   }}
                 >
                   {group.approvals.map((approval, idx) => {
@@ -3123,6 +2928,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                                 isPinned={pinnedItems.isPinned(approval.id, "approval")}
                                 onToggle={pinnedItems.togglePin}
                               />
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                onClick={() => openApprovalDetails(approval.id)}
+                                disabled={isPending}
+                              >
+                                Open details
+                              </button>
                               <button type="button" onClick={() => respondApproval(approval.id, "approved", { scope: "once" })} disabled={isPending}>
                                 Approve once
                               </button>
@@ -3196,6 +3009,14 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                       isPinned={pinnedItems.isPinned(approval.id, "approval")}
                       onToggle={pinnedItems.togglePin}
                     />
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => openApprovalDetails(approval.id)}
+                      disabled={isPending}
+                    >
+                      Open details
+                    </button>
                     <button type="button" onClick={() => respondApproval(approval.id, "approved", { scope: "once" })} disabled={isPending}>
                       Approve once
                     </button>
@@ -3227,78 +3048,17 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           )}
         </article>
 
-        <article className="card" id="section-artifacts">
-          <div className="card-header">
-            <FeatureHelp feature="artifacts">
-              <h2>Artifacts</h2>
-            </FeatureHelp>
-            <span>{filteredLatestArtifacts.length} / {data.latestArtifacts.length} recent</span>
-          </div>
-          <div className="artifact-stack">
-            {filteredLatestArtifacts.length === 0 ? (
-              data.latestArtifacts.length === 0 ? (
-                <NoArtifactsEmpty />
-              ) : (
-                <p className="status-chip idle">No artifacts match the current execution-mode filter.</p>
-              )
-            ) : null}
-            {filteredLatestArtifacts.map((artifact) => {
-              const executionMode = extractArtifactExecutionMode(artifact);
-              const goalConfidence = goalConfidenceById.get(artifact.goalId);
+        <ArtifactsPanel
+          artifacts={filteredLatestArtifacts}
+          totalArtifactCount={data.latestArtifacts.length}
+          goalConfidenceById={goalConfidenceById}
+        />
 
-              return (
-                <div className="artifact-card" key={artifact.id}>
-                  <div className="card-header">
-                    <ArtifactPreview artifact={artifact}>
-                      <strong>{artifact.title}</strong>
-                    </ArtifactPreview>
-                    <div className="detail-list-badges">
-                      <StatusBadge status={artifact.artifactType} />
-                      <ImplementationTierBadge mode={executionMode} />
-                      <ExecutionModeBadge mode={executionMode} />
-                    </div>
-                  </div>
-                  <div className="detail-list-meta">
-                    <span>Implementation tier: <strong>{getImplementationTierPresentation(executionMode).label}</strong></span>
-                  </div>
-                  <div className="detail-list-meta">
-                    <span>Execution mode: <strong>{getExecutionModePresentation(executionMode).label}</strong></span>
-                    <span>
-                      Goal confidence: <strong>{typeof goalConfidence === "number" ? formatConfidencePercentage(goalConfidence) : "Unavailable"}</strong>
-                    </span>
-                  </div>
-                  <pre>{artifact.content}</pre>
-                  <div className="artifact-actions">
-                    <CopyButton value={artifact.content} label="Copy content" />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </article>
-
-        <article className="card">
-          <div className="card-header">
-            <h2>Activity timeline</h2>
-            <span>{timelineFilters.filteredLogs.length} / {data.actionLogs.length} events</span>
-          </div>
-          <TimelineFilter
-            logs={data.actionLogs}
-            onFilterChange={timelineFilters.setFilters}
-          />
-          <div className="timeline">
-            {timelineFilters.filteredLogs.map((log) => (
-              <div className="timeline-row" key={log.id}>
-                <div className="timeline-dot" />
-                <div>
-                  <strong>{log.kind}</strong>
-                  <p>{log.message}</p>
-                  <RelativeTime date={log.createdAt} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
+        <ActivityTimeline
+          logs={data.actionLogs}
+          filteredLogs={timelineFilters.filteredLogs}
+          setFilters={timelineFilters.setFilters}
+        />
 
         <DashboardAdvancedSurface
           showAdvancedOperations={showAdvancedOperations}
@@ -3340,25 +3100,15 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           runTemplate={runTemplate}
           deleteTemplate={deleteTemplate}
         />
+
+        <DashboardWorkflowDetailDrawer
+          isOpen={detailPanel !== null}
+          goalBundle={selectedGoalDetailBundle} approval={selectedApprovalDetail}
+          relatedGoal={selectedApprovalGoalBundle} onClose={closeDetails}
+          onShareGoal={shareGoal} onSaveAsTemplate={saveAsTemplate}
+          onRespondApproval={respondApproval} isPending={isPending}
+        />
       </section>
-
-      <FloatingActionsBar position="bottom">
-        <QuickActionsBar actions={quickActions} />
-      </FloatingActionsBar>
-
-      <CommandPalette
-        onCreateGoal={async (req) => {
-          setRequest(req);
-          await submitGoalRequest(req);
-          setRequest("");
-        }}
-        onFocusRequestComposer={focusRequestComposer}
-        onNavigateToSection={navigateToSection}
-        onLogout={logout}
-        isPending={isPending}
-      />
-    </main>
-    </KeyboardShortcutsProvider>
-    </ApprovalNavigationProvider>
+    </DashboardShell>
   );
 }

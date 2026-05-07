@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
+  createPublicShareBrowserContext,
   enablePublicSharingForE2E,
   E2E_UI_TIMEOUT_MS,
   expectShareLinkReady,
@@ -72,8 +73,11 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
       hasText: "Inbox triage and follow-up prep"
     })
     .first();
+  const reviewShareButton = createdGoal.getByRole("button", { name: "Review share" });
 
-  await createdGoal.getByRole("button", { name: "Review share" }).click();
+  await expect(createdGoal).toBeVisible({ timeout: E2E_UI_TIMEOUT_MS });
+  await expect(reviewShareButton).toBeEnabled({ timeout: E2E_UI_TIMEOUT_MS });
+  await reviewShareButton.click();
   await expect(page.getByRole("heading", { name: "Public Share Review" })).toBeVisible({
     timeout: E2E_UI_TIMEOUT_MS
   });
@@ -86,9 +90,12 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
 
   expect(shareUrl).toBeTruthy();
 
-  const publicContext = await browser.newContext();
+  const publicContext = await createPublicShareBrowserContext(browser);
   const publicPage = await publicContext.newPage();
-  const publicResponse = await publicPage.goto(shareUrl!);
+  const publicResponse = await publicPage.goto(shareUrl!, {
+    timeout: E2E_UI_TIMEOUT_MS,
+    waitUntil: "domcontentloaded"
+  });
 
   expect(publicResponse).not.toBeNull();
   expect(publicResponse?.headers()["x-content-type-options"]).toBe("nosniff");

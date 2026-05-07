@@ -1,5 +1,6 @@
 import type { BriefingType, GoalTemplate } from "@agentic/contracts";
 import type { DashboardData } from "@agentic/repository";
+import type { DashboardEventBatch, DashboardFreshnessState } from "../lib/dashboard-events";
 
 type QueuedJobStatus = "queued" | "running" | "retrying" | "completed" | "dead_letter";
 
@@ -122,6 +123,7 @@ type DashboardAsyncOptions = {
 };
 
 type JobEventSource = Pick<EventSource, "addEventListener" | "close">;
+type DashboardEventSource = Pick<EventSource, "addEventListener" | "close">;
 
 type PollJobStatusOptions = DashboardAsyncOptions & {
   pollIntervalMs?: number;
@@ -130,8 +132,26 @@ type PollJobStatusOptions = DashboardAsyncOptions & {
   preferEventStream?: boolean;
 };
 
+export type DashboardEventStreamState = {
+  freshness: DashboardFreshnessState;
+  lastSequence: number;
+  lastEventAt: number | null;
+  reconnectAttempts: number;
+};
+
+export type DashboardEventStreamOptions = {
+  endpoint?: string;
+  eventSourceFactory?: (url: string) => DashboardEventSource;
+  onBatch: (batch: DashboardEventBatch) => void;
+  onFreshnessChange?: (state: DashboardEventStreamState) => void;
+  now?: () => number;
+  staleAfterMs?: number;
+  fallbackAfterMs?: number;
+};
+
 const GOAL_JOB_POLL_INTERVAL_MS = 500;
 const GOAL_JOB_POLL_TIMEOUT_MS = 60_000;
+const DASHBOARD_EVENTS_ENDPOINT = "/api/dashboard/events";
 
 export async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T & { error?: string };
@@ -168,6 +188,128 @@ export async function loadTemplatesSnapshot(
       cache: "no-store"
     })
   );
+}
+
+export function createInitialDashboardEventStreamState(): DashboardEventStreamState {
+  return {
+    freshness: "reconnecting",
+    lastSequence: 0,
+    lastEventAt: null,
+    reconnectAttempts: 0
+  };
+}
+
+export function deriveDashboardFreshnessState(
+  state: DashboardEventStreamState,
+  now: number,
+  staleAfterMs: number,
+  fallbackAfterMs: number
+): DashboardFreshnessState {
+  if (state.lastEventAt === null) {
+    return state.reconnectAttempts > 0 ? "fallback" : state.freshness;
+  }
+
+  const ageMs = now - state.lastEventAt;
+  if (ageMs >= fallbackAfterMs) {
+    return "fallback";
+  }
+
+  if (ageMs >= staleAfterMs) {
+    return "stale";
+  }
+
+  return state.freshness === "reconnecting" ? "reconnecting" : "live";
+}
+
+export function connectDashboardEventStream(options: DashboardEventStreamOptions): () => void {
+  const eventSourceFactory =
+    options.eventSourceFactory ??
+    (typeof globalThis.EventSource === "function" ? (url: string) => new globalThis.EventSource(url) : null);
+
+  if (!eventSourceFactory) {
+    options.onFreshnessChange?.({
+      ...createInitialDashboardEventStreamState(),
+      freshness: "fallback",
+      reconnectAttempts: 1
+    });
+    return () => undefined;
+  }
+
+  const now = options.now ?? (() => Date.now());
+  const staleAfterMs = options.staleAfterMs ?? 10_000;
+  const fallbackAfterMs = options.fallbackAfterMs ?? 30_000;
+  const eventSource = eventSourceFactory(options.endpoint ?? DASHBOARD_EVENTS_ENDPOINT);
+  let state = createInitialDashboardEventStreamState();
+  let closed = false;
+
+  const updateState = (next: Partial<DashboardEventStreamState>) => {
+    state = {
+      ...state,
+      ...next
+    };
+    options.onFreshnessChange?.(state);
+  };
+
+  eventSource.addEventListener("dashboard.events", (event) => {
+    const batch = parseDashboardEventBatch(event);
+    if (!batch) {
+      updateState({
+        freshness: "fallback",
+        reconnectAttempts: state.reconnectAttempts + 1
+      });
+      return;
+    }
+
+    const lastSequence = batch.events.at(-1)?.sequence ?? state.lastSequence;
+    if (batch.events.length > 0 && lastSequence <= state.lastSequence) {
+      return;
+    }
+
+    updateState({
+      freshness: "live",
+      lastSequence,
+      lastEventAt: now(),
+      reconnectAttempts: 0
+    });
+    options.onBatch(batch);
+  });
+
+  eventSource.addEventListener("error", () => {
+    if (closed) {
+      return;
+    }
+
+    updateState({
+      freshness: deriveDashboardFreshnessState(
+        {
+          ...state,
+          freshness: "reconnecting",
+          reconnectAttempts: state.reconnectAttempts + 1
+        },
+        now(),
+        staleAfterMs,
+        fallbackAfterMs
+      ),
+      reconnectAttempts: state.reconnectAttempts + 1
+    });
+  });
+
+  const freshnessTimer = globalThis.setInterval(() => {
+    if (closed) {
+      return;
+    }
+
+    const freshness = deriveDashboardFreshnessState(state, now(), staleAfterMs, fallbackAfterMs);
+    if (freshness !== state.freshness) {
+      updateState({ freshness });
+    }
+  }, Math.max(1_000, Math.min(staleAfterMs, fallbackAfterMs, 5_000)));
+
+  return () => {
+    closed = true;
+    globalThis.clearInterval(freshnessTimer);
+    eventSource.close();
+  };
 }
 
 export async function pollJobStatusUntilSettled<T extends { job: { status: QueuedJobStatus } }>(
@@ -304,6 +446,23 @@ function parseJobEventSnapshot(event: Event): { job: { status: QueuedJobStatus }
           status: status as QueuedJobStatus
         }
       };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function parseDashboardEventBatch(event: Event): DashboardEventBatch | null {
+  if (!("data" in event) || typeof event.data !== "string") {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(event.data) as DashboardEventBatch;
+    if (payload.schemaVersion === 1 && Array.isArray(payload.events)) {
+      return payload;
     }
   } catch {
     return null;

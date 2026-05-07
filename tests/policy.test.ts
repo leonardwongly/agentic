@@ -168,6 +168,39 @@ describe("policy", () => {
     expect(decision.requiresApproval).toBe(true);
   });
 
+  it("does not let inferred memory independently justify autonomy", () => {
+    const decision = evaluateTaskPolicy({
+      capabilities: ["send"],
+      confidence: 0.95,
+      title: "Send the customer follow-up",
+      memories: Array.from({ length: 5 }, () =>
+        createMemoryRecord({
+          userId: "user-1",
+          category: "preferences",
+          memoryType: "inferred",
+          content: "User approved send actions for customer follow-up and approved similar send tasks before.",
+          confidence: 0.95,
+          source: "auto-capture"
+        })
+      ),
+      scorecard: buildScorecard(),
+      learningValidation: {
+        replayValidated: true,
+        matchedPatterns: 1,
+        matchedEpisodes: 4,
+        suggestedPatterns: 1,
+        safeSuggestionPrecision: 1,
+        negativeOutcomeRate: 0,
+        failureCostRate: 0,
+        driftStatus: "stable",
+        rationale: "Recent replay evidence is stable."
+      }
+    });
+
+    expect(decision.outcome).toBe("allowed_with_confirmation");
+    expect(decision.requiresApproval).toBe(true);
+  });
+
   it("allows R3 autonomy only when strong memory trust, a strong scorecard, and replay validation are all present", () => {
     const decision = evaluateTaskPolicy({
       capabilities: ["send"],

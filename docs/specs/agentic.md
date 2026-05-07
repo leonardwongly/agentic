@@ -177,6 +177,24 @@ The system uses bounded specialists for different work shapes:
 
 Each agent must emit schema-validated JSON and stay inside an allowlisted capability envelope.
 
+### Sub-Agent Coordination
+
+Complex delegation requests use the orchestrator as the parent coordinator. The orchestrator creates a schema-validated sub-agent operating plan artifact, then expands the plan into normal workflow tasks so every spawned role still passes through policy evaluation, capability allowlists, dependency tracking, artifact generation, approval handling, and append-only action logs.
+
+Each sub-agent role must define:
+
+- role name and assigned specialist agent
+- responsibilities
+- allowed capabilities
+- input contracts
+- expected outputs
+- dependency role IDs
+- risk class
+- handoff criteria
+- guardrails
+
+The default complex-delegation lane uses recon/scoping, core implementation, test/hardening, and handoff coordination roles. These are coordination primitives, not hidden side effects: any external send, scheduling change, deletion, or sensitive update remains gated by the existing approval workflow.
+
 ## Provider Credential Model
 
 Provider connectivity is tenant-scoped rather than process-global.
