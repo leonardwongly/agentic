@@ -343,6 +343,7 @@ select {
   width: min(1380px, calc(100vw - 2rem));
   margin: 0 auto;
   padding: 2rem 0 4rem;
+  overflow-x: clip;
 }
 
 .hero-panel,
@@ -706,6 +707,7 @@ select {
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .control-plane-section-header p {
@@ -717,6 +719,7 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 .control-plane-stat {
@@ -727,6 +730,7 @@ select {
   background: color-mix(in srgb, var(--surface) 86%, var(--brand) 14%);
   color: var(--text);
   font-size: 0.82rem;
+  min-width: 0;
 }
 
 .control-plane-highlights {
@@ -737,8 +741,9 @@ select {
 
 .control-plane-detail-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .control-plane-detail-card {
@@ -751,6 +756,7 @@ select {
   background: color-mix(in srgb, rgba(255, 255, 255, 0.92) 88%, var(--brand) 12%);
   text-align: left;
   transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  min-width: 0;
 }
 
 .control-plane-detail-card:hover,
@@ -1109,6 +1115,15 @@ select {
     width: 100%;
   }
 
+  .control-plane-section-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .control-plane-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .list-item {
     flex-direction: column;
     align-items: stretch;
@@ -1139,6 +1154,7 @@ select {
   border: 1px solid var(--border);
   border-radius: 12px;
   width: 560px;
+  max-width: calc(100vw - 2rem);
   max-height: 440px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
   display: flex;
@@ -1774,6 +1790,9 @@ select {
   background: var(--panel);
   border-radius: 20px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .quick-actions-divider {
@@ -1792,6 +1811,7 @@ select {
   border-radius: 12px;
   font-size: 0.9rem;
   transition: all 0.15s ease;
+  flex: 0 0 auto;
 }
 
 .quick-action:hover { background: rgba(0, 0, 0, 0.05); }
@@ -1830,6 +1850,7 @@ select {
   left: 50%;
   transform: translateX(-50%);
   z-index: 800;
+  max-width: calc(100vw - 2rem);
 }
 
 .floating-actions-top { top: 1rem; }
@@ -2049,12 +2070,14 @@ select {
   font-size: 0.85rem;
   margin-bottom: 1.5rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .stats-bar-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 .stats-bar-label {
@@ -3577,6 +3600,7 @@ select {
   left: 50%;
   transform: translateX(-50%);
   z-index: 900;
+  max-width: calc(100vw - 2rem);
 }
 
 .nl-floating-bar.collapsed {
@@ -3584,7 +3608,7 @@ select {
 }
 
 .nl-floating-bar.expanded {
-  width: 90%;
+  width: min(90vw, 600px);
   max-width: 600px;
 }
 
@@ -3598,11 +3622,40 @@ select {
   border-radius: 999px;
   box-shadow: var(--shadow);
   cursor: pointer;
+  max-width: 100%;
 }
 
 .nl-expand-hint {
   font-size: 0.9rem;
   color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .floating-actions-bar {
+    left: 1rem;
+    right: 1rem;
+    transform: none;
+    max-width: none;
+  }
+
+  .quick-actions-bar {
+    width: 100%;
+  }
+
+  .nl-floating-bar.collapsed {
+    left: 1rem;
+    right: 1rem;
+    width: auto;
+    max-width: none;
+    transform: none;
+  }
+
+  .nl-expand-btn {
+    justify-content: center;
+    width: 100%;
+  }
 }
 
 /* Memory Search */

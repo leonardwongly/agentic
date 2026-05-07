@@ -250,6 +250,7 @@ export { ApprovalMutationError, JobMutationError, type AgenticRepository, type A
 export { resolveDashboardCockpitRollout, type DashboardCockpitRollout, type DashboardCockpitVariant } from "./dashboard-cockpit-rollout";
 export { buildDashboardTraceability, type DashboardApprovalTrace, type DashboardMemoryProvenance, type DashboardTaskTrace, type DashboardTraceability, type DashboardWorkflowTrace } from "./dashboard-traceability";
 export { buildExecutionProvenanceGraph } from "./provenance-graph";
+export { buildDashboardSummary, type DashboardSummary, type DashboardSummaryLane } from "./dashboard-summary";
 
 const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 

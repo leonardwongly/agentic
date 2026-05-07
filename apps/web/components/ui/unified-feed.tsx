@@ -132,6 +132,7 @@ type UseUnifiedFeedOptions = {
   approvals: ApprovalRequest[];
   artifacts: Artifact[];
   actionLogs: ActionLog[];
+  referenceTime: string;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onViewGoal: (id: string) => void;
@@ -143,6 +144,7 @@ export function useUnifiedFeed({
   approvals,
   artifacts,
   actionLogs,
+  referenceTime,
   onApprove,
   onReject,
   onViewGoal,
@@ -241,5 +243,5 @@ export function useUnifiedFeed({
     }
 
     return items;
-  }, [goals, approvals, artifacts, actionLogs, onApprove, onReject, onViewGoal, onViewArtifact]);
+  }, [goals, approvals, artifacts, actionLogs, referenceTime, onApprove, onReject, onViewGoal, onViewArtifact]);
 }
