@@ -190,6 +190,7 @@ import {
   type WorkspaceRetentionParams
 } from "./repository-types";
 import { buildWorkspaceAuditExport } from "./workspace-audit-export";
+import { acquireFileStoreLock } from "./file-store-lock";
 const UserRecordSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -1011,9 +1012,13 @@ class FileRepository implements AgenticRepository {
 
     await previous;
 
+    let releaseFileLock: (() => Promise<void>) | undefined;
+
     try {
+      releaseFileLock = await acquireFileStoreLock(this.storePath);
       return await callback();
     } finally {
+      await releaseFileLock?.();
       releaseLock?.();
     }
   }
