@@ -202,6 +202,51 @@ describe("core loop telemetry route", () => {
     expectNoStoreHeaders(response);
   });
 
+  it("records privacy-preserving cockpit telemetry without command query text", async () => {
+    const response = await coreLoopRoute(
+      buildCoreLoopRequest({
+        event: "command_palette_usage",
+        action: "selected",
+        category: "navigate",
+        cockpitVariant: "redesigned"
+      })
+    );
+    const payload = (await response.json()) as { accepted: boolean };
+    const snapshot = getTelemetrySnapshot();
+    const metric = snapshot.metrics.find((entry) => entry.name === "product.dashboard.command_palette.total");
+    const log = snapshot.logs.find((entry) => entry.message === "product.dashboard.command_palette");
+
+    expect(response.status).toBe(200);
+    expect(payload.accepted).toBe(true);
+    expect(metric).toMatchObject({
+      kind: "counter",
+      value: 1,
+      attributes: expect.objectContaining({
+        action: "selected",
+        category: "navigate",
+        variant: "redesigned"
+      })
+    });
+    expect(JSON.stringify(log)).not.toContain("query");
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects free-form command query fields in cockpit telemetry", async () => {
+    const response = await coreLoopRoute(
+      buildCoreLoopRequest({
+        event: "command_palette_usage",
+        action: "opened",
+        cockpitVariant: "redesigned",
+        query: "find customer@example.com"
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("query");
+    expectNoStoreHeaders(response);
+  });
+
   it("rejects unknown fields in telemetry requests", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { ApprovalMutationError } from "@agentic/repository";
+import { recordHistogram } from "@agentic/observability";
+import { ApprovalMutationError, resolveDashboardCockpitRollout } from "@agentic/repository";
 import { respondToApprovalAndEnqueueFollowUpJob } from "@agentic/worker-runtime";
 import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
 import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
@@ -64,6 +65,17 @@ export const POST = createGovernedMutationRoute<z.infer<typeof ApprovalResponseS
     if (!approval) {
       throw new Error(`Approval ${approvalId} is missing after response mutation.`);
     }
+    const createdAtMs = Date.parse(approval.createdAt);
+    const respondedAtMs = approval.respondedAt ? Date.parse(approval.respondedAt) : NaN;
+
+    if (Number.isFinite(createdAtMs) && Number.isFinite(respondedAtMs)) {
+      recordHistogram("product.dashboard.approval_latency_ms", Math.max(0, respondedAtMs - createdAtMs), {
+        decision: approval.decision,
+        riskClass: approval.riskClass,
+        variant: resolveDashboardCockpitRollout().variant
+      });
+    }
+
     return authenticatedJson(
       {
         bundle: updatedBundle,

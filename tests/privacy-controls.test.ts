@@ -10,13 +10,13 @@ describe("privacy control registry", () => {
     const summary = buildPrivacyControlSummary(registry);
 
     expect(registry.version).toBe(1);
-    expect(registry.datasets).toHaveLength(4);
-    expect(summary.totalDatasets).toBe(4);
+    expect(registry.datasets).toHaveLength(5);
+    expect(summary.totalDatasets).toBe(5);
     expect(summary.classifications).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "workspace_operational",
-          datasetCount: 2
+          datasetCount: 3
         }),
         expect.objectContaining({
           id: "shared_personal",
@@ -40,6 +40,11 @@ describe("privacy control registry", () => {
           id: "audit-and-export-packages",
           retentionLabel: "90 days default via workspace governance",
           tokenizationStrategy: "redacted_reference"
+        }),
+        expect.objectContaining({
+          id: "dashboard-cockpit-telemetry",
+          classificationLabel: "Workspace operational data",
+          tokenizationStrategy: "not_applicable"
         })
       ])
     );

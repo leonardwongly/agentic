@@ -188,6 +188,50 @@
         "workspace_export",
         "workspace_delete"
       ]
+    },
+    {
+      "id": "dashboard-cockpit-telemetry",
+      "title": "Dashboard cockpit telemetry and feedback",
+      "classificationId": "workspace_operational",
+      "productSurfaces": [
+        "Dashboard cockpit rollout gates",
+        "Command palette usage telemetry",
+        "Traceability and recommendation feedback"
+      ],
+      "recordExamples": [
+        "First meaningful render and summary latency histograms",
+        "Categorical command palette open/select counters",
+        "Categorical recommendation feedback outcome and note-length metadata"
+      ],
+      "codePaths": [
+        "apps/web/app/api/dashboard/core-loop/route.ts",
+        "apps/web/components/command-palette.tsx",
+        "apps/web/app/api/goals/[id]/recommendations/feedback/route.ts",
+        "config/observability/alerts.json"
+      ],
+      "minimizationRules": [
+        "Command palette telemetry records action and category only, never the operator query.",
+        "Cockpit feedback is categorical and bounded to allowlisted surfaces, reasons, and sentiment.",
+        "Recommendation feedback metadata stores whether notes were supplied and their length, not the note body."
+      ],
+      "maskingRules": [
+        "Telemetry excludes user ids, workspace ids, tokens, cookies, provider headers, and raw payloads.",
+        "Rollout logs contain bounded enum attributes and latency values only."
+      ],
+      "tokenizationStrategy": "not_applicable",
+      "retention": {
+        "mode": "fixed",
+        "defaultDays": 90,
+        "deletionFlow": "Cockpit telemetry follows the observability retention policy and is removed during workspace deletion."
+      },
+      "accessRules": [
+        "Cockpit telemetry is available only through operator-safe observability exports.",
+        "Feedback details remain scoped to the goal action log and avoid raw free-form note retention."
+      ],
+      "lifecycleOperations": [
+        "workspace_export",
+        "workspace_delete"
+      ]
     }
   ]
 }

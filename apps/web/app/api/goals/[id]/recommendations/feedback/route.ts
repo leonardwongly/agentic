@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createActionLog, recordCounter, recordHistogram } from "@agentic/observability";
+import { resolveDashboardCockpitRollout } from "@agentic/repository";
 import { createActorContextFromPrincipal } from "../../../../../../lib/actor-context";
 import { requireApiSession } from "../../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../../lib/api-response";
@@ -107,7 +108,10 @@ export async function POST(request: Request, context: RouteContext) {
       details: {
         actorContext,
         decision,
-        notes: notes ?? null,
+        feedback: {
+          notesProvided: Boolean(notes),
+          notesLength: notes?.length ?? 0
+        },
         source: "goal_card",
         recommendation
       },
@@ -126,6 +130,12 @@ export async function POST(request: Request, context: RouteContext) {
       recommendation.evidence.negativeRate,
       metricAttributes
     );
+    recordCounter("product.dashboard.cockpit_feedback.total", 1, {
+      surface: "recommendations",
+      sentiment: decision === "accepted" || decision === "edited" ? "helpful" : "unhelpful",
+      reason: decision,
+      variant: resolveDashboardCockpitRollout().variant
+    });
 
     await repository.saveGoalBundle({
       ...bundle,

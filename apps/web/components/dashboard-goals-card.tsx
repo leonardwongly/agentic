@@ -72,6 +72,7 @@ type DashboardGoalsCardProps = {
   confirmGoalShare: () => Promise<void>;
   cancelGoalShareReview: () => void;
   saveAsTemplate: (name: string, request: string) => void;
+  openGoalDetails?: (goalId: string) => void;
   shareStatsByGoal: Map<string, { total: number; active: number; viewed: number }>;
   highlightedItemId: string | null;
   getItemAnchorId: (itemId: string) => string;
@@ -173,6 +174,7 @@ export function DashboardGoalsCard({
   confirmGoalShare,
   cancelGoalShareReview,
   saveAsTemplate,
+  openGoalDetails,
   shareStatsByGoal,
   highlightedItemId,
   getItemAnchorId,
@@ -335,6 +337,16 @@ export function DashboardGoalsCard({
               <div className="goal-item-actions">
                 <StatusBadge status={bundle.goal.status} />
                 <CopyableText value={bundle.goal.id} />
+                {openGoalDetails ? (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => openGoalDetails(bundle.goal.id)}
+                    disabled={isPending}
+                  >
+                    Open details
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="secondary-button"

@@ -33,6 +33,7 @@ export AGENTIC_STAGING_IMAGE_TAG=agentic:<tag>
 export AGENTIC_TELEMETRY_RETENTION_DIR=.agentic/telemetry
 export AGENTIC_TELEMETRY_EXPORT_URL=https://telemetry.example.com/ingest
 export AGENTIC_TELEMETRY_EXPORT_TOKEN=replace-this-with-a-telemetry-ingest-token
+export AGENTIC_DASHBOARD_COCKPIT=legacy
 ```
 
 `AGENTIC_STAGING_DEPLOY_BIN` and `AGENTIC_STAGING_DEPLOY_ARGS_JSON` are the CI contract for the provider-backed staging release step. The command is executed without a shell, so pass structured arguments instead of a shell pipeline.
@@ -215,6 +216,7 @@ The rollout path is backed by checked-in observability config:
 
 - `config/observability/alerts.json`: gate and advisory thresholds for HTTP, worker, and provider metrics
 - `config/observability/dashboard.json`: dashboard panel definitions for the same metric families
+- `docs/runbooks/dashboard-cockpit-rollout.md`: feature flag, telemetry thresholds, privacy rules, and rollback for the dashboard cockpit
 
 Use the local export smoke harness when validating exporter wiring before a real backend is available:
 

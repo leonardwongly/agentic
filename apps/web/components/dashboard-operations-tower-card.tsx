@@ -67,29 +67,47 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
   } = props;
   const router = useRouter();
   const [replayingJobId, setReplayingJobId] = useState<string | null>(null);
+  const [recoveringKey, setRecoveringKey] = useState<string | null>(null);
 
-  const replayJob = async (jobId: string) => {
-    setReplayingJobId(jobId);
+  const runRecovery = async (body: Record<string, unknown>, successMessage: string, recoveryKey: string) => {
+    setRecoveringKey(recoveryKey);
 
     try {
-      const response = await fetch(`/api/jobs/${jobId}/replay`, {
-        method: "POST"
+      const response = await fetch("/api/operations/recovery", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(body)
       });
       const payload = (await response.json().catch(() => null)) as { error?: string } | null;
 
       if (!response.ok) {
-        throw new Error(payload?.error ?? "Failed to replay job.");
+        throw new Error(payload?.error ?? "Failed to run recovery action.");
       }
 
       startTransition(() => {
         router.refresh();
       });
-      toast.success("Queued job replay.");
+      toast.success(successMessage);
     } catch (error) {
-      toast.error("Replay failed", error instanceof Error ? error.message : "Failed to replay job.");
+      toast.error("Recovery failed", error instanceof Error ? error.message : "Failed to run recovery action.");
     } finally {
-      setReplayingJobId(null);
+      setRecoveringKey(null);
     }
+  };
+
+  const replayJob = async (jobId: string) => {
+    setReplayingJobId(jobId);
+    await runRecovery(
+      {
+        action: "retry_dead_letter_job",
+        jobId
+      },
+      "Queued job replay.",
+      `job:${jobId}:retry_dead_letter_job`
+    );
+    setReplayingJobId(null);
   };
 
   const renderAsyncIssueAction = (
@@ -108,7 +126,7 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
     }
 
     if (item.remediation.kind === "replay_job") {
-      const disabled = replayingJobId === item.jobId || !canReplayDeadLetterJobs;
+      const disabled = replayingJobId === item.jobId || recoveringKey !== null || !canReplayDeadLetterJobs;
       return (
         <button
           type="button"
@@ -118,6 +136,59 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
           title={!canReplayDeadLetterJobs ? replayPermissionReason : undefined}
         >
           {replayingJobId === item.jobId ? "Replaying..." : item.remediation.label}
+        </button>
+      );
+    }
+
+    if (item.remediation.kind === "release_expired_lease") {
+      const recoveryKey = `job:${item.jobId}:release_expired_lease`;
+      return (
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() =>
+            void runRecovery(
+              {
+                action: "release_expired_lease",
+                jobId: item.jobId
+              },
+              "Released expired lease.",
+              recoveryKey
+            )
+          }
+          disabled={recoveringKey !== null || !canReplayDeadLetterJobs}
+          title={!canReplayDeadLetterJobs ? replayPermissionReason : undefined}
+        >
+          {recoveringKey === recoveryKey ? "Releasing..." : item.remediation.label}
+        </button>
+      );
+    }
+
+    if (item.remediation.kind === "cancel_job") {
+      const recoveryKey = `job:${item.jobId}:cancel_job`;
+      return (
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => {
+            if (!globalThis.confirm("Cancel this queued job and record an operations recovery audit entry?")) {
+              return;
+            }
+
+            void runRecovery(
+              {
+                action: "cancel_job",
+                jobId: item.jobId,
+                confirm: true
+              },
+              "Cancelled queued job.",
+              recoveryKey
+            );
+          }}
+          disabled={recoveringKey !== null || !canReplayDeadLetterJobs}
+          title={!canReplayDeadLetterJobs ? replayPermissionReason : undefined}
+        >
+          {recoveringKey === recoveryKey ? "Cancelling..." : item.remediation.label}
         </button>
       );
     }
@@ -133,6 +204,53 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
         onClick={() => navigateToSection(item.target!.section, item.target!.itemId)}
       >
         {item.remediation.label}
+      </button>
+    );
+  };
+
+  const renderConnectorIssueAction = (
+    item: NonNullable<DashboardData["operations"]>["connectorHealth"]["items"][number]
+  ) => {
+    if (!item.remediation || item.remediation.kind === "open_target") {
+      return (
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => navigateToSection(item.target.section, item.target.itemId)}
+        >
+          {item.remediation?.label ?? item.target.label}
+        </button>
+      );
+    }
+
+    const recoveryKey = `connector:${item.credentialId}:${item.remediation.kind}`;
+    return (
+      <button
+        type="button"
+        className="secondary-button"
+        onClick={() => {
+          if (
+            item.remediation?.kind === "mark_connector_reconnect_required" &&
+            !globalThis.confirm("Mark this connector as requiring provider reconnect?")
+          ) {
+            return;
+          }
+
+          void runRecovery(
+            {
+              action: item.remediation!.kind,
+              credentialId: item.credentialId,
+              ...(item.remediation!.kind === "mark_connector_reconnect_required" ? { confirm: true } : {})
+            },
+            item.remediation!.kind === "revalidate_connector_credential"
+              ? "Revalidated connector credential."
+              : "Marked connector reconnect required.",
+            recoveryKey
+          );
+        }}
+        disabled={recoveringKey !== null}
+      >
+        {recoveringKey === recoveryKey ? "Recovering..." : item.remediation.label}
       </button>
     );
   };
@@ -335,13 +453,8 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
               {describeLinkedIntegrations(item.linkedIntegrationNames) ? (
                 <span className="pill">{describeLinkedIntegrations(item.linkedIntegrationNames)}</span>
               ) : null}
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => navigateToSection(item.target.section, item.target.itemId)}
-              >
-                {item.target.label}
-              </button>
+              {renderConnectorIssueAction(item)}
+              {item.remediation ? <span className="pill">{item.remediation.note}</span> : null}
             </div>
           </div>
         ))}

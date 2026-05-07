@@ -2,6 +2,7 @@ import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 const port = 3201;
+const isCI = Boolean(process.env.CI);
 const e2eRoot = path.join(process.cwd(), ".agentic", "e2e", process.env.PLAYWRIGHT_E2E_RUN_ID ?? `${Date.now()}`);
 const useProductionServer = process.env.PLAYWRIGHT_USE_PROD_SERVER === "true" && Boolean(process.env.DATABASE_URL?.trim());
 const sharedBackendEnv = process.env.DATABASE_URL?.trim()
@@ -15,11 +16,15 @@ const sharedBackendEnv = process.env.DATABASE_URL?.trim()
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  timeout: isCI ? 90_000 : 30_000,
+  expect: {
+    timeout: isCI ? 45_000 : 5_000
+  },
   fullyParallel: false,
-  forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 2 : 0,
+  forbidOnly: isCI,
+  retries: isCI ? 2 : 0,
   workers: 1,
-  reporter: process.env.CI ? [["html"], ["list"]] : "list",
+  reporter: isCI ? [["html"], ["list"]] : "list",
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     trace: "on-first-retry"

@@ -5,9 +5,10 @@ import { postDashboardCoreLoopEvent } from "../lib/core-loop-client";
 
 type CoreLoopViewTrackerProps = {
   workspaceId: string | null;
+  cockpitVariant: "legacy" | "redesigned";
 };
 
-export function CoreLoopViewTracker({ workspaceId }: CoreLoopViewTrackerProps) {
+export function CoreLoopViewTracker({ workspaceId, cockpitVariant }: CoreLoopViewTrackerProps) {
   const lastTrackedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -33,6 +34,16 @@ export function CoreLoopViewTracker({ workspaceId }: CoreLoopViewTrackerProps) {
       event: "dashboard_view"
     }).catch(() => undefined);
   }, [workspaceId]);
+
+  useEffect(() => {
+    const elapsedMs = Math.max(0, Math.round(performance.now()));
+
+    void postDashboardCoreLoopEvent({
+      event: "dashboard_first_meaningful_render",
+      elapsedMs,
+      cockpitVariant
+    }).catch(() => undefined);
+  }, [cockpitVariant]);
 
   return null;
 }

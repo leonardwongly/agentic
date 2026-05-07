@@ -1,8 +1,8 @@
-import { AgentDefinitionSchema, AgentRunnerContractSchema, TaskSchema, nowIso } from "@agentic/contracts";
+import { AgentDefinitionSchema, AgentRunnerContractSchema, SubAgentPlanSchema, TaskSchema, nowIso } from "@agentic/contracts";
 import { AgentRunnerExecutionError, runAgent, validateAgentRunnerRegistration, type AgentRunner } from "@agentic/agents";
 
 function buildTask(
-  assignedAgent: "calendar" | "communications" | "travel" | "workflow",
+  assignedAgent: "calendar" | "communications" | "orchestrator" | "travel" | "workflow",
   toolCapabilities: Array<"create" | "draft" | "monitor" | "read" | "schedule" | "search" | "send"> = ["read", "search"]
 ) {
   return TaskSchema.parse({
@@ -240,6 +240,23 @@ describe("runAgent", () => {
     expect(result.artifacts[0]?.content).not.toContain("secret-token-like");
   });
 
+  it("supports orchestrator coordination scaffolds without claiming external execution", () => {
+    const result = runAgent(buildTask("orchestrator"), "Coordinate specialist agents.");
+
+    expect(result.executionMode).toBe("deterministic_scaffold");
+    expect(result.implementationTier).toBe("experimental");
+    expect(result.confidence).toBe(0.76);
+    expect(result.summary).toMatch(/orchestration scaffold/i);
+    expect(result.explanation).toMatch(/deterministic coordination scaffold/i);
+    expect(result.artifacts[0]?.metadata).toMatchObject({
+      agent: "orchestrator",
+      executionMode: "deterministic_scaffold",
+      implementationTier: "experimental",
+      requiresManualReview: false
+    });
+    expect(result.artifacts[0]?.content).toMatch(/Delegate specialist lanes/i);
+  });
+
   it("validates runner registration contracts and rejects unsupported capability claims", () => {
     const runner: AgentRunner = {
       contract: AgentRunnerContractSchema.parse({
@@ -261,5 +278,71 @@ describe("runAgent", () => {
     };
 
     expect(() => validateAgentRunnerRegistration(runner)).toThrow(/outside its allowlist/i);
+  });
+});
+
+describe("sub-agent contracts", () => {
+  it("validates bounded role responsibilities, guardrails, and handoffs", () => {
+    const plan = SubAgentPlanSchema.parse({
+      id: "subagents-goal-1",
+      goalId: "goal-1",
+      anchorTaskId: null,
+      parentAgent: "orchestrator",
+      coordinationStrategy: "hybrid",
+      roles: [
+        {
+          id: "recon-scoping",
+          name: "Recon and Scoping Agent",
+          agent: "research",
+          role: "Discover affected surfaces before implementation starts.",
+          responsibilities: ["Map affected modules and tests."],
+          allowedCapabilities: ["read", "search"],
+          inputContracts: ["Normalized request."],
+          expectedOutputs: ["Affected-surface map."],
+          dependsOn: [],
+          riskClass: "R2",
+          handoffCriteria: ["Evidence is cited."],
+          guardrails: ["Read-only unless explicitly assigned implementation ownership."]
+        }
+      ],
+      successCriteria: ["Every spawned role has clear ownership and handoff criteria."],
+      createdAt: nowIso()
+    });
+
+    expect(plan.roles[0]).toMatchObject({
+      id: "recon-scoping",
+      agent: "research",
+      allowedCapabilities: ["read", "search"]
+    });
+  });
+
+  it("rejects vague sub-agent roles without explicit responsibilities", () => {
+    expect(() =>
+      SubAgentPlanSchema.parse({
+        id: "subagents-goal-1",
+        goalId: "goal-1",
+        anchorTaskId: null,
+        parentAgent: "orchestrator",
+        coordinationStrategy: "parallel",
+        roles: [
+          {
+            id: "empty-role",
+            name: "Empty Role",
+            agent: "workflow",
+            role: "Do work.",
+            responsibilities: [],
+            allowedCapabilities: ["read"],
+            inputContracts: [],
+            expectedOutputs: ["Output."],
+            dependsOn: [],
+            riskClass: "R1",
+            handoffCriteria: ["Done."],
+            guardrails: ["Stay bounded."]
+          }
+        ],
+        successCriteria: ["Done."],
+        createdAt: nowIso()
+      })
+    ).toThrow();
   });
 });
