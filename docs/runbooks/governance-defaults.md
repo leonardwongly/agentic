@@ -2,6 +2,10 @@
 
 Agentic uses the enterprise governance profile by default. New workspaces fail closed for risky autonomy, public sharing, data retention, provider-backed side effects, and escalation behavior.
 
+## Agentic International Laws
+
+Some safety constraints are enforced regardless of workspace governance configuration. Requests that attempt to poison an agent’s intent (for example bribery, corruption, collusion, or “bypass the safeguards”) are blocked at intake and when simulating task policy.
+
 ## Enterprise Defaults
 
 The source of truth for code defaults is `enterpriseWorkspaceGovernanceDefaults` in `packages/contracts/src/index.ts`. The operator-facing classification is mirrored in `config/governance/defaults.json`.

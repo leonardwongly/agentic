@@ -190,6 +190,7 @@ import {
   type WorkspaceRetentionParams
 } from "./repository-types";
 import { buildWorkspaceAuditExport } from "./workspace-audit-export";
+import { acquireFileStoreLock } from "./file-store-lock";
 const UserRecordSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -246,6 +247,8 @@ type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 
 export { CommitmentInboxQueryError, CollectionPageQueryError };
 export { ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters, type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
+export { resolveDashboardCockpitRollout, type DashboardCockpitRollout, type DashboardCockpitVariant } from "./dashboard-cockpit-rollout";
+export { buildDashboardTraceability, type DashboardApprovalTrace, type DashboardMemoryProvenance, type DashboardTaskTrace, type DashboardTraceability, type DashboardWorkflowTrace } from "./dashboard-traceability";
 export { buildExecutionProvenanceGraph } from "./provenance-graph";
 export { buildDashboardSummary, type DashboardSummary, type DashboardSummaryLane } from "./dashboard-summary";
 
@@ -1012,9 +1015,13 @@ class FileRepository implements AgenticRepository {
 
     await previous;
 
+    let releaseFileLock: (() => Promise<void>) | undefined;
+
     try {
+      releaseFileLock = await acquireFileStoreLock(this.storePath);
       return await callback();
     } finally {
+      await releaseFileLock?.();
       releaseLock?.();
     }
   }

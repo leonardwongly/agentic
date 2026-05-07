@@ -927,6 +927,7 @@ export const ContextPacketSchema = z
 
 export const executionProvenanceNodeTypeValues = [
   "goal",
+  "task",
   "decision",
   "approval",
   "action",

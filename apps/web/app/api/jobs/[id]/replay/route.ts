@@ -2,6 +2,8 @@ import { createActorContextFromPrincipal } from "../../../../../lib/actor-contex
 import { requireApiSession } from "../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../../lib/api-response";
 import { getSeededRepository } from "../../../../../lib/server";
+import { recordHistogram } from "@agentic/observability";
+import { resolveDashboardCockpitRollout } from "@agentic/repository";
 import {
   enqueueApprovalFollowUpJob,
   enqueueApprovalNotificationJob,
@@ -18,6 +20,28 @@ import {
   getSharedWorkflowDeniedReason,
   resolveWorkspaceRoleForUser
 } from "../../../../../lib/workspace-role-permissions";
+
+function recordDeadLetterRecoveryMetric(params: {
+  failedAt: string;
+  replayedAt: string;
+  jobKind: string;
+  surface: "approval_follow_up" | "autopilot" | "approval_notification";
+}): number | null {
+  const failedAtMs = Date.parse(params.failedAt);
+  const replayedAtMs = Date.parse(params.replayedAt);
+  const recoveryLatencyMs =
+    Number.isFinite(failedAtMs) && Number.isFinite(replayedAtMs) ? Math.max(0, replayedAtMs - failedAtMs) : null;
+
+  if (recoveryLatencyMs !== null) {
+    recordHistogram("product.dashboard.dead_letter_recovery_ms", recoveryLatencyMs, {
+      jobKind: params.jobKind,
+      surface: params.surface,
+      variant: resolveDashboardCockpitRollout().variant
+    });
+  }
+
+  return recoveryLatencyMs;
+}
 
 type RouteContext = {
   params: Promise<{
@@ -77,11 +101,14 @@ export async function POST(request: Request, context: RouteContext) {
         replayedFromJobId: job.id
       });
       const bundleForReplayLog = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
+      const recoveryLatencyMs = recordDeadLetterRecoveryMetric({
+        failedAt: job.updatedAt,
+        replayedAt: replayedJob.createdAt,
+        jobKind: job.kind,
+        surface: "approval_follow_up"
+      });
 
       if (bundleForReplayLog) {
-        const failedAtMs = Date.parse(job.updatedAt);
-        const replayedAtMs = Date.parse(replayedJob.createdAt);
-
         bundleForReplayLog.actionLogs.push(
           createActionLog({
             goalId: bundleForReplayLog.goal.id,
@@ -96,10 +123,7 @@ export async function POST(request: Request, context: RouteContext) {
               approvalId: followUpPayload.approvalId,
               decision: followUpPayload.decision,
               statusUrl: `/api/approvals/jobs/${replayedJob.id}`,
-              recoveryLatencyMs:
-                Number.isFinite(failedAtMs) && Number.isFinite(replayedAtMs)
-                  ? Math.max(0, replayedAtMs - failedAtMs)
-                  : null
+              recoveryLatencyMs
             },
             prevLog: bundleForReplayLog.actionLogs.at(-1) ?? null
           })
@@ -146,6 +170,12 @@ export async function POST(request: Request, context: RouteContext) {
         repository,
         autopilotEvent,
         replayedFromJobId: job.id
+      });
+      recordDeadLetterRecoveryMetric({
+        failedAt: job.updatedAt,
+        replayedAt: replayedJob.createdAt,
+        jobKind: job.kind,
+        surface: "autopilot"
       });
 
       await repository.saveAutopilotEvent({
@@ -237,11 +267,14 @@ export async function POST(request: Request, context: RouteContext) {
       );
 
       const bundle = await repository.getGoalBundleForUser(notificationPayload.goalId, principal.userId);
+      const recoveryLatencyMs = recordDeadLetterRecoveryMetric({
+        failedAt: job.updatedAt,
+        replayedAt: replayedJob.createdAt,
+        jobKind: job.kind,
+        surface: "approval_notification"
+      });
 
       if (bundle) {
-        const failedAtMs = Date.parse(job.updatedAt);
-        const replayedAtMs = Date.parse(replayedJob.createdAt);
-
         bundle.actionLogs.push(
           createActionLog({
             goalId: bundle.goal.id,
@@ -257,10 +290,7 @@ export async function POST(request: Request, context: RouteContext) {
               decision: notificationPayload.decision,
               channel: notificationPayload.channel,
               statusUrl: `/api/jobs/${replayedJob.id}`,
-              recoveryLatencyMs:
-                Number.isFinite(failedAtMs) && Number.isFinite(replayedAtMs)
-                  ? Math.max(0, replayedAtMs - failedAtMs)
-                  : null
+              recoveryLatencyMs
             },
             prevLog: bundle.actionLogs.at(-1) ?? null
           })

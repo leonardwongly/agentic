@@ -24,6 +24,8 @@ import type {
   WorkspaceSelection
 } from "@agentic/contracts";
 import { assessWorkspaceGovernanceConformance } from "@agentic/policy";
+import { resolveDashboardCockpitRollout } from "./dashboard-cockpit-rollout";
+import { buildDashboardTraceability } from "./dashboard-traceability";
 import type { DashboardControlPlane, DashboardData, DashboardDiagnostics } from "./repository-types";
 import type { DashboardOperationsTower } from "./dashboard-operations";
 
@@ -295,6 +297,19 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
   });
   const latestArtifacts = params.sortArtifacts(scopedGoals.flatMap((bundle) => bundle.artifacts)).slice(0, 8);
   const actionLogs = params.sortActionLogs(scopedGoals.flatMap((bundle) => bundle.actionLogs)).slice(0, 20);
+  const generatedAt = new Date(dashboardNow).toISOString();
+  const traceability = buildDashboardTraceability({
+    userId: params.userId,
+    activeWorkspaceId: params.activeWorkspace?.id ?? null,
+    goals: scopedGoals,
+    approvals: scopedApprovals,
+    evidenceRecords: scopedEvidenceRecords,
+    memories: params.memories,
+    jobs: params.jobs ?? [],
+    generatedAt,
+    now: dashboardNow
+  });
+  const cockpitRollout = resolveDashboardCockpitRollout();
   const operatingSections = params.buildOperatingSections({
     userId: params.userId,
     activeWorkspace: params.activeWorkspace,
@@ -358,6 +373,8 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
     latestArtifacts,
     actionLogs,
     diagnostics,
+    traceability,
+    cockpitRollout,
     operations
   };
 

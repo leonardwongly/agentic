@@ -54,6 +54,96 @@
       "description": "The rollout gate fails if any worker job reports a failed execution."
     },
     {
+      "key": "cockpit-first-meaningful-render",
+      "title": "Cockpit first meaningful render stays inside the rollout budget",
+      "metric": "product.dashboard.first_meaningful_render_ms",
+      "aggregation": "p95",
+      "operator": "<=",
+      "threshold": 2500,
+      "filters": {
+        "variant": "redesigned"
+      },
+      "minimumSamples": 1,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "The redesigned cockpit must become meaningfully visible within 2.5s during canary validation."
+    },
+    {
+      "key": "cockpit-summary-latency",
+      "title": "Cockpit summary assembly stays inside the rollout budget",
+      "metric": "product.dashboard.summary_latency_ms",
+      "aggregation": "p95",
+      "operator": "<=",
+      "threshold": 1000,
+      "filters": {
+        "variant": "redesigned"
+      },
+      "minimumSamples": 1,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "Dashboard summary assembly must stay under the canary latency budget."
+    },
+    {
+      "key": "cockpit-table-latency",
+      "title": "Cockpit table endpoints stay inside the rollout budget",
+      "metric": "product.dashboard.table_endpoint_latency_ms",
+      "aggregation": "p95",
+      "operator": "<=",
+      "threshold": 750,
+      "filters": {
+        "variant": "redesigned"
+      },
+      "minimumSamples": 1,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "Goal, approval, memory, and operations table refreshes must remain responsive during canary validation."
+    },
+    {
+      "key": "cockpit-event-reconnects",
+      "title": "Cockpit event reconnects stay bounded",
+      "metric": "product.dashboard.event_reconnect.total",
+      "aggregation": "sum",
+      "operator": "<=",
+      "threshold": 2,
+      "filters": {
+        "variant": "redesigned"
+      },
+      "minimumSamples": 0,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "Excessive reconnects indicate the cockpit cannot keep live state stable."
+    },
+    {
+      "key": "cockpit-approval-latency",
+      "title": "Cockpit approval latency stays inside the rollout budget",
+      "metric": "product.dashboard.approval_latency_ms",
+      "aggregation": "p95",
+      "operator": "<=",
+      "threshold": 600000,
+      "filters": {
+        "variant": "redesigned"
+      },
+      "minimumSamples": 0,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "Approval decisions should remain inside the ten-minute operating-loop budget during rollout."
+    },
+    {
+      "key": "cockpit-dead-letter-recovery",
+      "title": "Cockpit dead-letter recovery stays inside the rollout budget",
+      "metric": "product.dashboard.dead_letter_recovery_ms",
+      "aggregation": "p95",
+      "operator": "<=",
+      "threshold": 900000,
+      "filters": {
+        "variant": "redesigned"
+      },
+      "minimumSamples": 0,
+      "severity": "critical",
+      "rolloutGate": true,
+      "description": "Dead-letter replay should start within the fifteen-minute recovery objective."
+    },
+    {
       "key": "integration-error-rate",
       "title": "Integration calls stay error-free during rollout validation",
       "metric": "integration.call.total",

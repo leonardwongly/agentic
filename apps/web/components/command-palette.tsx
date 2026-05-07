@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { postDashboardCoreLoopEvent, type DashboardCockpitTelemetryVariant } from "../lib/core-loop-client";
 
 type Command = {
   id: string;
@@ -17,9 +18,17 @@ type CommandPaletteProps = {
   onNavigateToSection: (sectionId: string) => void;
   onLogout: () => void;
   isPending: boolean;
+  cockpitVariant?: DashboardCockpitTelemetryVariant;
 };
 
-export function CommandPalette({ onCreateGoal, onFocusRequestComposer, onNavigateToSection, onLogout, isPending }: CommandPaletteProps) {
+export function CommandPalette({
+  onCreateGoal,
+  onFocusRequestComposer,
+  onNavigateToSection,
+  onLogout,
+  isPending,
+  cockpitVariant = "legacy"
+}: CommandPaletteProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -124,11 +133,36 @@ export function CommandPalette({ onCreateGoal, onFocusRequestComposer, onNavigat
     setSelectedIndex(0);
   }, []);
 
+  const runCommand = useCallback(
+    (command: Command) => {
+      void postDashboardCoreLoopEvent({
+        event: "command_palette_usage",
+        action: "selected",
+        category: command.category,
+        cockpitVariant
+      }).catch(() => undefined);
+      command.action();
+    },
+    [cockpitVariant]
+  );
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setIsOpen((prev) => !prev);
+        setIsOpen((prev) => {
+          const next = !prev;
+
+          if (next) {
+            void postDashboardCoreLoopEvent({
+              event: "command_palette_usage",
+              action: "opened",
+              cockpitVariant
+            }).catch(() => undefined);
+          }
+
+          return next;
+        });
         setQuery("");
         setSelectedIndex(0);
       }
@@ -139,7 +173,7 @@ export function CommandPalette({ onCreateGoal, onFocusRequestComposer, onNavigat
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, close]);
+  }, [isOpen, close, cockpitVariant]);
 
   useEffect(() => {
     if (isOpen && inputRef.current) {
@@ -160,7 +194,7 @@ export function CommandPalette({ onCreateGoal, onFocusRequestComposer, onNavigat
       setSelectedIndex((prev) => Math.max(prev - 1, 0));
     } else if (e.key === "Enter" && filteredCommands[selectedIndex]) {
       e.preventDefault();
-      if (!isPending) filteredCommands[selectedIndex].action();
+      if (!isPending) runCommand(filteredCommands[selectedIndex]);
     }
   };
 
@@ -191,7 +225,13 @@ export function CommandPalette({ onCreateGoal, onFocusRequestComposer, onNavigat
 
   return (
     <div className="palette-overlay" onClick={close}>
-      <div className="palette-container" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="palette-container"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+      >
         <div className="palette-input-row">
           <svg className="palette-search-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
             <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" />
@@ -204,6 +244,7 @@ export function CommandPalette({ onCreateGoal, onFocusRequestComposer, onNavigat
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type a command..."
+            aria-label="Search commands"
             autoComplete="off"
             spellCheck={false}
           />
@@ -223,7 +264,7 @@ export function CommandPalette({ onCreateGoal, onFocusRequestComposer, onNavigat
                     key={cmd.id}
                     className={`palette-item ${idx === selectedIndex ? "palette-item-selected" : ""}`}
                     data-selected={idx === selectedIndex}
-                    onClick={() => { if (!isPending) cmd.action(); }}
+                    onClick={() => { if (!isPending) runCommand(cmd); }}
                     onMouseEnter={() => setSelectedIndex(idx)}
                     disabled={isPending}
                     type="button"

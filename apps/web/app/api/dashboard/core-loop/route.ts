@@ -5,10 +5,74 @@ import { authenticatedJson, handleApiError, parseJsonBody, withApiTelemetry } fr
 import { summarizeCoreLoopTelemetry } from "../../../../lib/core-loop-telemetry";
 import { getSeededRepository } from "../../../../lib/server";
 
+const CockpitVariantSchema = z.enum(["legacy", "redesigned"]);
+
 const CoreLoopTelemetryEventSchema = z.discriminatedUnion("event", [
   z
     .object({
       event: z.literal("dashboard_view")
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("dashboard_first_meaningful_render"),
+      elapsedMs: z.number().finite().min(0).max(86_400_000),
+      cockpitVariant: CockpitVariantSchema
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("dashboard_summary_latency"),
+      latencyMs: z.number().finite().min(0).max(86_400_000),
+      cockpitVariant: CockpitVariantSchema
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("dashboard_table_latency"),
+      table: z.enum(["goals", "approvals", "commitments", "artifacts", "memory", "operations"]),
+      latencyMs: z.number().finite().min(0).max(86_400_000),
+      cockpitVariant: CockpitVariantSchema
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("dashboard_event_reconnect"),
+      reconnectCount: z.number().int().min(1).max(100),
+      cockpitVariant: CockpitVariantSchema
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("dashboard_approval_latency"),
+      decision: z.enum(["approved", "rejected"]),
+      riskClass: z.enum(["R1", "R2", "R3", "R4"]),
+      latencyMs: z.number().finite().min(0).max(86_400_000),
+      cockpitVariant: CockpitVariantSchema
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("dashboard_dead_letter_recovery_latency"),
+      latencyMs: z.number().finite().min(0).max(86_400_000),
+      cockpitVariant: CockpitVariantSchema
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("command_palette_usage"),
+      action: z.enum(["opened", "selected"]),
+      category: z.enum(["quick-goal", "navigate", "action"]).optional(),
+      cockpitVariant: CockpitVariantSchema
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal("cockpit_feedback"),
+      surface: z.enum(["traceability", "approvals", "command_palette", "memory", "summary"]),
+      sentiment: z.enum(["helpful", "unhelpful"]),
+      reason: z.enum(["clear", "stale", "missing_context", "wrong_priority", "too_noisy"]),
+      cockpitVariant: CockpitVariantSchema
     })
     .strict(),
   z
@@ -30,15 +94,128 @@ const CoreLoopTelemetryEventSchema = z.discriminatedUnion("event", [
     .strict()
 ]);
 
+type CoreLoopTelemetryEvent = z.infer<typeof CoreLoopTelemetryEventSchema>;
+type FastCockpitTelemetryEvent = Exclude<
+  CoreLoopTelemetryEvent,
+  { event: "dashboard_view" | "command_center_role_change" | "command_center_action" }
+>;
+
+function recordFastCockpitTelemetry(body: CoreLoopTelemetryEvent): body is FastCockpitTelemetryEvent {
+  switch (body.event) {
+    case "dashboard_first_meaningful_render":
+      recordHistogram("product.dashboard.first_meaningful_render_ms", body.elapsedMs, {
+        variant: body.cockpitVariant
+      });
+      logInfo("product.dashboard.first_meaningful_render", {
+        elapsedMs: body.elapsedMs,
+        variant: body.cockpitVariant
+      });
+      return true;
+    case "dashboard_summary_latency":
+      recordHistogram("product.dashboard.summary_latency_ms", body.latencyMs, {
+        variant: body.cockpitVariant
+      });
+      logInfo("product.dashboard.summary_latency", {
+        latencyMs: body.latencyMs,
+        variant: body.cockpitVariant
+      });
+      return true;
+    case "dashboard_table_latency":
+      recordHistogram("product.dashboard.table_endpoint_latency_ms", body.latencyMs, {
+        table: body.table,
+        variant: body.cockpitVariant
+      });
+      logInfo("product.dashboard.table_latency", {
+        table: body.table,
+        latencyMs: body.latencyMs,
+        variant: body.cockpitVariant
+      });
+      return true;
+    case "dashboard_event_reconnect":
+      recordCounter("product.dashboard.event_reconnect.total", body.reconnectCount, {
+        variant: body.cockpitVariant
+      });
+      logInfo("product.dashboard.event_reconnect", {
+        reconnectCount: body.reconnectCount,
+        variant: body.cockpitVariant
+      });
+      return true;
+    case "dashboard_approval_latency":
+      recordHistogram("product.dashboard.approval_latency_ms", body.latencyMs, {
+        decision: body.decision,
+        riskClass: body.riskClass,
+        variant: body.cockpitVariant
+      });
+      logInfo("product.dashboard.approval_latency", {
+        decision: body.decision,
+        riskClass: body.riskClass,
+        latencyMs: body.latencyMs,
+        variant: body.cockpitVariant
+      });
+      return true;
+    case "dashboard_dead_letter_recovery_latency":
+      recordHistogram("product.dashboard.dead_letter_recovery_ms", body.latencyMs, {
+        variant: body.cockpitVariant
+      });
+      logInfo("product.dashboard.dead_letter_recovery", {
+        latencyMs: body.latencyMs,
+        variant: body.cockpitVariant
+      });
+      return true;
+    case "command_palette_usage":
+      recordCounter("product.dashboard.command_palette.total", 1, {
+        action: body.action,
+        category: body.category ?? "none",
+        variant: body.cockpitVariant
+      });
+      logInfo("product.dashboard.command_palette", {
+        action: body.action,
+        category: body.category ?? "none",
+        variant: body.cockpitVariant
+      });
+      return true;
+    case "cockpit_feedback":
+      recordCounter("product.dashboard.cockpit_feedback.total", 1, {
+        surface: body.surface,
+        sentiment: body.sentiment,
+        reason: body.reason,
+        variant: body.cockpitVariant
+      });
+      logInfo("product.dashboard.cockpit_feedback", {
+        surface: body.surface,
+        sentiment: body.sentiment,
+        reason: body.reason,
+        variant: body.cockpitVariant
+      });
+      return true;
+    default:
+      return false;
+  }
+}
+
 export async function POST(request: Request) {
   return withApiTelemetry(request, "api.dashboard.core_loop", async () => {
     try {
       const principal = await requireApiSession(request);
       const body = await parseJsonBody(request, CoreLoopTelemetryEventSchema);
+
+      if (recordFastCockpitTelemetry(body)) {
+        return authenticatedJson({
+          accepted: true
+        });
+      }
+
       const repository = await getSeededRepository();
+      const summaryStartedAt = Date.now();
       const dashboard = await repository.getDashboardData(principal.userId);
+      const summaryLatencyMs = Date.now() - summaryStartedAt;
       const summary = summarizeCoreLoopTelemetry(dashboard);
       const shellEffectiveness = dashboard.operations?.shellEffectiveness ?? null;
+      recordHistogram("product.dashboard.summary_latency_ms", summaryLatencyMs, {
+        variant: dashboard.cockpitRollout.variant,
+        workspaceState: summary.workspaceState,
+        health: summary.health
+      });
 
       if (body.event === "dashboard_view") {
         recordCounter("product.core_loop.dashboard_view.total", 1, {

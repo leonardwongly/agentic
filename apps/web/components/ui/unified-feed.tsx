@@ -211,24 +211,33 @@ export function useUnifiedFeed({
       });
     }
 
-    // Detect insights from recent activity
-    const referenceTimeMs = Date.parse(referenceTime);
-    const recentCutoffMs = (Number.isFinite(referenceTimeMs) ? referenceTimeMs : 0) - 60 * 60 * 1000;
-    const recentLogs = actionLogs.filter((log) => {
-      const logTimeMs = Date.parse(log.createdAt);
-      return Number.isFinite(logTimeMs) && logTimeMs > recentCutoffMs;
-    });
+    // Detect insights from recent activity using only the provided snapshot.
+    // Reading the wall clock during render can make SSR and hydration disagree.
+    const logTimes = actionLogs
+      .map((log) => Date.parse(log.createdAt))
+      .filter((timestamp) => Number.isFinite(timestamp));
+    const latestLogTime = logTimes.length > 0 ? Math.max(...logTimes) : null;
+    const recentLogCutoff = latestLogTime === null ? null : latestLogTime - 60 * 60 * 1000;
+    const recentLogs =
+      latestLogTime === null || recentLogCutoff === null
+        ? []
+        : actionLogs.filter((log) => {
+            const logTime = Date.parse(log.createdAt);
+            return Number.isFinite(logTime) && logTime > recentLogCutoff && logTime <= latestLogTime;
+          });
 
     // Add insight if many approvals recently
     const recentApprovals = recentLogs.filter((l) => l.kind.includes("approval"));
     if (recentApprovals.length >= 5) {
+      const latestApprovalTime = Math.max(...recentApprovals.map((log) => Date.parse(log.createdAt)));
+
       items.push({
         id: "insight-high-activity",
         type: "insight",
         priority: 4,
         title: "High approval activity",
         subtitle: `${recentApprovals.length} approvals processed in the last hour`,
-        timestamp: referenceTime,
+        timestamp: new Date(latestApprovalTime).toISOString(),
         data: { type: "activity-spike", count: recentApprovals.length }
       });
     }

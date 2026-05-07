@@ -31,6 +31,57 @@ const riskClassOrder: Record<RiskClass, number> = {
   R4: 4
 };
 
+type AgentPoisoningDetection = {
+  signals: Array<"bribery" | "corruption" | "collusion" | "intent_override">;
+  matchedTerms: string[];
+  detail: string;
+};
+
+const agentPoisoningSignals: Array<{
+  signal: AgentPoisoningDetection["signals"][number];
+  pattern: RegExp;
+}> = [
+  { signal: "bribery", pattern: /\b(bribe|bribery|kickback|under the table)\b/i },
+  { signal: "corruption", pattern: /\b(corrupt|corruption|blackmail|extort|extortion)\b/i },
+  { signal: "collusion", pattern: /\b(collude|collusion|conspire|conspiracy)\b/i },
+  {
+    signal: "intent_override",
+    pattern:
+      /\b(ignore|bypass|override)\b.{0,40}\b(instructions|rules|policy|safeguards|guardrails)\b|\b(do not tell|keep it secret|secretly)\b/i
+  }
+];
+
+const agentDirectedLanguage = /\b(you|your|assistant|agent|system prompt|instructions)\b/i;
+
+export function detectAgentPoisoningAttempt(text: string): AgentPoisoningDetection | null {
+  const normalized = text.trim();
+  if (!normalized) return null;
+
+  const matchedTerms: string[] = [];
+  const signals = new Set<AgentPoisoningDetection["signals"][number]>();
+
+  for (const entry of agentPoisoningSignals) {
+    const match = normalized.match(entry.pattern);
+    if (!match) continue;
+    signals.add(entry.signal);
+    matchedTerms.push(match[0]);
+  }
+
+  if (signals.size === 0) return null;
+
+  const directed = agentDirectedLanguage.test(normalized);
+  if (!directed && !signals.has("intent_override")) {
+    return null;
+  }
+
+  const signalList = Array.from(signals.values()).join(", ");
+  return {
+    signals: Array.from(signals.values()),
+    matchedTerms,
+    detail: `Detected potential agent-poisoning attempt (${signalList}) via terms: ${matchedTerms.join(", ")}.`
+  };
+}
+
 export function riskFromCapabilities(capabilities: Capability[]): RiskClass {
   if (capabilities.includes("delete") || capabilities.includes("approve")) {
     return "R4";
@@ -167,6 +218,7 @@ export function computeTrustFromMemories(memories: MemoryRecord[], taskTitle: st
   for (const memory of memories) {
     if (memory.source !== "auto-capture") continue;
     if (memory.category !== "preferences") continue;
+    if (memory.memoryType === "inferred") continue;
     if (getMemoryFreshness(memory) !== "fresh") continue;
 
     const content = memory.content.toLowerCase();
@@ -867,6 +919,14 @@ export function buildGovernanceSimulationScenarios(): GovernanceSimulationScenar
       expectedDecision: "approval"
     },
     {
+      id: "agent-poisoning",
+      title: "Offer a bribe to bypass safeguards",
+      description: "Attempt to compromise the agent's original intent via bribery/collusion.",
+      capabilities: ["read"],
+      confidence: 0.95,
+      expectedDecision: "block"
+    },
+    {
       id: "destructive-action",
       title: "Delete a workspace note permanently",
       description: "Irreversible destructive action.",
@@ -1070,6 +1130,34 @@ export function simulateTaskPolicy(params: {
       detail: `Capabilities [${params.capabilities.join(", ")}] map to ${riskClass}.`
     }
   ];
+
+  const poisoningAttempt = detectAgentPoisoningAttempt(params.title);
+  if (poisoningAttempt) {
+    checks.push({
+      id: "agent-poisoning",
+      stage: "input",
+      status: "fail",
+      summary: "Agent poisoning attempt detected.",
+      detail: poisoningAttempt.detail
+    });
+    return {
+      decision: buildDecision({
+        riskClass,
+        outcome: "blocked",
+        rationale: `Agentic International Law: requests that attempt to bribe, corrupt, collude with, or override the intent of an agent are blocked. (${poisoningAttempt.matchedTerms.join(
+          ", "
+        )})`,
+        confidence: params.confidence,
+        requiresApproval: true
+      }),
+      checks,
+      trust,
+      scorecardTrust,
+      autonomyBudget,
+      conformance,
+      learningValidation
+    };
+  }
 
   if (params.confidence < 0.55) {
     checks.push({

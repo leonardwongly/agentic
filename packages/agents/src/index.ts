@@ -29,6 +29,7 @@ export type RunAgentOptions = {
   requestContext?: string;
   timeoutMs?: number;
   traceId?: string | null;
+  runner?: AgentRunner;
 };
 
 const SELECTED_WEDGE_EXECUTION_MODE: AgentExecutionMode = "governed_specialist";
@@ -590,6 +591,10 @@ function validateRunnerPermissions(input: AgentRunnerInput) {
 }
 
 function selectAgentRunner(options?: RunAgentOptions): AgentRunner {
+  if (options?.runner) {
+    return options.runner;
+  }
+
   return options?.agentDefinition ? customPromptAgentRunner : builtInAgentRunner;
 }
 
@@ -610,6 +615,56 @@ function createAgentRunnerInput(task: Task, scenario: string, options?: RunAgent
   });
 }
 
+function describeAgentRunnerFailure(error: unknown): { code: string; retryable: boolean } {
+  if (error instanceof AgentRunnerExecutionError) {
+    return {
+      code: error.code,
+      retryable: error.retryable
+    };
+  }
+
+  return {
+    code: "unknown_error",
+    retryable: false
+  };
+}
+
+function buildRunnerFailureFallbackResult(params: {
+  task: Task;
+  scenario: string;
+  runner: AgentRunner;
+  agentDefinition?: AgentDefinition | null;
+  error: unknown;
+}): AgentResult {
+  const failure = describeAgentRunnerFailure(params.error);
+  const content =
+    `Scenario: ${params.scenario}\n\n` +
+    `Execution status: the agent runner failed to produce a bounded artifact. Manual review is required.\n\n` +
+    `Runner: ${params.runner.contract.id}\n` +
+    `Failure code: ${failure.code}\n` +
+    `Retryable: ${failure.retryable ? "yes" : "no"}\n\n` +
+    "This artifact is an immune-system fallback. No typed execution payload was produced.";
+
+  return buildAgentResult(
+    params.task,
+    {
+      summary: "Prepared a manual-review fallback due to an agent runner failure.",
+      artifactType: "summary",
+      content,
+      executionMode: "manual_review_required",
+      explanation:
+        "The agent runner failed during execution, so Agentic fell back to a manual-review artifact to keep the workflow resilient and approval-safe.",
+      nextSteps: [
+        "Review the fallback artifact and retry once dependencies are healthy.",
+        "If failures persist, switch to manual execution or adjust agent configuration."
+      ],
+      confidence: 0.22,
+      actionIntent: null
+    },
+    params.agentDefinition
+  );
+}
+
 export function validateAgentRunnerRegistration(runner: AgentRunner): AgentRunnerContract {
   const contract = AgentRunnerContractSchema.parse(runner.contract);
 
@@ -627,5 +682,15 @@ export function runAgent(task: Task, scenario: string, options?: RunAgentOptions
   const input = createAgentRunnerInput(task, scenario, options);
   validateRunnerPermissions(input);
 
-  return runner.run(input).result;
+  try {
+    return runner.run(input).result;
+  } catch (error) {
+    return buildRunnerFailureFallbackResult({
+      task,
+      scenario,
+      runner,
+      agentDefinition: options?.agentDefinition ?? null,
+      error
+    });
+  }
 }

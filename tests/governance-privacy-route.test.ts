@@ -150,7 +150,7 @@ describe("governance privacy route", () => {
     expect(payload.controls).toEqual(
       expect.objectContaining({
         registryVersion: 1,
-        totalDatasets: 4,
+        totalDatasets: 5,
         lifecycleOperations: ["retention_enforcement", "workspace_export", "workspace_delete"]
       })
     );
@@ -158,7 +158,7 @@ describe("governance privacy route", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "workspace_operational",
-          datasetCount: 2
+          datasetCount: 3
         })
       ])
     );
