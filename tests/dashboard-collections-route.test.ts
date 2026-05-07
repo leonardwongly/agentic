@@ -257,6 +257,51 @@ describe("dashboard collection routes", () => {
     expect(duplicateQuery.status).toBe(400);
   });
 
+  it("does not expose another user's workspace approvals or artifacts through search", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults("user-secondary");
+    await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a visible dashboard collection goal.");
+    const privateBundle = await createGoalForUser(
+      repository,
+      "user-secondary",
+      "PRIVATE_SECONDARY_WORKSPACE_TOKEN prepare a confidential approval workflow."
+    );
+    await repository.saveGoalBundle({
+      ...privateBundle,
+      artifacts: [
+        ...privateBundle.artifacts,
+        {
+          id: "artifact-secondary-private",
+          goalId: privateBundle.goal.id,
+          artifactType: "summary",
+          title: "PRIVATE_SECONDARY_WORKSPACE_TOKEN artifact",
+          content: "This artifact belongs to a different workspace owner.",
+          createdAt: nowIso()
+        }
+      ]
+    });
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const approvals = await dashboardApprovalsRoute(
+      buildAuthorizedGetRequest("/api/dashboard/approvals?q=PRIVATE_SECONDARY_WORKSPACE_TOKEN&limit=10")
+    );
+    const artifacts = await dashboardArtifactsRoute(
+      buildAuthorizedGetRequest("/api/dashboard/artifacts?q=PRIVATE_SECONDARY_WORKSPACE_TOKEN&limit=10")
+    );
+    const approvalPayload = (await approvals.json()) as { page: { totalCount: number; items: unknown[] } };
+    const artifactPayload = (await artifacts.json()) as { page: { totalCount: number; items: unknown[] } };
+
+    expect(approvals.status).toBe(200);
+    expect(artifacts.status).toBe(200);
+    expect(approvalPayload.page.totalCount).toBe(0);
+    expect(approvalPayload.page.items).toEqual([]);
+    expect(artifactPayload.page.totalCount).toBe(0);
+    expect(artifactPayload.page.items).toEqual([]);
+  });
+
   it("keeps large memory fixtures paginated and scoped to the signed-in user", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
