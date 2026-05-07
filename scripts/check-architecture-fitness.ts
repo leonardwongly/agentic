@@ -50,6 +50,7 @@ function main() {
   const dashboardCockpitPath = "apps/web/components/dashboard-cockpit.tsx";
   const dashboardHooksPath = "apps/web/components/dashboard-hooks.ts";
   const dashboardPrimarySectionsPath = "apps/web/components/dashboard-primary-sections.tsx";
+  const dashboardShellPath = "apps/web/components/dashboard-shell.tsx";
   const dashboardCollectionPath = "apps/web/lib/dashboard-collection.ts";
   const dashboardSummaryRoutePath = "apps/web/app/api/dashboard/summary/route.ts";
   const dashboardApprovalsRoutePath = "apps/web/app/api/dashboard/approvals/route.ts";
@@ -86,6 +87,7 @@ function main() {
   const dashboardCockpit = readRepoFile(dashboardCockpitPath);
   const dashboardHooks = readRepoFile(dashboardHooksPath);
   const dashboardPrimarySections = readRepoFile(dashboardPrimarySectionsPath);
+  const dashboardShell = readRepoFile(dashboardShellPath);
   const dashboardCollection = readRepoFile(dashboardCollectionPath);
   const dashboardSummaryRoute = readRepoFile(dashboardSummaryRoutePath);
   const dashboardApprovalsRoute = readRepoFile(dashboardApprovalsRoutePath);
@@ -320,10 +322,50 @@ function main() {
     `${dashboardPath} must source extracted operating cards from ${dashboardPrimarySectionsPath}.`
   );
   assertContains(
+    dashboard,
+    'from "./dashboard-shell";',
+    `${dashboardPath} must source dashboard providers and shell chrome from ${dashboardShellPath}.`
+  );
+  assertNotContains(
+    dashboard,
+    "KeyboardShortcutsProvider",
+    `${dashboardPath} must not own dashboard providers after shell extraction.`
+  );
+  assertContains(
     dashboardHooks,
     "useDashboardSnapshot",
     `${dashboardHooksPath} must own the dashboard snapshot state hook.`
   );
+  for (const hook of [
+    "useDashboardGoalActionsState",
+    "useDashboardApprovalActionsState",
+    "useDashboardCommitmentActionsState",
+    "useDashboardBriefingActionsState",
+    "useDashboardTemplateActionsState",
+    "useDashboardWorkspaceActionsState",
+    "useDashboardNotesActionsState"
+  ]) {
+    assertContains(
+      dashboardHooks,
+      hook,
+      `${dashboardHooksPath} must expose ${hook} for dashboard action/data state boundaries.`
+    );
+  }
+  for (const shellConcern of [
+    "ApprovalNavigationProvider",
+    "KeyboardShortcutsProvider",
+    "NLFloatingBar",
+    "StatsBar",
+    "ToastContainer",
+    "CommandPalette",
+    "QuickActionsBar"
+  ]) {
+    assertContains(
+      dashboardShell,
+      shellConcern,
+      `${dashboardShellPath} must own ${shellConcern} dashboard shell wiring.`
+    );
+  }
   assertContains(
     dashboardCockpit,
     "DashboardCockpitLanes",
@@ -410,9 +452,11 @@ function main() {
   );
   assertMaxLines(repository, 7900, repositoryPath);
   assertMaxLines(workerRuntime, 1650, workerRuntimePath);
-  assertMaxLines(dashboard, 3200, dashboardPath);
+  assertMaxLines(dashboard, 3150, dashboardPath);
   assertMaxLines(dashboardCockpit, 450, dashboardCockpitPath);
   assertMaxLines(dashboardPrimarySections, 500, dashboardPrimarySectionsPath);
+  assertMaxLines(dashboardShell, 180, dashboardShellPath);
+  assertMaxLines(dashboardHooks, 280, dashboardHooksPath);
   assertMaxLines(dashboardCollection, 230, dashboardCollectionPath);
   assertContains(
     dashboardSurface,

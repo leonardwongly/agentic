@@ -1,10 +1,9 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import {
   commitmentInboxBucketValues,
   privacyOperationKindValues,
-  workspaceRoleValues,
   defaultWorkspaceShadowReplayPolicy,
   enterpriseWorkspaceGovernanceDefaults,
   DEFAULT_COMMITMENT_INBOX_LIMIT,
@@ -31,26 +30,20 @@ import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/reposito
 import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
 import { DashboardCommandCenter } from "./dashboard-command-center";
-import {
-  DashboardGoalsCard,
-  type RecommendationLoadState
-} from "./dashboard-goals-card";
+import { DashboardGoalsCard } from "./dashboard-goals-card";
 import { DashboardAdvancedSurface } from "./dashboard-advanced-surface";
 import {
   DashboardCockpitLanes,
-  DashboardDetailDrawer,
   type DashboardDetailSelection
 } from "./dashboard-cockpit";
 import type {
   GoalRecommendationsApiResponse,
   OperatorProductPayload,
   PrivacyControlsApiResponse,
-  PrivacyControlSummary,
   RecommendationFeedbackApiResponse,
   RequestState
 } from "./dashboard-types";
 import { DashboardOperationsTowerCard } from "./dashboard-operations-tower-card";
-import { CoreLoopViewTracker } from "./core-loop-view-tracker";
 import {
   buildDashboardCommandCenterModel,
   getPreferredCommandCenterRole,
@@ -74,10 +67,8 @@ import {
 import {
   buildGoalRecommendationQuery,
   buildRecommendationFeedbackPayload,
-  buildRecommendationRefinementSource,
-  type RecommendationRefinementSource
+  buildRecommendationRefinementSource
 } from "../lib/workflow-recommendations";
-import { CommandPalette } from "./command-palette";
 import {
   buildClientIdempotencyKey,
   type BriefingCreateApiResponse,
@@ -93,9 +84,19 @@ import {
   type TemplateRunJobStatusApiResponse,
   readJson
 } from "./dashboard-async";
+import { DashboardShell } from "./dashboard-shell";
 import { DashboardOperatingSectionsCard } from "./dashboard-operating-sections";
 import { DashboardOperationsSections } from "./dashboard-operations-sections";
-import { useDashboardSnapshot } from "./dashboard-hooks";
+import {
+  useDashboardApprovalActionsState,
+  useDashboardBriefingActionsState,
+  useDashboardCommitmentActionsState,
+  useDashboardGoalActionsState,
+  useDashboardNotesActionsState,
+  useDashboardSnapshot,
+  useDashboardTemplateActionsState,
+  useDashboardWorkspaceActionsState
+} from "./dashboard-hooks";
 import {
   ActivityTimeline,
   ArtifactsPanel,
@@ -116,16 +117,10 @@ import {
   getExecutionModeFilterOption,
   matchesExecutionModeFilter,
   RelativeTime,
-  KeyboardShortcutsProvider,
   useShortcut,
-  FaviconBadge,
   toast,
-  ToastContainer,
-  QuickActionsBar,
-  FloatingActionsBar,
   NoApprovalsEmpty,
   // 10x Components Phase 1
-  StatsBar,
   useStatsBar,
   CollapsibleSection,
   ApprovalPreview,
@@ -135,7 +130,6 @@ import {
   useBatchSelection,
   BatchActionsBar,
   SelectableItem,
-  FocusMode,
   useFocusMode,
   FocusModeButton,
   UnifiedFeed,
@@ -146,7 +140,6 @@ import {
   PinButton,
   sortWithPins,
   // 10x Components Phase 2
-  ApprovalNavigationProvider,
   useApprovalNavigation,
   KeyboardApprovalItem,
   ApprovalKeyboardHints,
@@ -155,10 +148,7 @@ import {
   useApprovalGroups,
   ApprovalGroupSelector,
   ApprovalGroupView,
-  type GroupBy,
   useTheme,
-  ThemeToggle,
-  NLFloatingBar,
   useNLExecutor,
   useFilteredTimeline,
   InlineGoalProgress,
@@ -281,25 +271,61 @@ export function Dashboard(props: DashboardProps) {
 
 function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }: DashboardProps) {
   const { data, setData, loadDashboardSnapshot } = useDashboardSnapshot(initialData);
-  const [notes, setNotes] = useState(initialNotes);
-  const [request, setRequest] = useState("");
-  const [memoryContent, setMemoryContent] = useState("");
-  const [memoryCategory, setMemoryCategory] = useState("working-style");
-  const [noteQuery, setNoteQuery] = useState("");
-  const [noteTitle, setNoteTitle] = useState("");
-  const [noteContent, setNoteContent] = useState("");
-  const [selectedNoteSlug, setSelectedNoteSlug] = useState<string | null>(null);
-  const [selectedNoteTitle, setSelectedNoteTitle] = useState("");
-  const [selectedNoteContent, setSelectedNoteContent] = useState("");
-  const [docsState, setDocsState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [submitState, setSubmitState] = useState<RequestState>({ kind: "idle", message: "" });
+  const {
+    notes,
+    setNotes,
+    memoryContent,
+    setMemoryContent,
+    memoryCategory,
+    setMemoryCategory,
+    noteQuery,
+    setNoteQuery,
+    noteTitle,
+    setNoteTitle,
+    noteContent,
+    setNoteContent,
+    selectedNoteSlug,
+    selectedNoteTitle,
+    selectedNoteContent,
+    noteState,
+    setNoteState,
+    selectedNoteTitleRef,
+    selectedNoteContentRef,
+    setSelectedNoteTitleDraft,
+    setSelectedNoteContentDraft,
+    loadSelectedNoteDraft,
+    clearSelectedNoteDraft
+  } = useDashboardNotesActionsState(initialNotes);
+  const {
+    request,
+    setRequest,
+    submitState,
+    setSubmitState,
+    selectedAgentId,
+    setSelectedAgentId,
+    refinementInputs,
+    setRefinementInputs,
+    refinementSourceByGoal,
+    setRefinementSourceByGoal,
+    refinementState,
+    setRefinementState,
+    recommendationState,
+    setRecommendationState,
+    recommendationResultsByGoal,
+    setRecommendationResultsByGoal,
+    recommendationPendingByGoal,
+    setRecommendationPendingByGoal,
+    recommendationQueriesRef
+  } = useDashboardGoalActionsState();
+  const {
+    docsState,
+    setDocsState,
+    briefingState,
+    setBriefingState,
+    briefingPreferencesDraft,
+    setBriefingPreferencesDraft
+  } = useDashboardBriefingActionsState(initialData);
   const [shareState, setShareState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [noteState, setNoteState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [briefingState, setBriefingState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [autopilotState, setAutopilotState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [privacyState, setPrivacyState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [privacyInventoryState, setPrivacyInventoryState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [privacyControls, setPrivacyControls] = useState<PrivacyControlSummary | null>(null);
   const [isPending, setIsPending] = useState(false);
   const {
     lastShareUrl,
@@ -308,44 +334,65 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     confirmGoalShare,
     cancelGoalShareReview
   } = useGoalShareReview({ setData, setIsPending, setShareState });
-  const [templates, setTemplates] = useState<GoalTemplate[]>([]);
-  const [templateState, setTemplateState] = useState<RequestState>({ kind: "idle", message: "" });
+  const { templates, setTemplates, templateState, setTemplateState } = useDashboardTemplateActionsState();
   const [operatorProducts, setOperatorProducts] = useState<OperatorProduct[]>([]);
   const [operatorProductSelection, setOperatorProductSelection] = useState<OperatorProductSelection | null>(null);
   const [operatorProductAgents, setOperatorProductAgents] = useState<AgentDefinition[]>([]);
   const [operatorProductTemplates, setOperatorProductTemplates] = useState<GoalTemplate[]>([]);
   const [operatorProductState, setOperatorProductState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [refinementInputs, setRefinementInputs] = useState<Record<string, string>>({});
-  const [refinementSourceByGoal, setRefinementSourceByGoal] = useState<Record<string, RecommendationRefinementSource>>({});
-  const [refinementState, setRefinementState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [recommendationState, setRecommendationState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [recommendationResultsByGoal, setRecommendationResultsByGoal] = useState<Record<string, RecommendationLoadState>>({});
-  const [recommendationPendingByGoal, setRecommendationPendingByGoal] = useState<Record<string, boolean>>({});
   const [detailSelection, setDetailSelection] = useState<DashboardDetailSelection | null>(null);
   const [showUnifiedFeed, setShowUnifiedFeed] = useState(true);
   const [showAdvancedOperations, setShowAdvancedOperations] = useState(false);
   const [commandCenterRole, setCommandCenterRole] = useState<CommandCenterRole>("command");
-  const [selectedAgentId, setSelectedAgentId] = useState<string | undefined>(undefined);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
-  const [commitmentBucket, setCommitmentBucket] = useState<CommitmentInboxBucket>(initialCommitmentInbox.bucket);
-  const [commitmentInbox, setCommitmentInbox] = useState(initialCommitmentInbox);
-  const [commitmentInboxState, setCommitmentInboxState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
-  const [executionModeFilter, setExecutionModeFilter] = useState<ExecutionModeFilterValue>("all");
-  const [briefingPreferencesDraft, setBriefingPreferencesDraft] = useState<BriefingPreferences>(initialData.briefingPreferences);
-  const [autopilotDraft, setAutopilotDraft] = useState<AutopilotSettings>(initialData.autopilotSettings);
-  const [workspaceName, setWorkspaceName] = useState("");
-  const [workspaceSlug, setWorkspaceSlug] = useState("");
-  const [workspaceDescription, setWorkspaceDescription] = useState("");
-  const [workspaceMemberUserId, setWorkspaceMemberUserId] = useState("");
-  const [workspaceMemberRole, setWorkspaceMemberRole] = useState<(typeof workspaceRoleValues)[number]>("viewer");
-  const [workspaceState, setWorkspaceState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [governanceState, setGovernanceState] = useState<RequestState>({ kind: "idle", message: "" });
-  const [governanceDraft, setGovernanceDraft] = useState(() => buildWorkspaceGovernanceDraft(initialData.workspaceGovernance));
-  const selectedNoteTitleRef = useRef("");
-  const selectedNoteContentRef = useRef("");
-  const commitmentInboxRequestIdRef = useRef(0);
-  const recommendationQueriesRef = useRef<Record<string, string | null>>({});
+  const {
+    commitmentBucket,
+    setCommitmentBucket,
+    commitmentInbox,
+    setCommitmentInbox,
+    commitmentInboxState,
+    setCommitmentInboxState,
+    commitmentInboxRequestIdRef
+  } = useDashboardCommitmentActionsState(initialCommitmentInbox);
+  const {
+    approvalNotes,
+    setApprovalNotes,
+    approvalGroupBy,
+    setApprovalGroupBy,
+    executionModeFilter,
+    setExecutionModeFilter
+  } = useDashboardApprovalActionsState();
+  const {
+    autopilotState,
+    setAutopilotState,
+    privacyState,
+    setPrivacyState,
+    privacyInventoryState,
+    setPrivacyInventoryState,
+    privacyControls,
+    setPrivacyControls,
+    autopilotDraft,
+    setAutopilotDraft,
+    workspaceName,
+    setWorkspaceName,
+    workspaceSlug,
+    setWorkspaceSlug,
+    workspaceDescription,
+    setWorkspaceDescription,
+    workspaceMemberUserId,
+    setWorkspaceMemberUserId,
+    workspaceMemberRole,
+    setWorkspaceMemberRole,
+    workspaceState,
+    setWorkspaceState,
+    governanceState,
+    setGovernanceState,
+    governanceDraft,
+    setGovernanceDraft
+  } = useDashboardWorkspaceActionsState({
+    initialAutopilotDraft: initialData.autopilotSettings,
+    initialGovernanceDraft: buildWorkspaceGovernanceDraft(initialData.workspaceGovernance)
+  });
 
   // 10x Dashboard Hooks - Phase 1
   const statsBar = useStatsBar(data);
@@ -358,7 +405,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   
   // 10x Dashboard Hooks - Phase 2
   const undo = useUndo();
-  const [approvalGroupBy, setApprovalGroupBy] = useState<GroupBy>("none");
   const timelineFilters = useFilteredTimeline(data.actionLogs);
   const pendingApprovals = useMemo(
     () => data.approvals.filter((approval) => approval.decision === "pending"),
@@ -861,34 +907,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     setCommandCenterRole(getPreferredCommandCenterRole(selectedOperatorProduct));
   }, [selectedOperatorProduct]);
 
-  const setSelectedNoteTitleDraft = (value: string) => {
-    selectedNoteTitleRef.current = value;
-    setSelectedNoteTitle(value);
-  };
-
-  const setSelectedNoteContentDraft = (value: string) => {
-    selectedNoteContentRef.current = value;
-    setSelectedNoteContent(value);
-  };
-
-  const loadSelectedNoteDraft = (note: LocalNoteDocument) => {
-    setSelectedNoteSlug(note.slug);
-    setSelectedNoteTitleDraft(note.title);
-    setSelectedNoteContentDraft(note.content.replace(/^#\s+.*\n\n?/u, "").trim());
-  };
-
-  const clearSelectedNoteDraft = () => {
-    setSelectedNoteSlug(null);
-    setSelectedNoteTitleDraft("");
-    setSelectedNoteContentDraft("");
-  };
-
   // Unified Feed setup
   const unifiedFeedItems = useUnifiedFeed({
     goals: data.goals,
     approvals: data.approvals,
     artifacts: data.latestArtifacts,
     actionLogs: data.actionLogs,
+    referenceTime: data.diagnostics.generatedAt,
     onApprove: (id) => respondApproval(id, "approved", { scope: "once" }),
     onReject: (id) => respondApproval(id, "rejected"),
     onViewGoal: (id) => deepLink.setItem(id, "goal"),
@@ -2198,62 +2223,30 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   ];
 
   return (
-    <ApprovalNavigationProvider
-      approvals={pendingApprovals}
-      onApprove={(id) => respondApproval(id, "approved", { scope: "once" })}
-      onReject={(id) => respondApproval(id, "rejected")}
+    <DashboardShell
+      pendingApprovals={pendingApprovals}
+      onApprove={(id) => void respondApproval(id, "approved", { scope: "once" })}
+      onReject={(id) => void respondApproval(id, "rejected")}
+      isPending={isPending}
+      focusMode={focusMode}
+      nlExecute={nlExecutor.execute}
+      nlCapabilitySummary={nlCapabilitySummary}
+      activeWorkspaceId={data.activeWorkspace?.id ?? null}
+      themeMode={theme.mode}
+      statsBarProps={statsBar.props}
+      quickActions={quickActions}
+      detailSelection={detailSelection}
+      closeDetail={() => setDetailSelection(null)}
+      openView={openView}
+      onCreateGoal={async (req) => {
+        setRequest(req);
+        await submitGoalRequest(req);
+        setRequest("");
+      }}
+      onFocusRequestComposer={focusRequestComposer}
+      onNavigateToSection={navigateToSection}
+      onLogout={logout}
     >
-    <KeyboardShortcutsProvider>
-      <FaviconBadge count={pendingApprovals.length} />
-      <ToastContainer />
-
-      {/* Focus Mode Overlay */}
-      <FocusMode
-        isActive={focusMode.isInFocusMode}
-        sectionId={focusMode.focusedSection?.id || ""}
-        title={focusMode.focusedSection?.title || ""}
-        onClose={focusMode.exitFocus}
-      >
-        {focusMode.focusedSection?.id === "approvals" && (
-          <div className="focus-approvals">
-            {pendingApprovals.map((approval) => (
-              <div className="list-item vertical" key={approval.id}>
-                <div>
-                  <strong>{approval.title}</strong>
-                  <p>{approval.rationale}</p>
-                </div>
-                <div className="approval-actions">
-                  <RiskClassHelp riskClass={approval.riskClass}>
-                    <RiskBadge riskClass={approval.riskClass} />
-                  </RiskClassHelp>
-                  <RelativeTime date={approval.createdAt} />
-                  <button type="button" onClick={() => respondApproval(approval.id, "approved", { scope: "once" })} disabled={isPending}>
-                    Approve
-                  </button>
-                  <button type="button" className="secondary-button" onClick={() => respondApproval(approval.id, "rejected")} disabled={isPending}>
-                    Reject
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </FocusMode>
-      
-      {/* NL Floating Bar - Press / to toggle */}
-      <NLFloatingBar
-        onExecute={nlExecutor.execute}
-        capabilitySummary={nlCapabilitySummary}
-      />
-
-      <main className={`dashboard-shell ${theme.mode === 'dark' ? 'dark-mode' : ''}`}>
-        <CoreLoopViewTracker workspaceId={data.activeWorkspace?.id ?? null} />
-        {/* Stats Bar with Theme Toggle */}
-        <div className="stats-bar-wrapper">
-          <StatsBar {...statsBar.props} />
-          <ThemeToggle />
-        </div>
-
         <DashboardCommandCenter
           model={commandCenterModel}
           role={commandCenterRole}
@@ -3110,30 +3103,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           deleteTemplate={deleteTemplate}
         />
       </section>
-
-      <FloatingActionsBar position="bottom">
-        <QuickActionsBar actions={quickActions} />
-      </FloatingActionsBar>
-
-      <DashboardDetailDrawer
-        detail={detailSelection}
-        onClose={() => setDetailSelection(null)}
-        openView={openView}
-      />
-
-      <CommandPalette
-        onCreateGoal={async (req) => {
-          setRequest(req);
-          await submitGoalRequest(req);
-          setRequest("");
-        }}
-        onFocusRequestComposer={focusRequestComposer}
-        onNavigateToSection={navigateToSection}
-        onLogout={logout}
-        isPending={isPending}
-      />
-    </main>
-    </KeyboardShortcutsProvider>
-    </ApprovalNavigationProvider>
+    </DashboardShell>
   );
 }

@@ -39,6 +39,8 @@ Phase 1 is complete only when all of the following stay true:
 - public share view action-log construction lives in `packages/worker-runtime/src/public-share-log.ts`
 - dashboard client polling and fetch helpers live in `apps/web/components/dashboard-async.ts`
 - dashboard snapshot state lives in `apps/web/components/dashboard-hooks.ts`
+- dashboard action/data state hooks for goals, approvals, commitments, briefings, templates, workspaces, and notes live in `apps/web/components/dashboard-hooks.ts`
+- dashboard providers, shell chrome, stats, NL bar, command palette, quick actions, and toasts live in `apps/web/components/dashboard-shell.tsx`
 - exception-first cockpit lanes and the canonical detail drawer live in `apps/web/components/dashboard-cockpit.tsx`
 - first-viewport operating cards live in `apps/web/components/dashboard-primary-sections.tsx`
 - bounded first-paint and collection API helpers live outside the dashboard component
@@ -100,6 +102,7 @@ Dedicated helper ownership:
 - keep accumulating generic API response types
 - own reusable JSON parsing, polling, or snapshot-fetch utilities
 - own every first-viewport card and cockpit lane implementation inline
+- own provider wiring, shell chrome, stats, command palette, NL bar, quick actions, or toasts
 
 `apps/web/components/dashboard-async.ts` owns:
 
@@ -112,12 +115,20 @@ Dedicated helper ownership:
 
 - dashboard snapshot state
 - dashboard snapshot refresh hook wiring
+- grouped goal, approval, commitment, briefing, template, workspace, and note action state
 
 `apps/web/components/dashboard-cockpit.tsx` owns:
 
 - Operate, Approve, Recover, Govern, Build, and Learn lane rendering
 - high-severity diagnostic surfacing for the first viewport
 - the canonical dashboard detail drawer
+
+`apps/web/components/dashboard-shell.tsx` owns:
+
+- dashboard providers and keyboard shortcut wiring
+- command palette, NL floating bar, favicon badge, stats bar, toasts, and quick actions
+- focus-mode approval overlay
+- the dashboard `<main>` shell and detail drawer placement
 
 `apps/web/components/dashboard-primary-sections.tsx` owns:
 
@@ -150,8 +161,10 @@ The current hotspot budgets are intentionally strict enough to stop obvious back
 
 - `packages/repository/src/index.ts`: `<= 7900` lines
 - `packages/worker-runtime/src/index.ts`: `<= 1650` lines
-- `apps/web/components/dashboard.tsx`: `<= 3200` lines
+- `apps/web/components/dashboard.tsx`: `<= 3150` lines
 - `apps/web/components/dashboard-cockpit.tsx`: `<= 450` lines
+- `apps/web/components/dashboard-hooks.ts`: `<= 280` lines
+- `apps/web/components/dashboard-shell.tsx`: `<= 180` lines
 - `apps/web/components/dashboard-primary-sections.tsx`: `<= 500` lines
 - `apps/web/lib/dashboard-collection.ts`: `<= 230` lines
 
