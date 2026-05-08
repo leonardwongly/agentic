@@ -131,6 +131,9 @@ export const jobKindValues = [
 ] as const;
 export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
 export const jobPriorityValues = ["critical", "high", "normal", "low", "maintenance"] as const;
+export const githubIssueAutomationModeValues = ["intake", "plan", "work"] as const;
+export const githubIssueTriggerEventValues = ["issues", "issue_comment"] as const;
+export const githubIssueTriggerActionValues = ["opened", "reopened", "labeled", "created"] as const;
 export const evidenceRecordSourceKindValues = ["approval_response"] as const;
 export const workspaceRoleValues = ["owner", "editor", "viewer"] as const;
 export const workspaceApprovalModeValues = ["always_review", "risk_based"] as const;
@@ -210,6 +213,9 @@ export const PrivacyOperationStatusSchema = z.enum(privacyOperationStatusValues)
 export const JobKindSchema = z.enum(jobKindValues);
 export const JobStatusSchema = z.enum(jobStatusValues);
 export const JobPrioritySchema = z.enum(jobPriorityValues);
+export const GitHubIssueAutomationModeSchema = z.enum(githubIssueAutomationModeValues);
+export const GitHubIssueTriggerEventSchema = z.enum(githubIssueTriggerEventValues);
+export const GitHubIssueTriggerActionSchema = z.enum(githubIssueTriggerActionValues);
 export const EvidenceRecordSourceKindSchema = z.enum(evidenceRecordSourceKindValues);
 export const WorkspaceRoleSchema = z.enum(workspaceRoleValues);
 export const WorkspaceApprovalModeSchema = z.enum(workspaceApprovalModeValues);
@@ -2080,6 +2086,7 @@ export const GitHubIssueIntakeJobPayloadSchema = z
     type: z.literal("github_issue_intake"),
     goalId: z.string().min(1),
     workflowId: z.string().min(1),
+    automationMode: GitHubIssueAutomationModeSchema.default("intake"),
     workspaceId: z.string().min(1).max(160).nullable().default(null),
     agentId: z.string().min(1).max(120).nullable().default(null),
     repository: z
@@ -2108,9 +2115,12 @@ export const GitHubIssueIntakeJobPayloadSchema = z
     receivedAt: z.string().datetime(),
     metadata: z
       .object({
-        event: z.literal("issues").default("issues"),
-        action: z.literal("opened").default("opened"),
+        event: GitHubIssueTriggerEventSchema.default("issues"),
+        action: GitHubIssueTriggerActionSchema.default("opened"),
         senderLogin: z.string().trim().min(1).max(120).nullable().default(null),
+        triggerLabel: z.string().trim().min(1).max(80).nullable().default(null),
+        command: z.string().trim().min(1).max(40).nullable().default(null),
+        triggerId: z.string().trim().min(1).max(160).nullable().default(null),
         riskTags: z.array(z.string().trim().min(1).max(64)).max(20).default(["untrusted_external_input"])
       })
       .catchall(z.unknown())
@@ -2118,6 +2128,9 @@ export const GitHubIssueIntakeJobPayloadSchema = z
         event: "issues",
         action: "opened",
         senderLogin: null,
+        triggerLabel: null,
+        command: null,
+        triggerId: null,
         riskTags: ["untrusted_external_input"]
       })
   })

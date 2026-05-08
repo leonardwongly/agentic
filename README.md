@@ -16,7 +16,7 @@ The current product surface includes:
 
 - a commitment-first dashboard and core-loop API
 - async goal creation and briefing generation with durable job polling
-- GitHub issue-open intake that enqueues governed Agentic worker jobs
+- GitHub issue automation that enqueues governed Agentic worker jobs from issue opens, labels, and authorized comments
 - agents, templates, workflow templates, watchers, and operator products
 - approvals, autopilot events, and governance-aware execution paths
 - memories and self-improving outcome capture
@@ -348,6 +348,19 @@ export TELEGRAM_USER_MAP=123456789:user-id,-1001234567890/123456789:user-id
 ```
 
 Telegram approval actions use short server-stored action IDs so they fit Telegram `callback_data` limits. The webhook requires the `x-telegram-bot-api-secret-token` header to match `TELEGRAM_WEBHOOK_SECRET`.
+
+### GitHub Issue Autopilot
+
+Use these when you want GitHub issue activity to create governed Agentic worker jobs:
+
+```bash
+export AGENTIC_GITHUB_WEBHOOK_SECRET=replace-with-a-long-random-webhook-secret
+export AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=owner/repo
+```
+
+In GitHub, configure the matching `AGENTIC_GITHUB_WEBHOOK_SECRET` repository secret and set the `AGENTIC_GITHUB_ISSUE_WEBHOOK_URL` repository variable to `https://<agentic-host>/api/github/issues/webhook`.
+
+By default, `issues.opened` and `issues.reopened` enqueue intake work, `agentic:plan` enqueues plan-only work, `agentic:work` enqueues implementation work, and exact `/agentic plan` or `/agentic work` issue comments are accepted from `OWNER`, `MEMBER`, or `COLLABORATOR` commenters. See [docs/runbooks/github-issue-autopilot.md](docs/runbooks/github-issue-autopilot.md) for label, command, allowlist, and authorization knobs.
 
 ## Validation And Quality Gates
 
