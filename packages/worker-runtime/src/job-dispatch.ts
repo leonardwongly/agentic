@@ -499,7 +499,9 @@ export async function enqueueGitHubIssueIntakeJob(params: {
   const payload = buildGitHubIssueIntakePayload(params.payload);
   const identity = {
     repositoryFullName: payload.repository.fullName,
-    issueNumber: payload.issue.number
+    issueNumber: payload.issue.number,
+    automationMode: payload.automationMode,
+    triggerId: payload.metadata.triggerId
   };
 
   return withSpan(

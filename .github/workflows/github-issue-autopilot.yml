@@ -2,14 +2,16 @@ name: GitHub Issue Autopilot
 
 on:
   issues:
-    types: [opened]
+    types: [opened, reopened, labeled]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   issues: read
 
 concurrency:
-  group: github-issue-autopilot-${{ github.event.issue.node_id || github.event.issue.number }}
+  group: github-issue-autopilot-${{ github.event.issue.node_id || github.event.issue.number }}-${{ github.event.comment.id || github.event.label.name || github.event.action }}
   cancel-in-progress: false
 
 jobs:
@@ -22,7 +24,7 @@ jobs:
       AGENTIC_GITHUB_ISSUE_WEBHOOK_URL: ${{ vars.AGENTIC_GITHUB_ISSUE_WEBHOOK_URL }}
       AGENTIC_GITHUB_WEBHOOK_SECRET: ${{ secrets.AGENTIC_GITHUB_WEBHOOK_SECRET }}
     steps:
-      - name: Forward signed issue-opened event
+      - name: Forward signed issue automation event
         shell: bash
         run: |
           node --input-type=module <<'NODE'
@@ -48,9 +50,15 @@ jobs:
           }
 
           const eventPath = process.env.GITHUB_EVENT_PATH;
+          const eventName = process.env.GITHUB_EVENT_NAME;
 
           if (!eventPath) {
             console.log("::error title=Missing GitHub event path::GITHUB_EVENT_PATH was not provided by the runner.");
+            process.exit(1);
+          }
+
+          if (!eventName) {
+            console.log("::error title=Missing GitHub event name::GITHUB_EVENT_NAME was not provided by the runner.");
             process.exit(1);
           }
 
@@ -64,7 +72,7 @@ jobs:
             headers: {
               "content-type": "application/json",
               "user-agent": "agentic-github-issue-autopilot",
-              "x-github-event": "issues",
+              "x-github-event": eventName,
               "x-github-delivery": deliveryId,
               "x-hub-signature-256": signature
             },
