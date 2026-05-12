@@ -83,7 +83,15 @@ import {
 } from "@agentic/worker-runtime";
 
 describe("worker runtime", () => {
+  const RETENTION_TEST_NOW = "2026-04-16T00:00:00.000Z";
+  const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+  function retentionFixtureIso(daysFromNow: number): string {
+    return new Date(Date.parse(RETENTION_TEST_NOW) + daysFromNow * DAY_IN_MS).toISOString();
+  }
+
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     runDocsBuildMock.mockReset();
     runDocsBuildMock.mockResolvedValue({
@@ -1859,7 +1867,7 @@ describe("worker runtime", () => {
     expect(persistedOperation?.result).not.toHaveProperty("content");
   });
 
-  it("enforces retention and revokes expired active shares", async () => {
+  it("enforces retention with deterministic revoke, purge, and staged active-share cleanup windows", async () => {
     const { repository } = await createTestRuntime();
     const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
     const workspaceId = dashboard.activeWorkspace!.id;
@@ -1871,20 +1879,65 @@ describe("worker runtime", () => {
     });
 
     await repository.saveGoalBundle(bundle);
-    await repository.saveGoalShare({
-      id: "share-expired-retention",
-      goalId: bundle.goal.id,
-      userId: SYSTEM_USER_ID,
-      workspaceId,
-      tokenFingerprint: "abcdef123456",
-      status: "active",
-      actorContext: createSystemActorContext(SYSTEM_USER_ID),
-      expiresAt: "2026-04-10T00:00:00.000Z",
-      lastViewedAt: null,
-      revokedAt: null,
-      createdAt: "2026-04-10T00:00:00.000Z",
-      updatedAt: "2026-04-10T00:00:00.000Z"
-    });
+    const actorContext = createSystemActorContext(SYSTEM_USER_ID);
+    await Promise.all([
+      repository.saveGoalShare({
+        id: "share-expired-retention",
+        goalId: bundle.goal.id,
+        userId: SYSTEM_USER_ID,
+        workspaceId,
+        tokenFingerprint: "abcdef123456",
+        status: "active",
+        actorContext,
+        expiresAt: retentionFixtureIso(-1),
+        lastViewedAt: null,
+        revokedAt: null,
+        createdAt: retentionFixtureIso(-2),
+        updatedAt: retentionFixtureIso(-1)
+      }),
+      repository.saveGoalShare({
+        id: "share-revoked-retention-purge",
+        goalId: bundle.goal.id,
+        userId: SYSTEM_USER_ID,
+        workspaceId,
+        tokenFingerprint: "abcdef123457",
+        status: "revoked",
+        actorContext,
+        expiresAt: retentionFixtureIso(-45),
+        lastViewedAt: null,
+        revokedAt: retentionFixtureIso(-31),
+        createdAt: retentionFixtureIso(-45),
+        updatedAt: retentionFixtureIso(-31)
+      }),
+      repository.saveGoalShare({
+        id: "share-active-retention-purge",
+        goalId: bundle.goal.id,
+        userId: SYSTEM_USER_ID,
+        workspaceId,
+        tokenFingerprint: "abcdef123458",
+        status: "active",
+        actorContext,
+        expiresAt: retentionFixtureIso(-45),
+        lastViewedAt: null,
+        revokedAt: null,
+        createdAt: retentionFixtureIso(-45),
+        updatedAt: retentionFixtureIso(-45)
+      }),
+      repository.saveGoalShare({
+        id: "share-active-retention-fresh",
+        goalId: bundle.goal.id,
+        userId: SYSTEM_USER_ID,
+        workspaceId,
+        tokenFingerprint: "abcdef123459",
+        status: "active",
+        actorContext,
+        expiresAt: retentionFixtureIso(7),
+        lastViewedAt: null,
+        revokedAt: null,
+        createdAt: retentionFixtureIso(-1),
+        updatedAt: retentionFixtureIso(-1)
+      })
+    ]);
 
     const operation = await createPrivacyOperation({
       repository,
@@ -1905,6 +1958,7 @@ describe("worker runtime", () => {
       }
     });
 
+    vi.useFakeTimers({ now: new Date(RETENTION_TEST_NOW) });
     await executePrivacyOperationJob({
       repository,
       job
@@ -1912,6 +1966,9 @@ describe("worker runtime", () => {
 
     const persistedOperation = await repository.getPrivacyOperation(operation.id, SYSTEM_USER_ID);
     const revokedShare = await repository.getGoalShare("share-expired-retention", SYSTEM_USER_ID);
+    const purgedRevokedShare = await repository.getGoalShare("share-revoked-retention-purge", SYSTEM_USER_ID);
+    const stagedExpiredActiveShare = await repository.getGoalShare("share-active-retention-purge", SYSTEM_USER_ID);
+    const freshShare = await repository.getGoalShare("share-active-retention-fresh", SYSTEM_USER_ID);
 
     expect(persistedOperation).toMatchObject({
       id: operation.id,
@@ -1921,14 +1978,49 @@ describe("worker runtime", () => {
     expect(persistedOperation?.result).toMatchObject({
       workspaceId,
       retentionDays: 30,
-      revokedSharesCount: 1,
-      purgedSharesCount: 0
+      revokedSharesCount: 2,
+      purgedSharesCount: 1,
+      remainingShareCount: 3
     });
     expect(revokedShare).toMatchObject({
       id: "share-expired-retention",
       status: "revoked"
     });
-    expect(revokedShare?.revokedAt).not.toBeNull();
+    expect(revokedShare?.revokedAt).toBe(RETENTION_TEST_NOW);
+    expect(purgedRevokedShare).toBeNull();
+    expect(stagedExpiredActiveShare).toMatchObject({
+      id: "share-active-retention-purge",
+      status: "revoked",
+      revokedAt: RETENTION_TEST_NOW
+    });
+    expect(freshShare).toMatchObject({
+      id: "share-active-retention-fresh",
+      status: "active",
+      revokedAt: null
+    });
+
+    const followUpResult = await repository.enforceWorkspaceRetention({
+      workspaceId,
+      userId: SYSTEM_USER_ID,
+      retentionDays: 30,
+      now: retentionFixtureIso(31)
+    });
+    const followUpFreshShare = await repository.getGoalShare("share-active-retention-fresh", SYSTEM_USER_ID);
+
+    expect(followUpResult).toMatchObject({
+      workspaceId,
+      retentionDays: 30,
+      revokedSharesCount: 1,
+      purgedSharesCount: 2,
+      remainingShareCount: 1
+    });
+    expect(await repository.getGoalShare("share-expired-retention", SYSTEM_USER_ID)).toBeNull();
+    expect(await repository.getGoalShare("share-active-retention-purge", SYSTEM_USER_ID)).toBeNull();
+    expect(followUpFreshShare).toMatchObject({
+      id: "share-active-retention-fresh",
+      status: "revoked",
+      revokedAt: retentionFixtureIso(31)
+    });
   });
 
   it("deletes shared-workspace data and leaves a tombstone for workspace delete jobs", async () => {
