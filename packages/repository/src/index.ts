@@ -1397,11 +1397,6 @@ class FileRepository implements AgenticRepository {
         const terminalAtMs = Date.parse(goalShareTerminalAt(share));
         const isPurgeEligible = Number.isFinite(terminalAtMs) && terminalAtMs <= retentionCutoffMs;
 
-        if (isPurgeEligible) {
-          purgedSharesCount += 1;
-          return [];
-        }
-
         if (share.status === "active" && hasExpired) {
           revokedSharesCount += 1;
           return [
@@ -1412,6 +1407,11 @@ class FileRepository implements AgenticRepository {
               updatedAt: effectiveNow
             })
           ];
+        }
+
+        if (isPurgeEligible) {
+          purgedSharesCount += 1;
+          return [];
         }
 
         return [share];
