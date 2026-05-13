@@ -324,6 +324,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
 describe("goal share route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
+  const originalPublicBaseUrl = process.env.AGENTIC_PUBLIC_BASE_URL;
 
   async function createGoalForUser(
     repository: ReturnType<typeof createRepository>,
@@ -452,6 +453,11 @@ describe("goal share route", () => {
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
+    if (originalPublicBaseUrl === undefined) {
+      delete process.env.AGENTIC_PUBLIC_BASE_URL;
+    } else {
+      process.env.AGENTIC_PUBLIC_BASE_URL = originalPublicBaseUrl;
+    }
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
@@ -636,6 +642,24 @@ describe("goal share route", () => {
     });
     expect(JSON.stringify(createdLog?.details ?? {})).not.toContain(decodeURIComponent(token) ?? "");
     expectNoStoreHeaders(response);
+  });
+
+  it("builds public share links from AGENTIC_PUBLIC_BASE_URL", async () => {
+    process.env.AGENTIC_PUBLIC_BASE_URL = "https://agentic.example.com";
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a canonical public link.");
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
+      params: Promise.resolve({ id: bundle.goal.id })
+    });
+    const payload = (await response.json()) as { shareUrl: string };
+
+    expect(response.status).toBe(200);
+    expect(payload.shareUrl).toMatch(/^https:\/\/agentic\.example\.com\/share\//u);
   });
 
   it("rejects confirmation when the reviewed disclosure snapshot is stale", async () => {

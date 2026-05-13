@@ -111,7 +111,8 @@ The HTTP JSON API supports the UI and bounded automation:
 | `/api/governance/privacy` | `GET`, `POST` | Inspect or queue retention, export, and deletion operations |
 | `/api/governance/audit` | `GET` | Review governance and audit outputs |
 | `/api/health` | `GET` | Return liveness state for orchestration and probes |
-| `/api/ready` | `GET` | Return readiness state for access key, DB, migrations, and auth backing |
+| `/api/ready` | `GET` | Return public-safe readiness status for orchestration and probes |
+| `/api/ready/details` | `GET` | Return authenticated readiness diagnostics for access key, DB, migrations, auth backing, request identity, async execution, and connector health |
 | `/api/docs/render` | `POST` | Rebuild and validate `agentic.docx` |
 
 ## Goal Lifecycle

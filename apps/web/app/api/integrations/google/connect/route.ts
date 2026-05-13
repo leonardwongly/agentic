@@ -1,13 +1,11 @@
 import { buildGoogleAuthorizationUrl, isGoogleOAuthConfigured } from "@agentic/integrations";
 import { requireApiSession, buildOAuthStateToken } from "../../../../../lib/auth";
 import { ApiRouteError, authenticatedRedirect, handleApiError } from "../../../../../lib/api-response";
+import { buildPublicUrl } from "../../../../../lib/public-origin";
 import { getSeededRepository } from "../../../../../lib/server";
 
 function buildGoogleCallbackUrl(request: Request): string {
-  const url = new URL(request.url);
-  url.pathname = "/api/integrations/google/callback";
-  url.search = "";
-  return url.toString();
+  return buildPublicUrl(request.url, "/api/integrations/google/callback").toString();
 }
 
 export async function GET(request: Request) {

@@ -54,6 +54,7 @@ describe("google provider routes", () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalProviderSecretKey = process.env.AGENTIC_PROVIDER_SECRET_KEY;
   const originalProviderSecretKeyVersion = process.env.AGENTIC_PROVIDER_SECRET_KEY_VERSION;
+  const originalPublicBaseUrl = process.env.AGENTIC_PUBLIC_BASE_URL;
   const personalWorkspaceId = `workspace-personal-${SYSTEM_USER_ID}`;
 
   function createGoogleCredential(params?: Partial<ProviderCredential>): ProviderCredential {
@@ -94,6 +95,7 @@ describe("google provider routes", () => {
     process.env.NODE_ENV = "test";
     process.env.AGENTIC_PROVIDER_SECRET_KEY = "test-provider-secret-key";
     process.env.AGENTIC_PROVIDER_SECRET_KEY_VERSION = "test-v1";
+    delete process.env.AGENTIC_PUBLIC_BASE_URL;
     buildGoogleAuthorizationUrlMock.mockClear();
     exchangeGoogleAuthorizationCodeMock.mockReset();
     fetchGoogleAccountProfileMock.mockReset();
@@ -107,6 +109,11 @@ describe("google provider routes", () => {
     process.env.NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_PROVIDER_SECRET_KEY = originalProviderSecretKey;
     process.env.AGENTIC_PROVIDER_SECRET_KEY_VERSION = originalProviderSecretKeyVersion;
+    if (originalPublicBaseUrl === undefined) {
+      delete process.env.AGENTIC_PUBLIC_BASE_URL;
+    } else {
+      process.env.AGENTIC_PUBLIC_BASE_URL = originalPublicBaseUrl;
+    }
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
@@ -141,6 +148,24 @@ describe("google provider routes", () => {
       userId: SYSTEM_USER_ID,
       workspaceId: personalWorkspaceId
     });
+  });
+
+  it("uses the configured public base URL for OAuth redirects", async () => {
+    process.env.AGENTIC_PUBLIC_BASE_URL = "https://agentic.example.com";
+    const repository = await buildRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await googleConnectRoute(
+      buildAuthorizedGetRequest("http://host-header.example/api/integrations/google/connect")
+    );
+
+    expect(response.status).toBe(302);
+    expect(buildGoogleAuthorizationUrlMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        redirectUri: "https://agentic.example.com/api/integrations/google/callback"
+      })
+    );
   });
 
   it("persists tenant-scoped Google credentials, the encrypted refresh token, and managed integrations", async () => {

@@ -183,7 +183,13 @@ npm install
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
 ```
 
-If you do not set `AGENTIC_ACCESS_KEY`, local development falls back to `agentic-local-dev-key`. That fallback is for local use only; do not rely on it in shared or production environments.
+If you need the fastest single-user local boot, you can explicitly opt into the well-known fallback key:
+
+```bash
+export AGENTIC_ENABLE_LOCAL_DEV_KEY=true
+```
+
+That fallback uses `agentic-local-dev-key`. It is disabled by default, for local use only, and must never be enabled in shared or production environments.
 
 3. Start the web app:
 
@@ -299,7 +305,16 @@ curl http://localhost:3000/api/health
 curl http://localhost:3000/api/ready
 ```
 
-`/api/ready` validates more than process liveness. It checks:
+`/api/ready` validates more than process liveness but returns only public-safe status fields: `ok`, `status`, `generatedAt`, and a `details` pointer.
+
+Use an authenticated request when you need the full diagnostic report:
+
+```bash
+curl http://localhost:3000/api/ready/details \
+  -H 'x-agentic-access-key: replace-this-with-a-long-random-secret'
+```
+
+`/api/ready/details` checks:
 
 - access-key configuration
 - database reachability and migration readiness
@@ -327,6 +342,7 @@ For realistic local validation of the product, run both the web app and the work
 export NODE_ENV=production
 export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_PUBLIC_BASE_URL=https://agentic.example.com
 ```
 
 Production also expects:
@@ -350,10 +366,12 @@ Use that only for explicitly accepted single-instance deployments.
 ### Useful Local Overrides
 
 ```bash
+export AGENTIC_PUBLIC_BASE_URL=http://localhost:3000
 export AGENTIC_RUNTIME_STORE_PATH=/tmp/agentic-runtime-store.json
 export AGENTIC_NOTES_PATH=/tmp/agentic-notes
 ```
 
+- `AGENTIC_PUBLIC_BASE_URL` is the canonical origin for absolute OAuth redirects, share links, and logout redirects. Production requires it and should use HTTPS.
 - `AGENTIC_RUNTIME_STORE_PATH` overrides the default file-backed runtime store path
 - `AGENTIC_NOTES_PATH` overrides the filesystem-backed local notes directory
 
@@ -401,6 +419,8 @@ When storing tenant-scoped provider credentials, configure the encrypted secret 
 export AGENTIC_PROVIDER_SECRET_KEY=replace-with-a-strong-secret
 export AGENTIC_PROVIDER_SECRET_KEY_VERSION=2026-04-18
 ```
+
+Google OAuth redirect URIs are built from `AGENTIC_PUBLIC_BASE_URL` when it is set. Register `https://<agentic-host>/api/integrations/google/callback` with Google for production deployments.
 
 ### Slack
 
@@ -541,6 +561,7 @@ Production startup is intentionally split into explicit migration, readiness, an
 export NODE_ENV=production
 export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_PUBLIC_BASE_URL=https://agentic.example.com
 ```
 
 2. Check schema status before rollout:
@@ -576,9 +597,11 @@ Schema readiness also checks the shared auth runtime tables and indexes (`auth_s
 Agentic exposes two unauthenticated operational endpoints for orchestration and deployment validation:
 
 - `GET /api/health`: liveness probe with uptime and timestamp
-- `GET /api/ready`: readiness probe covering configuration, storage, auth runtime state, request identity, async execution, and connector health
+- `GET /api/ready`: minimal readiness probe with public-safe status only
 
-Both routes return `Cache-Control: no-store` and are safe for container probes and deployment smoke tests.
+Authenticated operators can inspect the detailed readiness report at `GET /api/ready/details`, which covers configuration, storage, auth runtime state, request identity, async execution, and connector health.
+
+All readiness routes return `Cache-Control: no-store`. The unauthenticated routes are safe for container probes and deployment smoke tests.
 
 The deployment smoke helper exercises those endpoints against a live environment:
 

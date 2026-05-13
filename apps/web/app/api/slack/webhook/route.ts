@@ -8,9 +8,11 @@ import {
   enqueueApprovalNotificationJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
-import { operationalJson } from "../../../../lib/api-response";
+import { ApiRouteError, operationalJson, readBoundedRequestText } from "../../../../lib/api-response";
 import { resolveSlackActorUserId, verifySlackApprovalToken } from "../../../../lib/slack-approvals";
 import { getSeededRepository } from "../../../../lib/server";
+
+const MAX_SLACK_WEBHOOK_BYTES = 64 * 1024;
 
 /**
  * POST /api/slack/webhook
@@ -21,7 +23,10 @@ import { getSeededRepository } from "../../../../lib/server";
 export async function POST(request: Request) {
   try {
     // Read the raw body for signature verification
-    const rawBody = await request.text();
+    const rawBody = await readBoundedRequestText(request, {
+      maxBytes: MAX_SLACK_WEBHOOK_BYTES,
+      tooLargeMessage: "Slack webhook payload is too large."
+    });
 
     const slackSignature = request.headers.get("x-slack-signature") ?? "";
     const slackTimestamp = request.headers.get("x-slack-request-timestamp") ?? "";
@@ -163,6 +168,10 @@ export async function POST(request: Request) {
     // Return 200 to Slack so it stops retrying
     return operationalJson({ ok: true });
   } catch (error) {
+    if (error instanceof ApiRouteError) {
+      return operationalJson({ error: error.message }, { status: error.status });
+    }
+
     logError("slack.webhook.unhandled_error", error);
     return operationalJson({ error: "Internal server error." }, { status: 500 });
   }

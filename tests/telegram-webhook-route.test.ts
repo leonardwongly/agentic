@@ -564,6 +564,25 @@ describe("telegram webhook route", () => {
     resetTelegramApprovalActionStoreForTests();
   });
 
+  it("rejects oversized Telegram webhook bodies before JSON parsing", async () => {
+    const response = await telegramWebhookRoute(
+      new Request("http://localhost/api/telegram/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "telegram-secret"
+        },
+        body: JSON.stringify({
+          update_id: 1,
+          padding: "x".repeat(70_000)
+        })
+      })
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Telegram webhook payload is too large." });
+  });
+
   it("binds approve actions to the mapped Telegram actor", async () => {
     const actions = await createTelegramApprovalActions({
       approvalId: "approval-safe",

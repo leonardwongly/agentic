@@ -14,6 +14,7 @@ import {
 import { formatValidationError, isContentTypeError } from "./api-errors";
 import { isAuthError } from "./auth";
 import { AuthRuntimeStateConfigurationError } from "./auth-runtime-state";
+import { PublicOriginConfigurationError } from "./public-origin";
 import { applyBaseSecurityHeaders } from "./security-headers";
 import { SharedAuthStateStoreError } from "./shared-auth-state-db";
 
@@ -21,6 +22,7 @@ export const AUTHENTICATED_API_CACHE_CONTROL = "private, no-store, max-age=0, mu
 export const OPERATIONAL_API_CACHE_CONTROL = "no-store, max-age=0, must-revalidate";
 
 const JSON_CONTENT_TYPE_PREFIX = "application/json";
+export const DEFAULT_JSON_BODY_MAX_BYTES = 256 * 1024;
 
 export class ApiRouteError extends Error {
   constructor(
@@ -133,17 +135,71 @@ export function operationalRateLimitResponse<T>(body: T, retryAfterSeconds: numb
   });
 }
 
-export async function parseJsonBody<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
+export async function readBoundedRequestText(
+  request: Request,
+  options: {
+    maxBytes?: number;
+    tooLargeMessage?: string;
+  } = {}
+): Promise<string> {
+  const maxBytes = options.maxBytes ?? DEFAULT_JSON_BODY_MAX_BYTES;
+  const tooLargeMessage = options.tooLargeMessage ?? "Request body is too large.";
+  const contentLengthHeader = request.headers.get("content-length");
+
+  if (contentLengthHeader) {
+    const contentLength = Number.parseInt(contentLengthHeader, 10);
+
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+      throw new ApiRouteError(413, tooLargeMessage);
+    }
+  }
+
+  if (!request.body) {
+    return "";
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    const result = await reader.read();
+
+    if (result.done) {
+      break;
+    }
+
+    totalBytes += result.value.byteLength;
+
+    if (totalBytes > maxBytes) {
+      await reader.cancel();
+      throw new ApiRouteError(413, tooLargeMessage);
+    }
+
+    chunks.push(result.value);
+  }
+
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
+
+export async function parseJsonBody<T>(
+  request: Request,
+  schema: z.ZodType<T>,
+  options: {
+    maxBytes?: number;
+  } = {}
+): Promise<T> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
 
   if (!contentType.startsWith(JSON_CONTENT_TYPE_PREFIX)) {
     throw new ApiRouteError(415, "Content-Type must be application/json.");
   }
 
+  const rawBody = await readBoundedRequestText(request, options);
   let parsedBody: unknown;
 
   try {
-    parsedBody = await request.json();
+    parsedBody = JSON.parse(rawBody);
   } catch {
     throw new ApiRouteError(400, "Request body must be valid JSON.");
   }
@@ -161,6 +217,10 @@ export function handleApiError(error: unknown, fallbackMessage: string) {
   }
 
   if (error instanceof SharedAuthStateStoreError) {
+    return authenticatedError(503, error.message);
+  }
+
+  if (error instanceof PublicOriginConfigurationError) {
     return authenticatedError(503, error.message);
   }
 
@@ -189,6 +249,10 @@ export function handleOperationalApiError(error: unknown, fallbackMessage: strin
 
   if (error instanceof ApiRouteError) {
     return operationalError(error.status, error.message);
+  }
+
+  if (error instanceof PublicOriginConfigurationError) {
+    return operationalError(503, error.message);
   }
 
   if (isContentTypeError(error)) {

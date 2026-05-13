@@ -39,15 +39,31 @@ function addCheck(checks: SetupCheckResult[], id: string, status: SetupCheckStat
 
 function evaluateAccessKey(env: NodeJS.ProcessEnv, checks: SetupCheckResult[], production: boolean) {
   const accessKey = trim(env.AGENTIC_ACCESS_KEY);
+  const explicitLocalDevKey = isTrue(env.AGENTIC_ENABLE_LOCAL_DEV_KEY);
+
+  if (production && explicitLocalDevKey) {
+    addCheck(checks, "access_key", "fail", "AGENTIC_ENABLE_LOCAL_DEV_KEY must not be enabled in production.");
+    return;
+  }
 
   if (!accessKey) {
+    if (!production && explicitLocalDevKey) {
+      addCheck(
+        checks,
+        "access_key",
+        "warn",
+        "AGENTIC_ENABLE_LOCAL_DEV_KEY=true is set; local development will use the agentic-local-dev-key fallback."
+      );
+      return;
+    }
+
     addCheck(
       checks,
       "access_key",
       production ? "fail" : "warn",
       production
         ? "AGENTIC_ACCESS_KEY is required in production."
-        : "AGENTIC_ACCESS_KEY is not set; local development will use the agentic-local-dev-key fallback."
+        : "AGENTIC_ACCESS_KEY is not set. Set a local key, or explicitly opt into the fallback with AGENTIC_ENABLE_LOCAL_DEV_KEY=true."
     );
     return;
   }
@@ -77,6 +93,48 @@ function evaluateAccessKey(env: NodeJS.ProcessEnv, checks: SetupCheckResult[], p
   }
 
   addCheck(checks, "access_key", "pass", "AGENTIC_ACCESS_KEY is configured.");
+}
+
+function evaluatePublicBaseUrl(env: NodeJS.ProcessEnv, checks: SetupCheckResult[], production: boolean) {
+  const publicBaseUrl = trim(env.AGENTIC_PUBLIC_BASE_URL);
+
+  if (!publicBaseUrl) {
+    addCheck(
+      checks,
+      "public_base_url",
+      production ? "fail" : "warn",
+      production
+        ? "AGENTIC_PUBLIC_BASE_URL is required in production so absolute redirects and share links do not depend on request Host headers."
+        : "AGENTIC_PUBLIC_BASE_URL is not set; local absolute URLs will use the request origin."
+    );
+    return;
+  }
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(publicBaseUrl);
+  } catch {
+    addCheck(checks, "public_base_url", "fail", "AGENTIC_PUBLIC_BASE_URL must be a valid absolute URL.");
+    return;
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    addCheck(checks, "public_base_url", "fail", "AGENTIC_PUBLIC_BASE_URL must use http or https.");
+    return;
+  }
+
+  if (production && parsed.protocol !== "https:") {
+    addCheck(checks, "public_base_url", "fail", "AGENTIC_PUBLIC_BASE_URL must use https in production.");
+    return;
+  }
+
+  if (parsed.username || parsed.password || parsed.search || parsed.hash || (parsed.pathname !== "/" && parsed.pathname !== "")) {
+    addCheck(checks, "public_base_url", "fail", "AGENTIC_PUBLIC_BASE_URL must be an origin without credentials, path, query, or hash.");
+    return;
+  }
+
+  addCheck(checks, "public_base_url", "pass", "AGENTIC_PUBLIC_BASE_URL is configured.");
 }
 
 function evaluateDatabase(env: NodeJS.ProcessEnv, checks: SetupCheckResult[], production: boolean) {
@@ -207,6 +265,7 @@ export function evaluateSetupEnvironment(
     nodeMajor >= 20 ? `Node ${nodeVersion} satisfies the Node 20+ requirement.` : `Node ${nodeVersion} is unsupported; use Node 20 or newer.`
   );
   evaluateAccessKey(env, checks, production);
+  evaluatePublicBaseUrl(env, checks, production);
   evaluateDatabase(env, checks, production);
   evaluateAuthState(env, checks, production);
   evaluateGoogleConfig(env, checks);

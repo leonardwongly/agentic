@@ -7,6 +7,7 @@ import {
   GOAL_SHARE_DEFAULT_EXPIRY_DAYS,
   getGoalShareExpiryFromDays
 } from "./share-disclosure";
+import { buildPublicUrl } from "./public-origin";
 
 const GOAL_SHARE_TOKEN_VERSION = 1;
 export const SHARE_VIEW_DEDUP_WINDOW_MS = 1000 * 60 * 15;
@@ -150,7 +151,7 @@ export function verifyGoalShareToken(token: string, now = Date.now()): GoalShare
 }
 
 export function buildGoalShareUrl(requestUrl: string, token: string): string {
-  return new URL(`/share/${encodeURIComponent(token)}`, requestUrl).toString();
+  return buildPublicUrl(requestUrl, `/share/${encodeURIComponent(token)}`).toString();
 }
 
 export function fingerprintGoalShareToken(token: string): string {

@@ -10,7 +10,7 @@ import {
   enqueueApprovalNotificationJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
-import { operationalJson } from "../../../../lib/api-response";
+import { ApiRouteError, operationalJson, readBoundedRequestText } from "../../../../lib/api-response";
 import {
   consumeTelegramApprovalActions,
   getTelegramApprovalAction,
@@ -45,6 +45,7 @@ const TelegramUpdateSchema = z
     callback_query: TelegramCallbackQuerySchema.optional()
   })
   .passthrough();
+const MAX_TELEGRAM_WEBHOOK_BYTES = 64 * 1024;
 
 async function acknowledgeTelegramCallback(callbackQueryId: string, text: string, showAlert = false): Promise<void> {
   try {
@@ -79,8 +80,19 @@ export async function POST(request: Request) {
     let payload: z.infer<typeof TelegramUpdateSchema>;
 
     try {
-      payload = TelegramUpdateSchema.parse(await request.json());
-    } catch {
+      payload = TelegramUpdateSchema.parse(
+        JSON.parse(
+          await readBoundedRequestText(request, {
+            maxBytes: MAX_TELEGRAM_WEBHOOK_BYTES,
+            tooLargeMessage: "Telegram webhook payload is too large."
+          })
+        )
+      );
+    } catch (error) {
+      if (error instanceof ApiRouteError) {
+        return operationalJson({ error: error.message }, { status: error.status });
+      }
+
       return operationalJson({ error: "Invalid Telegram payload." }, { status: 400 });
     }
 
@@ -197,6 +209,10 @@ export async function POST(request: Request) {
 
     return operationalJson({ ok: true });
   } catch (error) {
+    if (error instanceof ApiRouteError) {
+      return operationalJson({ error: error.message }, { status: error.status });
+    }
+
     logError("telegram.webhook.unhandled_error", error);
     return operationalJson({ error: "Internal server error." }, { status: 500 });
   }

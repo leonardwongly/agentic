@@ -305,6 +305,26 @@ describe("api request validation", () => {
     expectNoStoreHeaders(response);
   });
 
+  it("rejects oversized JSON bodies before schema validation", async () => {
+    const response = await sessionRoute(
+      new Request("http://localhost/api/session", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          accessKey: "test-access-key",
+          padding: "x".repeat(300_000)
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(413);
+    expect(payload.error).toBe("Request body is too large.");
+    expectNoStoreHeaders(response);
+  });
+
   it.each([
     ["session", () => sessionRoute(new Request("http://localhost/api/session", { method: "POST", body: "accessKey=test-access-key" }))],
     [

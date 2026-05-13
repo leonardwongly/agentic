@@ -563,6 +563,24 @@ describe("slack webhook route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
+  it("rejects oversized Slack webhook bodies before signature processing", async () => {
+    const response = await slackWebhookRoute(
+      new Request("http://localhost/api/slack/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-slack-signature": "v0=fake",
+          "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`
+        },
+        body: `payload=${"x".repeat(70_000)}`
+      })
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Slack webhook payload is too large." });
+    expect(verifySlackSignatureMock).not.toHaveBeenCalled();
+  });
+
   it("binds approve actions to the mapped Slack actor", async () => {
     const approvalCalls: Array<{
       approvalId: string;

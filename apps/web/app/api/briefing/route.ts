@@ -9,6 +9,7 @@ import {
   authenticatedJson,
   authenticatedRateLimitError,
   handleApiError,
+  readBoundedRequestText,
   withApiTelemetry
 } from "../../../lib/api-response";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
@@ -20,9 +21,13 @@ const BriefingRequestSchema = z
     type: BriefingTypeSchema.optional().default("startup")
   })
   .strict();
+const MAX_BRIEFING_REQUEST_BYTES = 16 * 1024;
 
 async function parseBriefingRequest(request: Request): Promise<z.infer<typeof BriefingRequestSchema>> {
-  const rawBody = await request.text();
+  const rawBody = await readBoundedRequestText(request, {
+    maxBytes: MAX_BRIEFING_REQUEST_BYTES,
+    tooLargeMessage: "Briefing request payload is too large."
+  });
 
   if (!rawBody.trim()) {
     return { type: "startup" };
