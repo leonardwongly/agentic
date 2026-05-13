@@ -1,6 +1,6 @@
 # Selected Production Wedge Quality Gates
 
-`LEO-137` closes the gap between "selected production wedge" branding and an actual release-quality evaluation suite. The gate in [`packages/observability/src/wedge-quality-gates.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/observability/src/wedge-quality-gates.ts) evaluates only the two selected Phase 3 wedges:
+`LEO-137` closes the gap between "selected production wedge" branding and an actual release-quality evaluation suite. The gate in [`packages/observability/src/wedge-quality-gates.ts`](packages/observability/src/wedge-quality-gates.ts) evaluates only the two selected Phase 3 wedges:
 
 - `communications_execution`
 - `scheduling_execution`
@@ -10,8 +10,8 @@ Everything else stays out of scope on purpose. Supporting wedges can still exist
 ## Inputs and trust boundaries
 
 - Trusted after validation:
-  - persisted [`GoalBundle`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/contracts/src/index.ts) state
-  - persisted approval [`EvidenceRecord`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/contracts/src/index.ts) state
+  - persisted [`GoalBundle`](packages/contracts/src/index.ts) state
+  - persisted approval [`EvidenceRecord`](packages/contracts/src/index.ts) state
   - artifact `metadata.executionMode` written by the runtime
 - Untrusted:
   - operator assumptions about wedge readiness
@@ -78,9 +78,9 @@ Every threshold carries an explicit correction action. Use them as the first res
 
 Focused regression coverage for the evaluator lives in:
 
-- [`tests/wedge-quality-gates.test.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/tests/wedge-quality-gates.test.ts)
-- [`tests/agent-metrics.test.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/tests/agent-metrics.test.ts)
-- [`tests/orchestrator.test.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/tests/orchestrator.test.ts)
+- [`tests/wedge-quality-gates.test.ts`](tests/wedge-quality-gates.test.ts)
+- [`tests/agent-metrics.test.ts`](tests/agent-metrics.test.ts)
+- [`tests/orchestrator.test.ts`](tests/orchestrator.test.ts)
 
 Recommended validation commands:
 

@@ -43,7 +43,7 @@ These are intentionally marked as supporting rather than selected production wed
 
 ## Runtime Source Of Truth
 
-The canonical source is [packages/contracts/src/index.ts](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/contracts/src/index.ts), via:
+The canonical source is [packages/contracts/src/index.ts](packages/contracts/src/index.ts), via:
 
 - `GoalWedgeSchema`
 - `GoalCompletionContractSchema`

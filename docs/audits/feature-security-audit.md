@@ -35,13 +35,13 @@ Document note:
 1. Missing baseline browser security headers on application pages
 - Evidence: `/` did not return `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, or cross-origin isolation headers during runtime checks.
 - Impact: weaker browser-side hardening against MIME sniffing, framing, and accidental capability exposure.
-- Fix: added shared response headers in [`apps/web/next.config.ts`](/Users/leonardwongly/Developer/Agentic/apps/web/next.config.ts) using [`apps/web/lib/security-headers.ts`](/Users/leonardwongly/Developer/Agentic/apps/web/lib/security-headers.ts), plus a nonce-backed CSP in [`apps/web/proxy.ts`](/Users/leonardwongly/Developer/Agentic/apps/web/proxy.ts) using [`apps/web/lib/csp.ts`](/Users/leonardwongly/Developer/Agentic/apps/web/lib/csp.ts).
+- Fix: added shared response headers in [`apps/web/next.config.ts`](apps/web/next.config.ts) using [`apps/web/lib/security-headers.ts`](apps/web/lib/security-headers.ts), plus a nonce-backed CSP in [`apps/web/proxy.ts`](apps/web/proxy.ts) using [`apps/web/lib/csp.ts`](apps/web/lib/csp.ts).
 - Residual risk: nonce-based CSP forces dynamic rendering on covered HTML pages, so future static rendering work must account for that constraint.
 
 2. Authenticated JSON APIs did not explicitly opt out of caching
 - Evidence: authenticated API responses lacked explicit `Cache-Control: no-store`.
 - Impact: intermediaries or browser caches could retain sensitive single-user dashboard data longer than intended.
-- Fix: added centralized authenticated JSON helpers in [`apps/web/lib/api-response.ts`](/Users/leonardwongly/Developer/Agentic/apps/web/lib/api-response.ts) and moved authenticated routes onto them.
+- Fix: added centralized authenticated JSON helpers in [`apps/web/lib/api-response.ts`](apps/web/lib/api-response.ts) and moved authenticated routes onto them.
 - Residual risk: page-level caching still depends on route behavior. The home page now calls `noStore()`, but future authenticated pages need the same discipline.
 
 ### Medium
@@ -49,31 +49,31 @@ Document note:
 3. Route error handling was inconsistent and leaked internal failures
 - Evidence: several routes returned raw `error.message` values and mixed `400`/`500` behavior for internal failures.
 - Impact: internal exception details could be exposed to clients and failure semantics were hard to reason about.
-- Fix: centralized JSON body parsing, auth handling, validation formatting, and safe internal-failure fallbacks in [`apps/web/lib/api-response.ts`](/Users/leonardwongly/Developer/Agentic/apps/web/lib/api-response.ts).
+- Fix: centralized JSON body parsing, auth handling, validation formatting, and safe internal-failure fallbacks in [`apps/web/lib/api-response.ts`](apps/web/lib/api-response.ts).
 - Residual risk: server-side logs still contain generic error objects for debugging; avoid adding sensitive data to future thrown errors.
 
 4. JSON endpoints accepted malformed bodies without consistent content-type enforcement
 - Evidence: routes called `request.json()` directly and relied on incidental failures.
 - Impact: invalid JSON and incorrect media types produced inconsistent responses and made abuse cases harder to test.
-- Fix: added strict `application/json` enforcement and malformed-body handling in [`apps/web/lib/api-response.ts`](/Users/leonardwongly/Developer/Agentic/apps/web/lib/api-response.ts).
+- Fix: added strict `application/json` enforcement and malformed-body handling in [`apps/web/lib/api-response.ts`](apps/web/lib/api-response.ts).
 - Residual risk: `GET` routes still validate query parameters independently and need the same discipline if new query surfaces are added.
 
 5. Local note writes were not atomic and direct adapter calls trusted oversized payloads
 - Evidence: note creation and updates wrote directly to target paths with `writeFile`.
 - Impact: interrupted writes could leave partial files; oversized direct library calls bypassed route-level limits.
-- Fix: added atomic temp-write-plus-rename behavior and adapter-level input validation in [`packages/integrations/src/local-notes.ts`](/Users/leonardwongly/Developer/Agentic/packages/integrations/src/local-notes.ts).
+- Fix: added atomic temp-write-plus-rename behavior and adapter-level input validation in [`packages/integrations/src/local-notes.ts`](packages/integrations/src/local-notes.ts).
 - Residual risk: concurrent edits still last-write-win because the product has no optimistic concurrency or file locks.
 
 6. Docs rendering allowed overlapping builds and surfaced raw execution failures to routes
 - Evidence: every request spawned a fresh docs build; failures could bubble up as low-level execution errors.
 - Impact: concurrent render requests could multiply expensive work, and raw process failures were harder to normalize.
-- Fix: added in-flight build deduplication, timeout/max-buffer normalization, and safer failure messages in [`apps/web/lib/server.ts`](/Users/leonardwongly/Developer/Agentic/apps/web/lib/server.ts).
+- Fix: added in-flight build deduplication, timeout/max-buffer normalization, and safer failure messages in [`apps/web/lib/server.ts`](apps/web/lib/server.ts).
 - Residual risk: docs rendering is still process-based and synchronous from the request path; a queued background workflow would be safer if demand increases.
 
 7. File-backed runtime store corruption failed without a targeted operator message
 - Evidence: malformed runtime-store JSON raised raw parser or schema exceptions.
 - Impact: recovery instructions were unclear and route-level errors could become opaque.
-- Fix: corrupted-store detection now throws a targeted recovery message in [`packages/repository/src/index.ts`](/Users/leonardwongly/Developer/Agentic/packages/repository/src/index.ts).
+- Fix: corrupted-store detection now throws a targeted recovery message in [`packages/repository/src/index.ts`](packages/repository/src/index.ts).
 - Residual risk: no automated backup or repair path exists.
 
 ## Current-State Feature Surface Matrix

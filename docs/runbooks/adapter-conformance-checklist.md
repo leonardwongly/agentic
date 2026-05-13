@@ -21,7 +21,7 @@ Trust levels:
 
 ## Required Contract
 
-Every typed-action adapter path must satisfy the shared contract exported from [`packages/contracts/src/index.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/contracts/src/index.ts) and implemented through [`packages/integrations/src/action-execution.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/integrations/src/action-execution.ts).
+Every typed-action adapter path must satisfy the shared contract exported from [`packages/contracts/src/index.ts`](packages/contracts/src/index.ts) and implemented through [`packages/integrations/src/action-execution.ts`](packages/integrations/src/action-execution.ts).
 
 Required plan fields:
 - `adapter`

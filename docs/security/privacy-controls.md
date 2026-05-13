@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Phase 2 privacy work now keeps a versioned data-handling registry in [config/privacy/data-controls.json](/Users/leonardwongly/.codex/worktrees/c9fe/Agentic/config/privacy/data-controls.json). The registry exists so minimization, masking, tokenization, retention, and lifecycle coverage stay explicit instead of being inferred from scattered route logic.
+Phase 2 privacy work now keeps a versioned data-handling registry in [config/privacy/data-controls.json](config/privacy/data-controls.json). The registry exists so minimization, masking, tokenization, retention, and lifecycle coverage stay explicit instead of being inferred from scattered route logic.
 
 ## What Is Covered
 
