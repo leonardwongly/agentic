@@ -27,8 +27,8 @@ Optional but commonly needed:
 ```bash
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
-export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
-export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
+export AGENTIC_STAGING_DEPLOY_BIN=provider-cli
+export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["deploy","--environment","staging"]'
 export AGENTIC_STAGING_IMAGE_TAG=agentic:<tag>
 export AGENTIC_TELEMETRY_RETENTION_DIR=.agentic/telemetry
 export AGENTIC_TELEMETRY_EXPORT_URL=https://telemetry.example.com/ingest
@@ -37,6 +37,7 @@ export AGENTIC_DASHBOARD_COCKPIT=legacy
 ```
 
 `AGENTIC_STAGING_DEPLOY_BIN` and `AGENTIC_STAGING_DEPLOY_ARGS_JSON` are the CI contract for the provider-backed staging release step. The command is executed without a shell, so pass structured arguments instead of a shell pipeline.
+Set the command to the real deploy executable for your provider. The example above intentionally uses a placeholder provider CLI; the repo-owned entry point that reads those variables is `npm run deploy:staging:provider`.
 
 ## Pre-Deploy Checks
 
@@ -46,19 +47,25 @@ export AGENTIC_DASHBOARD_COCKPIT=legacy
 npm ci
 ```
 
-2. Build the web and worker applications.
+2. Validate the configured environment contract.
+
+```bash
+npm run setup:check
+```
+
+3. Build the web and worker applications.
 
 ```bash
 npm run build
 ```
 
-3. Validate schema status against the target database.
+4. Validate schema status against the target database.
 
 ```bash
 npm run db:status -- --require-ready
 ```
 
-4. If the status check reports pending migrations, apply them explicitly.
+5. If the status check reports pending migrations, apply them explicitly.
 
 ```bash
 npm run db:migrate
@@ -67,7 +74,7 @@ npm run db:status -- --require-ready
 
 `db:status` also verifies the shared auth runtime tables and indexes required by session rate limiting, session revocation, and unlock throttling. A `required_schema_missing` status means the database has migration metadata but is missing one or more required auth runtime objects; treat it as a release blocker and run the additive migrations before process startup.
 
-5. Run the automated test suite before rollout.
+6. Run the automated test suite before rollout.
 
 ```bash
 npm test

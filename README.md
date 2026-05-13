@@ -90,18 +90,34 @@ node --version
 npm install
 ```
 
-3. Choose a persistence mode:
+3. Create a local environment file from the checked-in template:
+
+```bash
+cp .env.example .env.local
+```
+
+Review `.env.local` before sourcing it. The template contains placeholders only; never commit real secrets.
+
+4. Choose a persistence mode:
 
 - file-backed development: leave `DATABASE_URL` unset
 - Postgres parity: set `DATABASE_URL`, run migrations, and use `npm run db:status`
 
-4. Set a dashboard/API access key before sharing the environment:
+5. Set a dashboard/API access key before sharing the environment:
 
 ```bash
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
 ```
 
-5. Start the web app and, for queued work, the worker in separate terminals:
+6. Validate the environment contract:
+
+```bash
+npm run setup:check
+```
+
+Local file-backed development can pass with warnings. Production-like setups must clear failures before the app and worker are trusted.
+
+7. Start the web app and, for queued work, the worker in separate terminals:
 
 ```bash
 npm run dev
@@ -111,7 +127,7 @@ npm run dev
 npm run worker:start
 ```
 
-6. Validate the setup:
+8. Validate the setup:
 
 ```bash
 npm test
@@ -174,20 +190,35 @@ Use this path when you want shared persistence, migration validation, or behavio
 npm install
 ```
 
-2. Configure Postgres and the dashboard access key:
+2. Create a local Postgres database. For example:
+
+```bash
+createdb agentic
+```
+
+If you prefer Docker, run an equivalent local Postgres container and point `DATABASE_URL` at it. The application does not create the database for you.
+
+3. Configure Postgres and the dashboard access key:
 
 ```bash
 export DATABASE_URL=postgres://user:password@localhost:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
 ```
 
-3. Apply checked-in migrations:
+4. Apply checked-in migrations:
 
 ```bash
 npm run db:migrate
 ```
 
-4. Optional: opt development into shared auth-state behavior:
+5. Confirm the schema is ready:
+
+```bash
+npm run db:status -- --require-ready
+npm run setup:check
+```
+
+6. Optional: opt development into shared auth-state behavior:
 
 ```bash
 export AGENTIC_SHARED_AUTH_STATE=true
@@ -202,7 +233,7 @@ If you want development or test to fail closed the same way production does, als
 export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
 ```
 
-5. Start the web app and worker:
+7. Start the web app and worker:
 
 ```bash
 npm run dev
@@ -294,6 +325,15 @@ export AGENTIC_NOTES_PATH=/tmp/agentic-notes
 - `AGENTIC_NOTES_PATH` overrides the filesystem-backed local notes directory
 
 The default filesystem-backed notes adapter reads and writes Markdown under `.agentic/notes`.
+
+To reset the default local file-backed development state, stop the web app and worker, then run:
+
+```bash
+npm run dev:reset -- --dry-run
+npm run dev:reset
+```
+
+The reset command only removes configured paths under `.agentic` or the system temp directory. It refuses home-directory, repository-root, and other broad paths.
 
 ### Worker Tuning
 
@@ -438,6 +478,8 @@ These commands are the current repo-level entry points:
 | --- | --- |
 | `npm run dev` | Start the Next.js web app in development mode. |
 | `npm run worker:start` | Start the worker package against the configured repository backend. |
+| `npm run setup:check` | Validate the current environment contract without printing secret values. |
+| `npm run dev:reset` | Remove local file-backed development state under safe `.agentic` or temp paths. |
 | `npm run build` | Build the web app and run the worker TypeScript check. |
 | `npm test` | Run the full Vitest suite. |
 | `npm run test:security:regression` | Run the categorized security regression suite. |
