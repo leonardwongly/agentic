@@ -1,0 +1,25 @@
+name: Documentation issue
+description: Report unclear, stale, missing, or misleading documentation.
+title: "[docs] "
+labels:
+  - documentation
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Documentation location
+      description: Link or path to the affected README, runbook, spec, or example.
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: Issue
+      description: What is missing, confusing, stale, or incorrect?
+    validations:
+      required: true
+  - type: textarea
+    id: suggested
+    attributes:
+      label: Suggested improvement
+      description: Optional wording, examples, or commands that would help.

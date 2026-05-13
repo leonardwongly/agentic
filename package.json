@@ -1,6 +1,24 @@
 {
   "name": "agentic",
   "private": true,
+  "description": "Trusted execution control plane for governed goals, approvals, automations, memories, documents, and integrations.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leonardwongly/agentic.git"
+  },
+  "homepage": "https://github.com/leonardwongly/agentic#readme",
+  "bugs": {
+    "url": "https://github.com/leonardwongly/agentic/issues"
+  },
+  "keywords": [
+    "agentic",
+    "automation",
+    "governance",
+    "workflow",
+    "typescript",
+    "nextjs"
+  ],
   "type": "module",
   "engines": {
     "node": ">=20"
