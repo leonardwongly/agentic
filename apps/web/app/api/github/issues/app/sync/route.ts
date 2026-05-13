@@ -21,6 +21,8 @@ const GITHUB_API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com";
 const DEFAULT_MAX_ISSUES_PER_REPOSITORY = 100;
 const MAX_ISSUES_PER_REPOSITORY = 500;
+const MAX_GITHUB_ISSUE_BODY_LENGTH = 100_000;
+const MAX_JOB_ISSUE_BODY_LENGTH = 10_000;
 const GITHUB_REQUEST_TIMEOUT_MS = 10_000;
 const GITHUB_REPOSITORY_FULL_NAME_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const GITHUB_INSTALLATION_ID_PATTERN = /^[1-9][0-9]{0,19}$/u;
@@ -61,7 +63,7 @@ const GitHubIssueResponseSchema = z
     number: z.number().int().positive().max(1_000_000_000),
     node_id: z.string().trim().min(1).max(200).optional().nullable(),
     title: z.string().trim().min(1).max(300),
-    body: z.string().max(10_000).optional().nullable(),
+    body: z.string().max(MAX_GITHUB_ISSUE_BODY_LENGTH).optional().nullable(),
     html_url: z.string().url().max(500),
     user: GitHubUserSchema.optional().nullable(),
     labels: z.array(GitHubLabelSchema).max(100).default([]),
@@ -458,6 +460,18 @@ function uniqueBoundedLogins(values: Array<{ login?: string | null }>, maxItems:
   return Array.from(logins);
 }
 
+function normalizeIssueBody(body: string | null | undefined): string | null {
+  const normalized = body?.trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.length > MAX_JOB_ISSUE_BODY_LENGTH
+    ? normalized.slice(0, MAX_JOB_ISSUE_BODY_LENGTH)
+    : normalized;
+}
+
 function buildSyntheticDeliveryId(params: {
   installationId: string;
   repositoryFullName: string;
@@ -514,7 +528,7 @@ export async function POST(request: Request) {
                 number: issue.number,
                 nodeId: issue.node_id?.trim() || null,
                 title: issue.title,
-                body: issue.body?.trim() || null,
+                body: normalizeIssueBody(issue.body),
                 url: issue.html_url,
                 authorLogin: issue.user?.login?.trim() || null,
                 labels: uniqueBoundedLabels(issue.labels, 50),

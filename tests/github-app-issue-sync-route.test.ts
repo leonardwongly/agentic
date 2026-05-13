@@ -280,6 +280,48 @@ describe("GitHub App issue sync route", () => {
     });
   });
 
+  it("accepts large GitHub issue bodies and truncates the queued job payload", async () => {
+    const largeBody = ` ${"a".repeat(10_190)} `;
+
+    fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+
+      if (url === "https://github.test/app/installations/98765/access_tokens") {
+        return jsonResponse({
+          token: "github-installation-token",
+          expires_at: "2026-05-13T04:00:00.000Z"
+        });
+      }
+
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer github-installation-token");
+
+      if (url === "https://github.test/repos/leonardwongly/agentic") {
+        return jsonResponse(buildRepositoryResponse());
+      }
+
+      if (url.startsWith("https://github.test/repos/leonardwongly/agentic/issues?")) {
+        return jsonResponse([
+          buildIssueResponse({
+            body: largeBody
+          })
+        ]);
+      }
+
+      return jsonResponse({ message: "not found" }, { status: 404 });
+    });
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(202);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.payload.issue.body).toHaveLength(10_000);
+    expect(jobs[0]?.payload.issue.body).toBe("a".repeat(10_000));
+  });
+
   it("deduplicates repeat syncs by repository, issue, mode, and sync trigger", async () => {
     const first = await githubAppIssueSyncRoute(buildSyncRequest());
     const second = await githubAppIssueSyncRoute(buildSyncRequest());
