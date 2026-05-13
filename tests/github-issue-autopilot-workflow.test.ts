@@ -51,4 +51,25 @@ describe("GitHub issue autopilot workflow", () => {
     expect(workflow).not.toContain("console.log(secret");
     expect(workflow).not.toContain("console.error(secret");
   });
+
+  it("schedules GitHub App open issue sync without app private key exposure", () => {
+    const workflow = readRepoFile(".github/workflows/github-app-issue-sync.yml");
+
+    expect(workflow).toContain("name: GitHub App Issue Sync");
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain("schedule:");
+    expect(workflow).toContain('cron: "17 * * * *"');
+    expect(workflow).toContain("contents: read");
+    expect(workflow).not.toContain("contents: write");
+    expect(workflow).not.toContain("issues: write");
+    expect(workflow).not.toContain("actions/checkout");
+    expect(workflow).toContain("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL: ${{ vars.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL }}");
+    expect(workflow).toContain("AGENTIC_GITHUB_APP_SYNC_SECRET: ${{ secrets.AGENTIC_GITHUB_APP_SYNC_SECRET }}");
+    expect(workflow).toContain('authorization: `Bearer ${secret}`');
+    expect(workflow).toContain('!url.startsWith("https://")');
+    expect(workflow).toContain("secret.length < 32");
+    expect(workflow).not.toContain("AGENTIC_GITHUB_APP_PRIVATE_KEY");
+    expect(workflow).not.toContain("console.log(secret");
+    expect(workflow).not.toContain("console.error(secret");
+  });
 });
