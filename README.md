@@ -16,6 +16,8 @@ The current product surface includes:
 
 - a commitment-first dashboard and core-loop API
 - async goal creation and briefing generation with durable job polling
+- first-run setup validation, a checked-in environment template, and safe local state reset tooling
+- guided operator setup for role packs, integrations, templates, and watchers
 - GitHub issue automation that enqueues governed Agentic worker jobs from issue opens, labels, and authorized comments
 - agents, templates, workflow templates, watchers, and operator products
 - approvals, autopilot events, and governance-aware execution paths
@@ -25,6 +27,37 @@ The current product surface includes:
 - privacy lifecycle operations for retention, export, and workspace deletion
 - document rendering and validation for the checked-in `agentic.docx` pipeline
 - observability rollout gates, compliance evidence collection, and security regression tooling
+
+## Current State
+
+This checkout is currently a working local control-plane implementation, not just an architecture sketch. The validated happy path is:
+
+1. install dependencies
+2. copy `.env.example` to `.env.local`
+3. run `npm run setup:check`
+4. start the web app and worker
+5. unlock the dashboard
+6. create governed work
+7. approve, inspect, share, and track async execution through job status APIs
+
+The local product is strongest when both long-running processes are active:
+
+- `npm run dev` serves the dashboard and API routes
+- `npm run worker:start` claims and completes queued goals, briefings, templates, docs, autopilot, GitHub issue intake, and privacy jobs
+
+Recent validation on this branch covered:
+
+- full Vitest suite: `134` files, `904` passing tests, `14` skipped
+- full Playwright suite: `21` passing browser tests
+- production build for web and worker TypeScript checks
+- docs rendering and validation
+- security regression, architecture fitness, and performance fitness gates
+
+Known local caveats:
+
+- file-backed persistence is development-only; production and production-like validation should use Postgres
+- `npm run docs:validate` skips PDF smoke rendering when LibreOffice is not installed
+- `npm run build` currently passes with a Turbopack NFT trace warning on the `/api/ready` route import path
 
 ## Architecture At A Glance
 
@@ -483,6 +516,7 @@ These commands are the current repo-level entry points:
 | `npm run build` | Build the web app and run the worker TypeScript check. |
 | `npm test` | Run the full Vitest suite. |
 | `npm run test:security:regression` | Run the categorized security regression suite. |
+| `npm run test:e2e` | Run the Playwright browser workflow suite. |
 | `npm run test:architecture:fitness` | Check architecture constraints. |
 | `npm run test:parallel-worktree:fitness` | Check parallel-worktree ownership constraints. |
 | `npm run test:performance:fitness` | Run performance fitness checks and the performance test file. |
