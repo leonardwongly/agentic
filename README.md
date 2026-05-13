@@ -47,17 +47,17 @@ The local product is strongest when both long-running processes are active:
 
 Recent validation on this branch covered:
 
-- full Vitest suite: `134` files, `904` passing tests, `14` skipped
+- full Vitest suite: `138` files, `929` passing tests, `14` skipped
 - full Playwright suite: `21` passing browser tests
 - production build for web and worker TypeScript checks
 - docs rendering and validation
-- security regression, architecture fitness, and performance fitness gates
+- security regression, architecture fitness, performance fitness, release-context, provenance, compliance, and capability smoke gates
 
 Known local caveats:
 
 - file-backed persistence is development-only; production and production-like validation should use Postgres
 - `npm run docs:validate` skips PDF smoke rendering when LibreOffice is not installed
-- `npm run build` currently passes with a Turbopack NFT trace warning on the `/api/ready` route import path
+- `npm run build` currently passes with a Turbopack NFT trace warning on the `/api/ready/details` route import path
 
 ## Architecture At A Glance
 
