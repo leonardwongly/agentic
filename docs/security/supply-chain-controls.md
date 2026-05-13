@@ -41,12 +41,14 @@ CI and staging deploy both emit:
 - container image tarball
 
 These artifacts are uploaded into workflow storage for audit and incident-response use.
-Pull request builds still generate and validate the same evidence bundle, but skip upload to avoid artifact-quota failures before merge. Push-based builds keep uploading the evidence bundle.
+Pull request builds still generate and validate the same evidence bundle, but skip upload to avoid artifact-quota failures before merge. Push-based builds upload the evidence bundle only when `ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD=true`.
 
 ## Provenance
 
-Push-based builds attest the generated security evidence and deployable build artifacts with GitHub build provenance so the team can trace which workflow and commit produced them.
+Push-based builds attest the generated security evidence and deployable build artifacts with GitHub build provenance so the team can trace which workflow and commit produced them. CI keeps pull request and validation jobs on read-only token permissions; the separate `attest-supply-chain` job receives `id-token: write` and `attestations: write` only after validation passes, the evidence artifact is uploaded, and repository attestation support is enabled.
 External GitHub Actions in CI and staging workflows are pinned to immutable commit SHAs and checked by `npm run ci:validate-provenance`. Keep the trailing version comments when refreshing pins so reviewers can see which upstream release tag the SHA came from.
+
+The Docker release context is guarded by `npm run release:check-context`, which verifies `.dockerignore` covers local state, generated artifacts, secret-bearing files, browser output, and packed release artifacts before image builds are trusted.
 
 ## Rollback
 

@@ -38,6 +38,7 @@
     "governance:simulate": "tsx scripts/governance-simulation-suite.ts",
     "security:audit-runtime": "tsx scripts/runtime-vulnerability-gate.ts",
     "security:sbom": "tsx scripts/generate-sbom.ts",
+    "release:check-context": "tsx scripts/check-release-context.ts",
     "ci:validate-provenance": "tsx scripts/validate-github-actions-provenance.ts",
     "security:collect-evidence": "tsx scripts/collect-compliance-evidence.ts",
     "compliance:validate-registry": "tsx scripts/validate-compliance-registry.ts",

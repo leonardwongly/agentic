@@ -8,9 +8,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
-  attestations: write
-  id-token: write
 
 concurrency:
   group: staging-deploy
@@ -27,6 +24,10 @@ jobs:
   stage:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
     services:
       postgres:
         image: postgres:16

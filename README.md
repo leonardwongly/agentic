@@ -527,6 +527,7 @@ These commands are the current repo-level entry points:
 | `npm run docs:build` | Render and validate the generated `build/agentic.docx` artifact. |
 | `npm run security:audit-runtime` | Enforce runtime dependency vulnerability policy. |
 | `npm run security:sbom` | Generate the software bill of materials. |
+| `npm run release:check-context` | Verify Docker/release context exclusions and tracked-file safety. |
 
 Dependency Review in GitHub Actions requires repository support for GitHub's dependency graph / Advanced Security. The runtime dependency gate remains `npm run security:audit-runtime`, which is the repo-owned check to run locally and in CI.
 

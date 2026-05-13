@@ -14,9 +14,6 @@ env:
 
 permissions:
   contents: read
-  actions: read
-  attestations: write
-  id-token: write
 
 jobs:
   provenance-gate:
@@ -59,6 +56,8 @@ jobs:
   validate:
     needs: provenance-gate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:16
@@ -183,22 +182,30 @@ jobs:
           echo "Generated supply-chain evidence locally for PR validation."
           echo "Skipping artifact upload on pull_request events to avoid quota-bound CI failures."
 
+  attest-supply-chain:
+    needs: validate
+    if: github.event_name != 'pull_request' && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Download supply-chain evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: agentic-supply-chain-evidence
+          path: artifacts
+
       - name: Attest security evidence
-        if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: artifacts/security/agentic-sbom.spdx.json
 
       - name: Attest deployable build artifacts
-        if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: |
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
-
-      - name: Note attestation capability skip
-        if: github.event_name != 'pull_request' && github.event.repository.private && github.event.repository.owner.type != 'Organization' && vars.ENABLE_ATTESTATIONS != 'true'
-        run: |
-          echo "Skipping provenance attestation in this repository context."
-          echo "GitHub only supports attestations for public repos and supported organization-backed private repos by default."
