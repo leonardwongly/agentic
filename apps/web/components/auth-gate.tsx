@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 
 type AuthGateProps = {
   authMode: {
@@ -18,6 +18,13 @@ export function AuthGate({ authMode }: AuthGateProps) {
   const [isPending, setIsPending] = useState(false);
 
   const unlock = async () => {
+    const trimmedAccessKey = accessKey.trim();
+
+    if (!trimmedAccessKey) {
+      setState({ kind: "error", message: "Enter the Agentic access key before unlocking." });
+      return;
+    }
+
     setIsPending(true);
     setState({ kind: "idle", message: "" });
 
@@ -27,7 +34,7 @@ export function AuthGate({ authMode }: AuthGateProps) {
         headers: {
           "content-type": "application/json"
         },
-        body: JSON.stringify({ accessKey })
+        body: JSON.stringify({ accessKey: trimmedAccessKey })
       });
       const payload = (await response.json()) as { error?: string };
 
@@ -44,6 +51,10 @@ export function AuthGate({ authMode }: AuthGateProps) {
     } finally {
       setIsPending(false);
     }
+  };
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void unlock();
   };
 
   return (
@@ -62,7 +73,7 @@ export function AuthGate({ authMode }: AuthGateProps) {
             <p className="status-chip">Local development fallback is enabled. Set `AGENTIC_ACCESS_KEY` to replace it.</p>
           ) : null}
         </div>
-        <div className="auth-form">
+        <form className="auth-form" onSubmit={onSubmit}>
           <label className="field">
             <span>Access key</span>
             <input
@@ -70,14 +81,19 @@ export function AuthGate({ authMode }: AuthGateProps) {
               value={accessKey}
               onChange={(event) => setAccessKey(event.target.value)}
               placeholder="Enter the Agentic access key"
-              autoComplete="current-password"
+              autoComplete="one-time-code"
             />
           </label>
-          <button type="button" className="primary-button" onClick={unlock} disabled={isPending || authMode.requiresConfiguredKey}>
+          <button type="submit" className="primary-button" disabled={isPending || authMode.requiresConfiguredKey}>
             Unlock
           </button>
           <p className={`status-chip ${state.kind}`}>{state.message || "A valid session cookie is required before the UI can load."}</p>
-        </div>
+          {authMode.usesDevelopmentFallback ? (
+            <p className="operator-product-subtitle">
+              Local-only fallback key: <code>agentic-local-dev-key</code>
+            </p>
+          ) : null}
+        </form>
       </section>
     </main>
   );

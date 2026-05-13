@@ -138,7 +138,7 @@ import {
   countsTowardAutopilotBudget,
   evaluateAutopilotClaimControls
 } from "./autopilot-event-claim-helpers";
-import { defaultAgents, defaultOperatorProducts } from "./built-in-catalog";
+import { defaultAgents, defaultOperatorProducts, defaultTemplates } from "./built-in-catalog";
 import {
   buildCollectionPage,
   decodeCollectionCursor,
@@ -1109,19 +1109,15 @@ class FileRepository implements AgenticRepository {
           )
         );
       }
-
       if (!store.memories.some((memory) => memory.userId === userId)) {
         store.memories.push(...defaultMemories(userId));
       }
-
       if (!store.policyRules.some((rule) => rule.userId === userId)) {
         store.policyRules.push(...defaultPolicyRules(userId));
       }
-
       if (!store.briefingPreferences.some((preferences) => preferences.userId === userId)) {
         store.briefingPreferences.push(defaultBriefingPreferences(userId));
       }
-
       if (!store.autopilotSettings.some((settings) => settings.userId === userId)) {
         store.autopilotSettings.push(defaultAutopilotSettings(userId));
       }
@@ -1134,7 +1130,6 @@ class FileRepository implements AgenticRepository {
       if (!store.operatorProducts.some((product) => product.userId === userId && product.isBuiltIn)) {
         store.operatorProducts.push(...defaultOperatorProducts(userId));
       }
-
       if (!store.operatorProductSelections.some((selection) => selection.userId === userId)) {
         const [defaultSelection] = defaultOperatorProducts(userId);
         store.operatorProductSelections.push(
@@ -1148,6 +1143,7 @@ class FileRepository implements AgenticRepository {
         );
       }
 
+      if (!store.templates.some((template) => template.userId === userId)) store.templates.push(...defaultTemplates(userId));
       await this.writeStore(store);
     });
   }
@@ -5219,6 +5215,10 @@ class PostgresRepository implements AgenticRepository {
             updatedAt: nowIso()
           })
         );
+      }
+
+      if (Number((await client.query("select count(*)::int as count from goal_templates where user_id = $1", [userId])).rows[0]?.count ?? 0) === 0) {
+        for (const template of defaultTemplates(userId)) await this.saveTemplateWithClient(client, template);
       }
     });
   }

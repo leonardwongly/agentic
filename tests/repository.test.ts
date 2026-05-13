@@ -4943,12 +4943,13 @@ describe("repository", () => {
       storePath
     });
     const listed = await reloadedRepository.listTemplates(SYSTEM_USER_ID);
+    const listedTemplate = listed.find((candidate) => candidate.id === template.id);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       templates: Array<{ id: string; actorContext: unknown }>;
     };
 
-    expect(listed).toHaveLength(1);
-    expect(listed[0]).toMatchObject({
+    expect(listed.some((candidate) => candidate.id === "template-builtin-inbox-triage")).toBe(true);
+    expect(listedTemplate).toMatchObject({
       id: template.id,
       actorContext: systemActor
     });

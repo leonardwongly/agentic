@@ -1095,10 +1095,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       }
 
       const payload = await loadDashboardSnapshot();
+      setSubmitState({ kind: "success", message: "Created a new goal bundle." });
+      toast.success("Created a new goal bundle.");
       startTransition(() => {
         setData(payload.dashboard);
-        setSubmitState({ kind: "success", message: "Created a new goal bundle." });
-        toast.success("Created a new goal bundle.");
         statsBar.updateSync();
       });
     } catch (error) {
@@ -1855,12 +1855,12 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           })
         })
       );
+      setSubmitState({ kind: "success", message: "Created a new local note." });
+      setNoteState({ kind: "success", message: "Opened the new note in the editor." });
       startTransition(() => {
         setNotes(payload.notes);
         setData(payload.dashboard);
-        setSubmitState({ kind: "success", message: "Created a new local note." });
         loadSelectedNoteDraft(payload.note);
-        setNoteState({ kind: "success", message: "Opened the new note in the editor." });
       });
       setNoteTitle("");
       setNoteContent("");
@@ -1963,11 +1963,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         })
       );
 
+      setNoteState({ kind: "success", message: `Saved note "${payload.note.title}".` });
       startTransition(() => {
         setNotes(payload.notes);
         setData(payload.dashboard);
         loadSelectedNoteDraft(payload.note);
-        setNoteState({ kind: "success", message: `Saved note "${payload.note.title}".` });
       });
     } catch (error) {
       setNoteState({
@@ -2313,8 +2313,11 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
             advancedOperationalCount={featureCapabilitySummary.advanced.operationalOrBetter}
             advancedTotalCount={featureCapabilitySummary.advanced.total}
             trackedContractCount={featureCapabilitySummary.trackedContracts}
+            selectedOperatorProductName={selectedOperatorProduct?.name ?? null}
+            templateCount={operatorProductTemplateLookup.length}
             expanded={showAdvancedOperations}
             onToggle={() => setShowAdvancedOperations((current) => !current)}
+            onOpenSection={navigateToSection}
           />
 
           <div className={showAdvancedOperations ? "advanced-operations-expanded" : "advanced-surface-hidden"}>
@@ -2424,7 +2427,9 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
                     <h3>Integration readiness</h3>
                     <div className="list-stack compact">
                       {selectedOperatorProduct.recommendedIntegrations.map((integration) => {
-                        const connected = data.integrations.find((candidate) => candidate.system === integration.system);
+                        const connected = data.integrations.find(
+                          (candidate) => candidate.id === integration.system || candidate.system === integration.system
+                        );
 
                         return (
                           <div className="list-item vertical" key={integration.system}>

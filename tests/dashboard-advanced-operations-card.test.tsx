@@ -35,8 +35,11 @@ describe("DashboardAdvancedOperationsCard", () => {
         advancedOperationalCount={featureSummary.advanced.operationalOrBetter}
         advancedTotalCount={featureSummary.advanced.total}
         trackedContractCount={featureSummary.trackedContracts}
+        selectedOperatorProductName="Communications Operator"
+        templateCount={0}
         expanded={false}
         onToggle={() => {}}
+        onOpenSection={() => {}}
       />
     );
 
@@ -57,6 +60,10 @@ describe("DashboardAdvancedOperationsCard", () => {
     expect(markup).toContain("Watchers now run with queue recovery");
     expect(markup).toContain("Autopilot control is operational in notify only mode");
     expect(markup).toContain(`feature registry tracks ${featureSummary.trackedContracts} route contracts`);
+    expect(markup).toContain("First-run setup");
+    expect(markup).toContain("Role pack: Communications Operator");
+    expect(markup).toContain("Review integrations");
+    expect(markup).toContain("Load templates");
     expect(markup).toContain("Show advanced operations");
     expect(markup).not.toContain("Advanced surfaces are visible.");
   });
@@ -78,8 +85,11 @@ describe("DashboardAdvancedOperationsCard", () => {
         advancedOperationalCount={featureSummary.advanced.operationalOrBetter}
         advancedTotalCount={featureSummary.advanced.total}
         trackedContractCount={featureSummary.trackedContracts}
+        selectedOperatorProductName={null}
+        templateCount={2}
         expanded
         onToggle={() => {}}
+        onOpenSection={() => {}}
       />
     );
 
@@ -89,6 +99,8 @@ describe("DashboardAdvancedOperationsCard", () => {
     expect(markup).toContain("Watchers: preview");
     expect(markup).toContain("Autopilot surface: preview");
     expect(markup).toContain("Operator recovery paths are unavailable");
+    expect(markup).toContain("Choose role pack");
+    expect(markup).toContain("Templates: 2");
     expect(markup).toContain("Advanced surfaces are visible.");
     expect(markup).toContain("Hide advanced operations");
   });

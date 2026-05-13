@@ -40,20 +40,38 @@ describe("operator products route", () => {
   it("returns the seeded operator product catalog and default selection", async () => {
     const response = await operatorProductsRouteGet(buildAuthorizedRequest("http://localhost/api/operator-products", "GET"));
     const payload = (await response.json()) as {
-      products: Array<{ id: string; slug: string }>;
+      products: Array<{
+        id: string;
+        slug: string;
+        recommendedTemplateIds: string[];
+        recommendedIntegrations: Array<{ system: string }>;
+      }>;
       selection: { operatorProductId: string } | null;
       agents: Array<{ id: string; name: string; allowedCapabilities: string[]; maxRiskClass: string }>;
-      templates: Array<{ id: string }>;
+      templates: Array<{ id: string; name: string }>;
     };
     const communicationsAgent = payload.agents.find((agent) => agent.name === "communications");
     const calendarAgent = payload.agents.find((agent) => agent.name === "calendar");
+    const communicationsProduct = payload.products.find((product) => product.slug === "communications-operator");
 
     expect(response.status).toBe(200);
     expectNoStoreHeaders(response);
-    expect(payload.products.some((product) => product.slug === "communications-operator")).toBe(true);
+    expect(communicationsProduct).toBeDefined();
     expect(payload.selection).not.toBeNull();
     expect(payload.selection?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.agents.some((agent) => agent.id === "agent-builtin-communications")).toBe(true);
+    expect(communicationsProduct?.recommendedTemplateIds).toContain("template-builtin-inbox-triage");
+    expect(communicationsProduct?.recommendedIntegrations.map((integration) => integration.system)).toEqual(
+      expect.arrayContaining(["local-notes", "gmail", "google-calendar"])
+    );
+    expect(payload.templates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "template-builtin-inbox-triage",
+          name: "Inbox triage and follow-up prep"
+        })
+      ])
+    );
     expect(communicationsAgent).toMatchObject({
       allowedCapabilities: ["read", "search", "draft", "send"],
       maxRiskClass: "R3"

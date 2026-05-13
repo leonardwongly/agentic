@@ -15,8 +15,11 @@ type DashboardAdvancedOperationsCardProps = {
   advancedOperationalCount: number;
   advancedTotalCount: number;
   trackedContractCount: number;
+  selectedOperatorProductName: string | null;
+  templateCount: number;
   expanded: boolean;
   onToggle: () => void;
+  onOpenSection: (section: "operator-products" | "integrations" | "templates" | "watchers") => void;
 };
 
 export function DashboardAdvancedOperationsCard(props: DashboardAdvancedOperationsCardProps) {
@@ -35,8 +38,11 @@ export function DashboardAdvancedOperationsCard(props: DashboardAdvancedOperatio
     advancedOperationalCount,
     advancedTotalCount,
     trackedContractCount,
+    selectedOperatorProductName,
+    templateCount,
     expanded,
-    onToggle
+    onToggle,
+    onOpenSection
   } = props;
   const watcherReadinessLabel = watchersReadiness.replace(/_/gu, " ");
   const autopilotReadinessLabel = autopilotReadiness.replace(/_/gu, " ");
@@ -76,6 +82,28 @@ export function DashboardAdvancedOperationsCard(props: DashboardAdvancedOperatio
         feature registry tracks {trackedContractCount} route contracts so advanced surfaces do not drift away from
         their backing APIs.
       </p>
+      <div className="advanced-operations-setup" aria-label="First-run setup checklist">
+        <div>
+          <strong>First-run setup</strong>
+          <p className="operator-product-subtitle">
+            Start with the role pack, verify integrations, then create or run repeatable templates when the core loop is working.
+          </p>
+        </div>
+        <div className="advanced-operations-summary">
+          <button type="button" className="secondary-button" onClick={() => onOpenSection("operator-products")}>
+            {selectedOperatorProductName ? `Role pack: ${selectedOperatorProductName}` : "Choose role pack"}
+          </button>
+          <button type="button" className="secondary-button" onClick={() => onOpenSection("integrations")}>
+            Review integrations
+          </button>
+          <button type="button" className="secondary-button" onClick={() => onOpenSection("templates")}>
+            {templateCount > 0 ? `Templates: ${templateCount}` : "Load templates"}
+          </button>
+          <button type="button" className="secondary-button" onClick={() => onOpenSection("watchers")}>
+            Review watchers
+          </button>
+        </div>
+      </div>
       <div className="advanced-operations-expanded">
         <span className="pill">Watcher readiness: {watcherReadinessLabel}</span>
         <span className="pill">{watchersReason}</span>

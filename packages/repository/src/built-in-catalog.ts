@@ -1,9 +1,12 @@
 import {
   AgentDefinitionSchema,
+  GoalTemplateSchema,
   OperatorProductSchema,
+  createSystemActorContext,
   nowIso,
   type Capability,
   type AgentDefinition,
+  type GoalTemplate,
   type OperatorProduct,
   type RiskClass
 } from "@agentic/contracts";
@@ -184,6 +187,31 @@ export function defaultAgents(userId: string): AgentDefinition[] {
   );
 }
 
+export function defaultTemplates(userId: string): GoalTemplate[] {
+  const timestamp = nowIso();
+
+  return [
+    GoalTemplateSchema.parse({
+      id: "template-builtin-inbox-triage",
+      userId,
+      name: "Inbox triage and follow-up prep",
+      description: "Review inbound messages, prepare approval-safe replies, and surface follow-up commitments.",
+      request: "Triage my inbox, prepare sender-aware draft replies for important clients, and surface follow-up commitments that need approval.",
+      parameters: {},
+      actorContext: createSystemActorContext(userId),
+      schedule: {
+        enabled: false,
+        cron: "",
+        timezone: "UTC",
+        lastRunAt: null,
+        nextRunAt: null
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp
+    })
+  ];
+}
+
 export function defaultOperatorProducts(userId: string): OperatorProduct[] {
   const timestamp = nowIso();
 
@@ -203,7 +231,7 @@ export function defaultOperatorProducts(userId: string): OperatorProduct[] {
         "agent-builtin-knowledge",
         "agent-builtin-calendar"
       ],
-      recommendedTemplateIds: [],
+      recommendedTemplateIds: ["template-builtin-inbox-triage"],
       recommendedIntegrations: [
         {
           system: "local-notes",
