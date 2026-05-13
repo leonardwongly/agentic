@@ -6,6 +6,7 @@ test("operating loop cards deep-link operators into the active queue", async ({ 
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(
+    page,
     requestCard,
     requestInput,
     "Review my inbox and send one external reply."

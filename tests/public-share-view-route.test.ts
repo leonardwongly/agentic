@@ -155,12 +155,14 @@ describe("public share view route", () => {
       tracked: boolean;
       queued?: boolean;
       jobId?: string;
+      statusUrl?: string;
     };
     const secondPayload = (await secondResponse.json()) as {
       accepted: boolean;
       tracked: boolean;
       queued?: boolean;
       jobId?: string;
+      statusUrl?: string;
     };
     const reloadedRepository = createRouteTestRepository();
     const queuedJobs = await reloadedRepository.listJobs({
@@ -175,14 +177,16 @@ describe("public share view route", () => {
       accepted: true,
       tracked: true,
       queued: true,
-      jobId: expect.any(String)
+      jobId: expect.any(String),
+      statusUrl: expect.stringMatching(/^\/api\/jobs\/.+/u)
     });
     expect(secondResponse.status).toBe(202);
     expect(secondPayload).toEqual({
       accepted: true,
       tracked: true,
       queued: true,
-      jobId: firstPayload.jobId
+      jobId: firstPayload.jobId,
+      statusUrl: firstPayload.statusUrl
     });
     expect(queuedJobs).toHaveLength(1);
     expect(queuedJobs[0]?.id).toBe(firstPayload.jobId);

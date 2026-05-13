@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { showAdvancedOperations, unlockDashboard } from "./helpers";
+import { readApiJson, showAdvancedOperations, unlockDashboard } from "./helpers";
 
 test("unlocks the dashboard and edits a local note end-to-end", async ({ page }) => {
   const uniqueSuffix = `${Date.now()}`;
@@ -12,7 +12,14 @@ test("unlocks the dashboard and edits a local note end-to-end", async ({ page })
 
   await page.getByPlaceholder("Example: Travel packing list").fill(title);
   await page.getByPlaceholder("Write a note that should be searchable through the notes adapter.").fill(initialBody);
-  await page.getByRole("button", { name: "Create local note" }).click();
+  const [createNoteResponse] = await Promise.all([
+    page.waitForResponse((response) => response.url().includes("/api/integrations/local-notes") && response.request().method() === "POST"),
+    page.getByRole("button", { name: "Create local note" }).click()
+  ]);
+  const createNotePayload = await readApiJson<{ note: { title: string; content: string } }>(createNoteResponse, [200]);
+
+  expect(createNotePayload.note.title).toBe(title);
+  expect(createNotePayload.note.content).toContain(initialBody);
 
   await expect(page.getByText("Created a new local note.")).toBeVisible();
   await expect(page.getByRole("heading", { name: `Edit ${title}` })).toBeVisible();
@@ -35,7 +42,14 @@ test("unlocks the dashboard and edits a local note end-to-end", async ({ page })
   await editorBody.press("Backspace");
   await editorBody.pressSequentially(updatedBody);
   await expect(editorBody).toHaveValue(updatedBody);
-  await page.getByRole("button", { name: "Save selected note" }).click();
+  const [saveNoteResponse] = await Promise.all([
+    page.waitForResponse((response) => response.url().includes("/api/integrations/local-notes/") && response.request().method() === "PUT"),
+    page.getByRole("button", { name: "Save selected note" }).click()
+  ]);
+  const saveNotePayload = await readApiJson<{ note: { title: string; content: string } }>(saveNoteResponse, [200]);
+
+  expect(saveNotePayload.note.title).toBe(title);
+  expect(saveNotePayload.note.content).toContain(updatedBody);
 
   await expect(page.getByText(`Saved note "${title}".`)).toBeVisible();
 

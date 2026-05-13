@@ -38,11 +38,12 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: `tsx scripts/playwright-stack.ts --hostname 127.0.0.1 --port ${port}`,
+    command: `node --no-deprecation --import tsx scripts/playwright-stack.ts --hostname 127.0.0.1 --port ${port}`,
     url: `http://127.0.0.1:${port}`,
     timeout: 180_000,
     reuseExistingServer: false,
     env: {
+      NO_COLOR: "",
       AGENTIC_ACCESS_KEY: "playwright-e2e-key",
       AGENTIC_NOTES_PATH: path.join(e2eRoot, "notes"),
       ...sharedBackendEnv,

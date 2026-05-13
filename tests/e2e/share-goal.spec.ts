@@ -39,6 +39,10 @@ function isPublicShareViewRequest(url: string, method: string): boolean {
   return method === "POST" && url.includes("/api/share/view");
 }
 
+function futureShareExpiry(): string {
+  return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+}
+
 async function reviewAndCreateShareLink(page: Page, createdGoal: Locator, goalTitle: string) {
   const reviewShareButton = createdGoal.getByRole("button", { name: "Review share" });
 
@@ -58,6 +62,7 @@ test("creates a public goal share link and opens the shared page", async ({ page
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(
+    page,
     requestCard,
     requestInput,
     "Triage my inbox and prepare replies for important clients."
@@ -89,6 +94,7 @@ test("keeps the share flow successful when clipboard access is blocked", async (
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(
+    page,
     requestCard,
     requestInput,
     "Triage my inbox and prepare replies for important clients."
@@ -127,6 +133,7 @@ test("renders a valid public share page in a fresh unauthenticated context and d
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(
+    page,
     requestCard,
     requestInput,
     "Triage my inbox and prepare replies for important clients."
@@ -193,14 +200,14 @@ test("renders a valid public share page in a fresh unauthenticated context and d
         await page.reload();
         return sumVisibleViewedCounts(page);
       },
-      { timeout: 10_000 }
+      { timeout: E2E_UI_TIMEOUT_MS * 6 }
     )
     .toBe(viewedCountBeforePublicView + 1);
 });
 
 test("shows the invalid-share page for tampered or missing shared goals", async ({ page }) => {
   const tamperedToken = "invalid-token";
-  const missingGoalToken = createSignedShareToken("goal-does-not-exist", "share-does-not-exist", "2026-04-09T00:00:00.000Z");
+  const missingGoalToken = createSignedShareToken("goal-does-not-exist", "share-does-not-exist", futureShareExpiry());
 
   await page.goto(`/share/${tamperedToken}`);
   await expect(page.getByRole("heading", { name: "That share link is invalid or expired." })).toBeVisible();

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { E2E_UI_TIMEOUT_MS, unlockDashboard } from "./helpers";
+import { E2E_UI_TIMEOUT_MS, readApiJson, unlockDashboard, waitForJobStatus } from "./helpers";
 
 const viewports = [
   { name: "desktop", width: 1440, height: 900 },
@@ -42,19 +42,8 @@ async function seedGoalThroughApi(page: Page, request: string) {
   const createResponse = await page.request.post("/api/goals", {
     data: { request }
   });
-  expect(createResponse.status()).toBe(202);
-
-  const createPayload = (await createResponse.json()) as { statusUrl: string };
-  await expect
-    .poll(
-      async () => {
-        const statusResponse = await page.request.get(createPayload.statusUrl);
-        const statusPayload = (await statusResponse.json()) as { job: { status: string } };
-        return statusPayload.job.status;
-      },
-      { timeout: E2E_UI_TIMEOUT_MS * 3 }
-    )
-    .toBe("completed");
+  const createPayload = await readApiJson<{ statusUrl: string }>(createResponse, [202]);
+  await waitForJobStatus(page, createPayload.statusUrl);
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Traceability" })).toBeVisible({

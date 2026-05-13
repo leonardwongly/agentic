@@ -4,7 +4,8 @@ import {
 import {
   ApprovalFollowUpJobPayloadSchema,
   ApprovalNotificationJobPayloadSchema,
-  AutopilotProcessJobPayloadSchema
+  AutopilotProcessJobPayloadSchema,
+  PublicShareViewJobPayloadSchema
 } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../lib/api-response";
@@ -19,6 +20,7 @@ type RouteContext = {
 const APPROVAL_JOB_FAILURE_MESSAGE = "Approval follow-up failed. Replay the job or inspect worker logs.";
 const APPROVAL_NOTIFICATION_FAILURE_MESSAGE = "Approval notification failed. Replay the job or inspect worker logs.";
 const AUTOPILOT_JOB_FAILURE_MESSAGE = "Autopilot event processing failed. Replay the job or inspect worker logs.";
+const PUBLIC_SHARE_VIEW_FAILURE_MESSAGE = "Public share view tracking failed. Retry the request or inspect worker logs.";
 
 function buildJobJournal(job: {
   journal: {
@@ -221,6 +223,51 @@ export async function GET(request: Request, context: RouteContext) {
       return authenticatedJson(
         {
           ...responseBody,
+          error: null
+        },
+        { status: 202 }
+      );
+    }
+
+    if (job?.kind === "public_share_view" && job.payload.type === "public_share_view") {
+      const shareViewPayload = PublicShareViewJobPayloadSchema.parse(job.payload);
+      const responseBody = {
+        job: {
+          id: job.id,
+          kind: job.kind,
+          status: job.status,
+          goalId: shareViewPayload.goalId,
+          shareId: shareViewPayload.shareId,
+          attemptCount: job.attemptCount,
+          maxAttempts: job.maxAttempts,
+          journal: buildJobJournal(job),
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt
+        },
+        result: {
+          tracked: job.status === "completed"
+        }
+      };
+
+      if (job.status === "dead_letter") {
+        return authenticatedJson({
+          ...responseBody,
+          result: null,
+          error: PUBLIC_SHARE_VIEW_FAILURE_MESSAGE
+        });
+      }
+
+      if (job.status === "completed") {
+        return authenticatedJson({
+          ...responseBody,
+          error: null
+        });
+      }
+
+      return authenticatedJson(
+        {
+          ...responseBody,
+          result: null,
           error: null
         },
         { status: 202 }

@@ -62,6 +62,7 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(
+    page,
     requestCard,
     requestInput,
     "Triage my inbox and prepare replies for important clients."

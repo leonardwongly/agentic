@@ -8,6 +8,7 @@ test("creates and approves an inbox-triage goal end-to-end", async ({ page }) =>
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(
+    page,
     requestCard,
     requestInput,
     "Triage my inbox and prepare replies for important clients."

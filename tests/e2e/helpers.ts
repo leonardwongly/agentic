@@ -1,4 +1,4 @@
-import { expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { expect, type APIResponse, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
 export const REQUEST_PLACEHOLDER =
   "Example: Clear today’s approvals, surface blocked commitments, and draft replies for anything urgent.";
@@ -25,8 +25,9 @@ export async function enablePublicSharingForE2E(page: Page) {
       publicSharingEnabled: true
     }
   });
+  const payload = await readApiJson<{ governance: { publicSharingEnabled: boolean } }>(response, [200]);
 
-  expect(response.status()).toBe(200);
+  expect(payload.governance.publicSharingEnabled).toBe(true);
 }
 
 export async function openRequestComposer(page: Page) {
@@ -40,7 +41,41 @@ export async function openRequestComposer(page: Page) {
   return { requestCard, requestInput };
 }
 
-export async function submitRequest(requestCard: Locator, requestInput: Locator, request: string) {
+export async function readApiJson<T>(response: APIResponse, expectedStatuses: number[]): Promise<T> {
+  const status = response.status();
+  const contentType = response.headers()["content-type"] ?? "";
+
+  if (!expectedStatuses.includes(status)) {
+    const body = (await response.text()).slice(0, 500);
+    throw new Error(`Expected HTTP ${expectedStatuses.join(" or ")} but received ${status}: ${body}`);
+  }
+
+  if (!contentType.includes("application/json")) {
+    const body = (await response.text()).slice(0, 500);
+    throw new Error(`Expected JSON response but received ${contentType || "no content-type"}: ${body}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+export async function waitForJobStatus(
+  page: Page,
+  statusUrl: string,
+  expectedStatus: "completed" | "dead_letter" = "completed"
+) {
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(statusUrl);
+        const payload = await readApiJson<{ job: { status: string } }>(response, [200, 202]);
+        return payload.job.status;
+      },
+      { timeout: E2E_UI_TIMEOUT_MS * 6 }
+    )
+    .toBe(expectedStatus);
+}
+
+export async function submitRequest(page: Page, requestCard: Locator, requestInput: Locator, request: string) {
   await requestInput.fill(request);
   await expect(requestInput).toHaveValue(request, { timeout: E2E_UI_TIMEOUT_MS });
   await requestInput.press("Tab");
@@ -53,7 +88,12 @@ export async function submitRequest(requestCard: Locator, requestInput: Locator,
   // input events and initial dashboard refreshes, leaving the submit button
   // temporarily disabled even after the textarea reflects the new request.
   await expect(submitButton).toBeEnabled({ timeout: E2E_UI_TIMEOUT_MS });
-  await submitButton.click();
+  const [createResponse] = await Promise.all([
+    page.waitForResponse((response) => response.url().includes("/api/goals") && response.request().method() === "POST"),
+    submitButton.click()
+  ]);
+  const createPayload = await readApiJson<{ statusUrl: string }>(createResponse, [202]);
+  await waitForJobStatus(page, createPayload.statusUrl);
   await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
     timeout: E2E_UI_TIMEOUT_MS * 3
   });

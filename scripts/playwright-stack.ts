@@ -5,10 +5,24 @@ type ManagedProcess = {
   child: ChildProcess;
 };
 
+function buildChildEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+
+  if (env.FORCE_COLOR) {
+    delete env.NO_COLOR;
+  }
+
+  if (!env.NODE_OPTIONS?.includes("--no-deprecation")) {
+    env.NODE_OPTIONS = [env.NODE_OPTIONS, "--no-deprecation"].filter(Boolean).join(" ");
+  }
+
+  return env;
+}
+
 function spawnManagedProcess(name: string, command: string, args: string[]) {
   const child = spawn(command, args, {
     cwd: process.cwd(),
-    env: process.env,
+    env: buildChildEnv(),
     stdio: "inherit"
   });
 
@@ -22,7 +36,7 @@ async function runCommand(name: string, command: string, args: string[]) {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: process.cwd(),
-      env: process.env,
+      env: buildChildEnv(),
       stdio: "inherit"
     });
 

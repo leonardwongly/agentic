@@ -153,7 +153,8 @@ export async function POST(request: Request) {
           accepted: true,
           tracked: true,
           queued: true,
-          jobId: job.id
+          jobId: job.id,
+          statusUrl: `/api/jobs/${job.id}`
         },
         {
           status: 202

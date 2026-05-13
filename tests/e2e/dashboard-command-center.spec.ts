@@ -5,7 +5,7 @@ test("command center deep-links operators from exceptions into remediation views
   await unlockDashboard(page);
 
   const { requestCard, requestInput } = await openRequestComposer(page);
-  await submitRequest(requestCard, requestInput, "Review my inbox and send one external reply.");
+  await submitRequest(page, requestCard, requestInput, "Review my inbox and send one external reply.");
 
   const commandCenter = page.locator("#section-command-center");
   await expect(commandCenter.getByRole("heading", { name: "Command center" })).toBeVisible();
@@ -31,6 +31,7 @@ test("command center stays keyboard-operable and responsive on mobile", async ({
 
   const { requestCard, requestInput } = await openRequestComposer(page);
   await submitRequest(
+    page,
     requestCard,
     requestInput,
     "Clear approvals, unblock the automation queue, and confirm urgent follow-ups."
