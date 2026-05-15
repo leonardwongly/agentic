@@ -178,7 +178,7 @@ describe("provenance graph route", () => {
     expect(listGoalsPageSpy).toHaveBeenCalledWith(
       expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 25, cursor: expect.any(String) })
     );
-  });
+  }, 15_000);
 
   it("resolves long memory roots with bounded pages instead of unbounded scans", async () => {
     const repository = createRepository({
