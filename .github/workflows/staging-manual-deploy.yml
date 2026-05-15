@@ -47,6 +47,7 @@ jobs:
       AGENTIC_REQUIRE_SHARED_AUTH_STATE: "true"
       AGENTIC_SMOKE_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       AGENTIC_SMOKE_ACCESS_KEY: ${{ secrets.STAGING_SMOKE_ACCESS_KEY }}
+      AGENTIC_TRUST_PROXY_HEADERS: ${{ vars.STAGING_TRUST_PROXY_HEADERS }}
       AGENTIC_STAGING_DEPLOY_BIN: ${{ vars.STAGING_DEPLOY_BIN }}
       AGENTIC_STAGING_DEPLOY_ARGS_JSON: ${{ secrets.STAGING_DEPLOY_ARGS_JSON }}
       AGENTIC_STAGING_DEPLOY_TIMEOUT_MS: ${{ vars.STAGING_DEPLOY_TIMEOUT_MS }}
@@ -72,6 +73,10 @@ jobs:
       - name: Resolve staging execution mode
         id: inspect
         run: npx tsx scripts/staging-execution-plan.ts
+
+      - name: Validate stable ingress readiness
+        if: steps.inspect.outputs.mode == 'external'
+        run: npm run deploy:ingress:check
 
       - name: Validate compliance registry references
         run: npm run compliance:validate-registry
