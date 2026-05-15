@@ -65,6 +65,8 @@ GitHub repository configuration:
 - Secret `AGENTIC_GITHUB_APP_SYNC_SECRET`: same value as the Agentic runtime sync secret.
 - Variable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL`: `https://<agentic-host>/api/github/issues/app/sync`.
 
+Use a durable HTTPS URL for scheduled sync. Temporary tunnel hosts such as `trycloudflare.com`, `ngrok.io`, `ngrok-free.app`, `loca.lt`, `localhost`, and `.local` are allowed only for explicit manual validation: scheduled runs emit a notice and skip them, while manual dispatch requires `allow_temporary_url=true`.
+
 The sync route is intentionally a pull model: GitHub Actions only triggers Agentic with a bearer secret and never receives the GitHub App private key or installation token.
 
 ## Data Flow
@@ -81,11 +83,12 @@ The sync route is intentionally a pull model: GitHub Actions only triggers Agent
 GitHub App sync data flow:
 
 1. `.github/workflows/github-app-issue-sync.yml` runs on an hourly schedule or manual dispatch.
-2. The workflow calls `POST /api/github/issues/app/sync` with `Authorization: Bearer <AGENTIC_GITHUB_APP_SYNC_SECRET>`.
-3. Agentic verifies the bearer secret with constant-time comparison and validates GitHub App runtime configuration.
-4. Agentic creates a short-lived GitHub App JWT, exchanges it for an installation token, and lists open issues from each allowlisted repository.
-5. Agentic validates and bounds GitHub API responses, skips pull requests returned by the issues endpoint, and enqueues `github_issue_intake` jobs with trigger `issues.sync`.
-6. Repeated syncs de-duplicate by repository, issue number, automation mode, and the stable `github_app:open_issue_sync` trigger id.
+2. The workflow validates the configured URL and bearer secret, skips scheduled runs that still point at temporary tunnel hosts, and requires `allow_temporary_url=true` for ad hoc tunnel validation.
+3. The workflow calls `POST /api/github/issues/app/sync` with `Authorization: Bearer <AGENTIC_GITHUB_APP_SYNC_SECRET>`.
+4. Agentic verifies the bearer secret with constant-time comparison and validates GitHub App runtime configuration.
+5. Agentic creates a short-lived GitHub App JWT, exchanges it for an installation token, and lists open issues from each allowlisted repository.
+6. Agentic validates and bounds GitHub API responses, skips pull requests returned by the issues endpoint, and enqueues `github_issue_intake` jobs with trigger `issues.sync`.
+7. Repeated syncs de-duplicate by repository, issue number, automation mode, and the stable `github_app:open_issue_sync` trigger id.
 
 ## Security Notes
 

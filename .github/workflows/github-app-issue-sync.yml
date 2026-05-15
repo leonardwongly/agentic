@@ -2,6 +2,12 @@ name: GitHub App Issue Sync
 
 on:
   workflow_dispatch:
+    inputs:
+      allow_temporary_url:
+        description: "Allow a temporary tunnel URL for one manual validation run."
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "17 * * * *"
 
@@ -26,13 +32,22 @@ jobs:
           script: |
             const url = process.env.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL;
             const secret = process.env.AGENTIC_GITHUB_APP_SYNC_SECRET;
+            const allowTemporaryUrl = String(context.payload.inputs?.allow_temporary_url ?? "false") === "true";
 
             if (!url || !secret) {
               console.log("::notice title=Agentic GitHub App issue sync not configured::Set vars.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL and secrets.AGENTIC_GITHUB_APP_SYNC_SECRET to enable open issue sync.");
               return;
             }
 
-            if (!url.startsWith("https://")) {
+            let parsedUrl;
+            try {
+              parsedUrl = new URL(url);
+            } catch {
+              core.setFailed("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL must be a valid https URL.");
+              return;
+            }
+
+            if (parsedUrl.protocol !== "https:") {
               core.setFailed("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL must use https.");
               return;
             }
@@ -42,13 +57,42 @@ jobs:
               return;
             }
 
-            const response = await fetch(url, {
-              method: "POST",
-              headers: {
-                authorization: `Bearer ${secret}`,
-                "user-agent": "agentic-github-app-issue-sync"
-              }
-            });
+            const temporaryHostPatterns = [
+              /(^|\.)trycloudflare\.com$/i,
+              /(^|\.)loca\.lt$/i,
+              /(^|\.)ngrok-free\.app$/i,
+              /(^|\.)ngrok\.io$/i,
+              /(^|\.)localhost$/i,
+              /^127\./,
+              /^\[?::1\]?$/,
+              /(^|\.)local$/i
+            ];
+            const usesTemporaryUrl = temporaryHostPatterns.some((pattern) => pattern.test(parsedUrl.hostname));
+
+            if (usesTemporaryUrl && context.eventName === "schedule") {
+              console.log("::notice title=Agentic GitHub App issue sync skipped::Configured URL uses a temporary tunnel host. Set vars.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL to a stable HTTPS host before scheduled sync is enabled.");
+              return;
+            }
+
+            if (usesTemporaryUrl && !allowTemporaryUrl) {
+              core.setFailed("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL points to a temporary tunnel host. Re-run manually with allow_temporary_url=true for ad hoc validation or configure a stable HTTPS host.");
+              return;
+            }
+
+            let response;
+            try {
+              response = await fetch(url, {
+                method: "POST",
+                headers: {
+                  authorization: `Bearer ${secret}`,
+                  "user-agent": "agentic-github-app-issue-sync"
+                }
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : "unknown error";
+              core.setFailed(`Agentic GitHub App issue sync request failed: ${message}`);
+              return;
+            }
 
             if (!response.ok) {
               core.setFailed(`Agentic GitHub App issue sync failed with status ${response.status}.`);
