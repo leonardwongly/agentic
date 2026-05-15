@@ -65,7 +65,7 @@ GitHub repository configuration:
 - Secret `AGENTIC_GITHUB_APP_SYNC_SECRET`: same value as the Agentic runtime sync secret.
 - Variable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL`: `https://<agentic-host>/api/github/issues/app/sync`.
 
-Use a durable HTTPS URL for scheduled sync. Temporary tunnel hosts such as `trycloudflare.com`, `ngrok.io`, `ngrok-free.app`, `loca.lt`, `localhost`, and `.local` are allowed only for explicit manual validation: scheduled runs emit a notice and skip them, while manual dispatch requires `allow_temporary_url=true`.
+Use a durable HTTPS URL for scheduled sync. The repository variable must point exactly at `/api/github/issues/app/sync` on the selected host and must not include embedded credentials, query strings, or fragments. Temporary tunnel hosts such as `trycloudflare.com`, `ngrok.io`, `ngrok.app`, `ngrok-free.app`, `loca.lt`, `localhost.run`, `devtunnels.ms`, `serveo.net`, `tunnelmole.net`, `localhost`, private network addresses, and `.local` are allowed only for explicit manual validation: scheduled runs emit a notice and skip them, while manual dispatch requires `allow_temporary_url=true`.
 
 The sync route is intentionally a pull model: GitHub Actions only triggers Agentic with a bearer secret and never receives the GitHub App private key or installation token.
 

@@ -69,7 +69,16 @@ describe("GitHub issue autopilot workflow", () => {
     expect(workflow).toContain('authorization: `Bearer ${secret}`');
     expect(workflow).toContain('const allowTemporaryUrl = String(context.payload.inputs?.allow_temporary_url ?? "false") === "true";');
     expect(workflow).toContain('parsedUrl.protocol !== "https:"');
+    expect(workflow).toContain("parsedUrl.username || parsedUrl.password");
+    expect(workflow).toContain('parsedUrl.pathname !== "/api/github/issues/app/sync"');
+    expect(workflow).toContain("parsedUrl.search || parsedUrl.hash");
     expect(workflow).toContain("trycloudflare\\.com");
+    expect(workflow).toContain("ngrok\\.app");
+    expect(workflow).toContain("localhost\\.run");
+    expect(workflow).toContain("devtunnels\\.ms");
+    expect(workflow).toContain("serveo\\.net");
+    expect(workflow).toContain("tunnelmole\\.net");
+    expect(workflow).toContain("^192\\.168\\.");
     expect(workflow).toContain('context.eventName === "schedule"');
     expect(workflow).toContain("temporary tunnel host");
     expect(workflow).toContain("!allowTemporaryUrl");
