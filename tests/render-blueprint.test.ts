@@ -32,6 +32,21 @@ describe("Render Blueprint deployment target", () => {
     expect(blueprint).toContain('value: "true"');
   });
 
+  it("keeps the first provider sync manually controlled", () => {
+    const blueprint = readBlueprint();
+
+    expect(blueprint.match(/autoDeployTrigger: off/gu)).toHaveLength(2);
+  });
+
+  it("runs additive migrations once before the web service starts", () => {
+    const blueprint = readBlueprint();
+    const migrationCommand = "preDeployCommand: npm run db:migrate";
+    const workerSection = blueprint.slice(blueprint.indexOf("name: agentic-worker"));
+
+    expect(blueprint.match(new RegExp(migrationCommand, "gu"))).toHaveLength(1);
+    expect(workerSection).not.toContain(migrationCommand);
+  });
+
   it("keeps secret values out of the checked-in provider template", () => {
     const blueprint = readBlueprint();
     const secretKeys = [

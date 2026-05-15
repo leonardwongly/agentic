@@ -9,6 +9,12 @@
 # - one Docker background worker service running the durable worker loop
 # - one managed Postgres database shared by both services
 #
+# Safety controls:
+# - autoDeployTrigger is off for the first provider setup so an approved
+#   operator controls when each service deploys.
+# - the web service owns the additive database migration pre-deploy step; the
+#   worker validates schema readiness at startup but does not race migrations.
+#
 # Do not sync this Blueprint to a production workspace until #141 has an
 # approved provider, owner, hostname, and rollback authority.
 
@@ -29,6 +35,8 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: npm run start:web:prod -- --hostname 0.0.0.0 --port $PORT
+    preDeployCommand: npm run db:migrate
+    autoDeployTrigger: off
     healthCheckPath: /api/health
     region: singapore
     plan: starter
@@ -68,6 +76,7 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: npm run start:worker:prod
+    autoDeployTrigger: off
     region: singapore
     plan: starter
     numInstances: 1
