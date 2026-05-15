@@ -341,6 +341,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     cancelGoalShareReview
   } = useGoalShareReview({ setData, setIsPending, setShareState });
   const { templates, setTemplates, templateState, setTemplateState } = useDashboardTemplateActionsState();
+  const [integrationState, setIntegrationState] = useState<RequestState>({ kind: "idle", message: "" });
   const [operatorProducts, setOperatorProducts] = useState<OperatorProduct[]>([]);
   const [operatorProductSelection, setOperatorProductSelection] = useState<OperatorProductSelection | null>(null);
   const [operatorProductAgents, setOperatorProductAgents] = useState<AgentDefinition[]>([]);
@@ -1381,17 +1382,30 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     }
   }, []);
 
-  const runPrivacyOperation = useCallback(async (kind: (typeof privacyOperationKindValues)[number]) => {
+  const runPrivacyOperation = useCallback(async (
+    kind: (typeof privacyOperationKindValues)[number],
+    options?: { confirmationPhrase?: string }
+  ) => {
     setIsPending(true);
 
     try {
+      const requestBody = {
+        kind,
+        ...(options?.confirmationPhrase
+          ? {
+              confirmation: {
+                phrase: options.confirmationPhrase
+              }
+            }
+          : {})
+      };
       const payload = await readJson<{ operation: { id: string; status: string }; reused: boolean; dashboard: DashboardData }>(
         await fetch("/api/governance/privacy", {
           method: "POST",
           headers: {
             "content-type": "application/json"
           },
-          body: JSON.stringify({ kind })
+          body: JSON.stringify(requestBody)
         })
       );
       const actionLabel =
@@ -1785,9 +1799,28 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     );
   };
 
-  const connectGoogleProvider = () => {
-    window.location.assign("/api/integrations/google/connect");
-  };
+  const connectGoogleProvider = useCallback(async () => {
+    setIsPending(true);
+    setIntegrationState({ kind: "idle", message: "Checking Google OAuth configuration." });
+
+    try {
+      const payload = await readJson<{ authorizationUrl: string }>(
+        await fetch("/api/integrations/google/connect?format=json", {
+          headers: {
+            accept: "application/json"
+          }
+        })
+      );
+      setIntegrationState({ kind: "success", message: "Redirecting to Google OAuth." });
+      window.location.assign(payload.authorizationUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to start Google OAuth connection.";
+      setIntegrationState({ kind: "error", message });
+      toast.error("Action failed", message);
+    } finally {
+      setIsPending(false);
+    }
+  }, []);
 
   const renderDocs = async () => {
     setIsPending(true);
@@ -3075,6 +3108,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           setMemoryContent={setMemoryContent}
           saveMemory={saveMemory}
           updateMemory={updateMemory}
+          integrationState={integrationState}
           connectGoogleProvider={connectGoogleProvider}
           cycleIntegration={cycleIntegration}
           noteQuery={noteQuery}

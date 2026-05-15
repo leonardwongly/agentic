@@ -19,9 +19,17 @@ import { getSeededRepository } from "../../../../lib/server";
 
 const TriggerPrivacyOperationSchema = z
   .object({
-    kind: PrivacyOperationKindSchema
+    kind: PrivacyOperationKindSchema,
+    confirmation: z
+      .object({
+        phrase: z.string().min(1).max(80)
+      })
+      .strict()
+      .optional()
   })
   .strict();
+
+const WORKSPACE_DELETE_CONFIRMATION_PHRASE = "delete workspace";
 
 async function resolveWorkspaceContext(userId: string) {
   const repository = await getSeededRepository();
@@ -37,6 +45,23 @@ async function resolveWorkspaceContext(userId: string) {
   }
 
   return { repository, dashboard, activeWorkspace };
+}
+
+function requireWorkspaceDeleteConfirmation(body: z.infer<typeof TriggerPrivacyOperationSchema>) {
+  if (body.kind !== "workspace_delete") {
+    return null;
+  }
+
+  const normalizedPhrase = body.confirmation?.phrase.trim().toLowerCase() ?? "";
+
+  if (normalizedPhrase !== WORKSPACE_DELETE_CONFIRMATION_PHRASE) {
+    throw new ApiRouteError(400, `Workspace deletion requires typing "${WORKSPACE_DELETE_CONFIRMATION_PHRASE}" before it can be queued.`);
+  }
+
+  return {
+    method: "typed_phrase",
+    challenge: WORKSPACE_DELETE_CONFIRMATION_PHRASE
+  };
 }
 
 function sanitizeQueueFailure(kind: z.infer<typeof PrivacyOperationKindSchema>): string {
@@ -87,6 +112,7 @@ export async function POST(request: Request) {
     const actorContext = createActorContextFromPrincipal(principal);
     const body = await parseJsonBody(request, TriggerPrivacyOperationSchema);
     const { repository, dashboard, activeWorkspace } = await resolveWorkspaceContext(principal.userId);
+    const confirmation = requireWorkspaceDeleteConfirmation(body);
     const existing = (
       await repository.listPrivacyOperations({
         userId: principal.userId,
@@ -105,6 +131,20 @@ export async function POST(request: Request) {
     }
 
     const now = new Date().toISOString();
+    const details =
+      body.kind === "retention_enforcement"
+        ? {
+            retentionDays:
+              dashboard.workspaceGovernance?.retentionDays ?? resolveWorkspaceGovernanceDefaultsFromEnv().retentionDays
+          }
+        : confirmation
+          ? {
+              confirmation: {
+                ...confirmation,
+                confirmedAt: now
+              }
+            }
+          : {};
     const operation = PrivacyOperationSchema.parse({
       id: crypto.randomUUID(),
       workspaceId: activeWorkspace.id,
@@ -114,13 +154,7 @@ export async function POST(request: Request) {
       requestedBy: principal.userId,
       actorContext,
       jobId: null,
-      details:
-        body.kind === "retention_enforcement"
-	          ? {
-	              retentionDays:
-	                dashboard.workspaceGovernance?.retentionDays ?? resolveWorkspaceGovernanceDefaultsFromEnv().retentionDays
-	            }
-          : {},
+      details,
       result: {},
       startedAt: null,
       completedAt: null,

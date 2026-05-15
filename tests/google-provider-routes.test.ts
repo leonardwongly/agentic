@@ -357,6 +357,41 @@ describe("google provider routes", () => {
     expectNoStoreHeaders(response);
   });
 
+  it("returns a JSON authorization URL when the dashboard checks Google OAuth readiness before redirecting", async () => {
+    const repository = await buildRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await googleConnectRoute(
+      buildAuthorizedGetRequest("http://localhost/api/integrations/google/connect?format=json")
+    );
+    const payload = (await response.json()) as {
+      authorizationUrl: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.authorizationUrl).toMatch(/^https:\/\/accounts\.google\.test\/o\/oauth2\/v2\/auth/u);
+    expectNoStoreHeaders(response);
+  });
+
+  it("keeps unconfigured Google OAuth as a safe JSON setup error", async () => {
+    const repository = await buildRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    isGoogleOAuthConfiguredMock.mockReturnValue(false);
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await googleConnectRoute(
+      buildAuthorizedGetRequest("http://localhost/api/integrations/google/connect?format=json")
+    );
+    const payload = (await response.json()) as {
+      error: string;
+    };
+
+    expect(response.status).toBe(503);
+    expect(payload.error).toBe("Google OAuth is not configured for this runtime.");
+    expectNoStoreHeaders(response);
+  });
+
   it("reports managed Google readiness per integration based on provider scopes and refresh state", async () => {
     const repository = await buildRepository();
     await repository.seedDefaults(SYSTEM_USER_ID);

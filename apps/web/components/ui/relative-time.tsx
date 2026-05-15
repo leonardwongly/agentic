@@ -39,9 +39,23 @@ function formatAbsoluteTime(date: Date): string {
   });
 }
 
+function parseTimeValue(date: string | Date): Date | null {
+  const parsed = typeof date === "string" ? new Date(date) : date;
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export function RelativeTime({ date, className = "" }: RelativeTimeProps) {
-  const dateObj = useMemo(() => (typeof date === "string" ? new Date(date) : date), [date]);
-  const stableAbsolute = useMemo(() => dateObj.toISOString(), [dateObj]);
+  const dateObj = useMemo(() => parseTimeValue(date), [date]);
+
+  if (!dateObj) {
+    return <span className={`relative-time ${className}`}>Invalid timestamp</span>;
+  }
+
+  return <RelativeTimeValue date={dateObj} className={className} />;
+}
+
+function RelativeTimeValue({ date, className }: { date: Date; className: string }) {
+  const stableAbsolute = useMemo(() => date.toISOString(), [date]);
   const [isHydrated, setIsHydrated] = useState(false);
   const [tick, setTick] = useState(0);
 
@@ -54,29 +68,38 @@ export function RelativeTime({ date, className = "" }: RelativeTimeProps) {
     return () => window.clearInterval(interval);
   }, []);
 
-  const relative = useMemo(() => (isHydrated ? formatRelativeTime(dateObj) : stableAbsolute), [dateObj, isHydrated, stableAbsolute, tick]);
-  const absolute = useMemo(() => (isHydrated ? formatAbsoluteTime(dateObj) : stableAbsolute), [dateObj, isHydrated, stableAbsolute]);
+  const relative = useMemo(() => (isHydrated ? formatRelativeTime(date) : stableAbsolute), [date, isHydrated, stableAbsolute, tick]);
+  const absolute = useMemo(() => (isHydrated ? formatAbsoluteTime(date) : stableAbsolute), [date, isHydrated, stableAbsolute]);
 
   return (
-    <time dateTime={dateObj.toISOString()} title={absolute} className={`relative-time ${className}`}>
+    <time dateTime={date.toISOString()} title={absolute} className={`relative-time ${className}`}>
       {relative}
     </time>
   );
 }
 
 export function AbsoluteTime({ date, className = "" }: RelativeTimeProps) {
-  const dateObj = useMemo(() => (typeof date === "string" ? new Date(date) : date), [date]);
-  const stableAbsolute = useMemo(() => dateObj.toISOString(), [dateObj]);
+  const dateObj = useMemo(() => parseTimeValue(date), [date]);
+
+  if (!dateObj) {
+    return <span className={`absolute-time ${className}`}>Invalid timestamp</span>;
+  }
+
+  return <AbsoluteTimeValue date={dateObj} className={className} />;
+}
+
+function AbsoluteTimeValue({ date, className }: { date: Date; className: string }) {
+  const stableAbsolute = useMemo(() => date.toISOString(), [date]);
   const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
     setIsHydrated(true);
   }, []);
 
-  const absolute = useMemo(() => (isHydrated ? formatAbsoluteTime(dateObj) : stableAbsolute), [dateObj, isHydrated, stableAbsolute]);
+  const absolute = useMemo(() => (isHydrated ? formatAbsoluteTime(date) : stableAbsolute), [date, isHydrated, stableAbsolute]);
 
   return (
-    <time dateTime={dateObj.toISOString()} className={`absolute-time ${className}`}>
+    <time dateTime={date.toISOString()} className={`absolute-time ${className}`}>
       {absolute}
     </time>
   );

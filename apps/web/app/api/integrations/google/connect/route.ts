@@ -1,6 +1,6 @@
 import { buildGoogleAuthorizationUrl, isGoogleOAuthConfigured } from "@agentic/integrations";
 import { requireApiSession, buildOAuthStateToken } from "../../../../../lib/auth";
-import { ApiRouteError, authenticatedRedirect, handleApiError } from "../../../../../lib/api-response";
+import { ApiRouteError, authenticatedJson, authenticatedRedirect, handleApiError } from "../../../../../lib/api-response";
 import { getSeededRepository } from "../../../../../lib/server";
 
 function buildGoogleCallbackUrl(request: Request): string {
@@ -13,6 +13,8 @@ function buildGoogleCallbackUrl(request: Request): string {
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
+    const url = new URL(request.url);
+    const wantsJson = url.searchParams.get("format") === "json" || request.headers.get("accept")?.includes("application/json");
 
     if (!isGoogleOAuthConfigured()) {
       throw new ApiRouteError(503, "Google OAuth is not configured for this runtime.");
@@ -33,6 +35,12 @@ export async function GET(request: Request) {
       state,
       loginHint: existingCredential?.accountEmail ?? undefined
     });
+
+    if (wantsJson) {
+      return authenticatedJson({
+        authorizationUrl
+      });
+    }
 
     return authenticatedRedirect(authorizationUrl, { status: 302 });
   } catch (error) {

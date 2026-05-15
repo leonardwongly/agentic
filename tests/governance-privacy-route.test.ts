@@ -214,6 +214,71 @@ describe("governance privacy route", () => {
     expectNoStoreHeaders(response);
   });
 
+  it("rejects workspace deletion without the typed confirmation phrase", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults();
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await governancePrivacyPostRoute(
+      buildAuthorizedPostRequest("http://localhost/api/governance/privacy", {
+        kind: "workspace_delete"
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBe('Workspace deletion requires typing "delete workspace" before it can be queued.');
+    expect(enqueuePrivacyOperationJobMock).not.toHaveBeenCalled();
+    expectNoStoreHeaders(response);
+  });
+
+  it("queues workspace deletion only after valid typed confirmation and records audit metadata", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults();
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await governancePrivacyPostRoute(
+      buildAuthorizedPostRequest("http://localhost/api/governance/privacy", {
+        kind: "workspace_delete",
+        confirmation: {
+          phrase: "  delete workspace  "
+        }
+      })
+    );
+    const payload = (await response.json()) as {
+      operation: {
+        kind: string;
+        details: {
+          confirmation?: {
+            method?: string;
+            challenge?: string;
+            confirmedAt?: string;
+          };
+        };
+      };
+      reused: boolean;
+    };
+
+    expect(response.status).toBe(202);
+    expect(payload.reused).toBe(false);
+    expect(payload.operation.kind).toBe("workspace_delete");
+    expect(payload.operation.details.confirmation).toMatchObject({
+      method: "typed_phrase",
+      challenge: "delete workspace"
+    });
+    expect(payload.operation.details.confirmation?.confirmedAt).toEqual(expect.any(String));
+    expect(enqueuePrivacyOperationJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: expect.objectContaining({
+          kind: "workspace_delete"
+        })
+      })
+    );
+    expectNoStoreHeaders(response);
+  });
+
   it("rejects privacy operations when the active workspace belongs to another owner", async () => {
     const repository = createRouteTestRepository();
     const ownerActor = createSystemActorContext("workspace-owner");
