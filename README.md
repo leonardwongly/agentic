@@ -382,7 +382,7 @@ export AGENTIC_GITHUB_APP_PRIVATE_KEY='-----BEGIN PRIVATE KEY-----...'
 export AGENTIC_GITHUB_APP_SYNC_SECRET=replace-with-a-long-random-sync-secret
 ```
 
-Set the GitHub repository secret `AGENTIC_GITHUB_APP_SYNC_SECRET` and variable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL` to `https://<agentic-host>/api/github/issues/app/sync`. The scheduled/manual GitHub App issue sync workflow calls Agentic, Agentic authenticates as the installation, lists allowlisted open issues, skips pull requests, and queues the existing governed `github_issue_intake` jobs in `work` mode by default. Scheduled runs require a durable HTTPS host; temporary tunnel URLs are skipped on schedules and require `allow_temporary_url=true` for manual validation.
+Set the GitHub repository secret `AGENTIC_GITHUB_APP_SYNC_SECRET` and variable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL` to `https://<agentic-host>/api/github/issues/app/sync`. The URL must target that exact path without embedded credentials, query strings, or fragments. The scheduled/manual GitHub App issue sync workflow calls Agentic, Agentic authenticates as the installation, lists allowlisted open issues, skips pull requests, and queues the existing governed `github_issue_intake` jobs in `work` mode by default. Scheduled runs require a durable HTTPS host; temporary tunnel URLs are skipped on schedules and require `allow_temporary_url=true` for manual validation.
 
 ## Validation And Quality Gates
 

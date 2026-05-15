@@ -52,6 +52,16 @@ jobs:
               return;
             }
 
+            if (parsedUrl.username || parsedUrl.password) {
+              core.setFailed("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL must not include embedded credentials.");
+              return;
+            }
+
+            if (parsedUrl.pathname !== "/api/github/issues/app/sync" || parsedUrl.search || parsedUrl.hash) {
+              core.setFailed("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL must point exactly to /api/github/issues/app/sync without query strings or fragments.");
+              return;
+            }
+
             if (secret.length < 32) {
               core.setFailed("AGENTIC_GITHUB_APP_SYNC_SECRET must be at least 32 characters.");
               return;
@@ -61,10 +71,21 @@ jobs:
               /(^|\.)trycloudflare\.com$/i,
               /(^|\.)loca\.lt$/i,
               /(^|\.)ngrok-free\.app$/i,
+              /(^|\.)ngrok\.app$/i,
               /(^|\.)ngrok\.io$/i,
+              /(^|\.)localhost\.run$/i,
+              /(^|\.)devtunnels\.ms$/i,
+              /(^|\.)serveo\.net$/i,
+              /(^|\.)tunnelmole\.net$/i,
               /(^|\.)localhost$/i,
               /^127\./,
+              /^10\./,
+              /^172\.(1[6-9]|2\d|3[0-1])\./,
+              /^192\.168\./,
+              /^169\.254\./,
               /^\[?::1\]?$/,
+              /^\[?f[cd][0-9a-f]{2}:/i,
+              /^\[?fe[89ab][0-9a-f]:/i,
               /(^|\.)local$/i
             ];
             const usesTemporaryUrl = temporaryHostPatterns.some((pattern) => pattern.test(parsedUrl.hostname));
