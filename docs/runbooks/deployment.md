@@ -43,6 +43,40 @@ export AGENTIC_DASHBOARD_COCKPIT=legacy
 
 External staging and production-like rollout evidence must come from a stable HTTPS origin. Temporary tunnel domains, localhost/private addresses, URL credentials, URL paths, URL query strings, and URL fragments are not accepted as the deployment smoke target.
 
+## First Container Target Candidate
+
+The lowest-friction full Node/container target currently supported by the repository is a Render Blueprint deployment using the checked-in Dockerfile. Render's Blueprint model supports the three resources Agentic needs for the first production-like target: a Docker web service for the Next.js web/API process, a Docker background worker service for the durable worker loop, and managed Postgres shared by both processes.
+
+The prepared Blueprint template lives at `deploy/render/render.yaml` instead of the repository root. This is deliberate: Render's default Blueprint path is `render.yaml`, so keeping the template under `deploy/render/` prevents accidental provider sync before #141 has an approved provider, owner, hostname, and rollback authority.
+
+The candidate target shape is:
+
+| Resource | Runtime | Command | Purpose |
+| --- | --- | --- | --- |
+| `agentic-web` | Docker from `./Dockerfile` | `npm run start:web:prod -- --hostname 0.0.0.0 --port $PORT` | Serves Next.js web/API, `/api/health`, `/api/ready`, and GitHub App sync ingress. |
+| `agentic-worker` | Docker from `./Dockerfile` | `npm run start:worker:prod` | Processes durable worker jobs against the same Postgres database. |
+| `agentic-postgres` | Render Postgres | Managed by provider | Stores application state, shared auth runtime state, queues, leases, and worker recovery data. |
+
+Required confirmation before provider setup:
+
+- target workspace/account owner
+- target environment name, initially `staging` or `production-like`
+- stable HTTPS hostname, either provider-assigned or custom DNS
+- rollback authority and previous-image restore path
+- confirmation that the provider overwrites forwarded client-IP headers before `AGENTIC_TRUST_PROXY_HEADERS=true` is accepted
+
+After the target is approved and created, configure GitHub Actions for provider-backed staging with the stable base origin and provider deploy command:
+
+```bash
+gh secret set STAGING_BASE_URL --repo leonardwongly/agentic --body "https://agentic.example.com"
+gh secret set STAGING_SMOKE_ACCESS_KEY --repo leonardwongly/agentic --body "<same class of value as AGENTIC_ACCESS_KEY>"
+gh variable set STAGING_TRUST_PROXY_HEADERS --repo leonardwongly/agentic --body "true"
+gh variable set STAGING_DEPLOY_BIN --repo leonardwongly/agentic --body "<provider deploy executable>"
+gh secret set STAGING_DEPLOY_ARGS_JSON --repo leonardwongly/agentic --body '["<provider>","<args>"]'
+```
+
+Do not set `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL` until the deployed stable URL passes `/api/health`, `/api/ready`, and the deployment smoke checks.
+
 Use the stable ingress preflight before a provider-backed deployment:
 
 ```bash
