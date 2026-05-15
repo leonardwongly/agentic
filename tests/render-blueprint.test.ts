@@ -1,0 +1,64 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const blueprintPath = join(process.cwd(), "deploy", "render", "render.yaml");
+
+function readBlueprint(): string {
+  return readFileSync(blueprintPath, "utf8");
+}
+
+describe("Render Blueprint deployment target", () => {
+  it("prepares the full Node/container topology without being the default root Blueprint", () => {
+    const blueprint = readBlueprint();
+
+    expect(blueprint).toContain("This file intentionally lives outside the repository root");
+    expect(blueprint).toContain("name: agentic-web");
+    expect(blueprint).toContain("type: web");
+    expect(blueprint).toContain("name: agentic-worker");
+    expect(blueprint).toContain("type: worker");
+    expect(blueprint).toContain("name: agentic-postgres");
+    expect(blueprint).toContain("runtime: docker");
+    expect(blueprint).toContain("dockerfilePath: ./Dockerfile");
+    expect(blueprint).toContain("healthCheckPath: /api/health");
+  });
+
+  it("runs web and worker with the existing production startup contracts", () => {
+    const blueprint = readBlueprint();
+
+    expect(blueprint).toContain("dockerCommand: npm run start:web:prod -- --hostname 0.0.0.0 --port $PORT");
+    expect(blueprint).toContain("dockerCommand: npm run start:worker:prod");
+    expect(blueprint).toContain("AGENTIC_REQUIRE_SHARED_AUTH_STATE");
+    expect(blueprint).toContain('value: "true"');
+  });
+
+  it("keeps secret values out of the checked-in provider template", () => {
+    const blueprint = readBlueprint();
+    const secretKeys = [
+      "AGENTIC_ACCESS_KEY",
+      "AGENTIC_GITHUB_APP_ID",
+      "AGENTIC_GITHUB_APP_INSTALLATION_ID",
+      "AGENTIC_GITHUB_APP_PRIVATE_KEY",
+      "AGENTIC_GITHUB_APP_SYNC_SECRET",
+      "AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES"
+    ];
+
+    for (const key of secretKeys) {
+      expect(blueprint).toMatch(new RegExp(`key: ${key}\\n\\s+sync: false`));
+    }
+
+    expect(blueprint).not.toMatch(/AGENTIC_GITHUB_APP_PRIVATE_KEY\s*\n\s*value:/);
+    expect(blueprint).not.toMatch(/AGENTIC_ACCESS_KEY\s*\n\s*value:/);
+    expect(blueprint).not.toContain("trycloudflare.com");
+  });
+
+  it("shares managed Postgres through provider references instead of hardcoded credentials", () => {
+    const blueprint = readBlueprint();
+
+    expect(blueprint).toContain("fromDatabase:");
+    expect(blueprint).toContain("name: agentic-postgres");
+    expect(blueprint).toContain("property: connectionString");
+    expect(blueprint).not.toMatch(/postgres:\/\//);
+    expect(blueprint).not.toMatch(/postgresql:\/\//);
+  });
+});

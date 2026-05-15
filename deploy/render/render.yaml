@@ -1,0 +1,97 @@
+# Agentic Render Blueprint template.
+#
+# This file intentionally lives outside the repository root so it cannot be
+# picked up as Render's default Blueprint path accidentally. During provider
+# setup, select this file explicitly after the target environment is approved.
+#
+# Runtime shape:
+# - one Docker web service serving the Next.js web/API process
+# - one Docker background worker service running the durable worker loop
+# - one managed Postgres database shared by both services
+#
+# Do not sync this Blueprint to a production workspace until #141 has an
+# approved provider, owner, hostname, and rollback authority.
+
+previews:
+  generation: off
+
+databases:
+  - name: agentic-postgres
+    databaseName: agentic
+    user: agentic
+    region: singapore
+    plan: basic-256mb
+
+services:
+  - type: web
+    name: agentic-web
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: npm run start:web:prod -- --hostname 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    region: singapore
+    plan: starter
+    numInstances: 1
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: HOSTNAME
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agentic-postgres
+          property: connectionString
+      - key: AGENTIC_REQUIRE_SHARED_AUTH_STATE
+        value: "true"
+      - key: AGENTIC_TRUST_PROXY_HEADERS
+        value: "true"
+      - key: AGENTIC_ACCESS_KEY
+        sync: false
+      - key: AGENTIC_GITHUB_APP_ID
+        sync: false
+      - key: AGENTIC_GITHUB_APP_INSTALLATION_ID
+        sync: false
+      - key: AGENTIC_GITHUB_APP_PRIVATE_KEY
+        sync: false
+      - key: AGENTIC_GITHUB_APP_SYNC_SECRET
+        sync: false
+      - key: AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES
+        sync: false
+
+  - type: worker
+    name: agentic-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: npm run start:worker:prod
+    region: singapore
+    plan: starter
+    numInstances: 1
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agentic-postgres
+          property: connectionString
+      - key: AGENTIC_REQUIRE_SHARED_AUTH_STATE
+        value: "true"
+      - key: AGENTIC_ACCESS_KEY
+        sync: false
+      - key: AGENTIC_GITHUB_APP_ID
+        sync: false
+      - key: AGENTIC_GITHUB_APP_INSTALLATION_ID
+        sync: false
+      - key: AGENTIC_GITHUB_APP_PRIVATE_KEY
+        sync: false
+      - key: AGENTIC_GITHUB_APP_SYNC_SECRET
+        sync: false
+      - key: AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES
+        sync: false
