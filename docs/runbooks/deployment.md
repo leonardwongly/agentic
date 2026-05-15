@@ -53,9 +53,24 @@ The candidate target shape is:
 
 | Resource | Runtime | Command | Purpose |
 | --- | --- | --- | --- |
-| `agentic-web` | Docker from `./Dockerfile` | `npm run start:web:prod -- --hostname 0.0.0.0 --port $PORT` | Serves Next.js web/API, `/api/health`, `/api/ready`, and GitHub App sync ingress. |
-| `agentic-worker` | Docker from `./Dockerfile` | `npm run start:worker:prod` | Processes durable worker jobs against the same Postgres database. |
+| `agentic-web` | Docker from `./Dockerfile` | `npm run start:web:prod -- --hostname 0.0.0.0 --port $PORT` | Runs `npm run db:migrate` as the pre-deploy command, then serves Next.js web/API, `/api/health`, `/api/ready`, and GitHub App sync ingress. |
+| `agentic-worker` | Docker from `./Dockerfile` | `npm run start:worker:prod` | Processes durable worker jobs against the same Postgres database after startup schema-readiness validation. |
 | `agentic-postgres` | Render Postgres | Managed by provider | Stores application state, shared auth runtime state, queues, leases, and worker recovery data. |
+
+Both Render services set `autoDeployTrigger: off` for first setup. Keep this
+manual posture until the target environment, rollout owner, rollback path, and
+health/readiness gates have been proven. The web service owns the migration
+pre-deploy command so migrations run once before the web deploy is promoted; the
+worker validates the schema at startup and fails closed instead of racing the
+migration step.
+
+Current provider blocker:
+
+- `render blueprints validate deploy/render/render.yaml --output json` reaches
+  Render but currently returns `need_payment_info` for `agentic-postgres`,
+  `agentic-web`, and `agentic-worker`.
+- No Render services or datastores have been created yet. Add payment info to
+  the `leonardwongly` Render workspace before the first Blueprint sync.
 
 Required confirmation before provider setup:
 
@@ -64,6 +79,26 @@ Required confirmation before provider setup:
 - stable HTTPS hostname, either provider-assigned or custom DNS
 - rollback authority and previous-image restore path
 - confirmation that the provider overwrites forwarded client-IP headers before `AGENTIC_TRUST_PROXY_HEADERS=true` is accepted
+
+After billing is available, run the first provider sync manually:
+
+```bash
+render workspace current --output json
+render blueprints validate deploy/render/render.yaml --output json
+```
+
+Then create or sync the Blueprint from the Render dashboard using
+`deploy/render/render.yaml` as the Blueprint path. Keep Auto Sync disabled on
+the Blueprint until the first rollout and rollback path are captured.
+
+After the sync, verify Render created the expected resources:
+
+```bash
+render services --output json
+```
+
+Capture the generated `agentic-web` stable HTTPS URL before configuring GitHub
+Actions or the GitHub App issue sync URL.
 
 After the target is approved and created, configure GitHub Actions for provider-backed staging with the stable base origin and provider deploy command:
 
