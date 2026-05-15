@@ -1407,8 +1407,13 @@ describe("worker runtime", () => {
   it("opens a circuit breaker for repeatedly failing job kinds to stop thrashing", async () => {
     const { repository, selfImprovementRepository } = await createTestRuntime();
     const controller = new AbortController();
+    let attemptCount = 0;
 
     runDocsBuildMock.mockImplementation(async () => {
+      attemptCount += 1;
+      if (attemptCount >= 2) {
+        controller.abort();
+      }
       throw new Error("Synthetic docs failure with secret-like marker");
     });
 
@@ -1425,8 +1430,6 @@ describe("worker runtime", () => {
     });
 
     await repository.enqueueJob(failingJob);
-
-    setTimeout(() => controller.abort(), 60);
 
     const result = await runWorkerRuntime({
       repository,
@@ -1460,8 +1463,13 @@ describe("worker runtime", () => {
   it("recovers automatically by closing the circuit breaker after the cooldown", async () => {
     const { repository, selfImprovementRepository } = await createTestRuntime();
     const controller = new AbortController();
+    let attemptCount = 0;
 
     runDocsBuildMock.mockImplementation(async () => {
+      attemptCount += 1;
+      if (attemptCount >= 4) {
+        controller.abort();
+      }
       throw new Error("Synthetic docs failure");
     });
 
@@ -1478,8 +1486,6 @@ describe("worker runtime", () => {
     });
 
     await repository.enqueueJob(failingJob);
-
-    setTimeout(() => controller.abort(), 220);
 
     await runWorkerRuntime({
       repository,
