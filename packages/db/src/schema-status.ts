@@ -1,7 +1,3 @@
-import crypto from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 import {
   getRequiredAuthRuntimeSchemaObjectStatus,
@@ -9,16 +5,12 @@ import {
   REQUIRED_AUTH_RUNTIME_TABLES,
   type AuthRuntimeSchemaObjectStatus
 } from "./auth-runtime-schema";
+import { CHECKED_IN_MIGRATIONS, type CheckedInMigration } from "./migration-manifest";
 
-const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const SCHEMA_MIGRATIONS_TABLE = "agentic_schema_migrations";
 
 type SchemaQueryable = Pick<Pool, "query"> | PoolClient;
-
-type ExpectedMigration = {
-  name: string;
-  checksum: string;
-};
+type ExpectedMigration = CheckedInMigration;
 
 export type DatabaseSchemaStatus = {
   reachable: boolean;
@@ -63,34 +55,6 @@ function createEmptySchemaStatus(overrides?: Partial<DatabaseSchemaStatus>): Dat
     lastAppliedAt: null,
     ...overrides
   };
-}
-
-function resolveMigrationsDir(migrationsDir?: string): string {
-  return path.resolve(migrationsDir ?? DEFAULT_MIGRATIONS_DIR);
-}
-
-function hashMigration(sql: string): string {
-  return crypto.createHash("sha256").update(sql, "utf8").digest("hex");
-}
-
-async function listExpectedMigrations(options?: { migrationsDir?: string }): Promise<ExpectedMigration[]> {
-  const migrationsDir = resolveMigrationsDir(options?.migrationsDir);
-  const entries = await readdir(migrationsDir, { withFileTypes: true });
-  const migrationNames = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
-    .map((entry) => entry.name)
-    .sort((left, right) => left.localeCompare(right));
-
-  return Promise.all(
-    migrationNames.map(async (name) => {
-      const sql = await readFile(path.join(migrationsDir, name), "utf8");
-
-      return {
-        name,
-        checksum: hashMigration(sql)
-      };
-    })
-  );
 }
 
 async function withSchemaQueryable<T>(
@@ -175,11 +139,9 @@ function summarizeDatabaseSchemaStatus(params: {
 export async function getDatabaseSchemaStatus(options?: {
   databaseUrl?: string;
   pool?: Pool;
-  migrationsDir?: string;
+  expectedMigrations?: readonly ExpectedMigration[];
 }): Promise<DatabaseSchemaStatus> {
-  const expectedMigrations = await listExpectedMigrations({
-    migrationsDir: options?.migrationsDir
-  });
+  const expectedMigrations = options?.expectedMigrations ?? CHECKED_IN_MIGRATIONS;
 
   return withSchemaQueryable(
     {

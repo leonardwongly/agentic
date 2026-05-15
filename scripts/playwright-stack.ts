@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 type ManagedProcess = {
   name: string;
@@ -16,6 +18,32 @@ function spawnManagedProcess(name: string, command: string, args: string[]) {
     name,
     child
   };
+}
+
+function existingNextDevLockPaths(): string[] {
+  return [path.join(process.cwd(), "apps/web/.next/dev/lock"), path.join(process.cwd(), ".next/dev/lock")].filter((candidate) =>
+    existsSync(candidate)
+  );
+}
+
+function assertNoExistingNextDevServer(mode: "development" | "production") {
+  if (mode !== "development") {
+    return;
+  }
+
+  const lockPaths = existingNextDevLockPaths();
+
+  if (lockPaths.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    [
+      "A Next.js development server lock is already present, so the Playwright stack cannot start its own web server safely.",
+      "Stop the existing `npm run dev` process before running `npm run test:e2e`, or set PLAYWRIGHT_E2E_PORT to an unused port after the stale lock is removed.",
+      `Detected lock path${lockPaths.length === 1 ? "" : "s"}: ${lockPaths.join(", ")}`
+    ].join(" ")
+  );
 }
 
 async function runCommand(name: string, command: string, args: string[]) {
@@ -46,6 +74,7 @@ async function runCommand(name: string, command: string, args: string[]) {
 
 async function main() {
   const mode = process.env.PLAYWRIGHT_STACK_MODE === "production" ? "production" : "development";
+  assertNoExistingNextDevServer(mode);
 
   if (mode === "production") {
     await runCommand("build", "npm", ["run", "build"]);

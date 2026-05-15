@@ -1,6 +1,6 @@
 "use client";
 
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import {
   autopilotModeValues,
   privacyOperationKindValues,
@@ -88,7 +88,10 @@ type DashboardOperationsSectionsProps = {
   saveWorkspaceGovernance: () => Promise<void>;
   exportWorkspaceAudit: () => Promise<void>;
   saveAutopilotSettings: () => Promise<void>;
-  runPrivacyOperation: (kind: (typeof privacyOperationKindValues)[number]) => Promise<void>;
+  runPrivacyOperation: (
+    kind: (typeof privacyOperationKindValues)[number],
+    options?: { confirmationPhrase?: string }
+  ) => Promise<void>;
   revokeGoalShare: (goalId: string, shareId: string, title: string) => Promise<void>;
 };
 
@@ -109,6 +112,7 @@ const privacyOperationDescriptions: Record<(typeof privacyOperationKindValues)[n
   workspace_export: "Package the current workspace audit data through the durable worker path.",
   workspace_delete: "Delete shared workspace data and leave only a tombstone plus the owner audit trail."
 };
+const WORKSPACE_DELETE_CONFIRMATION_PHRASE = "delete workspace";
 
 const privacyOperationStatusLabels: Record<PrivacyOperation["status"], string> = {
   queued: "queued",
@@ -297,6 +301,35 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
   const governanceConformance = data.governanceConformance ?? null;
   const blockingGovernanceChecks = governanceConformance?.checks.filter((check) => check.status === "fail") ?? [];
   const warningGovernanceChecks = governanceConformance?.checks.filter((check) => check.status === "warn") ?? [];
+  const [workspaceDeleteDialogOpen, setWorkspaceDeleteDialogOpen] = useState(false);
+  const [workspaceDeleteConfirmationPhrase, setWorkspaceDeleteConfirmationPhrase] = useState("");
+  const workspaceDeleteConfirmationValid =
+    workspaceDeleteConfirmationPhrase.trim().toLowerCase() === WORKSPACE_DELETE_CONFIRMATION_PHRASE;
+
+  const closeWorkspaceDeleteDialog = () => {
+    setWorkspaceDeleteDialogOpen(false);
+    setWorkspaceDeleteConfirmationPhrase("");
+  };
+
+  const handlePrivacyOperationClick = (kind: (typeof privacyOperationKindValues)[number]) => {
+    if (kind === "workspace_delete") {
+      setWorkspaceDeleteDialogOpen(true);
+      return;
+    }
+
+    void runPrivacyOperation(kind);
+  };
+
+  const confirmWorkspaceDelete = async () => {
+    if (!workspaceDeleteConfirmationValid) {
+      return;
+    }
+
+    await runPrivacyOperation("workspace_delete", {
+      confirmationPhrase: workspaceDeleteConfirmationPhrase
+    });
+    closeWorkspaceDeleteDialog();
+  };
 
   return (
     <>
@@ -872,7 +905,7 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
                 <button
                   type="button"
                   className={kind === "workspace_delete" ? "danger-button" : "secondary-button"}
-                  onClick={() => void runPrivacyOperation(kind)}
+                  onClick={() => handlePrivacyOperationClick(kind)}
                   disabled={isPending || !canManagePrivacyOperations}
                 >
                   {privacyOperationLabels[kind]}
@@ -884,6 +917,51 @@ export function DashboardOperationsSections(props: DashboardOperationsSectionsPr
             <p className="operator-product-subtitle">{teamPermissions.managePrivacyOperations.reason}</p>
           ) : null}
         </div>
+        {workspaceDeleteDialogOpen ? (
+          <div className="batch-confirm-overlay" onClick={closeWorkspaceDeleteDialog}>
+            <div
+              className="batch-confirm-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="workspace-delete-confirm-title"
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  closeWorkspaceDeleteDialog();
+                }
+              }}
+            >
+              <h3 id="workspace-delete-confirm-title">Confirm workspace deletion</h3>
+              <p>
+                This queues a destructive worker job for {data.activeWorkspace?.name ?? "the active workspace"}. The job can delete
+                shared workspace data and preserve only tombstone and owner audit records.
+              </p>
+              <label className="field-label" htmlFor="workspace-delete-confirmation">
+                Type {WORKSPACE_DELETE_CONFIRMATION_PHRASE} to queue deletion
+              </label>
+              <input
+                id="workspace-delete-confirmation"
+                autoFocus
+                value={workspaceDeleteConfirmationPhrase}
+                onChange={(event) => setWorkspaceDeleteConfirmationPhrase(event.target.value)}
+                disabled={isPending}
+              />
+              <div className="batch-confirm-actions">
+                <button type="button" className="secondary-button" onClick={closeWorkspaceDeleteDialog} disabled={isPending}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={() => void confirmWorkspaceDelete()}
+                  disabled={isPending || !workspaceDeleteConfirmationValid}
+                >
+                  Queue workspace deletion
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="card-header">
           <h3>Recent share links</h3>

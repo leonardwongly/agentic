@@ -94,25 +94,31 @@ The orchestrator routes against capabilities only. Provider-specific method name
 
 ## API Surface
 
-The HTTP JSON API supports the UI and bounded automation:
+The canonical route inventory lives in [`docs/specs/api-route-inventory.md`](api-route-inventory.md) and is validated against `apps/web/app/api/**/route.ts`. New route handlers must update that inventory in the same change or stay out of the merge.
+
+Stable public and core automation endpoints are:
 
 | Endpoint | Method | Responsibility |
 | --- | --- | --- |
-| `/api/session` | `POST` | Create an authenticated session from the access key |
+| `/api/health` | `GET` | Return unauthenticated liveness state for orchestration and probes |
+| `/api/ready` | `GET` | Return unauthenticated readiness state for access key, storage, auth runtime state, request identity, async execution, and connector health |
+| `/api/session` | `POST`, `DELETE` | Create or clear an authenticated dashboard session from the access key |
 | `/api/goals` | `GET`, `POST` | Load the goals dashboard and enqueue goal creation |
 | `/api/goals/jobs/:id` | `GET` | Poll queued goal status and final result summary |
 | `/api/goals/:id` | `GET` | Fetch workflow, tasks, artifacts, and explanations |
+| `/api/goals/:id/refine` | `POST` | Enqueue bounded refinement for an existing goal |
 | `/api/approvals/:id/respond` | `POST` | Approve or reject a gated action |
 | `/api/memory` | `GET`, `POST` | Review and add memory records |
 | `/api/watchers` | `GET`, `POST` | Register persistent monitors |
 | `/api/autopilot/settings` | `GET`, `POST` | Inspect or update autopilot mode and scheduling controls |
-| `/api/autopilot/events` | `POST` | Queue deduplicated autopilot work from watcher, template, briefing, communication, deadline, approval, connector, or dormant-workflow triggers |
+| `/api/autopilot/events` | `POST` | Queue deduplicated autopilot work from watcher, template, briefing, approval, connector, or dormant-workflow triggers |
 | `/api/integrations` | `GET`, `POST` | Inspect or update adapter state and readiness |
+| `/api/governance` | `GET`, `POST` | Inspect or update workspace governance policy |
 | `/api/governance/privacy` | `GET`, `POST` | Inspect or queue retention, export, and deletion operations |
 | `/api/governance/audit` | `GET` | Review governance and audit outputs |
-| `/api/health` | `GET` | Return liveness state for orchestration and probes |
-| `/api/ready` | `GET` | Return readiness state for access key, DB, migrations, and auth backing |
 | `/api/docs/render` | `POST` | Rebuild and validate `agentic.docx` |
+
+Preview, dashboard-slice, integration callback, webhook, and worker event-stream endpoints are supported implementation contracts but are not promised as stable public API unless the route inventory marks them `Stable`.
 
 ## Goal Lifecycle
 

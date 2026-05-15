@@ -1,8 +1,11 @@
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
-const port = 3201;
+const port = Number.parseInt(process.env.PLAYWRIGHT_E2E_PORT ?? "3201", 10);
 const isCI = Boolean(process.env.CI);
+if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+  throw new Error("PLAYWRIGHT_E2E_PORT must be a valid TCP port.");
+}
 const e2eRoot = path.join(process.cwd(), ".agentic", "e2e", process.env.PLAYWRIGHT_E2E_RUN_ID ?? `${Date.now()}`);
 const useProductionServer = process.env.PLAYWRIGHT_USE_PROD_SERVER === "true" && Boolean(process.env.DATABASE_URL?.trim());
 const sharedBackendEnv = process.env.DATABASE_URL?.trim()

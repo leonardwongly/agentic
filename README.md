@@ -61,7 +61,7 @@ This keeps the dashboard, NL surface, and API contract aligned with what the sys
 
 ## Prerequisites
 
-- Node.js `20+`
+- Node.js `20.x` or `22.x`; the repo pins local version hints in `.nvmrc` and `.node-version`
 - npm
 - PostgreSQL, if you want shared-state local parity or any production-like run
 - `pandoc`, required for `npm run docs:render` and `npm run docs:build`
@@ -78,7 +78,7 @@ Agentic supports two useful local setups:
 
 Use this checklist when setting up a fresh checkout:
 
-1. Confirm Node.js is `20+`:
+1. Confirm Node.js is a supported LTS release:
 
 ```bash
 node --version
@@ -94,6 +94,11 @@ npm install
 
 - file-backed development: leave `DATABASE_URL` unset
 - Postgres parity: set `DATABASE_URL`, run migrations, and use `npm run db:status`
+
+| Setup mode | Required env | Supported commands | Notes |
+| --- | --- | --- | --- |
+| File-backed development | `AGENTIC_ACCESS_KEY`; optional `AGENTIC_RUNTIME_STORE_PATH` | `npm run dev`, `npm run worker:start`, `npm test`, `/api/ready` | Fast local path. Database commands that require `DATABASE_URL` are expected to fail. |
+| Postgres parity | `DATABASE_URL`, `AGENTIC_ACCESS_KEY` | File-backed commands plus `npm run db:migrate` and `npm run db:status -- --require-ready` | Use this for shared-state validation and production-like readiness. |
 
 4. Set a dashboard/API access key before sharing the environment:
 
@@ -117,6 +122,8 @@ npm run worker:start
 npm test
 npm run test:security:regression
 ```
+
+7. Unlock the dashboard and use the in-app first-run checklist. It follows the same order as this section: access key, web runtime, storage readiness, worker/queue readiness, first request, approval path, local notes, optional integrations, and repeatable workflows.
 
 ### Path 1: Minimal local run
 
@@ -255,6 +262,8 @@ Agentic intentionally moves high-cost and stateful work off the request path.
 
 For realistic local validation of the product, run both the web app and the worker.
 
+The canonical API route inventory lives in [`docs/specs/api-route-inventory.md`](docs/specs/api-route-inventory.md). Update it in the same change as any new `apps/web/app/api/**/route.ts` handler.
+
 ## Environment And Runtime Configuration
 
 ### Required For Production
@@ -315,6 +324,8 @@ Use these when you want Google connect/callback flows and tenant-scoped managed 
 export GOOGLE_CLIENT_ID=replace-with-your-client-id
 export GOOGLE_CLIENT_SECRET=replace-with-your-client-secret
 ```
+
+When either value is missing, Google-managed integrations remain visible as manual/setup-required adapters. The dashboard stays in context and reports that OAuth is not configured instead of sending the browser to the raw connect endpoint response.
 
 The repo also still supports a direct refresh-token path for legacy/local use:
 
@@ -391,6 +402,8 @@ npm run security:sbom
 npm run security:collect-evidence
 ```
 
+`npm run test:e2e` starts an isolated web app and worker stack on port `3201` by default. Stop a manually running `npm run dev` server before running E2E; Next.js protects a checkout with a dev-server lock, and the Playwright helper will now fail early with the detected lock path instead of surfacing a raw framework startup error. To use another isolated port, set `PLAYWRIGHT_E2E_PORT=3202` or another unused port.
+
 ## Observability Rollout Gates
 
 The observability package can retain sanitized telemetry locally and optionally export the same batches to a collector.
@@ -446,7 +459,7 @@ These commands are the current repo-level entry points:
 | `npm run test:performance:fitness` | Run performance fitness checks and the performance test file. |
 | `npm run remediation:dashboard` | Render the checked-in AOS remediation tracker with a git snapshot. |
 | `npm run remediation:verify` | Verify live AOS tracker issue coverage and render the remediation dashboard. |
-| `npm run db:status -- --require-ready` | Verify database reachability and migration readiness. |
+| `npm run db:status -- --require-ready` | Verify database reachability and migration readiness; requires `DATABASE_URL` and is not part of the file-backed minimal path. |
 | `npm run db:migrate` | Apply checked-in database migrations. |
 | `npm run docs:build` | Render and validate the generated `build/agentic.docx` artifact. |
 | `npm run security:audit-runtime` | Enforce runtime dependency vulnerability policy. |

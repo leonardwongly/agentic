@@ -45,7 +45,8 @@ type DashboardAdvancedSurfaceProps = {
   setMemoryContent: Dispatch<SetStateAction<string>>;
   saveMemory: () => void;
   updateMemory: (memoryId: string, action: "review" | "confirm") => Promise<void>;
-  connectGoogleProvider: () => void;
+  integrationState: RequestState;
+  connectGoogleProvider: () => Promise<void> | void;
   cycleIntegration: (
     integrationId: string,
     currentStatus: DashboardData["integrations"][number]["status"]
@@ -92,6 +93,7 @@ export function DashboardAdvancedSurface({
   setMemoryContent,
   saveMemory,
   updateMemory,
+  integrationState,
   connectGoogleProvider,
   cycleIntegration,
   noteQuery,
@@ -286,6 +288,9 @@ export function DashboardAdvancedSurface({
           <h2>Integrations</h2>
           <span>{data.integrations.length} adapters</span>
         </div>
+        <p className={`status-chip ${integrationState.kind}`}>
+          {integrationState.message || "Managed Google adapters require OAuth configuration before browser redirect."}
+        </p>
         <div className="list-stack">
           {integrationSurfaces.map(({ integration, readiness }) => {
             const isManagedGoogle = integration.metadata.provider === "google" && integration.metadata.managed === true;
@@ -472,7 +477,7 @@ export function DashboardAdvancedSurface({
           <span>{templates.length} saved</span>
         </div>
         <button type="button" className="secondary-button" onClick={loadTemplates} disabled={isPending}>
-          Load templates
+          Refresh templates
         </button>
         <p className={`status-chip ${templateState.kind}`}>
           {templateState.message || "Save completed goals as reusable templates with optional scheduling."}
