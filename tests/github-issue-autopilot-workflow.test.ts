@@ -57,6 +57,7 @@ describe("GitHub issue autopilot workflow", () => {
 
     expect(workflow).toContain("name: GitHub App Issue Sync");
     expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain("allow_temporary_url:");
     expect(workflow).toContain("schedule:");
     expect(workflow).toContain('cron: "17 * * * *"');
     expect(workflow).toContain("contents: read");
@@ -66,7 +67,12 @@ describe("GitHub issue autopilot workflow", () => {
     expect(workflow).toContain("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL: ${{ vars.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL }}");
     expect(workflow).toContain("AGENTIC_GITHUB_APP_SYNC_SECRET: ${{ secrets.AGENTIC_GITHUB_APP_SYNC_SECRET }}");
     expect(workflow).toContain('authorization: `Bearer ${secret}`');
-    expect(workflow).toContain('!url.startsWith("https://")');
+    expect(workflow).toContain('const allowTemporaryUrl = String(context.payload.inputs?.allow_temporary_url ?? "false") === "true";');
+    expect(workflow).toContain('parsedUrl.protocol !== "https:"');
+    expect(workflow).toContain("trycloudflare\\.com");
+    expect(workflow).toContain('context.eventName === "schedule"');
+    expect(workflow).toContain("temporary tunnel host");
+    expect(workflow).toContain("!allowTemporaryUrl");
     expect(workflow).toContain("secret.length < 32");
     expect(workflow).not.toContain("AGENTIC_GITHUB_APP_PRIVATE_KEY");
     expect(workflow).not.toContain("console.log(secret");
