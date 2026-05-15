@@ -30,6 +30,7 @@ import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/reposito
 import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import { DashboardAdvancedOperationsCard } from "./dashboard-advanced-operations-card";
 import { DashboardCommandCenter } from "./dashboard-command-center";
+import { DashboardFirstRunChecklist } from "./dashboard-first-run-checklist";
 import { DashboardGoalsCard } from "./dashboard-goals-card";
 import { DashboardAdvancedSurface } from "./dashboard-advanced-surface";
 import { DashboardTraceabilityCard } from "./dashboard-traceability-card";
@@ -2304,7 +2305,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           logout={logout}
           getShareableUrl={deepLink.getShareableUrl}
         />
-
+        <DashboardFirstRunChecklist data={data} notes={notes} templates={templates} isPending={isPending} onCreateGoal={focusRequestComposer} onOpenSection={navigateToSection} />
         <ReliabilityCard
           data={data}
           reliabilityHealth={reliabilityHealth}

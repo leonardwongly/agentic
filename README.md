@@ -123,6 +123,8 @@ npm test
 npm run test:security:regression
 ```
 
+7. Unlock the dashboard and use the in-app first-run checklist. It follows the same order as this section: access key, web runtime, storage readiness, worker/queue readiness, first request, approval path, local notes, optional integrations, and repeatable workflows.
+
 ### Path 1: Minimal local run
 
 This is the fastest way to boot the app locally. It uses the file-backed runtime store at `.agentic/runtime-store.json`.
@@ -259,6 +261,8 @@ Agentic intentionally moves high-cost and stateful work off the request path.
 - retries, leases, and dead-letter handling preserve operator-visible recovery state without exposing raw backend failure details
 
 For realistic local validation of the product, run both the web app and the worker.
+
+The canonical API route inventory lives in [`docs/specs/api-route-inventory.md`](docs/specs/api-route-inventory.md). Update it in the same change as any new `apps/web/app/api/**/route.ts` handler.
 
 ## Environment And Runtime Configuration
 
