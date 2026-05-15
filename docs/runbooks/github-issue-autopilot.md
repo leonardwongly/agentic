@@ -2,6 +2,8 @@
 
 GitHub Issue Autopilot turns GitHub issue activity into governed Agentic worker jobs. GitHub Actions forwards issue and issue-comment events to Agentic with an HMAC signature; Agentic verifies the signature, validates and bounds the payload, checks the repository allowlist, de-duplicates the trigger, and enqueues a `github_issue_intake` durable job.
 
+Agentic can also run a GitHub App pull sync for existing open issues. The scheduled/manual `.github/workflows/github-app-issue-sync.yml` workflow calls Agentic with a bearer sync secret; Agentic then authenticates as a GitHub App installation, lists open issues from allowlisted repositories, skips pull requests, and enqueues the same `github_issue_intake` durable jobs.
+
 Supported automation modes:
 
 - `intake`: created from `issues.opened` and `issues.reopened`; classifies and decomposes the issue into governed Agentic work.
@@ -34,6 +36,37 @@ Optional Agentic runtime environment:
 
 The workflow intentionally exits with a notice when the URL or secret is missing so issue creation is not blocked before the deployment is configured. Once configured, invalid URL schemes or short secrets fail closed.
 
+## GitHub App Open Issue Sync
+
+Create a GitHub App and install it on the repositories listed in `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`.
+
+Minimum GitHub App permissions:
+
+- Metadata: read
+- Issues: read
+
+Do not grant contents write, issues write, pull request write, administration, or secrets permissions for this sync path.
+
+Required Agentic runtime environment:
+
+- `AGENTIC_GITHUB_APP_ID`: numeric GitHub App id.
+- `AGENTIC_GITHUB_APP_INSTALLATION_ID`: numeric installation id for the repository or organization.
+- `AGENTIC_GITHUB_APP_PRIVATE_KEY`: GitHub App private key PEM. Escaped newlines and base64-encoded PEM are accepted.
+- `AGENTIC_GITHUB_APP_SYNC_SECRET`: high-entropy bearer secret used by the scheduled/manual sync workflow.
+
+Optional Agentic runtime environment:
+
+- `AGENTIC_GITHUB_APP_API_BASE_URL`: defaults to `https://api.github.com`; must use `https`.
+- `AGENTIC_GITHUB_APP_SYNC_AUTOMATION_MODE`: `work` or `plan`; defaults to `work`.
+- `AGENTIC_GITHUB_APP_SYNC_MAX_ISSUES_PER_REPOSITORY`: defaults to `100`, maximum `500`.
+
+GitHub repository configuration:
+
+- Secret `AGENTIC_GITHUB_APP_SYNC_SECRET`: same value as the Agentic runtime sync secret.
+- Variable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL`: `https://<agentic-host>/api/github/issues/app/sync`.
+
+The sync route is intentionally a pull model: GitHub Actions only triggers Agentic with a bearer secret and never receives the GitHub App private key or installation token.
+
 ## Data Flow
 
 1. `.github/workflows/github-issue-autopilot.yml` runs on `issues.opened`, `issues.reopened`, `issues.labeled`, and `issue_comment.created`.
@@ -45,6 +78,15 @@ The workflow intentionally exits with a notice when the URL or secret is missing
 7. Agentic enqueues a `github_issue_intake` job with a stable idempotency key covering repository, issue number, automation mode, and trigger identity.
 8. The worker runtime claims the job and converts it into a governed goal-create execution request. The original issue body is treated as untrusted external input and truncated before it reaches planning.
 
+GitHub App sync data flow:
+
+1. `.github/workflows/github-app-issue-sync.yml` runs on an hourly schedule or manual dispatch.
+2. The workflow calls `POST /api/github/issues/app/sync` with `Authorization: Bearer <AGENTIC_GITHUB_APP_SYNC_SECRET>`.
+3. Agentic verifies the bearer secret with constant-time comparison and validates GitHub App runtime configuration.
+4. Agentic creates a short-lived GitHub App JWT, exchanges it for an installation token, and lists open issues from each allowlisted repository.
+5. Agentic validates and bounds GitHub API responses, skips pull requests returned by the issues endpoint, and enqueues `github_issue_intake` jobs with trigger `issues.sync`.
+6. Repeated syncs de-duplicate by repository, issue number, automation mode, and the stable `github_app:open_issue_sync` trigger id.
+
 ## Security Notes
 
 - GitHub issue title, body, labels, assignees, and actor data are untrusted.
@@ -55,17 +97,19 @@ The workflow intentionally exits with a notice when the URL or secret is missing
 - Bot senders are ignored to reduce feedback loops.
 - Repository mutation remains behind Agentic governance and approval controls. The issue trigger only creates a queued worker job.
 - Payloads over 256 KB are rejected. Issue body text is trimmed to 10,000 characters in the job payload and to the orchestrator request limit during worker execution.
+- The GitHub App sync route stores only bounded issue fields and never logs the app private key, installation token, bearer sync secret, raw GitHub response, or raw issue body.
+- The scheduled sync workflow does not receive the GitHub App private key; it only receives a route-specific bearer secret.
 
 ## Validation
 
 Run focused checks after changing this flow:
 
 ```bash
-npm test -- tests/github-issue-webhook-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/worker-runtime.test.ts
+npm test -- tests/github-issue-webhook-route.test.ts tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/worker-runtime.test.ts
 npm run ci:validate-provenance
 npm run build
 ```
 
 ## Rollback
 
-Disable the GitHub repository variable `AGENTIC_GITHUB_ISSUE_WEBHOOK_URL` to stop enqueueing without changing deployed Agentic code. To fully remove the trigger, disable or revert `.github/workflows/github-issue-autopilot.yml`.
+Disable the GitHub repository variable `AGENTIC_GITHUB_ISSUE_WEBHOOK_URL` to stop webhook enqueueing without changing deployed Agentic code. Disable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL` or pause `.github/workflows/github-app-issue-sync.yml` to stop GitHub App pull sync. To fully remove either trigger, disable or revert its workflow.

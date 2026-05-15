@@ -1,0 +1,59 @@
+name: GitHub App Issue Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-app-issue-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger Agentic GitHub App issue sync
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          AGENTIC_GITHUB_APP_ISSUE_SYNC_URL: ${{ vars.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL }}
+          AGENTIC_GITHUB_APP_SYNC_SECRET: ${{ secrets.AGENTIC_GITHUB_APP_SYNC_SECRET }}
+        with:
+          script: |
+            const url = process.env.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL;
+            const secret = process.env.AGENTIC_GITHUB_APP_SYNC_SECRET;
+
+            if (!url || !secret) {
+              console.log("::notice title=Agentic GitHub App issue sync not configured::Set vars.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL and secrets.AGENTIC_GITHUB_APP_SYNC_SECRET to enable open issue sync.");
+              return;
+            }
+
+            if (!url.startsWith("https://")) {
+              core.setFailed("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL must use https.");
+              return;
+            }
+
+            if (secret.length < 32) {
+              core.setFailed("AGENTIC_GITHUB_APP_SYNC_SECRET must be at least 32 characters.");
+              return;
+            }
+
+            const response = await fetch(url, {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${secret}`,
+                "user-agent": "agentic-github-app-issue-sync"
+              }
+            });
+
+            if (!response.ok) {
+              core.setFailed(`Agentic GitHub App issue sync failed with status ${response.status}.`);
+              return;
+            }
+
+            const payload = await response.json();
+            core.info(`Queued ${payload.jobs?.length ?? 0} GitHub issue intake job(s).`);

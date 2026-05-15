@@ -373,6 +373,17 @@ In GitHub, configure the matching `AGENTIC_GITHUB_WEBHOOK_SECRET` repository sec
 
 By default, `issues.opened` and `issues.reopened` enqueue intake work, `agentic:plan` enqueues plan-only work, `agentic:work` enqueues implementation work, and exact `/agentic plan` or `/agentic work` issue comments are accepted from `OWNER`, `MEMBER`, or `COLLABORATOR` commenters. See [docs/runbooks/github-issue-autopilot.md](docs/runbooks/github-issue-autopilot.md) for label, command, allowlist, and authorization knobs.
 
+To have Agentic also poll currently open issues through a GitHub App installation, create a GitHub App with read-only metadata and issues permissions and configure:
+
+```bash
+export AGENTIC_GITHUB_APP_ID=12345
+export AGENTIC_GITHUB_APP_INSTALLATION_ID=98765
+export AGENTIC_GITHUB_APP_PRIVATE_KEY='-----BEGIN PRIVATE KEY-----...'
+export AGENTIC_GITHUB_APP_SYNC_SECRET=replace-with-a-long-random-sync-secret
+```
+
+Set the GitHub repository secret `AGENTIC_GITHUB_APP_SYNC_SECRET` and variable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL` to `https://<agentic-host>/api/github/issues/app/sync`. The scheduled/manual GitHub App issue sync workflow calls Agentic, Agentic authenticates as the installation, lists allowlisted open issues, skips pull requests, and queues the existing governed `github_issue_intake` jobs in `work` mode by default.
+
 ## Validation And Quality Gates
 
 Run the core validation suite:
