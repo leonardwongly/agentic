@@ -468,6 +468,7 @@ These commands are the current repo-level entry points:
 | `npm run test:architecture:fitness` | Check architecture constraints. |
 | `npm run test:parallel-worktree:fitness` | Check parallel-worktree ownership constraints. |
 | `npm run test:performance:fitness` | Run performance fitness checks and the performance test file. |
+| `npm run deploy:ingress:check` | Validate stable HTTPS ingress, proxy trust posture, smoke auth, and provider deploy wiring. |
 | `npm run remediation:dashboard` | Render the checked-in AOS remediation tracker with a git snapshot. |
 | `npm run remediation:verify` | Verify live AOS tracker issue coverage and render the remediation dashboard. |
 | `npm run db:status -- --require-ready` | Verify database reachability and migration readiness; requires `DATABASE_URL` and is not part of the file-backed minimal path. |
@@ -532,8 +533,23 @@ The deployment smoke helper exercises those endpoints against a live environment
 ```bash
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_TRUST_PROXY_HEADERS=true
 npm run test:smoke:deployment
 ```
+
+Before running a provider-backed staging or production-like deploy, validate that the smoke target is a stable HTTPS ingress and not a temporary tunnel or local address:
+
+```bash
+export NODE_ENV=production
+export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
+export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_TRUST_PROXY_HEADERS=true
+export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
+export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
+npm run deploy:ingress:check
+```
+
+Only set `AGENTIC_TRUST_PROXY_HEADERS=true` after confirming the ingress proxy overwrites forwarded client-IP headers at the edge.
 
 ## Parallel Delivery
 

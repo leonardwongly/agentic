@@ -27,6 +27,7 @@ Optional but commonly needed:
 ```bash
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_TRUST_PROXY_HEADERS=true
 export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
 export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
 export AGENTIC_STAGING_IMAGE_TAG=agentic:<tag>
@@ -37,6 +38,36 @@ export AGENTIC_DASHBOARD_COCKPIT=legacy
 ```
 
 `AGENTIC_STAGING_DEPLOY_BIN` and `AGENTIC_STAGING_DEPLOY_ARGS_JSON` are the CI contract for the provider-backed staging release step. The command is executed without a shell, so pass structured arguments instead of a shell pipeline.
+
+## Stable Ingress Contract
+
+External staging and production-like rollout evidence must come from a stable HTTPS origin. Temporary tunnel domains, localhost/private addresses, URL credentials, URL paths, URL query strings, and URL fragments are not accepted as the deployment smoke target.
+
+Use the stable ingress preflight before a provider-backed deployment:
+
+```bash
+export NODE_ENV=production
+export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
+export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_TRUST_PROXY_HEADERS=true
+export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
+export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
+npm run deploy:ingress:check
+```
+
+`AGENTIC_TRUST_PROXY_HEADERS=true` is only safe after confirming the ingress provider overwrites `x-forwarded-for`, `x-real-ip`, or equivalent client-IP headers at the edge. Do not enable it behind a proxy that forwards user-supplied values unchanged.
+
+For GitHub Actions, configure these repository secrets and variables before expecting `.github/workflows/staging-manual-deploy.yml` to run in external mode:
+
+| GitHub setting | Maps to | Purpose |
+| --- | --- | --- |
+| `STAGING_BASE_URL` secret | `AGENTIC_SMOKE_BASE_URL` | Stable HTTPS origin used by ingress preflight and deployment smoke tests. |
+| `STAGING_SMOKE_ACCESS_KEY` secret | `AGENTIC_SMOKE_ACCESS_KEY` | Allows the smoke suite to verify authenticated session bootstrap. |
+| `STAGING_TRUST_PROXY_HEADERS` variable | `AGENTIC_TRUST_PROXY_HEADERS` | Must be `true` after proxy overwrite behavior is confirmed. |
+| `STAGING_DEPLOY_BIN` variable | `AGENTIC_STAGING_DEPLOY_BIN` | Provider deploy executable. |
+| `STAGING_DEPLOY_ARGS_JSON` secret | `AGENTIC_STAGING_DEPLOY_ARGS_JSON` | Provider deploy arguments as a JSON string array. |
+
+When any external staging setting is missing, the workflow falls back to the runner-local self-test path and does not deploy to a provider-backed ingress.
 
 ## Pre-Deploy Checks
 
@@ -76,6 +107,12 @@ npm run test:smoke:observability-export
 ```
 
 The E2E suite should be treated as the pre-rollout check that exercises worker-backed goal flows from the user surface. The deployment smoke suite validates the deployed web boundary and rollout-gate telemetry after release.
+
+6. Validate the stable ingress contract before invoking a provider deploy.
+
+```bash
+npm run deploy:ingress:check
+```
 
 ## Rollout Stages By Risk Class
 

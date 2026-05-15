@@ -8,6 +8,7 @@ describe("staging execution plan", () => {
       AGENTIC_ACCESS_KEY: "staging-key",
       AGENTIC_SMOKE_BASE_URL: "https://staging.example.com",
       AGENTIC_SMOKE_ACCESS_KEY: "staging-smoke-key",
+      AGENTIC_TRUST_PROXY_HEADERS: "true",
       AGENTIC_STAGING_DEPLOY_BIN: "node"
     });
 
@@ -29,6 +30,7 @@ describe("staging execution plan", () => {
       "STAGING_AGENTIC_ACCESS_KEY",
       "STAGING_BASE_URL",
       "STAGING_SMOKE_ACCESS_KEY",
+      "STAGING_TRUST_PROXY_HEADERS",
       "STAGING_DEPLOY_BIN"
     ]);
     expect(plan.injectedEnv).toMatchObject({
