@@ -54,6 +54,7 @@ New route handlers must update this file in the same change unless they are dele
 | `/api/dashboard/summary` | `GET` | Authenticated UI/internal | Session or access key | Preview | Dashboard | Load the primary dashboard snapshot summary. |
 | `/api/docs/jobs/:id` | `GET` | Worker/job | Session or access key | Stable | Docs runtime | Poll document render job status. |
 | `/api/docs/render` | `POST` | Authenticated UI/internal | Session or access key | Stable | Docs runtime | Enqueue reproducible document rendering. |
+| `/api/github/issues/app/sync` | `POST` | Integration boundary | Bearer sync secret | Stable | GitHub issue intake | Run GitHub App pull sync for allowlisted open issues and queue governed issue-intake jobs. |
 | `/api/github/issues/webhook` | `POST` | Integration boundary | GitHub webhook signature | Stable | GitHub issue intake | Accept signed GitHub issue events for governed sync. |
 | `/api/goals` | `GET, POST` | Authenticated UI/internal | Session or access key | Stable | Goals and orchestration | Load dashboard data or enqueue goal creation. |
 | `/api/goals/:id` | `GET` | Authenticated UI/internal | Session or access key | Stable | Goals and orchestration | Fetch one goal bundle with workflow state. |
