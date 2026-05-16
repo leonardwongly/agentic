@@ -1,4 +1,4 @@
-import { createRepository } from "@agentic/repository";
+import { createRepository, type AgenticRepository } from "@agentic/repository";
 import type { ProviderCredential } from "@agentic/contracts";
 import { getAuthMode } from "./auth";
 import { getAuthRuntimeStateStatus, type AuthRuntimeStateStatus } from "./auth-runtime-state";
@@ -46,6 +46,16 @@ type ReadinessEvaluationParams = {
 
 const DEFAULT_MAX_PENDING_JOB_AGE_MS = 15 * 60 * 1000;
 const DEFAULT_PROVIDER_VALIDATION_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+let readinessRepository: AgenticRepository | null = null;
+
+function getReadinessRepository(): AgenticRepository {
+  if (readinessRepository) {
+    return readinessRepository;
+  }
+
+  readinessRepository = createRepository();
+  return readinessRepository;
+}
 
 async function loadDatabaseSchemaStatus(options?: {
   databaseUrl?: string;
@@ -406,7 +416,7 @@ async function getConnectorHealthCheckSnapshot(nodeEnv: string | undefined): Pro
   const runtime = normalizeRuntime(nodeEnv);
 
   try {
-    const repository = createRepository();
+    const repository = getReadinessRepository();
     const credentials = await repository.listProviderCredentials();
     return buildConnectorHealthCheckSnapshot({
       credentials,
@@ -428,7 +438,7 @@ async function getAsyncExecutionCheckSnapshot(nodeEnv: string | undefined): Prom
   const maxPendingJobAgeMs = getMaxPendingJobAgeMs();
 
   try {
-    const repository = createRepository();
+    const repository = getReadinessRepository();
     const jobs = await repository.listJobs({
       statuses: ["queued", "running", "retrying", "dead_letter"]
     });
