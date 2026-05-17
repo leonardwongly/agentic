@@ -181,6 +181,12 @@ describe("captureExecutionOutcomeSignals", () => {
       executionKind: "completed",
       outcomeScore: 1
     });
+    expect(captured.episodes[0].provenance).toMatchObject({
+      ownerUserId: "user-1",
+      workspaceId: "workspace-1",
+      source: "execution"
+    });
+    expect(captured.episodes[0].provenance.memoryIds.length).toBeGreaterThan(0);
     expect(captured.episodes[1].recommendation).toMatchObject({
       kind: "execution_path",
       action: "create_note",
@@ -197,6 +203,7 @@ describe("captureExecutionOutcomeSignals", () => {
       action: "create_note",
       success: false
     });
+    expect(captured.episodes[1].privacy.retention.expiresAt).toBe("2024-12-31T00:02:00.000Z");
   });
 
   it("truncates oversized execution detail in failure memories and episodes", () => {
@@ -216,6 +223,26 @@ describe("captureExecutionOutcomeSignals", () => {
     expect(captured.memories[1].content.length).toBeLessThan(500);
     expect(String(captured.episodes[0].metadata?.detail).length).toBeLessThanOrEqual(220);
     expect(String(captured.episodes[0].metadata?.detail)).toContain("...");
+  });
+
+  it("redacts sensitive execution details before learning capture", () => {
+    const captured = captureExecutionOutcomeSignals(buildBundle(), "user-1", [
+      {
+        taskId: "task-1",
+        success: false,
+        action: "send_message",
+        detail: "Execution failed for vip@example.com with token=abc123.",
+        timestamp: "2024-01-01T00:04:00.000Z",
+        kind: "execution.failed"
+      }
+    ]);
+
+    expect(JSON.stringify(captured)).not.toContain("vip@example.com");
+    expect(JSON.stringify(captured)).not.toContain("abc123");
+    expect(captured.episodes[0].privacy.redaction).toMatchObject({
+      applied: true,
+      rules: ["email", "secret-like"]
+    });
   });
 });
 
@@ -241,6 +268,13 @@ describe("captureMemoriesFromBundle", () => {
       approvalDecision: "approved",
       executionKind: "completed",
       outcomeScore: 1
+    });
+    expect(captured.episodes[0].privacy).toMatchObject({
+      sensitivity: "R2",
+      retention: expect.objectContaining({
+        reviewAt: "2024-03-31T00:00:00.000Z",
+        expiresAt: "2024-12-31T00:00:00.000Z"
+      })
     });
     expect(captured.episodes[1].recommendation).toMatchObject({
       kind: "task_plan",

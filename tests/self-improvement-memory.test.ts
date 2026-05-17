@@ -164,6 +164,98 @@ describe("self improvement memory repository", () => {
     ]);
   });
 
+  it("enforces owner and retention filters for learning episodes", async () => {
+    const context = await createTempRepository();
+    tempDirs.push(context.tempDir);
+
+    const ownedEpisode = buildEpisode({
+      id: "owned-episode",
+      timestamp: "2026-04-02T09:00:00.000Z",
+      provenance: {
+        ownerUserId: "user-1",
+        workspaceId: "workspace-1",
+        source: "execution",
+        memoryIds: ["memory-1"],
+        actionLogIds: ["action-1"],
+        evidenceRecordIds: [],
+        recommendationKeys: ["execution_path:debugger:repair:R1:write"]
+      },
+      privacy: {
+        sensitivity: "internal",
+        retention: {
+          policy: "learning-outcome-365d",
+          reviewAt: "2026-07-01T00:00:00.000Z",
+          expiresAt: "2027-04-02T00:00:00.000Z"
+        },
+        redaction: {
+          applied: true,
+          fields: ["execution.detail"],
+          rules: ["email"],
+          reason: "Boundary redaction applied before learning capture."
+        }
+      }
+    });
+    const foreignEpisode = buildEpisode({
+      id: "foreign-episode",
+      provenance: {
+        ownerUserId: "user-2",
+        workspaceId: "workspace-2",
+        source: "execution",
+        memoryIds: [],
+        actionLogIds: [],
+        evidenceRecordIds: [],
+        recommendationKeys: []
+      }
+    });
+    const expiredEpisode = buildEpisode({
+      id: "expired-episode",
+      timestamp: "2026-04-01T09:00:00.000Z",
+      provenance: {
+        ownerUserId: "user-1",
+        workspaceId: "workspace-1",
+        source: "execution",
+        memoryIds: [],
+        actionLogIds: [],
+        evidenceRecordIds: [],
+        recommendationKeys: []
+      },
+      privacy: {
+        sensitivity: "internal",
+        retention: {
+          policy: "learning-outcome-365d",
+          reviewAt: "2026-01-01T00:00:00.000Z",
+          expiresAt: "2026-01-02T00:00:00.000Z"
+        },
+        redaction: {
+          applied: false,
+          fields: [],
+          rules: [],
+          reason: null
+        }
+      }
+    });
+
+    await context.repository.appendEpisode(ownedEpisode);
+    await context.repository.appendEpisode(foreignEpisode);
+    await context.repository.appendEpisode(expiredEpisode);
+
+    await expect(
+      context.repository.listEpisodes({
+        ownerUserId: "user-1",
+        workspaceId: "workspace-1",
+        now: "2026-04-03T00:00:00.000Z"
+      })
+    ).resolves.toEqual([ownedEpisode]);
+    await expect(
+      context.repository.listEpisodes({
+        ownerUserId: "user-1",
+        workspaceId: "workspace-1",
+        includeExpired: true,
+        now: "2026-04-03T00:00:00.000Z"
+      })
+    ).resolves.toEqual([ownedEpisode, expiredEpisode]);
+  });
+
   it("trims trailing separators after truncating long episodic slugs", async () => {
     const context = await createTempRepository();
     tempDirs.push(context.tempDir);

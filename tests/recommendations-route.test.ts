@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { WorkspaceGovernanceSchema } from "@agentic/contracts";
+import { SYSTEM_USER_ID, WorkspaceGovernanceSchema } from "@agentic/contracts";
 import { createSelfImprovementRepository, EpisodeRecordSchema } from "@agentic/self-improvement-memory";
 import { GET as recommendationsRoute } from "../apps/web/app/api/memory/recommendations/route";
 import { expectNoStoreHeaders, buildAuthorizedGetRequest } from "./route-test-helpers";
@@ -22,6 +22,29 @@ function buildReplayEpisode(
     lesson: "Only suggest reuse once governed outcomes show stable success.",
     relatedPatternId: null,
     userFeedback: null,
+    provenance: {
+      ownerUserId: SYSTEM_USER_ID,
+      workspaceId: "workspace-1",
+      source: "execution",
+      memoryIds: [`memory-${id}`],
+      actionLogIds: [`action-${id}`],
+      evidenceRecordIds: [`evidence-${id}`],
+      recommendationKeys: ["execution_path:communications:send_message:R3:send"]
+    },
+    privacy: {
+      sensitivity: "R3",
+      retention: {
+        policy: "learning-outcome-365d",
+        reviewAt: "2026-07-20T06:00:00.000Z",
+        expiresAt: "2027-04-20T06:00:00.000Z"
+      },
+      redaction: {
+        applied: false,
+        fields: [],
+        rules: [],
+        reason: null
+      }
+    },
     metadata: {
       source: "unit-test"
     },
@@ -101,6 +124,7 @@ describe("workflow recommendations route", () => {
         workflow: { agent: string; action: string; capabilities: string[] };
         reuse: { replayMode: string; operatorAction: string; rationale: string };
         evidence: { count: number; successCount: number; score: number };
+        provenance: { episodeIds: string[]; graphRootIds: string[] };
       }>;
       summary: {
         totalEpisodes: number;
@@ -170,6 +194,10 @@ describe("workflow recommendations route", () => {
         evidence: expect.objectContaining({
           count: 2,
           successCount: 2
+        }),
+        provenance: expect.objectContaining({
+          episodeIds: expect.arrayContaining(["rec-1", "rec-2"]),
+          graphRootIds: expect.arrayContaining(["goal:goal-rec-1", "memory:memory-rec-1"])
         })
       })
     ]);
@@ -184,6 +212,62 @@ describe("workflow recommendations route", () => {
     expect(response.status).toBe(401);
     expectNoStoreHeaders(response);
     expect(payload.error).toMatch(/access key|session/i);
+  });
+
+  it("excludes expired and cross-owner learning traces from recommendations", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-recommendations-route-scope-"));
+    tempDirs.push(tempDir);
+    const repository = createSelfImprovementRepository({
+      baseDir: path.join(tempDir, ".agentic", "self-improvement")
+    });
+
+    await repository.seed();
+    await repository.appendEpisode(buildReplayEpisode("visible-1"));
+    await repository.appendEpisode(
+      buildReplayEpisode("foreign-1", {
+        provenance: {
+          ownerUserId: "other-user",
+          workspaceId: "workspace-2",
+          source: "execution",
+          memoryIds: [],
+          actionLogIds: [],
+          evidenceRecordIds: [],
+          recommendationKeys: ["execution_path:communications:send_message:R3:send"]
+        }
+      })
+    );
+    await repository.appendEpisode(
+      buildReplayEpisode("expired-1", {
+        privacy: {
+          sensitivity: "R3",
+          retention: {
+            policy: "learning-outcome-365d",
+            reviewAt: "2026-01-01T00:00:00.000Z",
+            expiresAt: "2026-01-02T00:00:00.000Z"
+          },
+          redaction: {
+            applied: false,
+            fields: [],
+            rules: [],
+            reason: null
+          }
+        }
+      })
+    );
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", repository);
+
+    const response = await recommendationsRoute(
+      buildAuthorizedGetRequest("http://localhost/api/memory/recommendations?includeDraftOnly=true&minimumScore=0&minimumEvidence=1")
+    );
+    const payload = (await response.json()) as {
+      summary: { totalEpisodes: number; matchedEpisodes: number };
+      recommendations: Array<{ evidence: { count: number } }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.summary.totalEpisodes).toBe(1);
+    expect(payload.summary.matchedEpisodes).toBe(1);
+    expect(payload.recommendations[0]?.evidence.count).toBe(1);
   });
 
   it("rejects invalid query parameters instead of widening the recommendation surface", async () => {

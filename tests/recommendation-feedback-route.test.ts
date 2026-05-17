@@ -1,10 +1,11 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
+import { createSelfImprovementRepository, type SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { POST as recommendationFeedbackRoute } from "../apps/web/app/api/goals/[id]/recommendations/feedback/route";
 import { buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-helpers";
@@ -62,22 +63,32 @@ function buildRecommendation() {
 describe("recommendation feedback route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
+  const tempDirs: string[] = [];
+  let selfImprovementRepository: SelfImprovementRepository;
 
   beforeEach(async () => {
     resetTelemetrySnapshot();
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
-    process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
-      await mkdtemp(path.join(os.tmpdir(), "agentic-recommendation-feedback-")),
-      "runtime-store.json"
-    );
+    const runtimeTempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-recommendation-feedback-"));
+    const learningTempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-recommendation-feedback-learning-"));
+    tempDirs.push(runtimeTempDir, learningTempDir);
+    process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(runtimeTempDir, "runtime-store.json");
+    selfImprovementRepository = createSelfImprovementRepository({
+      baseDir: path.join(learningTempDir, ".agentic", "self-improvement")
+    });
+    await selfImprovementRepository.seed();
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", selfImprovementRepository);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
     resetTelemetrySnapshot();
+    await Promise.all(tempDirs.map((tempDir) => rm(tempDir, { recursive: true, force: true })));
+    tempDirs.length = 0;
   });
 
   it("persists recommendation feedback as a goal-scoped action log and returns the dashboard snapshot", async () => {
@@ -106,6 +117,7 @@ describe("recommendation feedback route", () => {
     };
     const reloaded = await repository.getGoalBundle(bundle.goal.id);
     const feedbackLog = reloaded?.actionLogs.find((log) => log.kind === "goal.recommendation_feedback");
+    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: SYSTEM_USER_ID });
     const snapshot = getTelemetrySnapshot();
     const feedbackCountMetric = snapshot.metrics.find(
       (entry) =>
@@ -131,6 +143,21 @@ describe("recommendation feedback route", () => {
       decision: "accepted",
       source: "goal_card",
       recommendation: buildRecommendation()
+    });
+    expect(episodes).toHaveLength(1);
+    expect(episodes[0]).toMatchObject({
+      skill: "communications",
+      outcome: "success",
+      provenance: {
+        ownerUserId: SYSTEM_USER_ID,
+        source: "feedback",
+        recommendationKeys: [buildRecommendation().key]
+      },
+      outcomeLink: {
+        goalId: bundle.goal.id,
+        outcomeScore: 1,
+        userCorrection: false
+      }
     });
     expect(feedbackCountMetric).toMatchObject({
       kind: "counter",
@@ -170,10 +197,12 @@ describe("recommendation feedback route", () => {
     );
     const payload = (await response.json()) as { error: string };
     const reloaded = await repository.getGoalBundle(bundle.goal.id);
+    const episodes = await selfImprovementRepository.listEpisodes({ includeExpired: true });
 
     expect(response.status).toBe(404);
     expect(payload.error).toContain(`Goal ${bundle.goal.id} was not found.`);
     expect(reloaded?.actionLogs.some((log) => log.kind === "goal.recommendation_feedback")).toBe(false);
+    expect(episodes).toHaveLength(0);
   });
 
   it("rejects invalid bodies and unknown fields", async () => {
@@ -195,9 +224,11 @@ describe("recommendation feedback route", () => {
       }
     );
     const payload = (await response.json()) as { error: string };
+    const episodes = await selfImprovementRepository.listEpisodes({ includeExpired: true });
 
     expect(response.status).toBe(400);
     expect(payload.error).toContain('Unrecognized key: "extra"');
+    expect(episodes).toHaveLength(0);
   });
 
   it("labels edited feedback as overridden in telemetry so drift dashboards can track operator corrections", async () => {
@@ -218,6 +249,7 @@ describe("recommendation feedback route", () => {
         params: Promise.resolve({ id: bundle.goal.id })
       }
     );
+    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: SYSTEM_USER_ID });
     const snapshot = getTelemetrySnapshot();
     const feedbackCountMetric = snapshot.metrics.find(
       (entry) =>
@@ -226,6 +258,17 @@ describe("recommendation feedback route", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(episodes[0]).toMatchObject({
+      outcome: "failure",
+      outcomeLink: expect.objectContaining({
+        userCorrection: true,
+        outcomeScore: -0.4
+      }),
+      userFeedback: expect.objectContaining({
+        rating: 4,
+        comments: "Adjusted the recommendation before reuse."
+      })
+    });
     expect(feedbackCountMetric).toMatchObject({
       kind: "counter",
       value: 1,

@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { createActionLog, recordCounter, recordHistogram } from "@agentic/observability";
 import { resolveDashboardCockpitRollout } from "@agentic/repository";
+import { EpisodeRecordSchema, SelfImprovementConflictError } from "@agentic/self-improvement-memory";
 import { createActorContextFromPrincipal } from "../../../../../../lib/actor-context";
 import { requireApiSession } from "../../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../../lib/api-response";
-import { getSeededRepository } from "../../../../../../lib/server";
+import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../../../lib/server";
 
 const GoalIdSchema = z.string().trim().min(1).max(200);
 const RecommendationDecisionSchema = z.enum(["accepted", "edited", "rejected", "ignored"]);
@@ -44,7 +45,27 @@ const RecommendationBodySchema = z
         score: z.number().min(0).max(1),
         lastSeenAt: z.string().datetime()
       })
+      .strict(),
+    provenance: z
+      .object({
+        episodeIds: z.array(z.string().trim().min(1).max(160)).max(20).default([]),
+        goalIds: z.array(z.string().trim().min(1).max(160)).max(20).default([]),
+        taskIds: z.array(z.string().trim().min(1).max(160)).max(20).default([]),
+        memoryIds: z.array(z.string().trim().min(1).max(160)).max(20).default([]),
+        actionLogIds: z.array(z.string().trim().min(1).max(160)).max(20).default([]),
+        evidenceRecordIds: z.array(z.string().trim().min(1).max(160)).max(20).default([]),
+        graphRootIds: z.array(z.string().trim().min(1).max(220)).max(40).default([])
+      })
       .strict()
+      .default({
+        episodeIds: [],
+        goalIds: [],
+        taskIds: [],
+        memoryIds: [],
+        actionLogIds: [],
+        evidenceRecordIds: [],
+        graphRootIds: []
+      })
   })
   .strict();
 const RecommendationFeedbackBodySchema = z
@@ -71,6 +92,44 @@ function describeDecision(decision: z.infer<typeof RecommendationDecisionSchema>
       return "rejected";
     case "ignored":
       return "ignored";
+  }
+}
+
+function outcomeFromDecision(decision: z.infer<typeof RecommendationDecisionSchema>) {
+  switch (decision) {
+    case "accepted":
+      return "success";
+    case "ignored":
+      return "partial";
+    case "edited":
+    case "rejected":
+      return "failure";
+  }
+}
+
+function outcomeScoreFromDecision(decision: z.infer<typeof RecommendationDecisionSchema>) {
+  switch (decision) {
+    case "accepted":
+      return 1;
+    case "ignored":
+      return 0;
+    case "edited":
+      return -0.4;
+    case "rejected":
+      return -1;
+  }
+}
+
+function feedbackRatingFromDecision(decision: z.infer<typeof RecommendationDecisionSchema>) {
+  switch (decision) {
+    case "accepted":
+      return 10;
+    case "ignored":
+      return 5;
+    case "edited":
+      return 4;
+    case "rejected":
+      return 2;
   }
 }
 
@@ -141,6 +200,92 @@ export async function POST(request: Request, context: RouteContext) {
       ...bundle,
       actionLogs: [...bundle.actionLogs, actionLog]
     });
+
+    const selfImprovementRepository = await getSeededSelfImprovementRepository();
+    const feedbackEpisode = EpisodeRecordSchema.parse({
+      id: `feedback-${actionLog.id}`,
+      timestamp: actionLog.createdAt,
+      skill: recommendation.workflow.agent,
+      task: `Operator feedback for ${recommendation.workflow.action}`,
+      outcome: outcomeFromDecision(decision),
+      situation: `Recommendation ${recommendation.key} was presented for goal "${bundle.goal.title}".`,
+      rootCause:
+        decision === "accepted" || decision === "ignored"
+          ? null
+          : `Operator ${decision === "edited" ? "corrected" : "rejected"} the learned recommendation.`,
+      solution: `Recorded operator feedback as a bounded learning episode for future replay gates.`,
+      lesson:
+        decision === "accepted"
+          ? "This recommendation remains eligible for reuse when replay gates continue to pass."
+          : "This recommendation requires tighter review until operator feedback and replay evidence improve.",
+      recommendation: {
+        key: recommendation.key,
+        kind: recommendation.workflow.kind,
+        agent: recommendation.workflow.agent,
+        action: recommendation.workflow.action,
+        confidence: recommendation.evidence.averageConfidence,
+        rationale: recommendation.reuse.rationale,
+        riskClass: recommendation.workflow.riskClass,
+        capabilities: [...recommendation.workflow.capabilities],
+        sourceGoalId: bundle.goal.id,
+        sourceTaskId: recommendation.provenance.taskIds[0] ?? null,
+        fallbackMode: recommendation.reuse.replayMode === "suggest" ? "normal" : recommendation.reuse.replayMode === "draft_only" ? "draft_only" : "review_required",
+        evidenceHint: recommendation.evidence.count >= 3 ? "established" : recommendation.evidence.count > 0 ? "sparse" : "none"
+      },
+      outcomeLink: {
+        goalId: bundle.goal.id,
+        workflowId: bundle.workflow.id,
+        taskId: recommendation.provenance.taskIds[0] ?? null,
+        goalStatus: bundle.goal.status,
+        taskState: null,
+        approvalDecision: null,
+        executionKind: "not_run",
+        outcomeScore: outcomeScoreFromDecision(decision),
+        userCorrection: decision === "edited" || decision === "rejected",
+        notes: notes ?? null
+      },
+      relatedPatternId: null,
+      userFeedback: {
+        rating: feedbackRatingFromDecision(decision),
+        comments: notes
+      },
+      provenance: {
+        ownerUserId: principal.userId,
+        workspaceId: bundle.goal.workspaceId,
+        source: "feedback",
+        memoryIds: [...recommendation.provenance.memoryIds],
+        actionLogIds: [actionLog.id, ...recommendation.provenance.actionLogIds].slice(0, 50),
+        evidenceRecordIds: [...recommendation.provenance.evidenceRecordIds],
+        recommendationKeys: [recommendation.key]
+      },
+      privacy: {
+        sensitivity: recommendation.workflow.riskClass ?? "internal",
+        retention: {
+          policy: "learning-feedback-365d",
+          reviewAt: new Date(Date.parse(actionLog.createdAt) + 90 * 24 * 60 * 60 * 1000).toISOString(),
+          expiresAt: new Date(Date.parse(actionLog.createdAt) + 365 * 24 * 60 * 60 * 1000).toISOString()
+        },
+        redaction: {
+          applied: false,
+          fields: [],
+          rules: [],
+          reason: null
+        }
+      },
+      metadata: {
+        decision,
+        source: "recommendation_feedback_route",
+        feedbackActionLogId: actionLog.id
+      }
+    });
+
+    try {
+      await selfImprovementRepository.appendEpisode(feedbackEpisode);
+    } catch (error) {
+      if (!(error instanceof SelfImprovementConflictError)) {
+        throw error;
+      }
+    }
 
     return authenticatedJson({
       goalId: bundle.goal.id,
