@@ -41,6 +41,8 @@ import type {
   ProviderCredential,
   ProviderCredentialSecretKind,
   ProviderCredentialSecretRecord,
+  ProviderSideEffectRecord,
+  ProviderSideEffectStatus,
   Watcher,
   WatcherPage,
   WorkflowCanvasTemplate,
@@ -202,6 +204,29 @@ export type WorkspaceDeleteParams = {
   workspaceId: string;
   userId: string;
   operationId: string;
+  now?: string;
+};
+
+export type ReserveProviderSideEffectParams = {
+  userId: string;
+  workspaceId?: string | null;
+  goalId: string;
+  taskId: string;
+  adapter: ProviderSideEffectRecord["adapter"];
+  operation: ProviderSideEffectRecord["operation"];
+  idempotencyKey: string;
+  sideEffectTarget: string;
+  metadata?: Record<string, unknown>;
+  now?: string;
+};
+
+export type UpdateProviderSideEffectParams = {
+  id: string;
+  status: Exclude<ProviderSideEffectStatus, "reserved">;
+  providerRef?: string | null;
+  detail?: string | null;
+  error?: string | null;
+  metadata?: Record<string, unknown>;
   now?: string;
 };
 
@@ -379,6 +404,8 @@ export type AgenticRepository = {
     userId?: string
   ): Promise<ProviderCredentialSecretRecord | null>;
   saveProviderCredentialSecret(record: ProviderCredentialSecretRecord): Promise<ProviderCredentialSecretRecord>;
+  reserveProviderSideEffect(params: ReserveProviderSideEffectParams): Promise<ProviderSideEffectRecord>;
+  updateProviderSideEffect(params: UpdateProviderSideEffectParams): Promise<ProviderSideEffectRecord>;
   listTemplates(userId?: string): Promise<GoalTemplate[]>;
   saveTemplate(template: GoalTemplate): Promise<GoalTemplate>;
   deleteTemplate(templateId: string): Promise<void>;

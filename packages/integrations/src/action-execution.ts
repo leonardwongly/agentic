@@ -6,6 +6,7 @@ import {
   type ActionExecutionPlan,
   type ActionIntent,
   type ApprovalPreview,
+  type ProviderSideEffectRecord,
   type Task
 } from "@agentic/contracts";
 import { normalizeConnectorThrownError } from "./connector-errors";
@@ -24,6 +25,22 @@ export type ActionExecutionAdapters = {
   notes?: {
     createLocalNote: (params: { title: string; content: string }) => Promise<{ slug: string }>;
   };
+};
+
+export type ActionExecutionSideEffectLedger = {
+  reserve: (params: {
+    plan: ActionExecutionPlan;
+    task: Task;
+    actionIntent: ActionIntent;
+  }) => Promise<ProviderSideEffectRecord>;
+  update: (params: {
+    record: ProviderSideEffectRecord;
+    status: "partial_success" | "completed" | "failed";
+    providerRef?: string | null;
+    detail?: string | null;
+    error?: string | null;
+    metadata?: Record<string, unknown>;
+  }) => Promise<ProviderSideEffectRecord>;
 };
 
 function inferApprovalActionType(task: Task): ApprovalPreview["actionType"] {
@@ -420,6 +437,64 @@ function buildLocalFailureOutcome(params: {
   });
 }
 
+async function reserveProviderSideEffect(params: {
+  ledger?: ActionExecutionSideEffectLedger;
+  plan: ActionExecutionPlan;
+  task: Task;
+  actionIntent: ActionIntent;
+}): Promise<ProviderSideEffectRecord | null> {
+  if (!params.ledger || !params.plan.idempotencyKey || !params.plan.sideEffectTarget) {
+    return null;
+  }
+
+  return params.ledger.reserve({
+    plan: params.plan,
+    task: params.task,
+    actionIntent: params.actionIntent
+  });
+}
+
+async function updateProviderSideEffect(params: {
+  ledger?: ActionExecutionSideEffectLedger;
+  record: ProviderSideEffectRecord | null;
+  status: "partial_success" | "completed" | "failed";
+  providerRef?: string | null;
+  detail?: string | null;
+  error?: string | null;
+  metadata?: Record<string, unknown>;
+}) {
+  if (!params.ledger || !params.record) {
+    return params.record;
+  }
+
+  return params.ledger.update({
+    record: params.record,
+    status: params.status,
+    providerRef: params.providerRef,
+    detail: params.detail,
+    error: params.error,
+    metadata: params.metadata
+  });
+}
+
+function buildLedgerCompletedOutcome(params: {
+  plan: ActionExecutionPlan;
+  record: ProviderSideEffectRecord;
+}): ActionExecutionOutcome {
+  return ActionExecutionOutcomeSchema.parse({
+    status: "completed",
+    detail:
+      params.record.detail ??
+      `Provider side effect ${params.record.id} already completed for ${params.plan.operation}; duplicate execution suppressed.`,
+    preview: params.plan.preview,
+    retryable: false,
+    providerRef: params.record.providerRef,
+    idempotencyKey: params.plan.idempotencyKey,
+    sideEffectTarget: params.plan.sideEffectTarget,
+    recovery: buildSuccessRecovery()
+  });
+}
+
 export function planActionExecution(params: { task: Task; actionIntent: ActionIntent }): ActionExecutionPlan {
   const preview = buildApprovalPreview(params.task, params.actionIntent);
 
@@ -439,6 +514,7 @@ export async function executeTypedAction(params: {
   task: Task;
   actionIntent: ActionIntent;
   adapters: ActionExecutionAdapters;
+  sideEffectLedger?: ActionExecutionSideEffectLedger;
 }): Promise<{ plan: ActionExecutionPlan; outcome: ActionExecutionOutcome }> {
   const plan = planActionExecution({
     task: params.task,
@@ -457,26 +533,53 @@ export async function executeTypedAction(params: {
         };
       }
 
+      let ledgerRecord = await reserveProviderSideEffect({
+        ledger: params.sideEffectLedger,
+        plan,
+        task: params.task,
+        actionIntent: params.actionIntent
+      });
+
+      if (ledgerRecord?.status === "completed" && ledgerRecord.providerRef) {
+        return {
+          plan,
+          outcome: buildLedgerCompletedOutcome({ plan, record: ledgerRecord })
+        };
+      }
+
       let draftId: string | null = null;
 
       try {
-        const draft = await params.adapters.gmail.createDraft({
-          to: params.actionIntent.to,
-          subject: params.actionIntent.subject,
-          body: params.actionIntent.body,
-          ...(params.actionIntent.threadId ? { threadId: params.actionIntent.threadId } : {})
-        });
-        draftId = draft.id;
+        if (params.actionIntent.mode === "send" && ledgerRecord?.providerRef) {
+          draftId = ledgerRecord.providerRef;
+        } else {
+          const draft = await params.adapters.gmail.createDraft({
+            to: params.actionIntent.to,
+            subject: params.actionIntent.subject,
+            body: params.actionIntent.body,
+            ...(params.actionIntent.threadId ? { threadId: params.actionIntent.threadId } : {})
+          });
+          draftId = draft.id;
+        }
 
         if (params.actionIntent.mode === "draft") {
+          const detail = `Draft created (id: ${draftId}) for ${params.actionIntent.to}.`;
+          ledgerRecord = await updateProviderSideEffect({
+            ledger: params.sideEffectLedger,
+            record: ledgerRecord,
+            status: "completed",
+            providerRef: draftId,
+            detail
+          });
+
           return {
             plan,
             outcome: ActionExecutionOutcomeSchema.parse({
               status: "completed",
-              detail: `Draft created (id: ${draft.id}) for ${params.actionIntent.to}.`,
+              detail,
               preview: plan.preview,
               retryable: false,
-              providerRef: draft.id,
+              providerRef: draftId,
               idempotencyKey: plan.idempotencyKey,
               sideEffectTarget: plan.sideEffectTarget,
               recovery: buildSuccessRecovery()
@@ -485,13 +588,32 @@ export async function executeTypedAction(params: {
         }
 
         try {
-          const sent = await params.adapters.gmail.sendDraft(draft.id);
+          await updateProviderSideEffect({
+            ledger: params.sideEffectLedger,
+            record: ledgerRecord,
+            status: "partial_success",
+            providerRef: draftId,
+            detail: `Draft ${draftId} created; delivery pending.`
+          });
+
+          const sent = await params.adapters.gmail.sendDraft(draftId);
+          const detail = `Draft ${draftId} sent as message ${sent.messageId}.`;
+          await updateProviderSideEffect({
+            ledger: params.sideEffectLedger,
+            record: ledgerRecord,
+            status: "completed",
+            providerRef: sent.messageId,
+            detail,
+            metadata: {
+              draftId
+            }
+          });
 
           return {
             plan,
             outcome: ActionExecutionOutcomeSchema.parse({
               status: "completed",
-              detail: `Draft ${draft.id} sent as message ${sent.messageId}.`,
+              detail,
               preview: plan.preview,
               retryable: false,
               providerRef: sent.messageId,
@@ -501,6 +623,15 @@ export async function executeTypedAction(params: {
             })
           };
         } catch (error) {
+          await updateProviderSideEffect({
+            ledger: params.sideEffectLedger,
+            record: ledgerRecord,
+            status: "partial_success",
+            providerRef: draftId,
+            detail: `Draft ${draftId} was created but delivery failed.`,
+            error: error instanceof Error ? error.message : "Unknown Gmail send error"
+          });
+
           return {
             plan,
             outcome: buildConnectorFailureOutcome({
@@ -508,14 +639,22 @@ export async function executeTypedAction(params: {
               provider: "gmail",
               operation: "drafts.send",
               error,
-              providerRef: draft.id,
+              providerRef: draftId,
               status: "partial_success",
-              detailPrefix: `Draft ${draft.id} was created but delivery failed`,
-              compensationHints: [`Review draft ${draft.id} before retrying delivery.`]
+              detailPrefix: `Draft ${draftId} was created but delivery failed`,
+              compensationHints: [`Review draft ${draftId} before retrying delivery.`]
             })
           };
         }
       } catch (error) {
+        await updateProviderSideEffect({
+          ledger: params.sideEffectLedger,
+          record: ledgerRecord,
+          status: "failed",
+          providerRef: draftId,
+          error: error instanceof Error ? error.message : "Unknown Gmail execution error"
+        });
+
         return {
           plan,
           outcome: buildConnectorFailureOutcome({
@@ -541,6 +680,20 @@ export async function executeTypedAction(params: {
         };
       }
 
+      let ledgerRecord = await reserveProviderSideEffect({
+        ledger: params.sideEffectLedger,
+        plan,
+        task: params.task,
+        actionIntent: params.actionIntent
+      });
+
+      if (ledgerRecord?.status === "completed" && ledgerRecord.providerRef) {
+        return {
+          plan,
+          outcome: buildLedgerCompletedOutcome({ plan, record: ledgerRecord })
+        };
+      }
+
       try {
         const event = await params.adapters.calendar.createEvent({
           summary: params.actionIntent.summary,
@@ -549,12 +702,23 @@ export async function executeTypedAction(params: {
           ...(params.actionIntent.description ? { description: params.actionIntent.description } : {}),
           attendees: params.actionIntent.attendees
         });
+        const detail = `Calendar event created (id: ${event.id}). Link: ${event.htmlLink}`;
+        ledgerRecord = await updateProviderSideEffect({
+          ledger: params.sideEffectLedger,
+          record: ledgerRecord,
+          status: "completed",
+          providerRef: event.id,
+          detail,
+          metadata: {
+            htmlLink: event.htmlLink
+          }
+        });
 
         return {
           plan,
           outcome: ActionExecutionOutcomeSchema.parse({
             status: "completed",
-            detail: `Calendar event created (id: ${event.id}). Link: ${event.htmlLink}`,
+            detail,
             preview: plan.preview,
             retryable: false,
             providerRef: event.id,
@@ -564,6 +728,13 @@ export async function executeTypedAction(params: {
           })
         };
       } catch (error) {
+        await updateProviderSideEffect({
+          ledger: params.sideEffectLedger,
+          record: ledgerRecord,
+          status: "failed",
+          error: error instanceof Error ? error.message : "Unknown Calendar execution error"
+        });
+
         return {
           plan,
           outcome: buildConnectorFailureOutcome({

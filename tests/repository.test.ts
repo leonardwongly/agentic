@@ -1444,6 +1444,76 @@ describe("repository", () => {
     expect(rawStore).not.toContain(refreshToken);
   });
 
+  it("reserves and updates provider side effects by user idempotency key in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const repository = createRepository({
+      storePath: path.join(tempDir, "runtime-store.json")
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const reserved = await repository.reserveProviderSideEffect({
+      userId: SYSTEM_USER_ID,
+      workspaceId: null,
+      goalId: "goal-side-effect",
+      taskId: "task-side-effect",
+      adapter: "gmail",
+      operation: "create_draft",
+      idempotencyKey: "task:task-side-effect:abc123",
+      sideEffectTarget: "gmail:draft:client@example.com:abc123",
+      metadata: {
+        jobId: "job-side-effect"
+      },
+      now: "2026-05-17T00:00:00.000Z"
+    });
+    const duplicateReservation = await repository.reserveProviderSideEffect({
+      userId: SYSTEM_USER_ID,
+      workspaceId: null,
+      goalId: "goal-side-effect",
+      taskId: "task-side-effect",
+      adapter: "gmail",
+      operation: "create_draft",
+      idempotencyKey: "task:task-side-effect:abc123",
+      sideEffectTarget: "gmail:draft:client@example.com:abc123",
+      now: "2026-05-17T00:01:00.000Z"
+    });
+    const completed = await repository.updateProviderSideEffect({
+      id: reserved.id,
+      status: "completed",
+      providerRef: "draft-side-effect",
+      detail: "Draft created.",
+      now: "2026-05-17T00:02:00.000Z"
+    });
+    const completedReservation = await repository.reserveProviderSideEffect({
+      userId: SYSTEM_USER_ID,
+      workspaceId: null,
+      goalId: "goal-side-effect",
+      taskId: "task-side-effect",
+      adapter: "gmail",
+      operation: "create_draft",
+      idempotencyKey: "task:task-side-effect:abc123",
+      sideEffectTarget: "gmail:draft:client@example.com:abc123",
+      now: "2026-05-17T00:03:00.000Z"
+    });
+
+    expect(duplicateReservation).toMatchObject({
+      id: reserved.id,
+      attemptCount: 2,
+      status: "reserved"
+    });
+    expect(completed).toMatchObject({
+      id: reserved.id,
+      status: "completed",
+      providerRef: "draft-side-effect",
+      completedAt: "2026-05-17T00:02:00.000Z"
+    });
+    expect(completedReservation).toMatchObject({
+      id: reserved.id,
+      attemptCount: 2,
+      status: "completed",
+      providerRef: "draft-side-effect"
+    });
+  });
+
   it("isolates provider credentials and secrets by user", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
     const storePath = path.join(tempDir, "runtime-store.json");

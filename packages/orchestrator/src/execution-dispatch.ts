@@ -17,7 +17,8 @@ import {
   assertCapabilitiesWithinAllowlist,
   CapabilityAllowlistViolationError,
   executeTypedAction,
-  type ActionExecutionAdapters
+  type ActionExecutionAdapters,
+  type ActionExecutionSideEffectLedger
 } from "@agentic/integrations";
 import { createActionLog } from "@agentic/observability";
 import { getGovernanceApprovalReason } from "@agentic/policy";
@@ -200,8 +201,9 @@ export async function executeApprovedTask(params: {
   bundle: GoalBundle;
   adapters: ActionExecutionAdapters;
   governance?: WorkspaceGovernance | null;
+  sideEffectLedger?: ActionExecutionSideEffectLedger;
 }): Promise<{ result: ExecutionResult; log: ActionLog }> {
-  const { task, bundle, adapters, governance } = params;
+  const { task, bundle, adapters, governance, sideEffectLedger } = params;
   const actionIntent = resolveActionIntent(task, bundle);
   const approvedApproval = findApprovedApproval(task, bundle);
   const governanceApprovalReason = getGovernanceApprovalReason({
@@ -250,7 +252,8 @@ export async function executeApprovedTask(params: {
     const { plan, outcome } = await executeTypedAction({
       task,
       actionIntent,
-      adapters
+      adapters,
+      sideEffectLedger
     });
     const kind =
       outcome.status === "completed"
@@ -294,8 +297,9 @@ export async function executeApprovedTasks(params: {
   approvedTaskIds: string[];
   adapters: ActionExecutionAdapters;
   governance?: WorkspaceGovernance | null;
+  sideEffectLedger?: ActionExecutionSideEffectLedger;
 }): Promise<{ results: ExecutionResult[]; logs: ActionLog[] }> {
-  const { bundle, approvedTaskIds, adapters, governance } = params;
+  const { bundle, approvedTaskIds, adapters, governance, sideEffectLedger } = params;
   const results: ExecutionResult[] = [];
   const logs: ActionLog[] = [];
 
@@ -306,7 +310,7 @@ export async function executeApprovedTasks(params: {
       continue;
     }
 
-    const { result, log } = await executeApprovedTask({ task, bundle, adapters, governance });
+    const { result, log } = await executeApprovedTask({ task, bundle, adapters, governance, sideEffectLedger });
     results.push(result);
     logs.push(log);
   }

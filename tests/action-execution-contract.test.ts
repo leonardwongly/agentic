@@ -1,5 +1,12 @@
-import { ActionIntentSchema, TaskSchema, nowIso, type Capability } from "@agentic/contracts";
-import { executeTypedAction, planActionExecution } from "@agentic/integrations";
+import {
+  ActionIntentSchema,
+  ProviderSideEffectRecordSchema,
+  TaskSchema,
+  nowIso,
+  type Capability,
+  type ProviderSideEffectRecord
+} from "@agentic/contracts";
+import { executeTypedAction, planActionExecution, type ActionExecutionSideEffectLedger } from "@agentic/integrations";
 import { vi } from "vitest";
 
 function buildTask(capabilities: Capability[] = ["read", "send"]) {
@@ -18,6 +25,75 @@ function buildTask(capabilities: Capability[] = ["read", "send"]) {
     createdAt: nowIso(),
     updatedAt: nowIso()
   });
+}
+
+function buildLedger() {
+  const records = new Map<string, ProviderSideEffectRecord>();
+  const calls: string[] = [];
+  const ledger: ActionExecutionSideEffectLedger = {
+    async reserve({ plan, task }) {
+      calls.push("reserve");
+      const key = plan.idempotencyKey ?? "";
+      const existing = records.get(key);
+
+      if (existing) {
+        const next = ProviderSideEffectRecordSchema.parse({
+          ...existing,
+          attemptCount: Math.min(existing.attemptCount + 1, 25),
+          lastAttemptAt: nowIso(),
+          updatedAt: nowIso()
+        });
+        records.set(key, next);
+        return next;
+      }
+
+      const now = nowIso();
+      const record = ProviderSideEffectRecordSchema.parse({
+        id: `side-effect-${records.size + 1}`,
+        userId: "user-1",
+        workspaceId: null,
+        goalId: task.goalId,
+        taskId: task.id,
+        adapter: plan.adapter,
+        operation: plan.operation,
+        idempotencyKey: key,
+        sideEffectTarget: plan.sideEffectTarget ?? "",
+        status: "reserved",
+        providerRef: null,
+        detail: null,
+        error: null,
+        attemptCount: 1,
+        metadata: {},
+        reservedAt: now,
+        lastAttemptAt: now,
+        completedAt: null,
+        createdAt: now,
+        updatedAt: now
+      });
+      records.set(key, record);
+      return record;
+    },
+    async update({ record, status, providerRef, detail, error, metadata }) {
+      calls.push(`update:${status}`);
+      const next = ProviderSideEffectRecordSchema.parse({
+        ...record,
+        status,
+        providerRef: providerRef === undefined ? record.providerRef : providerRef,
+        detail: detail === undefined ? record.detail : detail,
+        error: error === undefined ? record.error : error,
+        metadata: {
+          ...record.metadata,
+          ...(metadata ?? {})
+        },
+        completedAt: status === "completed" ? nowIso() : record.completedAt,
+        updatedAt: nowIso()
+      });
+      records.set(record.idempotencyKey, next);
+      return next;
+    }
+  };
+
+  return { ledger, calls, records };
 }
 
 describe("action execution contract", () => {
@@ -79,6 +155,111 @@ describe("action execution contract", () => {
       }
     });
     expect(createDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("records provider side effects before Gmail mutation and suppresses duplicate drafts", async () => {
+    const task = buildTask(["read", "draft", "send"]);
+    const actionIntent = ActionIntentSchema.parse({
+      type: "send_message",
+      to: "client@example.com",
+      subject: "Follow-up",
+      body: "Approved response body.",
+      mode: "draft"
+    });
+    const createDraft = vi.fn().mockResolvedValue({ id: "draft-ledger-1" });
+    const { ledger, calls } = buildLedger();
+
+    const first = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        gmail: {
+          createDraft,
+          sendDraft: vi.fn(),
+          listRecentEmails: vi.fn()
+        }
+      },
+      sideEffectLedger: ledger
+    });
+    const second = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        gmail: {
+          createDraft,
+          sendDraft: vi.fn(),
+          listRecentEmails: vi.fn()
+        }
+      },
+      sideEffectLedger: ledger
+    });
+
+    expect(createDraft).toHaveBeenCalledTimes(1);
+    expect(calls.slice(0, 2)).toEqual(["reserve", "update:completed"]);
+    expect(first.outcome.providerRef).toBe("draft-ledger-1");
+    expect(second.outcome).toMatchObject({
+      status: "completed",
+      providerRef: "draft-ledger-1",
+      retryable: false
+    });
+  });
+
+  it("resumes Gmail send from a partial ledger record without creating another draft", async () => {
+    const task = buildTask(["read", "send"]);
+    const actionIntent = ActionIntentSchema.parse({
+      type: "send_message",
+      to: "client@example.com",
+      subject: "Follow-up",
+      body: "Approved response body.",
+      mode: "send"
+    });
+    const sendTimeout = new Error("gmail send timed out");
+    sendTimeout.name = "TimeoutError";
+    const createDraft = vi.fn().mockResolvedValue({ id: "draft-resume-1" });
+    const sendDraft = vi.fn().mockRejectedValueOnce(sendTimeout).mockResolvedValueOnce({ messageId: "message-resume-1" });
+    const { ledger, records } = buildLedger();
+
+    const first = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        gmail: {
+          createDraft,
+          sendDraft,
+          listRecentEmails: vi.fn()
+        }
+      },
+      sideEffectLedger: ledger
+    });
+    const second = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        gmail: {
+          createDraft,
+          sendDraft,
+          listRecentEmails: vi.fn()
+        }
+      },
+      sideEffectLedger: ledger
+    });
+
+    expect(first.outcome).toMatchObject({
+      status: "partial_success",
+      providerRef: "draft-resume-1",
+      retryable: true
+    });
+    expect(second.outcome).toMatchObject({
+      status: "completed",
+      providerRef: "message-resume-1"
+    });
+    expect(createDraft).toHaveBeenCalledTimes(1);
+    expect(sendDraft).toHaveBeenNthCalledWith(1, "draft-resume-1");
+    expect(sendDraft).toHaveBeenNthCalledWith(2, "draft-resume-1");
+    expect([...records.values()][0]).toMatchObject({
+      status: "completed",
+      providerRef: "message-resume-1"
+    });
   });
 
   it("marks draft-send split failures as partial success with recovery hints", async () => {
