@@ -31,5 +31,5 @@ This runbook defines which shared-workspace roles can inspect workflow state ver
 
 - Goal refinements record the acting session or system actor in the queued job and resulting action log.
 - Watcher mutations and watcher-triggered autopilot events preserve actor and responsibility context so recovery actions are attributable.
-- Dead-letter replays preserve `replayedFromJobId` metadata and queue journal recovery entries.
+- Dead-letter replays pass through the governed mutation boundary, validate optional idempotency keys, apply replay-specific abuse limits, and preserve `replayedFromJobId` metadata plus queue journal recovery entries.
 - Approval responses remain owner-attributed even when other shared members can inspect the surrounding workflow state.

@@ -9,6 +9,7 @@ import { POST as goalShareRoute } from "../apps/web/app/api/goals/[id]/share/rou
 import { POST as governanceRoute } from "../apps/web/app/api/governance/route";
 import { POST as integrationsRoute } from "../apps/web/app/api/integrations/route";
 import { POST as localNotesRoute } from "../apps/web/app/api/integrations/local-notes/route";
+import { POST as replayJobRoute } from "../apps/web/app/api/jobs/[id]/replay/route";
 import { POST as memoryRoute } from "../apps/web/app/api/memory/route";
 import { PATCH as memoryUpdateRoute } from "../apps/web/app/api/memory/[id]/route";
 import { POST as nlIntentRoute } from "../apps/web/app/api/nl/intent/route";
@@ -693,6 +694,20 @@ describe("api request validation", () => {
             }
           }),
           { params: Promise.resolve({ id: "goal-1" }) }
+        )
+    ],
+    [
+      "job replay",
+      () =>
+        replayJobRoute(
+          new Request("http://localhost/api/jobs/job-1/replay", {
+            method: "POST",
+            headers: {
+              "x-agentic-access-key": "test-access-key",
+              "x-idempotency-key": "bad key"
+            }
+          }),
+          { params: Promise.resolve({ id: "job-1" }) }
         )
     ]
   ])("rejects malformed idempotency keys for governed %s mutations", async (_label, invokeRoute) => {
