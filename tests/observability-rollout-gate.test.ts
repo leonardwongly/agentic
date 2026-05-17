@@ -295,6 +295,18 @@ describe("observability rollout gate evaluator", () => {
       "cockpit-summary-latency",
       "cockpit-table-latency"
     ]);
+    expect(checkedInManifest.alerts.filter((alert) => alert.key.startsWith("cockpit-"))).toEqual(
+      expect.arrayContaining(
+        cockpitKeys.map((key) =>
+          expect.objectContaining({
+            key,
+            minimumSamples: 1,
+            severity: "critical",
+            rolloutGate: true
+          })
+        )
+      )
+    );
 
     const evaluation = evaluateRolloutGateManifest(checkedInManifest, [
       createBatch([
@@ -325,5 +337,144 @@ describe("observability rollout gate evaluator", () => {
       ])
     );
     expect(evaluation.passed).toBe(false);
+  });
+
+  it("passes the checked-in rollout gate with synthetic cockpit smoke samples", async () => {
+    const checkedInManifest = JSON.parse(
+      await readFile(new URL("../config/observability/alerts.json", import.meta.url), "utf8")
+    ) as RolloutGateManifest;
+    const evaluation = evaluateRolloutGateManifest(checkedInManifest, [
+      createBatch([
+        {
+          kind: "metric",
+          entry: {
+            timestamp: "2026-04-17T00:00:00.000Z",
+            kind: "histogram",
+            name: "http.request.duration_ms",
+            value: 240,
+            attributes: {},
+            context: {
+              route: "observability.export.smoke"
+            }
+          }
+        },
+        {
+          kind: "metric",
+          entry: {
+            timestamp: "2026-04-17T00:00:01.000Z",
+            kind: "histogram",
+            name: "product.dashboard.first_meaningful_render_ms",
+            value: 1420,
+            attributes: {
+              variant: "redesigned"
+            },
+            context: {}
+          }
+        },
+        {
+          kind: "metric",
+          entry: {
+            timestamp: "2026-04-17T00:00:02.000Z",
+            kind: "histogram",
+            name: "product.dashboard.summary_latency_ms",
+            value: 420,
+            attributes: {
+              variant: "redesigned"
+            },
+            context: {}
+          }
+        },
+        {
+          kind: "metric",
+          entry: {
+            timestamp: "2026-04-17T00:00:03.000Z",
+            kind: "histogram",
+            name: "product.dashboard.table_endpoint_latency_ms",
+            value: 240,
+            attributes: {
+              variant: "redesigned"
+            },
+            context: {}
+          }
+        },
+        {
+          kind: "metric",
+          entry: {
+            timestamp: "2026-04-17T00:00:04.000Z",
+            kind: "counter",
+            name: "product.dashboard.event_reconnect.total",
+            value: 0,
+            attributes: {
+              variant: "redesigned"
+            },
+            context: {}
+          }
+        },
+        {
+          kind: "metric",
+          entry: {
+            timestamp: "2026-04-17T00:00:05.000Z",
+            kind: "histogram",
+            name: "product.dashboard.approval_latency_ms",
+            value: 120_000,
+            attributes: {
+              variant: "redesigned"
+            },
+            context: {}
+          }
+        },
+        {
+          kind: "metric",
+          entry: {
+            timestamp: "2026-04-17T00:00:06.000Z",
+            kind: "histogram",
+            name: "product.dashboard.dead_letter_recovery_ms",
+            value: 180_000,
+            attributes: {
+              variant: "redesigned"
+            },
+            context: {}
+          }
+        }
+      ])
+    ]);
+
+    expect(evaluation.passed).toBe(true);
+    expect(evaluation.results.filter((result) => result.key.startsWith("cockpit-"))).toEqual(
+      expect.arrayContaining(
+        [
+          "cockpit-approval-latency",
+          "cockpit-dead-letter-recovery",
+          "cockpit-event-reconnects",
+          "cockpit-first-meaningful-render",
+          "cockpit-summary-latency",
+          "cockpit-table-latency"
+        ].map((key) =>
+          expect.objectContaining({
+            key,
+            passed: true,
+            sampleCount: 1
+          })
+        )
+      )
+    );
+  });
+
+  it("keeps the export smoke path wired to every required cockpit metric", async () => {
+    const smokeScript = await readFile(
+      new URL("../scripts/observability-export-smoke.ts", import.meta.url),
+      "utf8"
+    );
+
+    for (const metricName of [
+      "product.dashboard.first_meaningful_render_ms",
+      "product.dashboard.summary_latency_ms",
+      "product.dashboard.table_endpoint_latency_ms",
+      "product.dashboard.event_reconnect.total",
+      "product.dashboard.approval_latency_ms",
+      "product.dashboard.dead_letter_recovery_ms"
+    ]) {
+      expect(smokeScript).toContain(metricName);
+    }
   });
 });
