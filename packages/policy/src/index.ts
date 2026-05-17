@@ -15,8 +15,16 @@ import {
 import { getMemoryFreshness } from "@agentic/memory";
 export {
   buildPrivacyControlSummary,
+  applyLearningPrivacyToMemoryRecord,
+  evaluateLearningPrivacyPreflight,
+  redactLearningCaptureJson,
+  redactLearningCaptureText,
   loadPrivacyControlRegistry,
   parsePrivacyControlRegistry,
+  LEARNING_CAPTURE_DATASET_ID,
+  type LearningCaptureSource,
+  type LearningPrivacyMetadata,
+  type LearningPrivacyPreflight,
   type PrivacyClassification,
   type PrivacyControlRegistry,
   type PrivacyControlSummary,

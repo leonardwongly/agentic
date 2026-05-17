@@ -1,5 +1,21 @@
-import { GoalBundleSchema, createHumanActorContext } from "@agentic/contracts";
+import {
+  GoalBundleSchema,
+  WorkspaceGovernanceSchema,
+  createHumanActorContext,
+  enterpriseWorkspaceGovernanceDefaults
+} from "@agentic/contracts";
 import { captureExecutionOutcomeSignals, captureMemoriesFromBundle } from "@agentic/orchestrator";
+
+function buildGovernance(overrides: Partial<ReturnType<typeof WorkspaceGovernanceSchema.parse>> = {}) {
+  return WorkspaceGovernanceSchema.parse({
+    workspaceId: "workspace-1",
+    ...enterpriseWorkspaceGovernanceDefaults,
+    updatedBy: "user-1",
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
+    ...overrides
+  });
+}
 
 function buildBundle() {
   return GoalBundleSchema.parse({
@@ -248,6 +264,53 @@ describe("captureMemoriesFromBundle", () => {
     expect(secondCapture.memories.map((memory) => memory.createdAt)).toEqual(firstCapture.memories.map((memory) => memory.createdAt));
     expect(secondCapture.episodes.map((episode) => episode.timestamp)).toEqual(firstCapture.episodes.map((episode) => episode.timestamp));
   });
+
+  it("attaches retention and lifecycle metadata before persistence", () => {
+    const captured = captureMemoriesFromBundle(buildBundle(), "user-1", createHumanActorContext("user-1", "session-1"), {
+      governance: buildGovernance({ retentionDays: 30 }),
+      now: "2024-01-01T00:00:00.000Z"
+    });
+
+    expect(captured.memories).not.toHaveLength(0);
+    expect(captured.memories.every((memory) => memory.sensitivity === "learning-redacted")).toBe(true);
+    expect(captured.memories.every((memory) => memory.reviewAt === "2024-01-16T00:00:00.000Z")).toBe(true);
+    expect(captured.memories.every((memory) => memory.expiryAt === "2024-01-31T00:00:00.000Z")).toBe(true);
+    expect(captured.episodes.every((episode) => episode.metadata?.learningPrivacy)).toBe(true);
+    expect(captured.episodes[0].metadata?.learningPrivacy).toMatchObject({
+      datasetId: "learning-capture-records",
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      captureAllowed: true,
+      retentionDays: 30,
+      expiresAt: "2024-01-31T00:00:00.000Z",
+      exportable: true,
+      deletable: true,
+      redacted: true
+    });
+  });
+
+  it("honors workspace learning opt-out before creating records", () => {
+    const captured = captureMemoriesFromBundle(buildBundle(), "user-1", createHumanActorContext("user-1", "session-1"), {
+      governance: buildGovernance({
+        shadowReplayPolicy: {
+          ...enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy,
+          enabled: false
+        }
+      })
+    });
+
+    expect(captured.memories).toEqual([]);
+    expect(captured.episodes).toEqual([]);
+  });
+
+  it("fails closed on user and actor boundary mismatches", () => {
+    const captured = captureMemoriesFromBundle(buildBundle(), "user-2", createHumanActorContext("user-1", "session-1"), {
+      governance: buildGovernance()
+    });
+
+    expect(captured.memories).toEqual([]);
+    expect(captured.episodes).toEqual([]);
+  });
 });
 
 describe("captureExecutionOutcomeSignals", () => {
@@ -275,5 +338,34 @@ describe("captureExecutionOutcomeSignals", () => {
 
     expect(secondCapture.memories.map((memory) => memory.id)).toEqual(firstCapture.memories.map((memory) => memory.id));
     expect(secondCapture.episodes.map((episode) => episode.id)).toEqual(firstCapture.episodes.map((episode) => episode.id));
+  });
+
+  it("redacts sensitive execution details before memory and episode persistence", () => {
+    const captured = captureExecutionOutcomeSignals(
+      buildBundle(),
+      "user-1",
+      [
+        {
+          taskId: "task-2",
+          success: false,
+          action: "create_note",
+          detail: "Failed for vip@example.com with token=ghp_1234567890abcdef and Authorization: Bearer secretBearerValue123.",
+          timestamp: "2024-01-01T00:03:00.000Z",
+          kind: "execution.failed"
+        }
+      ],
+      createHumanActorContext("user-1", "session-1"),
+      {
+        governance: buildGovernance()
+      }
+    );
+
+    const serialized = JSON.stringify(captured);
+    expect(serialized).not.toContain("vip@example.com");
+    expect(serialized).not.toContain("ghp_1234567890abcdef");
+    expect(serialized).not.toContain("secretBearerValue123");
+    expect(serialized).toContain("[redacted-email]");
+    expect(serialized).toContain("[redacted-secret]");
+    expect(serialized).toContain("[redacted-token]");
   });
 });

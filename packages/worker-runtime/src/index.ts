@@ -61,6 +61,7 @@ import {
 } from "@agentic/orchestrator";
 import type { AgenticRepository } from "@agentic/repository";
 import {
+  assertEpisodeLearningPrivacyPreflight,
   SelfImprovementConflictError,
   type SelfImprovementRepository
 } from "@agentic/self-improvement-memory";
@@ -209,6 +210,7 @@ async function persistCapturedSignals(params: {
   userId: string;
   jobId: string;
   label: string;
+  workspaceId?: string | null;
 }) {
   if (params.captured.memories.length === 0 && params.captured.episodes.length === 0) {
     return [];
@@ -219,6 +221,10 @@ async function persistCapturedSignals(params: {
 
     for (const episode of params.captured.episodes) {
       try {
+        assertEpisodeLearningPrivacyPreflight(episode, {
+          userId: params.userId,
+          workspaceId: params.workspaceId ?? null
+        });
         await params.selfImprovementRepository.appendEpisode(episode);
       } catch (error) {
         if (error instanceof SelfImprovementConflictError) {
@@ -609,7 +615,8 @@ async function executeGenericAutopilotEvent(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance: workspaceGovernance
   });
   return bundle;
 }
@@ -740,7 +747,8 @@ async function executeWatcherEvent(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance
   });
   return bundle;
 }
@@ -798,7 +806,8 @@ async function runTemplateExecution(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance: params.workspaceGovernance
   });
   return bundle;
 }
@@ -875,7 +884,8 @@ async function executeBriefingEvent(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance: workspaceGovernance
   });
   return bundle;
 }
@@ -928,7 +938,8 @@ async function executeEventFabricEvent(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance: executionContext.workspaceGovernance
   });
   return bundle;
 }
@@ -1109,6 +1120,9 @@ export async function executeApprovalFollowUpJob(params: {
 
   let updatedBundle = bundle;
   const shouldExecuteApprovedTask = job.payload.decision === "approved" && task.state === "queued";
+  const workspaceGovernance = job.payload.workspaceId
+    ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
+    : null;
 
   if (shouldExecuteApprovedTask) {
     const googleAdapters = await resolveGoogleWorkspaceAdapters({
@@ -1124,9 +1138,7 @@ export async function executeApprovalFollowUpJob(params: {
         calendar: googleAdapters?.calendar,
         notes: { createLocalNote }
       },
-      governance: job.payload.workspaceId
-        ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
-        : null
+      governance: workspaceGovernance
     });
     updatedBundle = reconcileExecutionResults({
       bundle,
@@ -1142,11 +1154,15 @@ export async function executeApprovalFollowUpJob(params: {
         updatedBundle,
         job.userId,
         results,
-        job.actorContext ?? createSystemActorContext(job.userId)
+        job.actorContext ?? createSystemActorContext(job.userId),
+        {
+          governance: workspaceGovernance
+        }
       ),
       userId: job.userId,
       jobId: job.id,
-      label: "approval-execution-capture"
+      label: "approval-execution-capture",
+      workspaceId: updatedBundle.goal.workspaceId ?? null
     });
 
     await finalizeApprovalEvidenceRecord({
@@ -1165,11 +1181,15 @@ export async function executeApprovalFollowUpJob(params: {
       captured: captureMemoriesFromBundle(
         updatedBundle,
         job.userId,
-        job.actorContext ?? createSystemActorContext(job.userId)
+        job.actorContext ?? createSystemActorContext(job.userId),
+        {
+          governance: workspaceGovernance
+        }
       ),
       userId: job.userId,
       jobId: job.id,
-      label: "approval-auto-capture"
+      label: "approval-auto-capture",
+      workspaceId: updatedBundle.goal.workspaceId ?? null
     });
 
     if (capturedMemoryIds.length > 0) {
