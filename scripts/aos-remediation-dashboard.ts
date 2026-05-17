@@ -25,6 +25,12 @@ export interface AosBaselineCommand {
   purpose: string;
 }
 
+export interface AosItemIdPolicy {
+  requiredIds: string[];
+  acceptedPrefixes: string[];
+  rule: string;
+}
+
 export interface AosTrackerItem {
   id: string;
   issue: number;
@@ -41,6 +47,7 @@ export interface AosTracker {
   reviewedAt: string;
   repository: string;
   program: string;
+  itemIdPolicy: AosItemIdPolicy;
   sourceOfTruth: AosSourceOfTruth[];
   lanes: AosLane[];
   baselineCommands: AosBaselineCommand[];
@@ -95,8 +102,12 @@ interface FormatOutputOptions {
   cwd?: string;
 }
 
+interface ResolvedItemIdPolicy {
+  requiredIds: string[];
+  acceptedPrefixes: string[];
+}
+
 const DEFAULT_CONFIG_PATH = "config/remediation/aos-tracker.json";
-const EXPECTED_AOS_IDS = Array.from({ length: 19 }, (_, index) => `AOS-${String(index).padStart(2, "0")}`);
 const GH_ISSUE_QUERY_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const VALID_PRIORITIES: Priority[] = ["critical", "high", "medium", "low"];
 const VALID_PRIORITY_SET = new Set<string>(VALID_PRIORITIES);
@@ -160,6 +171,7 @@ export function validateAosTracker(tracker: AosTracker): string[] {
   const lanes = readArray<AosLane>(tracker.lanes, "lanes", errors);
   const baselineCommands = readArray<AosBaselineCommand>(tracker.baselineCommands, "baselineCommands", errors);
   const items = readArray<AosTrackerItem>(tracker.items, "items", errors);
+  const itemIdPolicy = readItemIdPolicy(tracker.itemIdPolicy, errors);
   const laneIds = new Set<string>();
   const itemIds: string[] = [];
   const itemIdSet = new Set(itemIds);
@@ -254,13 +266,21 @@ export function validateAosTracker(tracker: AosTracker): string[] {
       itemIds.push(id);
     }
   }
-  itemIds.sort();
+  itemIds.sort(compareItemIds);
   for (const itemId of itemIds) {
+    if (itemIdSet.has(itemId)) {
+      errors.push(`Duplicate item id: ${itemId}.`);
+    }
+    if (!isAcceptedItemId(itemId, itemIdPolicy)) {
+      errors.push(`${itemId} does not match accepted item ID policy.`);
+    }
     itemIdSet.add(itemId);
   }
 
-  if (JSON.stringify(itemIds) !== JSON.stringify(EXPECTED_AOS_IDS)) {
-    errors.push(`Tracker must contain exactly ${EXPECTED_AOS_IDS.join(", ")}.`);
+  for (const requiredId of itemIdPolicy.requiredIds) {
+    if (!itemIdSet.has(requiredId)) {
+      errors.push(`Tracker is missing required item ${requiredId}.`);
+    }
   }
 
   const issueNumbers = new Set<number>();
@@ -383,6 +403,9 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push(`- Tracker items: ${summary.totalItems}`);
   lines.push(`- Critical items: ${summary.byPriority.critical}`);
   lines.push(`- Items blocked by AOS-00 baseline: ${summary.blockedByBaseline.join(", ") || "none"}`);
+  if (isRecord(tracker.itemIdPolicy) && Array.isArray(tracker.itemIdPolicy.requiredIds)) {
+    lines.push(`- Required tracker baseline: ${tracker.itemIdPolicy.requiredIds.join(", ")}`);
+  }
 
   if (options.includeGitSnapshot) {
     const snapshot = collectGitSnapshot(options.cwd);
@@ -436,7 +459,7 @@ export function renderAosDashboard(tracker: AosTracker, options: RenderOptions =
   lines.push("| --- | ---: | --- | --- | --- | --- |");
   for (const item of items
     .filter(isRecord)
-    .sort((left, right) => String(left.id).localeCompare(String(right.id)))) {
+    .sort((left, right) => compareItemIds(String(left.id), String(right.id)))) {
     const dependencies = Array.isArray(item.dependencies) ? item.dependencies.join(", ") : "invalid";
     const firstValidationGate = Array.isArray(item.validationGates) ? item.validationGates[0] ?? "none" : "invalid";
     lines.push(
@@ -497,6 +520,11 @@ export function formatAosTrackerOutput(tracker: unknown, errors: string[], optio
 export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repository): string[] {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo)) {
     return [`Invalid GitHub repository identifier: ${repo}`];
+  }
+  const manifestErrors: string[] = [];
+  const itemIdPolicy = readItemIdPolicy(tracker.itemIdPolicy, manifestErrors);
+  if (manifestErrors.length > 0) {
+    return manifestErrors;
   }
   const expectedIssueNumbers = new Set(tracker.items.map((item) => item.issue));
 
@@ -570,7 +598,9 @@ export function verifyLiveIssueCoverage(tracker: AosTracker, repo = tracker.repo
     }
     const expectedIssue = expectedById.get(id);
     if (!expectedIssue) {
-      errors.push(`Unexpected live AOS issue id ${id} on #${issue.number}.`);
+      if (!isAcceptedItemId(id, itemIdPolicy)) {
+        errors.push(`Unexpected live AOS issue id ${id} on #${issue.number}.`);
+      }
     } else if (expectedIssue.issue !== issue.number) {
       errors.push(`Live issue #${issue.number} claims to be ${id}, but manifest says ${id} is #${expectedIssue.issue}.`);
     }
@@ -614,6 +644,108 @@ function findDependencyCycles(items: AosTrackerItem[]): string[][] {
   }
 
   return cycles;
+}
+
+function readItemIdPolicy(value: unknown, errors: string[]): ResolvedItemIdPolicy {
+  const fallback: ResolvedItemIdPolicy = {
+    requiredIds: [],
+    acceptedPrefixes: []
+  };
+  const policy = readRecord(value, "itemIdPolicy", errors);
+  if (!policy) {
+    return fallback;
+  }
+
+  const requiredIds = readArray<string>(policy.requiredIds, "itemIdPolicy.requiredIds", errors);
+  const acceptedPrefixes = readArray<string>(policy.acceptedPrefixes, "itemIdPolicy.acceptedPrefixes", errors);
+  const rule = readString(policy.rule, "itemIdPolicy.rule", errors);
+  if (rule !== null && !rule.trim()) {
+    errors.push("itemIdPolicy.rule must not be empty.");
+  }
+
+  const validRequiredIds: string[] = [];
+  const seenRequiredIds = new Set<string>();
+  for (let index = 0; index < requiredIds.length; index += 1) {
+    const requiredId = readString(requiredIds[index], `itemIdPolicy.requiredIds[${index}]`, errors);
+    if (requiredId === null) {
+      continue;
+    }
+    if (seenRequiredIds.has(requiredId)) {
+      errors.push(`Duplicate required item id: ${requiredId}.`);
+    }
+    seenRequiredIds.add(requiredId);
+    validRequiredIds.push(requiredId);
+  }
+
+  const validPrefixes: string[] = [];
+  const seenPrefixes = new Set<string>();
+  for (let index = 0; index < acceptedPrefixes.length; index += 1) {
+    const prefix = readString(acceptedPrefixes[index], `itemIdPolicy.acceptedPrefixes[${index}]`, errors);
+    if (prefix === null) {
+      continue;
+    }
+    if (!/^[A-Z][A-Z0-9]*$/u.test(prefix)) {
+      errors.push(`itemIdPolicy.acceptedPrefixes[${index}] must be an uppercase alphanumeric prefix.`);
+      continue;
+    }
+    if (seenPrefixes.has(prefix)) {
+      errors.push(`Duplicate accepted item prefix: ${prefix}.`);
+    }
+    seenPrefixes.add(prefix);
+    validPrefixes.push(prefix);
+  }
+
+  if (validRequiredIds.length === 0) {
+    errors.push("itemIdPolicy.requiredIds must include at least one baseline item.");
+  }
+  if (validPrefixes.length === 0) {
+    errors.push("itemIdPolicy.acceptedPrefixes must include at least one prefix.");
+  }
+
+  const resolved = {
+    requiredIds: validRequiredIds,
+    acceptedPrefixes: validPrefixes
+  };
+  for (const requiredId of validRequiredIds) {
+    if (!isAcceptedItemId(requiredId, resolved)) {
+      errors.push(`itemIdPolicy.requiredIds contains unsupported item id ${requiredId}.`);
+    }
+  }
+
+  return resolved;
+}
+
+function isAcceptedItemId(id: string, policy: ResolvedItemIdPolicy): boolean {
+  for (const prefix of policy.acceptedPrefixes) {
+    if (id.startsWith(`${prefix}-`) && hasCanonicalNumericSuffix(id.slice(prefix.length + 1))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasCanonicalNumericSuffix(value: string): boolean {
+  return /^(?:0[0-9]|[1-9][0-9]+)$/u.test(value);
+}
+
+function compareItemIds(left: string, right: string): number {
+  const leftParts = parseItemId(left);
+  const rightParts = parseItemId(right);
+  if (leftParts && rightParts && leftParts.prefix === rightParts.prefix) {
+    return leftParts.number - rightParts.number;
+  }
+  return left.localeCompare(right);
+}
+
+function parseItemId(id: string): { prefix: string; number: number } | null {
+  const match = id.match(/^([A-Z][A-Z0-9]*)-(\d+)$/u);
+  if (!match) {
+    return null;
+  }
+  return {
+    prefix: match[1],
+    number: Number.parseInt(match[2], 10)
+  };
 }
 
 function extractAosId(title: string): string | null {
