@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { createSystemActorContext, SYSTEM_USER_ID } from "@agentic/contracts";
 import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
@@ -13,10 +13,12 @@ import { buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-h
 async function createGoalForUser(
   repository: ReturnType<typeof createRepository>,
   userId: string,
-  request: string
+  request: string,
+  workspaceId: string | null = null
 ) {
   const bundle = await processUserRequest({
     userId,
+    workspaceId,
     request,
     memories: await repository.listMemory(userId),
     integrations: await repository.listIntegrations(userId)
@@ -159,6 +161,35 @@ describe("recommendation feedback route", () => {
         userCorrection: false
       }
     });
+    expect(episodes[0].metadata?.learningPrivacy).toMatchObject({
+      datasetId: "learning-capture-records",
+      userId: SYSTEM_USER_ID,
+      workspaceId: bundle.goal.workspaceId ?? null,
+      captureSource: "recommendation_feedback",
+      captureAllowed: true,
+      optOutApplied: false,
+      exportable: true,
+      deletable: true,
+      redacted: true
+    });
+    expect(episodes[0].privacy.retention).toMatchObject({
+      policy: "learning-feedback-90d",
+      expiresAt: episodes[0].metadata?.learningPrivacy?.expiresAt
+    });
+    await expect(
+      selfImprovementRepository.exportLearningEpisodes!({
+        userId: SYSTEM_USER_ID,
+        workspaceId: bundle.goal.workspaceId ?? null
+      })
+    ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ id: episodes[0].id })]));
+    await expect(
+      selfImprovementRepository.deleteLearningEpisodes!({
+        userId: SYSTEM_USER_ID,
+        workspaceId: bundle.goal.workspaceId ?? null
+      })
+    ).resolves.toMatchObject({
+      deletedEpisodeCount: 1
+    });
     expect(feedbackCountMetric).toMatchObject({
       kind: "counter",
       value: 1,
@@ -176,6 +207,103 @@ describe("recommendation feedback route", () => {
         operatorOutcome: "accepted"
       })
     });
+  });
+
+  it("redacts sensitive rationale and free-form notes before appending feedback learning", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a reviewed outbound reply for a customer.");
+    Reflect.set(globalThis, "__agenticRepository", repository);
+    const recommendation = buildRecommendation();
+
+    const response = await recommendationFeedbackRoute(
+      buildAuthorizedJsonRequest(`http://localhost/api/goals/${bundle.goal.id}/recommendations/feedback`, {
+        decision: "edited",
+        recommendation: {
+          ...recommendation,
+          reuse: {
+            ...recommendation.reuse,
+            rationale:
+              "Email alice@example.com after setting token=super-secret-value and Bearer abcdefghijklmnop."
+          }
+        },
+        notes: "Customer bob@example.com requested password=hunter2 before reuse."
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: SYSTEM_USER_ID });
+    const serializedEpisode = JSON.stringify(episodes[0]);
+
+    expect(response.status).toBe(200);
+    expect(episodes).toHaveLength(1);
+    expect(episodes[0].recommendation?.rationale).toContain("[redacted-email]");
+    expect(episodes[0].recommendation?.rationale).toContain("[redacted-secret]");
+    expect(episodes[0].recommendation?.rationale).toContain("Bearer [redacted-token]");
+    expect(episodes[0].outcomeLink?.notes).toContain("[redacted-email]");
+    expect(episodes[0].outcomeLink?.notes).toContain("[redacted-secret]");
+    expect(episodes[0].userFeedback?.comments).toBe(episodes[0].outcomeLink?.notes);
+    expect(episodes[0].privacy.redaction).toMatchObject({
+      applied: true,
+      fields: expect.arrayContaining([
+        "recommendation.rationale",
+        "outcomeLink.notes",
+        "userFeedback.comments"
+      ])
+    });
+    expect(serializedEpisode).not.toContain("alice@example.com");
+    expect(serializedEpisode).not.toContain("bob@example.com");
+    expect(serializedEpisode).not.toContain("super-secret-value");
+    expect(serializedEpisode).not.toContain("hunter2");
+  });
+
+  it("records feedback but skips feedback learning append when workspace learning capture is opted out", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const workspaceId = dashboard.activeWorkspace?.id;
+    expect(workspaceId).toBeTruthy();
+    const governance = await repository.getWorkspaceGovernance(workspaceId!, SYSTEM_USER_ID);
+    expect(governance).toBeTruthy();
+    await repository.saveWorkspaceGovernance(
+      {
+        ...governance!,
+        shadowReplayPolicy: {
+          ...governance!.shadowReplayPolicy,
+          enabled: false
+        },
+        updatedAt: "2026-04-20T00:00:00.000Z"
+      },
+      createSystemActorContext(SYSTEM_USER_ID)
+    );
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Prepare a reviewed outbound reply for a customer.",
+      workspaceId!
+    );
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const response = await recommendationFeedbackRoute(
+      buildAuthorizedJsonRequest(`http://localhost/api/goals/${bundle.goal.id}/recommendations/feedback`, {
+        decision: "accepted",
+        recommendation: buildRecommendation()
+      }),
+      {
+        params: Promise.resolve({ id: bundle.goal.id })
+      }
+    );
+    const reloaded = await repository.getGoalBundle(bundle.goal.id);
+    const episodes = await selfImprovementRepository.listEpisodes({ includeExpired: true });
+
+    expect(response.status).toBe(200);
+    expect(reloaded?.actionLogs.some((log) => log.kind === "goal.recommendation_feedback")).toBe(true);
+    expect(episodes).toHaveLength(0);
   });
 
   it("returns 404 when the system principal tries to record feedback for another user's goal", async () => {
