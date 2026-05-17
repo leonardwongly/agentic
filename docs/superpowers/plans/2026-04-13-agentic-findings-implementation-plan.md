@@ -138,7 +138,7 @@ Security controls were implemented early with in-memory defaults.
 - Development and test remain process-local by default unless `AGENTIC_SHARED_AUTH_STATE=true`.
 - Multi-node concurrency and TTL-focused contract tests are now covered in the auth regression suite for Postgres-backed shared state when `DATABASE_URL` is configured.
 - Trusted client identity for login throttling and unlock throttling is now centralized behind a default-deny proxy-header policy.
-- Deployments that rely on trusted reverse proxies must opt in with `AGENTIC_TRUST_PROXY_HEADERS=true` so canonical forwarded client IPs are used consistently.
+- Deployments that rely on trusted reverse proxies must opt in with `AGENTIC_TRUST_PROXY_HEADERS=true` and `AGENTIC_TRUSTED_CLIENT_IP_HEADER=<header>` so exactly one ingress-overwritten client IP header is trusted consistently.
 
 ---
 

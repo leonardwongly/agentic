@@ -9,6 +9,7 @@ describe("staging execution plan", () => {
       AGENTIC_SMOKE_BASE_URL: "https://staging.example.com",
       AGENTIC_SMOKE_ACCESS_KEY: "staging-smoke-key",
       AGENTIC_TRUST_PROXY_HEADERS: "true",
+      AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for",
       AGENTIC_STAGING_DEPLOY_BIN: "node"
     });
 
@@ -31,6 +32,7 @@ describe("staging execution plan", () => {
       "STAGING_BASE_URL",
       "STAGING_SMOKE_ACCESS_KEY",
       "STAGING_TRUST_PROXY_HEADERS",
+      "STAGING_TRUSTED_CLIENT_IP_HEADER",
       "STAGING_DEPLOY_BIN"
     ]);
     expect(plan.injectedEnv).toMatchObject({
@@ -40,6 +42,7 @@ describe("staging execution plan", () => {
       AGENTIC_SMOKE_ACCESS_KEY: "agentic-staging-self-test-key",
       AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE: "true",
       AGENTIC_TRUST_PROXY_HEADERS: "true",
+      AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for",
       AGENTIC_STAGING_DEPLOY_BIN: "node",
       AGENTIC_STAGING_DEPLOY_TIMEOUT_MS: "45000"
     });

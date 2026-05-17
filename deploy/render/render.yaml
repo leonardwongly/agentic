@@ -57,6 +57,8 @@ services:
         value: "true"
       - key: AGENTIC_TRUST_PROXY_HEADERS
         value: "true"
+      - key: AGENTIC_TRUSTED_CLIENT_IP_HEADER
+        value: x-forwarded-for
       - key: AGENTIC_ACCESS_KEY
         sync: false
       - key: AGENTIC_GITHUB_APP_ID

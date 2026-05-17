@@ -66,6 +66,7 @@ function buildRequestIdentityStatus(
   return {
     production: false,
     trustProxyHeaders: false,
+    trustedClientIpHeader: null,
     identitySource: "request-fingerprint",
     warnings: [
       "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."
@@ -258,6 +259,7 @@ describe("runtime readiness", () => {
       requestIdentity: buildRequestIdentityStatus({
         production: true,
         trustProxyHeaders: true,
+        trustedClientIpHeader: "x-forwarded-for",
         identitySource: "trusted-ip",
         warnings: []
       }),
@@ -296,6 +298,7 @@ describe("runtime readiness", () => {
       requestIdentity: buildRequestIdentityStatus({
         production: true,
         trustProxyHeaders: true,
+        trustedClientIpHeader: "x-forwarded-for",
         identitySource: "trusted-ip",
         warnings: []
       }),
@@ -342,6 +345,7 @@ describe("runtime readiness", () => {
       requestIdentity: buildRequestIdentityStatus({
         production: true,
         trustProxyHeaders: true,
+        trustedClientIpHeader: "x-forwarded-for",
         identitySource: "trusted-ip",
         warnings: []
       }),
@@ -399,6 +403,7 @@ describe("runtime readiness", () => {
       requestIdentity: buildRequestIdentityStatus({
         production: true,
         trustProxyHeaders: true,
+        trustedClientIpHeader: "x-forwarded-for",
         identitySource: "trusted-ip",
         warnings: []
       }),
@@ -469,7 +474,55 @@ describe("runtime readiness", () => {
         status: "fail",
         details: expect.objectContaining({
           identitySource: "request-fingerprint",
-          trustProxyHeaders: false
+          trustProxyHeaders: false,
+          trustedClientIpHeader: null
+        })
+      })
+    );
+  });
+
+  it("fails readiness in production when proxy trust lacks a canonical client IP header", () => {
+    const report = buildWebReadinessReport({
+      nodeEnv: "production",
+      databaseConfigured: true,
+      authMode: {
+        requiresConfiguredKey: false,
+        usesDevelopmentFallback: false,
+        configured: true
+      },
+      authRuntimeState: buildAuthRuntimeState({
+        production: true,
+        requiresSharedState: true,
+        sessionStateScope: "shared",
+        unlockStateScope: "shared",
+        sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        trustedClientIpHeader: null,
+        identitySource: "request-fingerprint",
+        warnings: [
+          "Trusted proxy headers are enabled, but AGENTIC_TRUSTED_CLIENT_IP_HEADER must name one canonical client-IP header."
+        ]
+      }),
+      asyncExecution: buildAsyncExecutionCheck(),
+      connectorHealth: buildConnectorHealthCheck(),
+      databaseStatus: buildDatabaseStatus(),
+      generatedAt: "2026-04-17T00:00:00.000Z"
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "request_identity",
+        status: "fail",
+        details: expect.objectContaining({
+          identitySource: "request-fingerprint",
+          trustProxyHeaders: true,
+          trustedClientIpHeader: null
         })
       })
     );
@@ -496,6 +549,7 @@ describe("runtime readiness", () => {
       requestIdentity: buildRequestIdentityStatus({
         production: true,
         trustProxyHeaders: true,
+        trustedClientIpHeader: "x-forwarded-for",
         identitySource: "trusted-ip",
         warnings: []
       }),
@@ -554,6 +608,7 @@ describe("runtime readiness", () => {
       requestIdentity: buildRequestIdentityStatus({
         production: true,
         trustProxyHeaders: true,
+        trustedClientIpHeader: "x-forwarded-for",
         identitySource: "trusted-ip",
         warnings: []
       }),
