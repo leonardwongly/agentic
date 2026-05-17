@@ -28,6 +28,10 @@ const originalExportBatchSize = process.env.AGENTIC_TELEMETRY_EXPORT_BATCH_SIZE;
 const originalExportInterval = process.env.AGENTIC_TELEMETRY_EXPORT_INTERVAL_MS;
 const originalExportTimeout = process.env.AGENTIC_TELEMETRY_EXPORT_TIMEOUT_MS;
 const originalTelemetryConsole = process.env.AGENTIC_TELEMETRY_CONSOLE;
+const cockpitRolloutAttributes = {
+  variant: "redesigned",
+  sampleSource: "observability-export-smoke"
+};
 
 function restoreOptionalEnv(name: string, value: string | undefined) {
   if (value === undefined) {
@@ -36,6 +40,15 @@ function restoreOptionalEnv(name: string, value: string | undefined) {
   }
 
   process.env[name] = value;
+}
+
+function recordSyntheticCockpitRolloutSamples() {
+  recordHistogram("product.dashboard.first_meaningful_render_ms", 1420, cockpitRolloutAttributes);
+  recordHistogram("product.dashboard.summary_latency_ms", 420, cockpitRolloutAttributes);
+  recordHistogram("product.dashboard.table_endpoint_latency_ms", 240, cockpitRolloutAttributes);
+  recordCounter("product.dashboard.event_reconnect.total", 0, cockpitRolloutAttributes);
+  recordHistogram("product.dashboard.approval_latency_ms", 120_000, cockpitRolloutAttributes);
+  recordHistogram("product.dashboard.dead_letter_recovery_ms", 180_000, cockpitRolloutAttributes);
 }
 
 async function main() {
@@ -67,7 +80,7 @@ async function main() {
     process.env.AGENTIC_TELEMETRY_EXPORT_URL = `http://127.0.0.1:${address.port}/telemetry`;
     process.env.AGENTIC_TELEMETRY_EXPORT_TOKEN = "observability-smoke-token";
     process.env.AGENTIC_TELEMETRY_RETENTION_DIR = retentionDir;
-    process.env.AGENTIC_TELEMETRY_RETENTION_MAX_FILES = "4";
+    process.env.AGENTIC_TELEMETRY_RETENTION_MAX_FILES = "8";
     process.env.AGENTIC_TELEMETRY_EXPORT_BATCH_SIZE = "3";
     process.env.AGENTIC_TELEMETRY_EXPORT_INTERVAL_MS = "10";
     process.env.AGENTIC_TELEMETRY_EXPORT_TIMEOUT_MS = "1000";
@@ -106,6 +119,7 @@ async function main() {
           method: "POST",
           path: "/internal/observability/export-smoke"
         });
+        recordSyntheticCockpitRolloutSamples();
         await withSpan("telemetry.export.smoke.span", { mode: "smoke" }, async () => {
           logError("telemetry.export.smoke.redaction", "token=super-secret-value");
         });
@@ -138,6 +152,21 @@ async function main() {
       retainedBatches.some((entry) => entry.batch.items.some((item) => item.kind === "metric" && item.entry?.name === "http.request.total")),
       "Retained telemetry batches are missing request count metrics."
     );
+    for (const metricName of [
+      "product.dashboard.first_meaningful_render_ms",
+      "product.dashboard.summary_latency_ms",
+      "product.dashboard.table_endpoint_latency_ms",
+      "product.dashboard.event_reconnect.total",
+      "product.dashboard.approval_latency_ms",
+      "product.dashboard.dead_letter_recovery_ms"
+    ]) {
+      assert(
+        retainedBatches.some((entry) =>
+          entry.batch.items.some((item) => item.kind === "metric" && item.entry?.name === metricName)
+        ),
+        `Retained telemetry batches are missing cockpit rollout metric ${metricName}.`
+      );
+    }
     assert(retainedBatches.every((entry) => !entry.raw.includes("super-secret-value")), "Retained telemetry batch leaked a secret.");
     assert(!requests[0]!.body.includes("super-secret-value"), "Telemetry backend payload leaked a secret.");
 
