@@ -211,14 +211,16 @@ function buildAuthRuntimeStateCheck(params: ReadinessEvaluationParams): Readines
 function buildRequestIdentityCheck(params: ReadinessEvaluationParams): ReadinessCheck {
   const runtime = normalizeRuntime(params.nodeEnv);
 
-  if (runtime === "production" && !params.requestIdentity.trustProxyHeaders) {
+  if (runtime === "production" && params.requestIdentity.identitySource !== "trusted-ip") {
     return {
       name: "request_identity",
       status: "fail",
-      message: "Trusted proxy headers must be enabled in production so abuse controls can key off canonical client IPs.",
+      message:
+        "Trusted proxy headers and a canonical client-IP header must be configured in production so abuse controls can key off canonical client IPs.",
       details: {
         identitySource: params.requestIdentity.identitySource,
-        trustProxyHeaders: params.requestIdentity.trustProxyHeaders
+        trustProxyHeaders: params.requestIdentity.trustProxyHeaders,
+        trustedClientIpHeader: params.requestIdentity.trustedClientIpHeader
       }
     };
   }
@@ -234,6 +236,7 @@ function buildRequestIdentityCheck(params: ReadinessEvaluationParams): Readiness
       details: {
         identitySource: params.requestIdentity.identitySource,
         trustProxyHeaders: params.requestIdentity.trustProxyHeaders,
+        trustedClientIpHeader: params.requestIdentity.trustedClientIpHeader,
         warningCount: params.requestIdentity.warnings.length
       }
     };
@@ -245,7 +248,8 @@ function buildRequestIdentityCheck(params: ReadinessEvaluationParams): Readiness
     message: "Request identity controls are configured to trust canonical proxy IP headers.",
     details: {
       identitySource: params.requestIdentity.identitySource,
-      trustProxyHeaders: params.requestIdentity.trustProxyHeaders
+      trustProxyHeaders: params.requestIdentity.trustProxyHeaders,
+      trustedClientIpHeader: params.requestIdentity.trustedClientIpHeader
     }
   };
 }

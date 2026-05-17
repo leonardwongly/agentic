@@ -28,6 +28,7 @@ Optional but commonly needed:
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
 export AGENTIC_TRUST_PROXY_HEADERS=true
+export AGENTIC_TRUSTED_CLIENT_IP_HEADER=x-forwarded-for
 export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
 export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
 export AGENTIC_STAGING_IMAGE_TAG=agentic:<tag>
@@ -78,7 +79,7 @@ Required confirmation before provider setup:
 - target environment name, initially `staging` or `production-like`
 - stable HTTPS hostname, either provider-assigned or custom DNS
 - rollback authority and previous-image restore path
-- confirmation that the provider overwrites forwarded client-IP headers before `AGENTIC_TRUST_PROXY_HEADERS=true` is accepted
+- confirmation that the provider overwrites the configured canonical client-IP header before `AGENTIC_TRUST_PROXY_HEADERS=true` and `AGENTIC_TRUSTED_CLIENT_IP_HEADER=<header>` are accepted
 
 After billing is available, run the first provider sync manually:
 
@@ -106,6 +107,7 @@ After the target is approved and created, configure GitHub Actions for provider-
 gh secret set STAGING_BASE_URL --repo leonardwongly/agentic --body "https://agentic.example.com"
 gh secret set STAGING_SMOKE_ACCESS_KEY --repo leonardwongly/agentic --body "<same class of value as AGENTIC_ACCESS_KEY>"
 gh variable set STAGING_TRUST_PROXY_HEADERS --repo leonardwongly/agentic --body "true"
+gh variable set STAGING_TRUSTED_CLIENT_IP_HEADER --repo leonardwongly/agentic --body "x-forwarded-for"
 gh variable set STAGING_DEPLOY_BIN --repo leonardwongly/agentic --body "<provider deploy executable>"
 gh secret set STAGING_DEPLOY_ARGS_JSON --repo leonardwongly/agentic --body '["<provider>","<args>"]'
 ```
@@ -119,12 +121,13 @@ export NODE_ENV=production
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
 export AGENTIC_TRUST_PROXY_HEADERS=true
+export AGENTIC_TRUSTED_CLIENT_IP_HEADER=x-forwarded-for
 export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
 export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
 npm run deploy:ingress:check
 ```
 
-`AGENTIC_TRUST_PROXY_HEADERS=true` is only safe after confirming the ingress provider overwrites `x-forwarded-for`, `x-real-ip`, or equivalent client-IP headers at the edge. Do not enable it behind a proxy that forwards user-supplied values unchanged.
+`AGENTIC_TRUST_PROXY_HEADERS=true` is only safe after confirming the ingress provider overwrites the single header named by `AGENTIC_TRUSTED_CLIENT_IP_HEADER` at the edge. Supported values are `x-forwarded-for`, `x-real-ip`, and `cf-connecting-ip`. Do not enable proxy trust behind an ingress that forwards that configured header from users unchanged.
 
 For GitHub Actions, configure these repository secrets and variables before expecting `.github/workflows/staging-manual-deploy.yml` to run in external mode:
 
@@ -133,6 +136,7 @@ For GitHub Actions, configure these repository secrets and variables before expe
 | `STAGING_BASE_URL` secret | `AGENTIC_SMOKE_BASE_URL` | Stable HTTPS origin used by ingress preflight and deployment smoke tests. |
 | `STAGING_SMOKE_ACCESS_KEY` secret | `AGENTIC_SMOKE_ACCESS_KEY` | Allows the smoke suite to verify authenticated session bootstrap. |
 | `STAGING_TRUST_PROXY_HEADERS` variable | `AGENTIC_TRUST_PROXY_HEADERS` | Must be `true` after proxy overwrite behavior is confirmed. |
+| `STAGING_TRUSTED_CLIENT_IP_HEADER` variable | `AGENTIC_TRUSTED_CLIENT_IP_HEADER` | Names the one ingress-overwritten client-IP header to trust. |
 | `STAGING_DEPLOY_BIN` variable | `AGENTIC_STAGING_DEPLOY_BIN` | Provider deploy executable. |
 | `STAGING_DEPLOY_ARGS_JSON` secret | `AGENTIC_STAGING_DEPLOY_ARGS_JSON` | Provider deploy arguments as a JSON string array. |
 

@@ -52,6 +52,7 @@ describe("api request validation", () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalRequireSharedAuthState = process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
   const originalTrustProxyHeaders = process.env.AGENTIC_TRUST_PROXY_HEADERS;
+  const originalTrustedClientIpHeader = process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER;
   const originalAllowProcessLocalAuthState = process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
   beforeEach(async () => {
@@ -70,6 +71,7 @@ describe("api request validation", () => {
     process.env.NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
+    process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = originalTrustedClientIpHeader;
     process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = originalAllowProcessLocalAuthState;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -524,6 +526,7 @@ describe("api request validation", () => {
 
   it("uses the trusted forwarded client IP for session login throttling when proxy trust is enabled", async () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     const seenKeys: string[] = [];
     const store: AuthSessionStateStore = {

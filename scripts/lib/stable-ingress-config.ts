@@ -13,12 +13,15 @@ const TEMPORARY_INGRESS_DOMAINS = [
   "tunnelmole.net"
 ];
 
+const TRUSTED_CLIENT_IP_HEADERS = new Set(["cf-connecting-ip", "x-forwarded-for", "x-real-ip"]);
+
 export type StableIngressCheck = {
   name:
     | "base_url"
     | "host_stability"
     | "runtime"
     | "proxy_trust"
+    | "client_ip_header"
     | "provider_deploy"
     | "smoke_session";
   status: "pass" | "warn" | "fail";
@@ -229,6 +232,27 @@ function buildProxyTrustCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
   return pass("proxy_trust", "Trusted proxy headers are explicitly enabled for this ingress.");
 }
 
+function buildTrustedClientIpHeaderCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
+  const configured = trim(env.AGENTIC_TRUSTED_CLIENT_IP_HEADER).toLowerCase();
+
+  if (!configured) {
+    return fail(
+      "client_ip_header",
+      "Set AGENTIC_TRUSTED_CLIENT_IP_HEADER to the one ingress-overwritten client-IP header."
+    );
+  }
+
+  if (!TRUSTED_CLIENT_IP_HEADERS.has(configured)) {
+    return fail("client_ip_header", "Trusted client-IP header must be one of the supported canonical headers.", {
+      configured
+    });
+  }
+
+  return pass("client_ip_header", "Trusted client-IP header contract is explicit.", {
+    header: configured
+  });
+}
+
 function buildProviderDeployCheck(env: NodeJS.ProcessEnv): {
   check: StableIngressCheck;
   configured: boolean;
@@ -272,6 +296,7 @@ export function validateStableIngressConfig(env: NodeJS.ProcessEnv = process.env
     buildHostStabilityCheck(url),
     buildRuntimeCheck(env),
     buildProxyTrustCheck(env),
+    buildTrustedClientIpHeaderCheck(env),
     providerDeploy.check,
     buildSmokeSessionCheck(env)
   ];

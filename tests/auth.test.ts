@@ -43,6 +43,7 @@ describe("auth helpers", () => {
   const originalDatabaseUrl = process.env.DATABASE_URL;
   const originalSharedAuthState = process.env.AGENTIC_SHARED_AUTH_STATE;
   const originalTrustProxyHeaders = process.env.AGENTIC_TRUST_PROXY_HEADERS;
+  const originalTrustedClientIpHeader = process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER;
   const originalAllowProcessLocalAuthState = process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
   const originalEnableLocalDevKey = process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
   const databaseUrl = process.env.DATABASE_URL;
@@ -59,6 +60,7 @@ describe("auth helpers", () => {
     process.env.DATABASE_URL = originalDatabaseUrl;
     process.env.AGENTIC_SHARED_AUTH_STATE = originalSharedAuthState;
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
+    process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = originalTrustedClientIpHeader;
     process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = originalAllowProcessLocalAuthState;
     if (originalEnableLocalDevKey === undefined) {
       delete process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
@@ -361,6 +363,7 @@ describe("auth helpers", () => {
 
   it("uses a canonical trusted proxy IP when proxy headers are explicitly trusted", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     const request = new Request("http://localhost/api/session", {
       method: "POST",
@@ -383,6 +386,7 @@ describe("auth helpers", () => {
     expect(getRequestIdentityRuntimeStatus()).toEqual({
       production: true,
       trustProxyHeaders: false,
+      trustedClientIpHeader: null,
       identitySource: "request-fingerprint",
       warnings: [
         "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."
@@ -390,10 +394,12 @@ describe("auth helpers", () => {
     });
 
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     expect(getRequestIdentityRuntimeStatus()).toEqual({
       production: true,
       trustProxyHeaders: true,
+      trustedClientIpHeader: "x-forwarded-for",
       identitySource: "trusted-ip",
       warnings: []
     });
@@ -401,6 +407,7 @@ describe("auth helpers", () => {
 
   it("falls back to request fingerprinting when trusted forwarded headers are malformed", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     const request = new Request("http://localhost/api/session", {
       method: "POST",
@@ -422,6 +429,7 @@ describe("auth helpers", () => {
 
   it("supports swapping in a shared session unlock state store boundary", async () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     const forwardedIp = "203.0.113.19";
     const expectedKey = `ip:${forwardedIp}`;

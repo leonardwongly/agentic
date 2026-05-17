@@ -6,9 +6,13 @@ export type RequestClientIdentity = {
   source: "trusted-ip" | "request-fingerprint";
 };
 
+const trustedClientIpHeaderValues = ["cf-connecting-ip", "x-forwarded-for", "x-real-ip"] as const;
+export type TrustedClientIpHeader = (typeof trustedClientIpHeaderValues)[number];
+
 export type RequestIdentityRuntimeStatus = {
   production: boolean;
   trustProxyHeaders: boolean;
+  trustedClientIpHeader: TrustedClientIpHeader | null;
   identitySource: RequestClientIdentity["source"];
   warnings: string[];
 };
@@ -27,19 +31,39 @@ function shouldTrustProxyHeaders(): boolean {
   return isTrue(process.env.AGENTIC_TRUST_PROXY_HEADERS);
 }
 
+function getTrustedClientIpHeader(): TrustedClientIpHeader | null {
+  const configured = process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER?.trim().toLowerCase();
+
+  if (!configured) {
+    return null;
+  }
+
+  return trustedClientIpHeaderValues.includes(configured as TrustedClientIpHeader)
+    ? (configured as TrustedClientIpHeader)
+    : null;
+}
+
 export function getRequestIdentityRuntimeStatus(): RequestIdentityRuntimeStatus {
   const production = process.env.NODE_ENV === "production";
   const trustProxyHeaders = shouldTrustProxyHeaders();
-  const identitySource = trustProxyHeaders ? "trusted-ip" : "request-fingerprint";
-  const warnings = trustProxyHeaders
-    ? []
-    : [
-        "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."
-      ];
+  const trustedClientIpHeader = trustProxyHeaders ? getTrustedClientIpHeader() : null;
+  const identitySource = trustProxyHeaders && trustedClientIpHeader ? "trusted-ip" : "request-fingerprint";
+  const warnings: string[] = [];
+
+  if (!trustProxyHeaders) {
+    warnings.push(
+      "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."
+    );
+  } else if (!trustedClientIpHeader) {
+    warnings.push(
+      "Trusted proxy headers are enabled, but AGENTIC_TRUSTED_CLIENT_IP_HEADER must name one canonical client-IP header."
+    );
+  }
 
   return {
     production,
     trustProxyHeaders,
+    trustedClientIpHeader,
     identitySource,
     warnings
   };
@@ -88,13 +112,17 @@ function getTrustedProxyIp(request: Request): string | null {
     return null;
   }
 
-  const candidates = [
-    normalizeIpCandidate(request.headers.get("cf-connecting-ip")),
-    parseTrustedForwardedFor(request.headers.get("x-forwarded-for")),
-    normalizeIpCandidate(request.headers.get("x-real-ip"))
-  ];
+  const trustedClientIpHeader = getTrustedClientIpHeader();
 
-  return candidates.find((candidate) => candidate !== null) ?? null;
+  switch (trustedClientIpHeader) {
+    case "cf-connecting-ip":
+    case "x-real-ip":
+      return normalizeIpCandidate(request.headers.get(trustedClientIpHeader));
+    case "x-forwarded-for":
+      return parseTrustedForwardedFor(request.headers.get("x-forwarded-for"));
+    default:
+      return null;
+  }
 }
 
 function normalizeFingerprintSegment(value: string | null | undefined, maxLength: number): string {

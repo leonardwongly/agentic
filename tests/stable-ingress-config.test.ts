@@ -6,6 +6,7 @@ const BASE_ENV = {
   AGENTIC_SMOKE_BASE_URL: "https://staging.agentic.example.com",
   AGENTIC_SMOKE_ACCESS_KEY: "smoke-key",
   AGENTIC_TRUST_PROXY_HEADERS: "true",
+  AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for",
   AGENTIC_STAGING_DEPLOY_BIN: "node",
   AGENTIC_STAGING_DEPLOY_ARGS_JSON: JSON.stringify(["scripts/provider-deploy.mjs"])
 };
@@ -26,6 +27,7 @@ describe("stable ingress config", () => {
       ["host_stability", "pass"],
       ["runtime", "pass"],
       ["proxy_trust", "pass"],
+      ["client_ip_header", "pass"],
       ["provider_deploy", "pass"],
       ["smoke_session", "pass"]
     ]);
@@ -136,7 +138,8 @@ describe("stable ingress config", () => {
       NODE_ENV: "production",
       AGENTIC_SMOKE_BASE_URL: "https://staging.agentic.example.com",
       AGENTIC_SMOKE_ACCESS_KEY: "smoke-key",
-      AGENTIC_TRUST_PROXY_HEADERS: "true"
+      AGENTIC_TRUST_PROXY_HEADERS: "true",
+      AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for"
     });
 
     expect(report.ok).toBe(false);
@@ -146,6 +149,36 @@ describe("stable ingress config", () => {
         name: "provider_deploy",
         status: "fail",
         message: "AGENTIC_STAGING_DEPLOY_BIN must be configured."
+      })
+    );
+  });
+
+  it("requires an explicit supported client IP header contract", () => {
+    const missing = validateStableIngressConfig({
+      ...BASE_ENV,
+      AGENTIC_TRUSTED_CLIENT_IP_HEADER: ""
+    });
+
+    expect(missing.ok).toBe(false);
+    expect(missing.checks).toContainEqual(
+      expect.objectContaining({
+        name: "client_ip_header",
+        status: "fail",
+        message: "Set AGENTIC_TRUSTED_CLIENT_IP_HEADER to the one ingress-overwritten client-IP header."
+      })
+    );
+
+    const unsupported = validateStableIngressConfig({
+      ...BASE_ENV,
+      AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-client-ip"
+    });
+
+    expect(unsupported.ok).toBe(false);
+    expect(unsupported.checks).toContainEqual(
+      expect.objectContaining({
+        name: "client_ip_header",
+        status: "fail",
+        message: "Trusted client-IP header must be one of the supported canonical headers."
       })
     );
   });
