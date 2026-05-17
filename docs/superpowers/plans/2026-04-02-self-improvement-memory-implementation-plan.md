@@ -2,7 +2,7 @@
 
 Date: 2026-04-02
 Status: Ready for implementation
-Related spec: `/Users/leonardwongly/Developer/Agentic/docs/superpowers/specs/2026-04-02-self-improvement-memory-design.md`
+Related spec: `docs/superpowers/specs/2026-04-02-self-improvement-memory-design.md`
 Scope: Slice 1 only
 
 ## Quick understanding
@@ -44,19 +44,19 @@ The phases are intentionally ordered so each later phase depends on verified wor
 
 ### New package files
 
-1. `/Users/leonardwongly/Developer/Agentic/packages/self-improvement-memory/package.json`
-2. `/Users/leonardwongly/Developer/Agentic/packages/self-improvement-memory/src/index.ts`
+1. `packages/self-improvement-memory/package.json`
+2. `packages/self-improvement-memory/src/index.ts`
 
 ### Test files
 
-1. `/Users/leonardwongly/Developer/Agentic/tests/self-improvement-memory.test.ts`
+1. `tests/self-improvement-memory.test.ts`
 
 ### Optional supporting split, only if `src/index.ts` becomes too large
 
-1. `/Users/leonardwongly/Developer/Agentic/packages/self-improvement-memory/src/schemas.ts`
-2. `/Users/leonardwongly/Developer/Agentic/packages/self-improvement-memory/src/paths.ts`
-3. `/Users/leonardwongly/Developer/Agentic/packages/self-improvement-memory/src/io.ts`
-4. `/Users/leonardwongly/Developer/Agentic/packages/self-improvement-memory/src/errors.ts`
+1. `packages/self-improvement-memory/src/schemas.ts`
+2. `packages/self-improvement-memory/src/paths.ts`
+3. `packages/self-improvement-memory/src/io.ts`
+4. `packages/self-improvement-memory/src/errors.ts`
 
 The preferred starting point is a single `src/index.ts` file. If the implementation becomes hard to read, split by responsibility without changing the public API.
 

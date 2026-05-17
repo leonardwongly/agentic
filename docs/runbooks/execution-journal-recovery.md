@@ -10,7 +10,7 @@ The execution journal exists so Agentic can recover failed external side effects
 
 The canonical schema and derivation helpers live in:
 
-- [`packages/contracts/src/index.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/contracts/src/index.ts)
+- [`packages/contracts/src/index.ts`](https://github.com/leonardwongly/agentic/blob/main/packages/contracts/src/index.ts)
 
 Key exports:
 
@@ -48,11 +48,11 @@ The journal lifecycle is intentionally small and explicit:
 - `completed`: worker finished without further operator intervention
 - `dead_letter`: bounded retries were exhausted or the failure was intentionally classified as unrecoverable by normal retries
 
-State transitions are appended through [`appendJobExecutionJournalEntry(...)`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/contracts/src/index.ts), and repository persistence updates the durable journal whenever a worker claims, retries, dead-letters, or completes a job.
+State transitions are appended through [`appendJobExecutionJournalEntry(...)`](https://github.com/leonardwongly/agentic/blob/main/packages/contracts/src/index.ts), and repository persistence updates the durable journal whenever a worker claims, retries, dead-letters, or completes a job.
 
 ## Recovery Strategies
 
-The recovery strategy is derived through [`deriveJobRecoveryState(...)`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/contracts/src/index.ts). Current operator-facing strategies are:
+The recovery strategy is derived through [`deriveJobRecoveryState(...)`](https://github.com/leonardwongly/agentic/blob/main/packages/contracts/src/index.ts). Current operator-facing strategies are:
 
 - `retry_job`: the worker can safely retry through the normal queue policy
 - `replay_job`: the job must be explicitly requeued after dead-letter recovery
@@ -65,8 +65,8 @@ These strategies are derived from trusted job kind, status, and payload shape. T
 Use this recovery path for any durable job surfaced in the operator shell.
 
 1. Poll the job state through the canonical API.
-   - Approval follow-up jobs: [`/api/approvals/jobs/[id]`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/apps/web/app/api/approvals/jobs/[id]/route.ts)
-   - Generic durable jobs: [`/api/jobs/[id]`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/apps/web/app/api/jobs/[id]/route.ts)
+   - Approval follow-up jobs: [`/api/approvals/jobs/[id]`](https://github.com/leonardwongly/agentic/blob/main/apps/web/app/api/approvals/jobs/[id]/route.ts)
+   - Generic durable jobs: [`/api/jobs/[id]`](https://github.com/leonardwongly/agentic/blob/main/apps/web/app/api/jobs/[id]/route.ts)
 2. Inspect `journal.lifecycleState`.
    - If `queued`, `running`, or `retrying`, wait for the worker or queue policy to finish.
    - If `completed`, stop. No operator recovery is required.
@@ -76,7 +76,7 @@ Use this recovery path for any durable job surfaced in the operator shell.
    - If `replay_job`, use the replay endpoint because bounded retries are exhausted but the side effect is safe to requeue.
    - If `manual_review`, do not trigger another side effect automatically.
 4. For `replay_job`, choose the replay surface based on job family.
-   - `approval_follow_up`: replay through [`/api/jobs/[id]/replay`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/apps/web/app/api/jobs/[id]/replay/route.ts), then continue polling through `/api/approvals/jobs/[replayedId]`
+   - `approval_follow_up`: replay through [`/api/jobs/[id]/replay`](https://github.com/leonardwongly/agentic/blob/main/apps/web/app/api/jobs/[id]/replay/route.ts), then continue polling through `/api/approvals/jobs/[replayedId]`
    - `approval_notification`: replay through `/api/jobs/[id]/replay`, then poll through `/api/jobs/[replayedId]`
    - `autopilot_process`: replay through `/api/jobs/[id]/replay`, then poll through `/api/jobs/[replayedId]`
 5. Confirm the replayed job journal.
@@ -92,16 +92,16 @@ Use this recovery path for any durable job surfaced in the operator shell.
 Operator-facing recovery state is exposed in four places:
 
 - Approval follow-up polling route:
-  - [`apps/web/app/api/approvals/jobs/[id]/route.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/apps/web/app/api/approvals/jobs/[id]/route.ts)
+  - [`apps/web/app/api/approvals/jobs/[id]/route.ts`](https://github.com/leonardwongly/agentic/blob/main/apps/web/app/api/approvals/jobs/[id]/route.ts)
   - Returns `lifecycleState`, `retryCount`, `sideEffectTarget`, `providerRef`, `replayedFromJobId`, `recovery`, and `entries`
 - Generic durable-job polling route:
-  - [`apps/web/app/api/jobs/[id]/route.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/apps/web/app/api/jobs/[id]/route.ts)
+  - [`apps/web/app/api/jobs/[id]/route.ts`](https://github.com/leonardwongly/agentic/blob/main/apps/web/app/api/jobs/[id]/route.ts)
   - Returns the same journal projection for approval notification and autopilot jobs
 - Generic replay route:
-  - [`apps/web/app/api/jobs/[id]/replay/route.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/apps/web/app/api/jobs/[id]/replay/route.ts)
+  - [`apps/web/app/api/jobs/[id]/replay/route.ts`](https://github.com/leonardwongly/agentic/blob/main/apps/web/app/api/jobs/[id]/replay/route.ts)
   - Requeues dead-lettered replayable jobs and persists replay recovery logs
 - Dashboard remediation mapping:
-  - [`packages/repository/src/dashboard-operations.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/repository/src/dashboard-operations.ts)
+  - [`packages/repository/src/dashboard-operations.ts`](https://github.com/leonardwongly/agentic/blob/main/packages/repository/src/dashboard-operations.ts)
   - Derives replay actions from `job.journal.recovery` instead of ad hoc UI heuristics
 
 ## Failure Handling Rules
@@ -121,20 +121,20 @@ When these invariants are violated, the correct fix is to harden the worker or c
 
 The current regression coverage for this recovery contract lives in:
 
-- [`tests/execution.test.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/tests/execution.test.ts)
+- [`tests/execution.test.ts`](https://github.com/leonardwongly/agentic/blob/main/tests/execution.test.ts)
   - initial journal creation
   - retry transition handling
   - dead-letter transition handling
-- [`tests/repository.test.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/tests/repository.test.ts)
+- [`tests/repository.test.ts`](https://github.com/leonardwongly/agentic/blob/main/tests/repository.test.ts)
   - file-backed persistence of retry and dead-letter transitions
   - dashboard remediation derivation for replayable approval and autopilot jobs
-- [`tests/approval-job-route.test.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/tests/approval-job-route.test.ts)
+- [`tests/approval-job-route.test.ts`](https://github.com/leonardwongly/agentic/blob/main/tests/approval-job-route.test.ts)
   - approval follow-up job polling with journal projection
   - dead-letter replay for approval follow-up jobs
   - dead-letter replay for approval notification jobs
   - dead-letter replay for autopilot jobs
   - cross-user denial for polling and replay
-- [`tests/worker-runtime.test.ts`](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/tests/worker-runtime.test.ts)
+- [`tests/worker-runtime.test.ts`](https://github.com/leonardwongly/agentic/blob/main/tests/worker-runtime.test.ts)
   - notification job execution
   - worker-owned side-effect failure dead-letter handling
   - sanitized autopilot dead-letter recovery details
