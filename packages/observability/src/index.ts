@@ -5,6 +5,7 @@ import path from "node:path";
 import { ActionLogSchema, nowIso, type ActionLog, type AgentDefinition } from "@agentic/contracts";
 
 export * from "./wedge-quality-gates";
+export * from "./execution-grade-wedge";
 export * from "./edit-distance";
 
 export type TelemetryPrimitive = string | number | boolean | null;
