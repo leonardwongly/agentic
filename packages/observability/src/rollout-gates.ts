@@ -45,6 +45,18 @@ export type RolloutGateEvaluation = {
   batchesEvaluated: number;
 };
 
+export type TelemetryRetentionSummary = {
+  directory: string;
+  batchCount: number;
+  itemCount: number;
+  metricCount: number;
+  droppedCount: number;
+  oldestBatchAt: string | null;
+  newestBatchAt: string | null;
+  services: string[];
+  environments: string[];
+};
+
 function matchesFilter(
   value: TelemetryPrimitive | undefined,
   expected: TelemetryPrimitive | TelemetryPrimitive[]
@@ -131,6 +143,33 @@ export async function readTelemetryExportBatches(retentionDir: string): Promise<
       return JSON.parse(raw) as TelemetryExportBatch;
     })
   );
+}
+
+export function summarizeTelemetryRetention(
+  retentionDir: string,
+  batches: TelemetryExportBatch[]
+): TelemetryRetentionSummary {
+  const createdAtValues = batches
+    .map((batch) => batch.createdAt)
+    .filter((value) => Number.isFinite(Date.parse(value)))
+    .sort();
+  const services = [...new Set(batches.map((batch) => batch.source.service))].sort();
+  const environments = [...new Set(batches.map((batch) => batch.source.environment))].sort();
+
+  return {
+    directory: retentionDir,
+    batchCount: batches.length,
+    itemCount: batches.reduce((count, batch) => count + batch.items.length, 0),
+    metricCount: batches.reduce(
+      (count, batch) => count + batch.items.filter((item) => item.kind === "metric").length,
+      0
+    ),
+    droppedCount: batches.reduce((count, batch) => count + batch.droppedCount, 0),
+    oldestBatchAt: createdAtValues[0] ?? null,
+    newestBatchAt: createdAtValues.at(-1) ?? null,
+    services,
+    environments
+  };
 }
 
 export function evaluateRolloutGateManifest(

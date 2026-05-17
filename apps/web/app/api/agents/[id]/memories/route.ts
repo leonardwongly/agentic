@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentMemoryScopeSchema, memoryTypeValues } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
 import type { AgenticRepository } from "@agentic/repository";
 import { requireApiSession } from "../../../../../lib/auth";
@@ -13,8 +14,10 @@ const CreateAgentMemorySchema = z
   .object({
     category: z.string().trim().min(1).max(64),
     content: z.string().trim().min(1).max(500),
-    memoryType: z.enum(["observed", "inferred", "confirmed"]).optional(),
-    agentScope: z.enum(["global", "agent-only", "agent-preferred"]).optional()
+    memoryType: z.enum(memoryTypeValues).optional(),
+    agentScope: AgentMemoryScopeSchema.refine((scope) => scope !== "global", {
+      message: "Agent memory scope must remain agent-scoped."
+    }).optional()
   })
   .strict();
 

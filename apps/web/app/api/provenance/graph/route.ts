@@ -2,11 +2,12 @@ import { z } from "zod";
 import { buildExecutionProvenanceGraph } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError } from "../../../../lib/api-response";
-import { getSeededRepository } from "../../../../lib/server";
+import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../lib/server";
 
 const GraphQuerySchema = z
   .object({
     rootId: z.string().trim().min(1).nullable().default(null),
+    recommendationKey: z.string().trim().min(1).max(200).nullable().default(null),
     depth: z.coerce.number().int().min(0).max(4).default(2),
     limit: z.coerce.number().int().min(1).max(500).default(250)
   })
@@ -115,20 +116,43 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const query = GraphQuerySchema.parse({
       rootId: url.searchParams.get("rootId"),
+      recommendationKey: url.searchParams.get("recommendationKey"),
       depth: url.searchParams.get("depth") ?? undefined,
       limit: url.searchParams.get("limit") ?? undefined
     });
     const repository = await getSeededRepository();
+    const learningEpisodes = query.recommendationKey
+      ? (await (await getSeededSelfImprovementRepository()).listEpisodes({
+          ownerUserId: principal.userId,
+          limit: query.limit
+        })).filter(
+          (episode) =>
+            episode.recommendation?.key === query.recommendationKey ||
+            episode.provenance.recommendationKeys.includes(query.recommendationKey!)
+        )
+      : [];
+    const learningGoalIds = [
+      ...new Set(
+        learningEpisodes.flatMap((episode) => [
+          episode.outcomeLink?.goalId ?? null,
+          episode.recommendation?.sourceGoalId ?? null
+        ].filter((goalId): goalId is string => Boolean(goalId)))
+      )
+    ].slice(0, query.limit);
     const rootGoalId = goalIdFromRoot(query.rootId);
     const root = rootIdParts(query.rootId);
     const rootJobPromise =
       root?.type === "job" || root?.type === "failure" ? repository.getJob(root.id, principal.userId) : Promise.resolve(null);
     const goalsPromise = rootJobPromise.then(async (rootJob) => {
       const rootJobGoalId = rootJob ? goalIdFromJobPayload(rootJob.payload) : null;
-      if (rootGoalId || rootJobGoalId) {
-        const rootGoal = await repository.getGoalBundleForUser(rootGoalId ?? rootJobGoalId!, principal.userId);
+      if (rootGoalId || rootJobGoalId || learningGoalIds.length > 0) {
+        const explicitGoalIds = [...new Set([rootGoalId, rootJobGoalId, ...learningGoalIds].filter((goalId): goalId is string => Boolean(goalId)))];
+        const rootGoals = (
+          await Promise.all(explicitGoalIds.map((goalId) => repository.getGoalBundleForUser(goalId, principal.userId)))
+        ).filter((goal): goal is NonNullable<typeof goal> => Boolean(goal));
         const goals = await listGoalBundlesForProvenance(repository, principal.userId, query.limit);
-        return rootGoal ? [rootGoal, ...goals.filter((goal) => goal.goal.id !== rootGoal.goal.id)] : goals;
+        const rootGoalIds = new Set(rootGoals.map((goal) => goal.goal.id));
+        return [...rootGoals, ...goals.filter((goal) => !rootGoalIds.has(goal.goal.id))];
       }
       return listGoalBundlesForProvenance(repository, principal.userId, query.limit);
     });
@@ -153,7 +177,15 @@ export async function GET(request: Request) {
         rootId: query.rootId,
         depth: query.depth,
         limit: query.limit
-      })
+      }),
+      learning:
+        query.recommendationKey === null
+          ? null
+          : {
+              recommendationKey: query.recommendationKey,
+              linkedEpisodeCount: learningEpisodes.length,
+              linkedGoalIds: learningGoalIds
+            }
     });
   } catch (error) {
     return handleApiError(error, "Failed to build execution provenance graph.");

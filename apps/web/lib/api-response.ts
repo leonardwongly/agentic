@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   appendCorrelationHeaders,
   getOrCreateRequestId,
+  getOrCreateTraceId,
+  getParentSpanId,
   getTelemetryContext,
   logError,
   logInfo,
@@ -11,6 +13,7 @@ import {
   withSpan,
   withTelemetryContext
 } from "@agentic/observability";
+import { CollectionPageQueryError } from "@agentic/repository";
 import { formatValidationError, isContentTypeError } from "./api-errors";
 import { isAuthError } from "./auth";
 import { AuthRuntimeStateConfigurationError } from "./auth-runtime-state";
@@ -172,6 +175,10 @@ export function handleApiError(error: unknown, fallbackMessage: string) {
     return authenticatedError(error.status, error.message);
   }
 
+  if (error instanceof CollectionPageQueryError) {
+    return authenticatedError(400, error.message);
+  }
+
   if (isContentTypeError(error)) {
     return authenticatedError(415, "Content-Type must be application/json.");
   }
@@ -214,6 +221,8 @@ export async function withApiTelemetry(
   return withTelemetryContext(
     {
       requestId: getOrCreateRequestId(request.headers.get("x-request-id")),
+      traceId: getOrCreateTraceId(request.headers.get("x-trace-id")),
+      parentSpanId: getParentSpanId(request.headers.get("x-parent-span-id")),
       route,
       method: request.method,
       path: url.pathname
@@ -247,13 +256,17 @@ export async function withApiTelemetry(
             route,
             method: request.method,
             path: url.pathname,
-            statusCode: finalized.status
+            statusCode: finalized.status,
+            statusClass: `${Math.floor(finalized.status / 100)}xx`,
+            outcome: finalized.status >= 500 ? "error" : "ok"
           });
           recordHistogram("http.request.duration_ms", durationMs, {
             route,
             method: request.method,
             path: url.pathname,
-            statusCode: finalized.status
+            statusCode: finalized.status,
+            statusClass: `${Math.floor(finalized.status / 100)}xx`,
+            outcome: finalized.status >= 500 ? "error" : "ok"
           });
 
           if (finalized.status >= 500) {

@@ -3,6 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS } from "@agentic/contracts";
 import {
+  collectFeatureCapabilityContractDrift,
+  extractRouteHandlerMethods,
+  formatFeatureCapabilityContractDrift
+} from "../scripts/lib/feature-capability-contracts";
+import {
   FEATURE_CAPABILITIES,
   resolveFeatureCapabilities,
   deriveFeatureCapabilityReadiness,
@@ -23,6 +28,44 @@ describe("feature capability registry", () => {
         expect(existsSync(path.resolve(repoRoot, contract.routeFile))).toBe(true);
       }
     }
+  });
+
+  it("keeps feature capability route methods synchronized with route exports", () => {
+    const drift = collectFeatureCapabilityContractDrift(FEATURE_CAPABILITIES, repoRoot);
+
+    expect(drift.map(formatFeatureCapabilityContractDrift)).toEqual([]);
+  });
+
+  it("detects stale and missing method declarations in capability contracts", () => {
+    expect(extractRouteHandlerMethods("export async function GET() {}\nexport const POST = async () => {}")).toEqual([
+      "GET",
+      "POST"
+    ]);
+
+    const drift = collectFeatureCapabilityContractDrift(
+      [
+        {
+          id: "fixture",
+          contracts: [
+            {
+              route: "/api/fixture",
+              routeFile: "tests/fixtures/feature-capability-fixture-route.ts",
+              methods: ["GET", "DELETE"]
+            }
+          ]
+        }
+      ],
+      repoRoot
+    );
+
+    expect(drift).toEqual([
+      expect.objectContaining({
+        actualMethods: [],
+        declaredMethods: ["GET", "DELETE"],
+        missingDeclaredMethods: [],
+        staleDeclaredMethods: ["GET", "DELETE"]
+      })
+    ]);
   });
 
   it("tracks the agent memory contract and readiness summary", () => {

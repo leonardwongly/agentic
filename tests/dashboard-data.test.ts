@@ -1,5 +1,6 @@
 import { assembleDashboardData } from "../packages/repository/src/dashboard-data";
 import { DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS } from "@agentic/contracts";
+import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 
 describe("assembleDashboardData instrumentation", () => {
   const originalTimingLog = process.env.AGENTIC_DASHBOARD_TIMING_LOG;
@@ -8,6 +9,7 @@ describe("assembleDashboardData instrumentation", () => {
   afterEach(() => {
     process.env.AGENTIC_DASHBOARD_TIMING_LOG = originalTimingLog;
     process.env.AGENTIC_DASHBOARD_WARN_MS = originalWarnMs;
+    resetTelemetrySnapshot();
   });
 
   it("does not emit timing logs when assembly stays under the warning threshold", () => {
@@ -267,6 +269,206 @@ describe("assembleDashboardData instrumentation", () => {
     );
     dateNowSpy.mockRestore();
     warnSpy.mockRestore();
+  });
+
+  it("records dashboard queue, connector, and payload health metrics", () => {
+    resetTelemetrySnapshot();
+
+    assembleDashboardData({
+      userId: "user-1",
+      workspaces: [],
+      activeWorkspace: null,
+      workspaceSelection: null,
+      workspaceMembers: [],
+      workspaceGovernance: null,
+      goals: [],
+      goalShares: [],
+      privacyOperations: [],
+      approvals: [],
+      evidenceRecords: [],
+      commitments: [],
+      briefingPreferences: {
+        userId: "user-1",
+        timezone: "Asia/Singapore",
+        focus: "balanced",
+        schedules: [],
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      autopilotSettings: {
+        userId: "user-1",
+        mode: "notify_only",
+        debounceMinutes: 15,
+        reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z"
+      },
+      autopilotEvents: [],
+      memories: [],
+      integrations: [],
+      watchers: [],
+      filterBundlesForWorkspace: (goals) => goals,
+      mergeCommitments: () => [],
+      buildDiagnostics: () => ({
+        status: "healthy",
+        totalCount: 0,
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        items: []
+      }),
+      buildControlPlane: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        sections: []
+      }),
+      buildNowQueue: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        totalCount: 0,
+        items: []
+      }),
+      buildOperatingSections: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        roleView: {
+          role: null,
+          label: "Setup view",
+          summary: "No active workspace is selected.",
+          focusAreas: [],
+          prioritizedSectionKeys: []
+        },
+        teamWorkflow: {
+          mode: "setup",
+          label: "Team workflow not active",
+          summary: "No active workspace is selected.",
+          visibilityLabel: "Setup-only visibility",
+          queueMetrics: [],
+          ownershipAssignments: [],
+          queues: [],
+          controls: [],
+          auditCoverage: {
+            required: false,
+            status: "attention",
+            summary: "Activate a workspace before evaluating whether audit export coverage is meeting the governed baseline.",
+            latestStatus: null,
+            latestCompletedAt: null
+          },
+          actionBoundaries: [],
+          handoffGuidance: [],
+          permissions: {
+            manageMembers: { allowed: false, reason: "Select or create a workspace before managing members." },
+            editGovernance: { allowed: false, reason: "Select a workspace before editing governance controls." },
+            exportAudit: { allowed: false, reason: "Select a workspace before exporting workspace audit evidence." },
+            managePrivacyOperations: { allowed: false, reason: "Select a workspace before running privacy lifecycle operations." }
+          },
+          escalationTargetRole: null,
+          slaStatus: "attention",
+          slaSummary: "A workspace must be activated before team ownership can be enforced."
+        },
+        nextBestAction: {
+          kind: "configure_workspace",
+          label: "Activate a workspace",
+          summary: "Select or create a workspace before using the operator shell.",
+          status: "attention",
+          targetSection: "workspaces",
+          role: null
+        },
+        sections: []
+      }),
+      buildOperations: () => ({
+        generatedAt: "2024-01-01T00:00:00.000Z",
+        asyncExecution: {
+          status: "critical",
+          queuedJobs: 3,
+          retryingJobs: 1,
+          runningJobs: 2,
+          deadLetterJobs: 1,
+          expiredLeaseCount: 1,
+          stalePendingCount: 2,
+          issueCount: 4,
+          oldestPendingJobAgeSeconds: 90,
+          maxPendingJobAgeSeconds: 900,
+          items: []
+        },
+        connectorHealth: {
+          status: "attention",
+          totalCount: 2,
+          connectedCount: 1,
+          degradedCount: 1,
+          reconnectRequiredCount: 1,
+          refreshFailedCount: 0,
+          revokedCount: 0,
+          expiredCount: 0,
+          validationStaleCount: 1,
+          issueCount: 1,
+          items: []
+        },
+        autonomyPosture: {
+          status: "attention",
+          level: "approval_gated",
+          label: "Approval gated",
+          summary: "Governed automation remains approval gated.",
+          reasons: [],
+          stats: [],
+          overridePaths: []
+        },
+        shellEffectiveness: {
+          status: "attention",
+          summary: "Some recovery signals need attention.",
+          measurementWindowDays: 30,
+          windowStartedAt: "2023-12-01T00:00:00.000Z",
+          approvalSampleCount: 0,
+          medianApprovalDecisionSeconds: null,
+          recoveryStartCount: 0,
+          recoveryResolvedCount: 0,
+          medianRecoveryStartSeconds: null,
+          pendingApprovalCount: 0,
+          openRuntimeIssueCount: 1,
+          metrics: [],
+          highlights: []
+        }
+      }),
+      buildBriefingHistory: () => [],
+      sortArtifacts: (artifacts) => artifacts,
+      sortActionLogs: (logs) => logs
+    });
+
+    const snapshot = getTelemetrySnapshot();
+
+    expect(snapshot.metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "dashboard.health.queue_depth",
+          value: 3,
+          attributes: expect.objectContaining({ queueStatus: "queued", operationsStatus: "critical" })
+        }),
+        expect.objectContaining({
+          name: "dashboard.health.queue_lag_seconds",
+          value: 90,
+          attributes: expect.objectContaining({ stalePendingCount: 2 })
+        }),
+        expect.objectContaining({
+          name: "dashboard.health.connector_count",
+          value: 1,
+          attributes: expect.objectContaining({ connectorState: "issue", connectorStatus: "attention" })
+        }),
+        expect.objectContaining({
+          name: "dashboard.health.operations_status.total",
+          attributes: expect.objectContaining({
+            asyncStatus: "critical",
+            connectorStatus: "attention",
+            shellStatus: "attention"
+          })
+        })
+      ])
+    );
+    expect(snapshot.logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "dashboard.health.metrics_recorded",
+          attributes: expect.objectContaining({
+            queuedJobs: 3,
+            connectorIssues: 1
+          })
+        })
+      ])
+    );
   });
 
   it("enriches approvals with explanation paths backed by evidence records", () => {

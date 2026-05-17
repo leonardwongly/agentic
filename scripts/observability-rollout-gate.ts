@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   evaluateRolloutGateManifest,
   readTelemetryExportBatches,
+  summarizeTelemetryRetention,
   type RolloutGateManifest
 } from "../packages/observability/src/rollout-gates";
 
@@ -54,6 +55,7 @@ async function main() {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as RolloutGateManifest;
   const batches = await readTelemetryExportBatches(retentionDir);
   const evaluation = evaluateRolloutGateManifest(manifest, batches);
+  const retention = summarizeTelemetryRetention(retentionDir, batches);
 
   assert(evaluation.results.length > 0, "Rollout gate manifest does not contain any alerts.");
 
@@ -63,6 +65,7 @@ async function main() {
         ok: evaluation.passed,
         retentionDir,
         manifestPath,
+        retention,
         ...evaluation
       },
       null,

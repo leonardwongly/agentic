@@ -70,6 +70,9 @@ jobs:
       - name: Validate GitHub Actions provenance pins
         run: npm run ci:validate-provenance
 
+      - name: Validate issue-theme gate taxonomy
+        run: npm run ci:issue-theme-gates -- --assert-workflow
+
       - name: Resolve staging execution mode
         id: inspect
         run: npx tsx scripts/staging-execution-plan.ts
@@ -119,11 +122,11 @@ jobs:
         if: steps.inspect.outputs.mode == 'external'
         run: npm run test:smoke:observability
 
-      - name: Validate telemetry exporter and retention wiring
+      - name: Validate telemetry exporter, retention, and cockpit samples
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
         run: npm run test:smoke:observability-export
 
-      - name: Validate rollout gate manifests against retained telemetry
+      - name: Validate rollout gate manifests against retained cockpit telemetry
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
         run: npm run telemetry:rollout-gate -- --dir "$AGENTIC_TELEMETRY_RETENTION_DIR"
 

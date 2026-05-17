@@ -165,6 +165,7 @@ import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 import { listContextPacketMemoryFromStore, listContextPacketMemoryWithPool } from "./repository-context-packet-memory";
 import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
+import { mapMemoryRow } from "./repository-memory-row";
 import {
   assertRunningJobOwner, autopilotEventMatchesBudget, buildDeletedWorkspaceTombstone, buildJobLifecycleJournal,
   goalShareTerminalAt, isJobScopedToWorkspace, normalizeAutopilotEventDetails, resolveRetentionWindow,
@@ -251,12 +252,12 @@ const RuntimeStoreSchema = z.object({
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 
 export { CommitmentInboxQueryError, CollectionPageQueryError };
-export { ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters, type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
+export { ApprovalMutationError, JobMutationError, type AgenticRepository, type AutopilotEventClaim, type CollectionPageParams, type DashboardCollectionPage, type DashboardCollectionPageParams, type DashboardCollectionSort, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type GoalPageParams, type GoalShareListFilters, type PrivacyOperationListFilters, type WatcherListFilters, type WatcherPageParams, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
 export { resolveDashboardCockpitRollout, type DashboardCockpitRollout, type DashboardCockpitVariant } from "./dashboard-cockpit-rollout";
 export { buildDashboardTraceability, type DashboardApprovalTrace, type DashboardMemoryProvenance, type DashboardTaskTrace, type DashboardTraceability, type DashboardWorkflowTrace } from "./dashboard-traceability";
 export { buildExecutionProvenanceGraph } from "./provenance-graph";
 export { buildDashboardSummary, type DashboardSummary, type DashboardSummaryLane } from "./dashboard-summary";
-
+export { listDashboardActionLogsPage, listDashboardApprovalsPage, listDashboardArtifactsPage, listDashboardCommitmentsPage, listDashboardJobsPage, listDashboardMemoryPage } from "./dashboard-collection-page";
 const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
 const STALLED_WORKFLOW_MS = 30 * 60 * 1000;
@@ -2424,6 +2425,7 @@ class FileRepository implements AgenticRepository {
   async listContextPacketMemory(params: {
     userId: string;
     agent?: AgentName;
+    agentId?: string;
     includeExpired?: boolean;
     allowedSensitivities?: string[];
     limit?: number;
@@ -3064,9 +3066,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into memory_records (
-          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, context_packet_consent, review_at, expiry_at, created_at, updated_at
+          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, context_packet_consent, agent_id, agent_scope, review_at, expiry_at, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17)
         on conflict (id) do update
         set category = excluded.category,
             memory_type = excluded.memory_type,
@@ -3077,6 +3079,8 @@ class PostgresRepository implements AgenticRepository {
             permissions = excluded.permissions,
             actor_context = excluded.actor_context,
             context_packet_consent = excluded.context_packet_consent,
+            agent_id = excluded.agent_id,
+            agent_scope = excluded.agent_scope,
             review_at = excluded.review_at,
             expiry_at = excluded.expiry_at,
             updated_at = excluded.updated_at
@@ -3093,6 +3097,8 @@ class PostgresRepository implements AgenticRepository {
         JSON.stringify(memory.permissions),
         JSON.stringify(memory.actorContext),
         JSON.stringify(memory.contextPacketConsent),
+        memory.agentId,
+        memory.agentScope,
         memory.reviewAt,
         memory.expiryAt,
         memory.createdAt,
@@ -7238,30 +7244,13 @@ class PostgresRepository implements AgenticRepository {
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
     await this.ready;
     const result = await this.pool.query("select * from memory_records where user_id = $1 order by created_at desc, id desc", [userId]);
-    return result.rows.map((row) =>
-      MemoryRecordSchema.parse({
-        id: row.id,
-        userId: row.user_id,
-        category: row.category,
-        memoryType: row.memory_type,
-        content: row.content,
-        confidence: Number(row.confidence),
-        source: row.source,
-        sensitivity: row.sensitivity,
-        permissions: row.permissions ?? [],
-        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-        contextPacketConsent: row.context_packet_consent ?? null,
-        reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
-        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-        createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
-      })
-    );
+    return result.rows.map(mapMemoryRow);
   }
 
   async listContextPacketMemory(params: {
     userId: string;
     agent?: AgentName;
+    agentId?: string;
     includeExpired?: boolean;
     allowedSensitivities?: string[];
     limit?: number;
@@ -7298,25 +7287,7 @@ class PostgresRepository implements AgenticRepository {
       `,
       values
     );
-    const items = result.rows.slice(0, limit).map((row) =>
-      MemoryRecordSchema.parse({
-        id: row.id,
-        userId: row.user_id,
-        category: row.category,
-        memoryType: row.memory_type,
-        content: row.content,
-        confidence: Number(row.confidence),
-        source: row.source,
-        sensitivity: row.sensitivity,
-        permissions: row.permissions ?? [],
-        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-        contextPacketConsent: row.context_packet_consent ?? null,
-        reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
-        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-        createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
-      })
-    );
+    const items = result.rows.slice(0, limit).map(mapMemoryRow);
     const last = items.at(-1);
     return MemoryRecordPageSchema.parse({
       items,

@@ -49,7 +49,11 @@ export const CHECKED_IN_MIGRATIONS: readonly CheckedInMigration[] = [
     checksum: "3dfd55e1067c2174dea6328fbecd27b6d0be675eabcc65027c323f80b1ac78f1"
   },
   {
-    name: "0010_provider_side_effect_ledger.sql",
+    name: "0010_agent_memory_scope.sql",
+    checksum: "3238e9acb035fd842064ede345133737af1f007b1cc33832a215e466582fbd82"
+  },
+  {
+    name: "0011_provider_side_effect_ledger.sql",
     checksum: "882ace56f1dce3a10e729ef975b50c9ef3289dd8a6af9c1b4108c44fea542ca1"
   }
 ] as const;

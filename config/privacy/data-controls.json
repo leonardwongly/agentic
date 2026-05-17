@@ -232,6 +232,51 @@
         "workspace_export",
         "workspace_delete"
       ]
+    },
+    {
+      "id": "learning-capture-records",
+      "title": "Learning capture memory and episodes",
+      "classificationId": "workspace_operational",
+      "productSurfaces": [
+        "Automatic memory capture",
+        "Self-improvement episode capture",
+        "Recommendation replay evidence"
+      ],
+      "recordExamples": [
+        "Auto-captured workflow memory records",
+        "Self-improvement episode traces",
+        "Recommendation evidence metadata"
+      ],
+      "codePaths": [
+        "packages/orchestrator/src/memory-capture.ts",
+        "packages/worker-runtime/src/job-executors-core.ts",
+        "packages/self-improvement-memory/src/index.ts",
+        "packages/policy/src/privacy-controls.ts"
+      ],
+      "minimizationRules": [
+        "Learning capture runs only after tenant, actor, and workspace boundaries are validated.",
+        "Disabled shadow-replay governance opts the workspace out before memory or episode persistence.",
+        "Episode metadata stores privacy lifecycle scope rather than duplicating raw workspace state."
+      ],
+      "maskingRules": [
+        "Email addresses, bearer tokens, cookie/session identifiers, passwords, private keys, and secret assignments are redacted before persistence.",
+        "Execution details and recommendation rationales are sanitized before they are stored as learning evidence."
+      ],
+      "tokenizationStrategy": "redacted_reference",
+      "retention": {
+        "mode": "workspace_governance",
+        "defaultDays": 90,
+        "deletionFlow": "Learning memory records and episode files carry expiry and workspace scope so retention, export, and deletion operations can address them before reuse."
+      },
+      "accessRules": [
+        "Learning capture is scoped to the goal owner and workspace before records are created.",
+        "Self-improvement episodes must include learning privacy preflight metadata before worker persistence."
+      ],
+      "lifecycleOperations": [
+        "retention_enforcement",
+        "workspace_export",
+        "workspace_delete"
+      ]
     }
   ]
 }

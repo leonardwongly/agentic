@@ -43,6 +43,7 @@ import type {
   ProviderCredentialSecretRecord,
   ProviderSideEffectRecord,
   ProviderSideEffectStatus,
+  RiskClass,
   Watcher,
   WatcherPage,
   WorkflowCanvasTemplate,
@@ -183,6 +184,33 @@ export type CollectionPageParams = {
   userId?: string;
   limit?: number;
   cursor?: string | null;
+};
+
+export type DashboardCollectionSort =
+  | "created_desc"
+  | "created_asc"
+  | "updated_desc"
+  | "updated_asc"
+  | "title_asc"
+  | "title_desc";
+
+export type DashboardCollectionPage<TItem> = {
+  items: TItem[];
+  totalCount: number;
+  limit: number;
+  nextCursor: string | null;
+  generatedAt: string;
+};
+
+export type DashboardCollectionPageParams = CollectionPageParams & {
+  q?: string;
+  sort?: DashboardCollectionSort;
+  status?: string;
+  riskClass?: RiskClass;
+  bucket?: CommitmentInboxBucket;
+  kind?: string;
+  kinds?: JobKind[];
+  statuses?: JobStatus[];
 };
 
 export type GoalPageParams = CollectionPageParams & {
@@ -380,6 +408,7 @@ export type AgenticRepository = {
   listContextPacketMemory(params: {
     userId: string;
     agent?: AgentName;
+    agentId?: string;
     includeExpired?: boolean;
     allowedSensitivities?: string[];
     limit?: number;

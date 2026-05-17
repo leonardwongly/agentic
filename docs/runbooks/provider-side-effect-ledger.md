@@ -18,4 +18,4 @@ The provider side-effect ledger records externally visible Gmail and Calendar mu
 
 ## Rollback
 
-Disable ledger-aware provider execution before rolling back the `0010_provider_side_effect_ledger.sql` migration. Preserve ledger rows for duplicate-delivery forensics unless an operator-approved restore plan removes the table from backup.
+Disable ledger-aware provider execution before rolling back the `0011_provider_side_effect_ledger.sql` migration. Preserve ledger rows for duplicate-delivery forensics unless an operator-approved restore plan removes the table from backup.

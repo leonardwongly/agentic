@@ -33,6 +33,7 @@ export const goalWedgeKeyValues = [
 ] as const;
 export const goalWedgeSelectionValues = ["selected_production", "supporting"] as const;
 export const memoryTypeValues = ["observed", "inferred", "confirmed"] as const;
+export const agentMemoryScopeValues = ["global", "agent-only", "agent-preferred"] as const;
 export const approvalDecisionValues = ["pending", "approved", "rejected"] as const;
 export const approvalActionTypeValues = ["send", "schedule", "create", "update", "delete", "draft", "artifact-only"] as const;
 export const approvalDecisionScopeValues = ["once", "similar_24h", "always_review"] as const;
@@ -185,6 +186,7 @@ export const GoalStatusSchema = z.enum(goalStatusValues);
 export const GoalWedgeKeySchema = z.enum(goalWedgeKeyValues);
 export const GoalWedgeSelectionSchema = z.enum(goalWedgeSelectionValues);
 export const MemoryTypeSchema = z.enum(memoryTypeValues);
+export const AgentMemoryScopeSchema = z.enum(agentMemoryScopeValues);
 export const ApprovalDecisionSchema = z.enum(approvalDecisionValues);
 export const ApprovalActionTypeSchema = z.enum(approvalActionTypeValues);
 export const ApprovalDecisionScopeSchema = z.enum(approvalDecisionScopeValues);
@@ -844,7 +846,7 @@ export const MemoryRecordSchema = z.object({
   }).strict().nullable().default(null),
   // Agent-scoped memories
   agentId: z.string().nullable().default(null),
-  agentScope: z.enum(["global", "agent-only", "agent-preferred"]).default("global"),
+  agentScope: AgentMemoryScopeSchema.default("global"),
   reviewAt: z.string().datetime().nullable().default(null),
   expiryAt: z.string().datetime().nullable().default(null),
   createdAt: z.string().datetime(),
@@ -3749,6 +3751,7 @@ export type WorkflowResponsibilityAssignee = z.infer<typeof WorkflowResponsibili
 export type WorkflowResponsibilityAudit = z.infer<typeof WorkflowResponsibilityAuditSchema>;
 export type WorkflowResponsibility = z.infer<typeof WorkflowResponsibilitySchema>;
 export type MemoryRecord = z.infer<typeof MemoryRecordSchema>;
+export type AgentMemoryScope = z.infer<typeof AgentMemoryScopeSchema>;
 export type ContextPacket = z.infer<typeof ContextPacketSchema>;
 export type ContextPacketTransformation = z.infer<typeof ContextPacketTransformationSchema>;
 export type ContextPacketUsage = z.infer<typeof ContextPacketUsageSchema>;

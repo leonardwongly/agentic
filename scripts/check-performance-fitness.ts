@@ -158,8 +158,8 @@ function main() {
   );
   assertContains(
     dashboardCollection,
-    "DASHBOARD_CURSOR_MAX_OFFSET",
-    `${dashboardCollectionPath} must bound cursor offsets for collection paging.`
+    "RepositoryDashboardCollectionPage",
+    `${dashboardCollectionPath} must adapt repository-owned bounded collection pages instead of offset cursors.`
   );
   assertContains(
     dashboardMemoriesRoute,

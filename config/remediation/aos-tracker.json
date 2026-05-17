@@ -3,6 +3,31 @@
   "reviewedAt": "2026-04-28",
   "repository": "leonardwongly/agentic",
   "program": "Agentic OS remediation",
+  "itemIdPolicy": {
+    "requiredIds": [
+      "AOS-00",
+      "AOS-01",
+      "AOS-02",
+      "AOS-03",
+      "AOS-04",
+      "AOS-05",
+      "AOS-06",
+      "AOS-07",
+      "AOS-08",
+      "AOS-09",
+      "AOS-10",
+      "AOS-11",
+      "AOS-12",
+      "AOS-13",
+      "AOS-14",
+      "AOS-15",
+      "AOS-16",
+      "AOS-17",
+      "AOS-18"
+    ],
+    "acceptedPrefixes": ["AOS"],
+    "rule": "AOS-00 through AOS-18 are the required baseline. Later generated plan items may extend the same taxonomy as AOS-19, AOS-20, and so on without changing dashboard code. Numeric IDs below 10 stay zero-padded; IDs 10 and above must not use leading zeroes."
+  },
   "sourceOfTruth": [
     {
       "id": "blueprint",
@@ -64,7 +89,7 @@
     {
       "id": "tracker-coverage",
       "command": "gh issue list --repo leonardwongly/agentic --search 'AOS- in:title' --state all --limit 100",
-      "purpose": "Confirm GitHub tracker coverage for AOS-00 through AOS-18."
+      "purpose": "Confirm GitHub tracker coverage for required AOS baseline items and any later generated AOS plan IDs."
     },
     {
       "id": "capability-baseline",

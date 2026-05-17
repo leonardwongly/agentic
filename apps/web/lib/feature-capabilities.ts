@@ -60,7 +60,7 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
       {
         route: "/api/nl/intent",
         routeFile: "apps/web/app/api/nl/intent/route.ts",
-        methods: ["POST"]
+        methods: ["GET", "POST"]
       },
       {
         route: "/api/goals",
@@ -118,12 +118,12 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
       {
         route: "/api/briefing",
         routeFile: "apps/web/app/api/briefing/route.ts",
-        methods: ["GET"]
+        methods: ["POST"]
       },
       {
         route: "/api/briefing/schedule",
         routeFile: "apps/web/app/api/briefing/schedule/route.ts",
-        methods: ["PATCH"]
+        methods: ["GET", "POST"]
       }
     ]
   },
@@ -143,7 +143,7 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
       {
         route: "/api/memory/[id]",
         routeFile: "apps/web/app/api/memory/[id]/route.ts",
-        methods: ["PATCH", "DELETE"]
+        methods: ["PATCH"]
       }
     ]
   },
@@ -163,7 +163,7 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
       {
         route: "/api/memory/[id]",
         routeFile: "apps/web/app/api/memory/[id]/route.ts",
-        methods: ["PATCH", "DELETE"]
+        methods: ["PATCH"]
       }
     ],
     notes: "Preview surface that now has an explicit backing contract instead of a phantom endpoint."
@@ -184,7 +184,7 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
       {
         route: "/api/agents/[id]",
         routeFile: "apps/web/app/api/agents/[id]/route.ts",
-        methods: ["GET", "PUT"]
+        methods: ["GET", "PUT", "DELETE"]
       },
       {
         route: "/api/agents/[id]/clone",
@@ -204,7 +204,7 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
       {
         route: "/api/integrations",
         routeFile: "apps/web/app/api/integrations/route.ts",
-        methods: ["GET", "PATCH"]
+        methods: ["GET", "POST"]
       },
       {
         route: "/api/workspaces",
@@ -229,7 +229,7 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
       {
         route: "/api/watchers/[id]",
         routeFile: "apps/web/app/api/watchers/[id]/route.ts",
-        methods: ["PATCH", "DELETE"]
+        methods: ["PATCH"]
       }
     ]
   },
@@ -249,7 +249,7 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
       {
         route: "/api/workflow-templates/[id]",
         routeFile: "apps/web/app/api/workflow-templates/[id]/route.ts",
-        methods: ["PATCH", "DELETE"]
+        methods: ["GET", "PUT", "DELETE"]
       }
     ]
   },
@@ -264,12 +264,12 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
       {
         route: "/api/autopilot/settings",
         routeFile: "apps/web/app/api/autopilot/settings/route.ts",
-        methods: ["GET", "PATCH"]
+        methods: ["GET", "POST"]
       },
       {
         route: "/api/autopilot/events",
         routeFile: "apps/web/app/api/autopilot/events/route.ts",
-        methods: ["GET", "POST"]
+        methods: ["POST"]
       }
     ],
     notes: "Runtime readiness graduates from preview once backlog, failure, and event-budget thresholds stay inside the bounded reliability controls."

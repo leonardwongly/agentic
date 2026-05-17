@@ -302,6 +302,70 @@ describe("dashboard collection routes", () => {
     expect(artifactPayload.page.items).toEqual([]);
   });
 
+  it("searches bounded approval and artifact collections beyond the dashboard goal summary window", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const token = "DEEP_DASHBOARD_COLLECTION_TOKEN";
+    const oldestBundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      `${token} send one external reply that needs a retained approval.`
+    );
+    const approval = oldestBundle.approvals[0];
+    expect(approval).toBeDefined();
+    const createdAt = nowIso();
+
+    await repository.saveGoalBundle({
+      ...oldestBundle,
+      approvals: oldestBundle.approvals.map((candidate) =>
+        candidate.id === approval!.id
+          ? {
+              ...candidate,
+              title: `${token} retained approval`,
+              rationale: `${candidate.rationale} ${token}`
+            }
+          : candidate
+      ),
+      artifacts: [
+        ...oldestBundle.artifacts,
+        {
+          id: "artifact-deep-dashboard-collection-token",
+          goalId: oldestBundle.goal.id,
+          artifactType: "summary",
+          title: `${token} retained artifact`,
+          content: "This old artifact must remain discoverable by the bounded collection route.",
+          createdAt
+        }
+      ]
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 2));
+
+    for (let index = 0; index < 45; index += 1) {
+      await createGoalForUser(repository, SYSTEM_USER_ID, `Prepare newer dashboard filler goal ${index}.`);
+    }
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const approvals = await dashboardApprovalsRoute(
+      buildAuthorizedGetRequest(`/api/dashboard/approvals?q=${token}&limit=5`)
+    );
+    const artifacts = await dashboardArtifactsRoute(
+      buildAuthorizedGetRequest("/api/dashboard/artifacts?q=artifact-deep-dashboard-collection-token&limit=5")
+    );
+    const approvalPayload = (await approvals.json()) as { page: { totalCount: number; items: Array<{ id: string }> } };
+    const artifactPayload = (await artifacts.json()) as { page: { totalCount: number; items: Array<{ id: string }> } };
+
+    expect(approvals.status).toBe(200);
+    expect(artifacts.status).toBe(200);
+    expect(approvalPayload.page.totalCount).toBe(1);
+    expect(approvalPayload.page.items[0]?.id).toBe(approval!.id);
+    expect(artifactPayload.page.totalCount).toBe(1);
+    expect(artifactPayload.page.items[0]?.id).toBe("artifact-deep-dashboard-collection-token");
+  });
+
   it("keeps large memory fixtures paginated and scoped to the signed-in user", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH

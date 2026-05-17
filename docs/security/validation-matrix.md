@@ -36,6 +36,10 @@ Run all of the following before a staged rollout:
 
 ```bash
 npm ci
+npm run lint
+npm run typecheck
+npm run format:check
+npm run release:check-context
 npm run build
 npm test
 npm run test:security:regression

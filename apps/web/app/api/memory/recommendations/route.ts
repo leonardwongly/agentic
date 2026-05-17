@@ -105,7 +105,9 @@ export async function GET(request: Request) {
       includeDraftOnly: url.searchParams.get("includeDraftOnly") ?? undefined
     });
     const repository = await getSeededSelfImprovementRepository();
-    const episodes = await repository.listEpisodes();
+    const episodes = await repository.listEpisodes({
+      ownerUserId: principal.userId
+    });
     const evidenceFilters = {
       kind: query.kind,
       agent: query.agent,
