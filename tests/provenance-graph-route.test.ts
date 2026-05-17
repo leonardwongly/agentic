@@ -6,6 +6,7 @@ import { createJobRecord } from "@agentic/execution";
 import { createMemoryRecord } from "@agentic/memory";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
+import { createSelfImprovementRepository, EpisodeRecordSchema } from "@agentic/self-improvement-memory";
 import { vi } from "vitest";
 import { buildAuthorizedGetRequest, expectNoStoreHeaders } from "./route-test-helpers";
 import { GET as graphRoute } from "../apps/web/app/api/provenance/graph/route";
@@ -21,12 +22,14 @@ describe("provenance graph route", () => {
       "runtime-store.json"
     );
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
   });
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
   });
 
   it("returns a graph scoped to the authenticated owner", async () => {
@@ -273,6 +276,166 @@ describe("provenance graph route", () => {
     expect(response.status).toBe(200);
     expect(listMemoryPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 10 }));
     expect(listMemorySpy).not.toHaveBeenCalled();
+  });
+
+  it("resolves recommendation provenance through owner-scoped learning episodes", async () => {
+    const runtimeTempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-provenance-learning-runtime-"));
+    const learningTempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-provenance-learning-"));
+    process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(runtimeTempDir, "runtime-store.json");
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const bundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Prepare recommendation-linked provenance.",
+      memories: [],
+      integrations: []
+    });
+    const otherBundle = await processUserRequest({
+      userId: "other-user",
+      request: "Prepare hidden recommendation-linked provenance.",
+      memories: [],
+      integrations: []
+    });
+    await repository.saveGoalBundle(bundle);
+    await repository.saveGoalBundle(otherBundle);
+    const selfImprovementRepository = createSelfImprovementRepository({
+      baseDir: path.join(learningTempDir, ".agentic", "self-improvement")
+    });
+    await selfImprovementRepository.seed();
+    await selfImprovementRepository.appendEpisode(
+      EpisodeRecordSchema.parse({
+        id: "learning-episode-1",
+        timestamp: "2026-04-20T00:00:00.000Z",
+        skill: "communications",
+        task: "Learn outbound recommendation",
+        outcome: "success",
+        situation: "Recommendation completed successfully.",
+        rootCause: null,
+        solution: "Reuse recommendation when replay gates pass.",
+        lesson: "Recommendation provenance should link back to the source goal.",
+        recommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          kind: "execution_path",
+          agent: "communications",
+          action: "send_message",
+          confidence: 0.9,
+          rationale: "Validated send path.",
+          riskClass: "R3",
+          capabilities: ["send"],
+          sourceGoalId: bundle.goal.id,
+          sourceTaskId: bundle.tasks[0]?.id ?? null,
+          fallbackMode: "normal",
+          evidenceHint: "established"
+        },
+        outcomeLink: {
+          goalId: bundle.goal.id,
+          workflowId: bundle.workflow.id,
+          taskId: bundle.tasks[0]?.id ?? null,
+          goalStatus: bundle.goal.status,
+          taskState: bundle.tasks[0]?.state ?? null,
+          approvalDecision: null,
+          executionKind: "completed",
+          outcomeScore: 1,
+          userCorrection: false,
+          notes: null
+        },
+        provenance: {
+          ownerUserId: SYSTEM_USER_ID,
+          workspaceId: bundle.goal.workspaceId,
+          source: "execution",
+          memoryIds: [],
+          actionLogIds: [],
+          evidenceRecordIds: [],
+          recommendationKeys: ["execution_path:communications:send_message:R3:send"]
+        },
+        privacy: {
+          sensitivity: "R3",
+          retention: {
+            policy: "learning-outcome-365d",
+            reviewAt: "2026-07-20T00:00:00.000Z",
+            expiresAt: "2027-04-20T00:00:00.000Z"
+          },
+          redaction: {
+            applied: false,
+            fields: [],
+            rules: [],
+            reason: null
+          }
+        },
+        metadata: {}
+      })
+    );
+    await selfImprovementRepository.appendEpisode(
+      EpisodeRecordSchema.parse({
+        id: "foreign-learning-episode",
+        timestamp: "2026-04-20T00:01:00.000Z",
+        skill: "communications",
+        task: "Learn foreign outbound recommendation",
+        outcome: "success",
+        situation: "Foreign recommendation completed successfully.",
+        rootCause: null,
+        solution: "Hidden.",
+        lesson: "Hidden.",
+        recommendation: {
+          key: "execution_path:communications:send_message:R3:send",
+          kind: "execution_path",
+          agent: "communications",
+          action: "send_message",
+          confidence: 0.9,
+          rationale: "Foreign send path.",
+          riskClass: "R3",
+          capabilities: ["send"],
+          sourceGoalId: otherBundle.goal.id,
+          sourceTaskId: otherBundle.tasks[0]?.id ?? null,
+          fallbackMode: "normal",
+          evidenceHint: "established"
+        },
+        outcomeLink: {
+          goalId: otherBundle.goal.id,
+          workflowId: otherBundle.workflow.id,
+          taskId: otherBundle.tasks[0]?.id ?? null,
+          goalStatus: otherBundle.goal.status,
+          taskState: otherBundle.tasks[0]?.state ?? null,
+          approvalDecision: null,
+          executionKind: "completed",
+          outcomeScore: 1,
+          userCorrection: false,
+          notes: null
+        },
+        provenance: {
+          ownerUserId: "other-user",
+          workspaceId: otherBundle.goal.workspaceId,
+          source: "execution",
+          memoryIds: [],
+          actionLogIds: [],
+          evidenceRecordIds: [],
+          recommendationKeys: ["execution_path:communications:send_message:R3:send"]
+        },
+        metadata: {}
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", repository);
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", selfImprovementRepository);
+
+    const response = await graphRoute(
+      buildAuthorizedGetRequest(
+        "http://localhost/api/provenance/graph?recommendationKey=execution_path%3Acommunications%3Asend_message%3AR3%3Asend&limit=50"
+      )
+    );
+    const payload = (await response.json()) as {
+      graph: { nodes: Array<{ id: string }> };
+      learning: { linkedEpisodeCount: number; linkedGoalIds: string[] };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.learning).toEqual({
+      recommendationKey: "execution_path:communications:send_message:R3:send",
+      linkedEpisodeCount: 1,
+      linkedGoalIds: [bundle.goal.id]
+    });
+    expect(payload.graph.nodes.some((node) => node.id === `goal:${bundle.goal.id}`)).toBe(true);
+    expect(payload.graph.nodes.some((node) => node.id === `goal:${otherBundle.goal.id}`)).toBe(false);
   });
 
   it("projects more than 200 memory-derived nodes when the provenance limit allows it", async () => {
