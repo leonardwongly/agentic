@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   provenance-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -43,7 +43,7 @@ jobs:
     # private repos. Skip unsupported private repos by default, with an explicit
     # opt-in knob for environments that enable the necessary GitHub features.
     if: github.event_name == 'pull_request' && (!github.event.repository.private || vars.ENABLE_DEPENDENCY_REVIEW == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write
@@ -58,7 +58,7 @@ jobs:
 
   issue-theme-gates:
     needs: provenance-gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -80,7 +80,7 @@ jobs:
     needs:
       - provenance-gate
       - issue-theme-gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16

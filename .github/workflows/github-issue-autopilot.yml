@@ -18,7 +18,7 @@ jobs:
   enqueue:
     name: Enqueue governed Agentic job
     if: ${{ github.event.issue.pull_request == null }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       AGENTIC_GITHUB_ISSUE_WEBHOOK_URL: ${{ vars.AGENTIC_GITHUB_ISSUE_WEBHOOK_URL }}
