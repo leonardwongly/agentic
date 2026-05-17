@@ -36,7 +36,7 @@ The current implementation evidence lives in:
 Run these commands from the repository root:
 
 ```bash
-cd /Users/leonardwongly/.codex/worktrees/c9fe/Agentic
+cd <agentic-worktree>
 npm run test -- tests/core-loop-route.test.ts tests/dashboard-command-center.test.tsx tests/dashboard-advanced-operations-card.test.tsx
 npm run test:e2e -- tests/e2e/dashboard-command-center.spec.ts
 npm run build -w @agentic/web

@@ -43,7 +43,7 @@ These are intentionally marked as supporting rather than selected production wed
 
 ## Runtime Source Of Truth
 
-The canonical source is [packages/contracts/src/index.ts](/Users/leonardwongly/.codex/worktrees/w02/Agentic/packages/contracts/src/index.ts), via:
+The canonical source is [packages/contracts/src/index.ts](https://github.com/leonardwongly/agentic/blob/main/packages/contracts/src/index.ts), via:
 
 - `GoalWedgeSchema`
 - `GoalCompletionContractSchema`
@@ -53,7 +53,7 @@ Goals created after this change persist the chosen wedge and completion contract
 
 ## Execution-Grade Vertical Evaluation
 
-The execution-grade proof harness lives in [packages/observability/src/execution-grade-wedge.ts](/Users/leonardwongly/.codex/worktrees/w02/Agentic/packages/observability/src/execution-grade-wedge.ts).
+The execution-grade proof harness lives in [packages/observability/src/execution-grade-wedge.ts](https://github.com/leonardwongly/agentic/blob/main/packages/observability/src/execution-grade-wedge.ts).
 
 Use `evaluateExecutionGradeVerticalWorkflow(...)` when promoting one selected wedge from control-plane readiness into end-to-end operator evidence. The evaluator fails closed unless the bundle proves all of the following:
 
