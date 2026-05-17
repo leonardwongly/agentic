@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { TelemetryExportBatch } from "@agentic/observability";
 import {
   evaluateRolloutGateManifest,
+  summarizeTelemetryRetention,
   type RolloutGateManifest
 } from "../packages/observability/src/rollout-gates";
 
@@ -276,6 +277,56 @@ describe("observability rollout gate evaluator", () => {
         })
       ])
     );
+  });
+
+  it("summarizes retained telemetry batches for rollout evidence", () => {
+    const batch = createBatch([
+      {
+        kind: "metric",
+        entry: {
+          timestamp: "2026-04-17T00:00:00.000Z",
+          kind: "counter",
+          name: "http.request.total",
+          value: 1,
+          attributes: {
+            outcome: "ok"
+          },
+          context: {
+            route: "api.ready"
+          }
+        }
+      },
+      {
+        kind: "log",
+        entry: {
+          timestamp: "2026-04-17T00:00:01.000Z",
+          level: "info",
+          message: "api.request.completed",
+          attributes: {},
+          context: {
+            route: "api.ready"
+          }
+        }
+      }
+    ]);
+    const summary = summarizeTelemetryRetention("/tmp/agentic-telemetry", [
+      {
+        ...batch,
+        droppedCount: 2
+      }
+    ]);
+
+    expect(summary).toEqual({
+      directory: "/tmp/agentic-telemetry",
+      batchCount: 1,
+      itemCount: 2,
+      metricCount: 1,
+      droppedCount: 2,
+      oldestBatchAt: "2026-04-17T00:00:00.000Z",
+      newestBatchAt: "2026-04-17T00:00:00.000Z",
+      services: ["agentic-test"],
+      environments: ["test"]
+    });
   });
 
   it("defines cockpit rollout thresholds as critical gates in the checked-in manifest", async () => {

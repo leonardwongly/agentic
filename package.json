@@ -35,6 +35,7 @@
     "test:smoke:observability-export": "tsx scripts/observability-export-smoke.ts",
     "test:smoke:deployment": "tsx scripts/deployment-smoke.ts",
     "test:smoke:deployment-async": "tsx scripts/deployment-async-canary.ts",
+    "test:smoke:deployment-confidence": "tsx scripts/deployment-confidence.ts",
     "test:load:observability": "tsx scripts/observability-load.ts",
     "test:failure:observability": "tsx scripts/observability-failure-injection.ts",
     "telemetry:rollout-gate": "tsx scripts/observability-rollout-gate.ts",
