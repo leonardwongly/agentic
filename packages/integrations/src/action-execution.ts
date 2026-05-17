@@ -13,12 +13,12 @@ import { normalizeConnectorThrownError } from "./connector-errors";
 
 export type ActionExecutionAdapters = {
   gmail?: {
-    createDraft: (params: { to: string; subject: string; body: string; threadId?: string }) => Promise<{ id: string }>;
-    sendDraft: (draftId: string) => Promise<{ messageId: string }>;
+    createDraft: (params: { to: string; subject: string; body: string; threadId?: string; idempotencyKey?: string }) => Promise<{ id: string }>;
+    sendDraft: (draftId: string, options?: { idempotencyKey?: string }) => Promise<{ messageId: string }>;
     listRecentEmails: (maxResults?: number, query?: string) => Promise<Array<{ id: string; from: string; subject: string; snippet: string }>>;
   };
   calendar?: {
-    createEvent: (params: { summary: string; start: string; end: string; description?: string; attendees?: string[] }) => Promise<{ id: string; htmlLink: string }>;
+    createEvent: (params: { summary: string; start: string; end: string; description?: string; attendees?: string[]; idempotencyKey?: string }) => Promise<{ id: string; htmlLink: string }>;
     updateEvent: (params: { eventId: string; summary?: string; start?: string; end?: string }) => Promise<{ id: string }>;
     listUpcomingEvents: (params?: { maxResults?: number }) => Promise<Array<{ id: string; summary: string; start: string; end: string }>>;
   };
@@ -557,7 +557,8 @@ export async function executeTypedAction(params: {
             to: params.actionIntent.to,
             subject: params.actionIntent.subject,
             body: params.actionIntent.body,
-            ...(params.actionIntent.threadId ? { threadId: params.actionIntent.threadId } : {})
+            ...(params.actionIntent.threadId ? { threadId: params.actionIntent.threadId } : {}),
+            idempotencyKey: plan.idempotencyKey ?? undefined
           });
           draftId = draft.id;
         }
@@ -596,7 +597,9 @@ export async function executeTypedAction(params: {
             detail: `Draft ${draftId} created; delivery pending.`
           });
 
-          const sent = await params.adapters.gmail.sendDraft(draftId);
+          const sent = await params.adapters.gmail.sendDraft(draftId, {
+            idempotencyKey: plan.idempotencyKey ?? undefined
+          });
           const detail = `Draft ${draftId} sent as message ${sent.messageId}.`;
           await updateProviderSideEffect({
             ledger: params.sideEffectLedger,
@@ -700,7 +703,8 @@ export async function executeTypedAction(params: {
           start: params.actionIntent.start,
           end: params.actionIntent.end,
           ...(params.actionIntent.description ? { description: params.actionIntent.description } : {}),
-          attendees: params.actionIntent.attendees
+          attendees: params.actionIntent.attendees,
+          idempotencyKey: plan.idempotencyKey ?? undefined
         });
         const detail = `Calendar event created (id: ${event.id}). Link: ${event.htmlLink}`;
         ledgerRecord = await updateProviderSideEffect({
