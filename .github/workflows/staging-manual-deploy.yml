@@ -70,6 +70,9 @@ jobs:
       - name: Validate GitHub Actions provenance pins
         run: npm run ci:validate-provenance
 
+      - name: Validate issue-theme gate taxonomy
+        run: npm run ci:issue-theme-gates -- --assert-workflow
+
       - name: Resolve staging execution mode
         id: inspect
         run: npx tsx scripts/staging-execution-plan.ts

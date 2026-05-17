@@ -478,7 +478,7 @@ jobs:
 
     expect(gateIndex).toBeGreaterThanOrEqual(0);
     expect(validateIndex).toBeGreaterThan(gateIndex);
-    expect(workflow).toMatch(/validate:\n\s+needs:\s+provenance-gate/u);
+    expect(workflow).toMatch(/validate:\n\s+needs:\n\s+- provenance-gate\n\s+- issue-theme-gates/u);
     expect(gateBlock).toContain("Validate GitHub Actions provenance pins");
     expect(gateBlock).toContain("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6");
     expect(gateBlock).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6");

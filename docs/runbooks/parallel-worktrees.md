@@ -128,6 +128,18 @@ Do not treat a clean git merge as proof of correctness. Integration is complete 
 
 ## CLI Commands
 
+Resolve issue-theme validation gates before assigning a stream:
+
+```bash
+npm run ci:issue-theme-gates -- --label aos-shell
+```
+
+For a branch that already has local changes, resolve gates from the diff:
+
+```bash
+npm run ci:issue-theme-gates -- --from-git --base-ref origin/main
+```
+
 Create the standard sibling worktrees from the repo root:
 
 ```bash
