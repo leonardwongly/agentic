@@ -4,9 +4,11 @@ import path from "node:path";
 import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { sendNotification } from "@agentic/integrations";
 import {
+  createActionLog,
   getTelemetrySnapshot,
   resetTelemetrySnapshot,
-  sanitizeForTelemetry
+  sanitizeForTelemetry,
+  withTelemetryContext
 } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
@@ -50,7 +52,8 @@ describe("observability", () => {
         headers: {
           "content-type": "application/json",
           [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
-          "x-request-id": "req-observability-1"
+          "x-request-id": "req-observability-1",
+          "x-trace-id": "trace-observability-1"
         },
         body: JSON.stringify({
           request: "Plan my operating week with approval-safe follow-ups."
@@ -65,11 +68,12 @@ describe("observability", () => {
 
     expect(response.status).toBe(202);
     expect(response.headers.get("x-request-id")).toBe("req-observability-1");
-    expect(response.headers.get("x-trace-id")).toBeTruthy();
+    expect(response.headers.get("x-trace-id")).toBe("trace-observability-1");
     expect(startedLog).toMatchObject({
       message: "api.request.started",
       context: {
         requestId: "req-observability-1",
+        traceId: "trace-observability-1",
         route: "api.goals.create",
         method: "POST",
         path: "/api/goals"
@@ -90,10 +94,13 @@ describe("observability", () => {
         route: "api.goals.create",
         method: "POST",
         path: "/api/goals",
-        statusCode: 202
+        statusCode: 202,
+        statusClass: "2xx",
+        outcome: "ok"
       },
       context: {
-        requestId: "req-observability-1"
+        requestId: "req-observability-1",
+        traceId: "trace-observability-1"
       }
     });
     expect(requestDurationMetric?.value).toBeGreaterThanOrEqual(0);
@@ -237,6 +244,57 @@ describe("observability", () => {
       token: "[REDACTED]",
       nested: {
         message: "[REDACTED]"
+      }
+    });
+  });
+
+  it("threads workflow and artifact identifiers through action-log telemetry", async () => {
+    await withTelemetryContext(
+      {
+        requestId: "req-action-log",
+        traceId: "trace-action-log"
+      },
+      async () => {
+        createActionLog({
+          goalId: "goal-telemetry",
+          taskId: "task-telemetry",
+          workflowId: "workflow-telemetry",
+          actor: SYSTEM_USER_ID,
+          kind: "artifact.created",
+          message: "Created deployment evidence artifact.",
+          details: {
+            artifactId: "artifact-telemetry",
+            token: "super-secret-value"
+          }
+        });
+      }
+    );
+
+    const snapshot = getTelemetrySnapshot();
+    const log = snapshot.logs.find((entry) => entry.message === "action_log.created");
+    const counter = snapshot.metrics.find((entry) => entry.name === "action_log.created.total");
+
+    expect(log).toMatchObject({
+      context: {
+        requestId: "req-action-log",
+        traceId: "trace-action-log",
+        workflowId: "workflow-telemetry",
+        artifactId: "artifact-telemetry"
+      },
+      attributes: {
+        actionKind: "artifact.created",
+        goalId: "goal-telemetry",
+        taskId: "task-telemetry",
+        workflowId: "workflow-telemetry",
+        artifactId: "artifact-telemetry"
+      }
+    });
+    expect(JSON.stringify(log)).not.toContain("super-secret-value");
+    expect(counter).toMatchObject({
+      attributes: {
+        actionKind: "artifact.created",
+        hasWorkflow: true,
+        hasArtifact: true
       }
     });
   });

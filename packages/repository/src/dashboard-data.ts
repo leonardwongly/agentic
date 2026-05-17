@@ -23,6 +23,7 @@ import type {
   WorkspaceMember,
   WorkspaceSelection
 } from "@agentic/contracts";
+import { logInfo, recordCounter, recordHistogram } from "@agentic/observability";
 import { assessWorkspaceGovernanceConformance } from "@agentic/policy";
 import { resolveDashboardCockpitRollout } from "./dashboard-cockpit-rollout";
 import { buildDashboardTraceability } from "./dashboard-traceability";
@@ -144,6 +145,86 @@ function formatCount(count: number, singular: string, plural = `${singular}s`): 
 
 function pluralize(count: number, noun: string): string {
   return formatCount(count, noun, noun.endsWith("y") ? `${noun.slice(0, -1)}ies` : `${noun}s`);
+}
+
+function recordDashboardHealthMetrics(params: {
+  durationMs: number;
+  scopedGoals: number;
+  approvals: number;
+  commitments: number;
+  memories: number;
+  operations?: DashboardOperationsTower;
+}) {
+  recordHistogram("product.dashboard.summary_latency_ms", params.durationMs, {
+    variant: "server",
+    surface: "dashboard_data"
+  });
+  recordHistogram("dashboard.health.payload_items", params.scopedGoals, {
+    collection: "goals"
+  });
+  recordHistogram("dashboard.health.payload_items", params.approvals, {
+    collection: "approvals"
+  });
+  recordHistogram("dashboard.health.payload_items", params.commitments, {
+    collection: "commitments"
+  });
+  recordHistogram("dashboard.health.payload_items", params.memories, {
+    collection: "memories"
+  });
+
+  if (!params.operations) {
+    return;
+  }
+
+  const { asyncExecution, connectorHealth, shellEffectiveness } = params.operations;
+
+  recordHistogram("dashboard.health.queue_depth", asyncExecution.queuedJobs, {
+    queueStatus: "queued",
+    operationsStatus: asyncExecution.status
+  });
+  recordHistogram("dashboard.health.queue_depth", asyncExecution.retryingJobs, {
+    queueStatus: "retrying",
+    operationsStatus: asyncExecution.status
+  });
+  recordHistogram("dashboard.health.queue_depth", asyncExecution.runningJobs, {
+    queueStatus: "running",
+    operationsStatus: asyncExecution.status
+  });
+  recordHistogram("dashboard.health.queue_depth", asyncExecution.deadLetterJobs, {
+    queueStatus: "dead_letter",
+    operationsStatus: asyncExecution.status
+  });
+  recordHistogram("dashboard.health.queue_lag_seconds", asyncExecution.oldestPendingJobAgeSeconds ?? 0, {
+    operationsStatus: asyncExecution.status,
+    stalePendingCount: asyncExecution.stalePendingCount
+  });
+  recordHistogram("dashboard.health.connector_count", connectorHealth.totalCount, {
+    connectorStatus: connectorHealth.status,
+    connectorState: "total"
+  });
+  recordHistogram("dashboard.health.connector_count", connectorHealth.connectedCount, {
+    connectorStatus: connectorHealth.status,
+    connectorState: "connected"
+  });
+  recordHistogram("dashboard.health.connector_count", connectorHealth.issueCount, {
+    connectorStatus: connectorHealth.status,
+    connectorState: "issue"
+  });
+  recordCounter("dashboard.health.operations_status.total", 1, {
+    asyncStatus: asyncExecution.status,
+    connectorStatus: connectorHealth.status,
+    shellStatus: shellEffectiveness.status
+  });
+  logInfo("dashboard.health.metrics_recorded", {
+    asyncStatus: asyncExecution.status,
+    connectorStatus: connectorHealth.status,
+    shellStatus: shellEffectiveness.status,
+    queuedJobs: asyncExecution.queuedJobs,
+    retryingJobs: asyncExecution.retryingJobs,
+    deadLetterJobs: asyncExecution.deadLetterJobs,
+    connectorIssues: connectorHealth.issueCount,
+    oldestPendingJobAgeSeconds: asyncExecution.oldestPendingJobAgeSeconds
+  });
 }
 
 function buildApprovalImpactSummary(approval: ApprovalRequest): string {
@@ -380,6 +461,15 @@ export function assembleDashboardData(params: AssembleDashboardDataParams): Dash
 
   const durationMs = Date.now() - startedAt;
   const warnMs = readDashboardWarnMs();
+
+  recordDashboardHealthMetrics({
+    durationMs,
+    scopedGoals: scopedGoals.length,
+    approvals: scopedApprovals.length,
+    commitments: mergedCommitments.length,
+    memories: params.memories.length,
+    operations
+  });
 
   if (shouldAlwaysLogDashboardTiming() || durationMs >= warnMs) {
     const log = durationMs >= warnMs ? console.warn : console.info;

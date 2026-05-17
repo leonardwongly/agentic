@@ -19,15 +19,33 @@ describe("deployment smoke", () => {
     await expect(
       runDeploymentSmoke({
         baseUrl: "http://127.0.0.1:3301/",
+        requestId: "smoke-request-1",
+        traceId: "smoke-trace-1",
         fetchImpl
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       healthStatus: "live",
       readinessStatus: "ready",
-      sessionChecked: false
+      sessionChecked: false,
+      requestId: "smoke-request-1",
+      traceId: "smoke-trace-1",
+      checks: [
+        expect.objectContaining({ name: "health", status: 200 }),
+        expect.objectContaining({ name: "readiness", status: 200 })
+      ]
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:3301/api/health",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-request-id": "smoke-request-1",
+          "x-trace-id": "smoke-trace-1"
+        })
+      })
+    );
   });
 
   it("performs a session login when a smoke access key is configured", async () => {
@@ -40,15 +58,32 @@ describe("deployment smoke", () => {
       runDeploymentSmoke({
         baseUrl: "http://127.0.0.1:3301",
         accessKey: "smoke-key",
+        requestId: "smoke-request-session",
+        traceId: "smoke-trace-session",
         fetchImpl
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       healthStatus: "live",
       readinessStatus: "ready",
-      sessionChecked: true
+      sessionChecked: true,
+      requestId: "smoke-request-session",
+      traceId: "smoke-trace-session",
+      checks: [
+        expect.objectContaining({ name: "health", status: 200 }),
+        expect.objectContaining({ name: "readiness", status: 200 }),
+        expect.objectContaining({ name: "session", status: 200 })
+      ]
     });
 
     expect(fetchImpl.mock.calls[2]?.[0]).toBe("http://127.0.0.1:3301/api/session");
+    expect(fetchImpl.mock.calls[2]?.[1]).toEqual(
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-request-id": "smoke-request-session",
+          "x-trace-id": "smoke-trace-session"
+        })
+      })
+    );
   });
 
   it("fails when the readiness payload is not ready", async () => {

@@ -26,6 +26,8 @@ export type TelemetryContext = {
   provider?: string;
   userId?: string;
   workspaceId?: string | null;
+  workflowId?: string | null;
+  artifactId?: string | null;
 };
 
 export type StructuredLogLevel = "info" | "warn" | "error";
@@ -124,6 +126,7 @@ const telemetrySnapshot: TelemetrySnapshot = {
 const TELEMETRY_BUFFER_LIMIT = 1_000;
 const REQUEST_ID_HEADER = "x-request-id";
 const TRACE_ID_HEADER = "x-trace-id";
+const PARENT_SPAN_ID_HEADER = "x-parent-span-id";
 const TELEMETRY_CONSOLE_ENV = "AGENTIC_TELEMETRY_CONSOLE";
 const TELEMETRY_EXPORT_URL_ENV = "AGENTIC_TELEMETRY_EXPORT_URL";
 const TELEMETRY_EXPORT_TOKEN_ENV = "AGENTIC_TELEMETRY_EXPORT_TOKEN";
@@ -156,6 +159,17 @@ let telemetryExportSuppressionDepth = 0;
 
 function createTelemetryId(): string {
   return crypto.randomBytes(8).toString("hex");
+}
+
+function normalizeCorrelationId(candidate: string | null | undefined): string | null {
+  const trimmed = candidate?.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalized = trimmed.replace(/[^\w:./-]/gu, "").slice(0, 200);
+  return normalized.length > 0 ? normalized : null;
 }
 
 function copyContext(context: TelemetryContext | undefined): TelemetryContext {
@@ -553,7 +567,9 @@ function normalizeTelemetryContext(
     runnerId: next.runnerId ?? parent?.runnerId,
     provider: next.provider ?? parent?.provider,
     userId: next.userId ?? parent?.userId,
-    workspaceId: next.workspaceId ?? parent?.workspaceId
+    workspaceId: next.workspaceId ?? parent?.workspaceId,
+    workflowId: next.workflowId ?? parent?.workflowId ?? null,
+    artifactId: next.artifactId ?? parent?.artifactId ?? null
   };
 }
 
@@ -570,20 +586,34 @@ export async function withTelemetryContext<T>(
 }
 
 export function getOrCreateRequestId(candidate?: string | null): string {
-  const trimmed = candidate?.trim();
+  return normalizeCorrelationId(candidate) ?? createTelemetryId();
+}
 
-  if (trimmed) {
-    return trimmed.slice(0, 200);
-  }
+export function getOrCreateTraceId(candidate?: string | null): string {
+  return normalizeCorrelationId(candidate) ?? createTelemetryId();
+}
 
-  return createTelemetryId();
+export function getParentSpanId(candidate?: string | null): string | null {
+  return normalizeCorrelationId(candidate);
+}
+
+export function getTelemetryContextFromHeaders(headers: Headers): Pick<
+  TelemetryContext,
+  "requestId" | "traceId" | "parentSpanId"
+> {
+  return {
+    requestId: getOrCreateRequestId(headers.get(REQUEST_ID_HEADER)),
+    traceId: getOrCreateTraceId(headers.get(TRACE_ID_HEADER)),
+    parentSpanId: getParentSpanId(headers.get(PARENT_SPAN_ID_HEADER))
+  };
 }
 
 export function getCorrelationHeaders(): HeadersInit {
   const context = getTelemetryContext();
   return {
     ...(context?.requestId ? { [REQUEST_ID_HEADER]: context.requestId } : {}),
-    ...(context?.traceId ? { [TRACE_ID_HEADER]: context.traceId } : {})
+    ...(context?.traceId ? { [TRACE_ID_HEADER]: context.traceId } : {}),
+    ...(context?.spanId ? { [PARENT_SPAN_ID_HEADER]: context.spanId } : {})
   };
 }
 
@@ -619,13 +649,18 @@ export function recordHistogram(name: string, value: number, attributes?: Record
   });
 }
 
-function writeStructuredLog(level: StructuredLogLevel, message: string, attributes?: Record<string, unknown>) {
+function writeStructuredLog(
+  level: StructuredLogLevel,
+  message: string,
+  attributes?: Record<string, unknown>,
+  context?: Partial<TelemetryContext>
+) {
   const entry: StructuredLogEntry = {
     timestamp: nowIso(),
     level,
     message,
     attributes: sanitizeAttributes(attributes),
-    context: copyContext(getTelemetryContext())
+    context: normalizeTelemetryContext(context ?? {}, getTelemetryContext())
   };
 
   pushLog(entry);
@@ -676,7 +711,7 @@ export async function withSpan<T>(
       traceId: parent?.traceId ?? createTelemetryId(),
       requestId: parent?.requestId,
       spanId: createTelemetryId(),
-      parentSpanId: parent?.spanId ?? null
+      parentSpanId: parent?.spanId ?? parent?.parentSpanId ?? null
     },
     parent
   );
@@ -866,7 +901,7 @@ export function createActionLog(
 ): ActionLog {
   const prevHash = input.prevLog ? hashActionLog(input.prevLog) : null;
   const { prevLog: _prevLog, ...rest } = input;
-  return ActionLogSchema.parse({
+  const log = ActionLogSchema.parse({
     taskId: rest.taskId ?? null,
     workflowId: rest.workflowId ?? null,
     ...rest,
@@ -874,6 +909,35 @@ export function createActionLog(
     createdAt: nowIso(),
     prevHash
   });
+  const details = typeof log.details === "object" && log.details !== null
+    ? (log.details as Record<string, unknown>)
+    : {};
+  const artifactId = typeof details.artifactId === "string" ? details.artifactId : null;
+
+  writeStructuredLog(
+    "info",
+    "action_log.created",
+    {
+      actionLogId: log.id,
+      actionKind: log.kind,
+      goalId: log.goalId,
+      taskId: log.taskId,
+      workflowId: log.workflowId,
+      artifactId
+    },
+    {
+      userId: log.actor,
+      workflowId: log.workflowId,
+      artifactId
+    }
+  );
+  recordCounter("action_log.created.total", 1, {
+    actionKind: log.kind,
+    hasWorkflow: Boolean(log.workflowId),
+    hasArtifact: Boolean(artifactId)
+  });
+
+  return log;
 }
 
 // Activity event types for agent execution instrumentation
