@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  AgentDefinitionSchema,
   SYSTEM_USER_ID,
   WorkspaceMemberSchema,
   WorkspaceSchema,
@@ -388,6 +389,70 @@ describe("goal route", () => {
 
     expect(response.status).toBe(400);
     expect(payload.error).toContain("x-idempotency-key");
+  });
+
+  it("rejects unknown, foreign, and non-active custom agents before goal enqueue", async () => {
+    const repository = createRouteTestRepository();
+    const timestamp = "2026-04-22T00:00:00.000Z";
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults("user-secondary");
+    await repository.saveAgent(
+      AgentDefinitionSchema.parse({
+        id: "agent-secondary-only",
+        userId: "user-secondary",
+        name: "secondary-only",
+        displayName: "Secondary Only",
+        description: "Foreign agent.",
+        systemPrompt: "Prepare scoped plans for the secondary user only.",
+        artifactType: "summary",
+        allowedCapabilities: ["read", "search"],
+        status: "active",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+    );
+    await repository.saveAgent(
+      AgentDefinitionSchema.parse({
+        id: "agent-draft-goal",
+        userId: SYSTEM_USER_ID,
+        name: "draft-goal",
+        displayName: "Draft Goal Agent",
+        description: "Draft agent.",
+        systemPrompt: "Prepare scoped plans only after activation.",
+        artifactType: "summary",
+        allowedCapabilities: ["read", "search"],
+        status: "draft",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+    );
+
+    for (const [agentId, expectedStatus, expectedError] of [
+      ["agent-missing", 404, "Agent not found."],
+      ["agent-secondary-only", 404, "Agent not found."],
+      ["agent-draft-goal", 409, "Agent is not active and cannot execute goals."]
+    ] as const) {
+      const response = await goalsCreateRoute(
+        new Request("http://localhost/api/goals", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+          },
+          body: JSON.stringify({
+            request: "Prepare a durable weekly planning workflow.",
+            agentId
+          })
+        })
+      );
+      const payload = (await response.json()) as { error?: string };
+
+      expect(response.status).toBe(expectedStatus);
+      expect(payload.error).toBe(expectedError);
+    }
+
+    await expect(repository.listJobs({ userId: SYSTEM_USER_ID })).resolves.toHaveLength(0);
   });
 
   it("returns 404 for a goal owned by another user", async () => {

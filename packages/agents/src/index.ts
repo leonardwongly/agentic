@@ -563,6 +563,19 @@ function permissionsForTask(task: Task, agentDefinition?: AgentDefinition | null
   };
 }
 
+function validateExecutableAgentDefinition(agentDefinition?: AgentDefinition | null) {
+  if (!agentDefinition) {
+    return;
+  }
+
+  if (agentDefinition.status !== "active") {
+    throw new AgentRunnerExecutionError(
+      "unsupported_agent",
+      `Agent runner rejected ${agentDefinition.status} agent "${agentDefinition.id}".`
+    );
+  }
+}
+
 function validateRunnerPermissions(input: AgentRunnerInput) {
   assertCapabilitiesWithinAllowlist(input.task.assignedAgent, input.task.toolCapabilities);
 
@@ -697,6 +710,8 @@ export function validateAgentRunnerRegistration(runner: AgentRunner): AgentRunne
 }
 
 export function runAgent(task: Task, scenario: string, options?: RunAgentOptions): AgentResult {
+  validateExecutableAgentDefinition(options?.agentDefinition ?? null);
+
   const runner = selectAgentRunner(options);
   validateAgentRunnerRegistration(runner);
 

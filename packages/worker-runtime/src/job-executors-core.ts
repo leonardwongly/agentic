@@ -5,6 +5,7 @@ import {
   createSystemActorContext,
   nowIso,
   type ActorContext,
+  type AgentDefinition,
   type BriefingCreateJobPayload,
   type Capability,
   type DocsRenderJobPayload,
@@ -108,14 +109,30 @@ async function resolveGoalCreateAgentDefinition(
     return undefined;
   }
 
-  try {
-    return (await repository.getAgent(agentId, userId)) ?? undefined;
-  } catch {
-    logWarn("goal_job.agent_override_missing", {
+  const agent = await repository.getAgent(agentId, userId);
+
+  if (!agent) {
+    logWarn("goal_job.agent_override_rejected", {
       agentId,
-      userId
+      userId,
+      reason: "missing_or_forbidden"
     });
-    return undefined;
+    throw new Error("Goal agent override is unavailable.");
+  }
+
+  assertExecutableGoalAgentDefinition(agent);
+  return agent;
+}
+
+function assertExecutableGoalAgentDefinition(agent: AgentDefinition) {
+  if (agent.status !== "active") {
+    logWarn("goal_job.agent_override_rejected", {
+      agentId: agent.id,
+      userId: agent.userId,
+      status: agent.status,
+      reason: "not_active"
+    });
+    throw new Error("Goal agent override is not active.");
   }
 }
 
