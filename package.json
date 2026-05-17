@@ -19,6 +19,7 @@
     "security:audit-runtime": "tsx scripts/runtime-vulnerability-gate.ts",
     "security:sbom": "tsx scripts/generate-sbom.ts",
     "ci:validate-provenance": "tsx scripts/validate-github-actions-provenance.ts",
+    "ci:issue-theme-gates": "tsx scripts/issue-theme-gates.ts",
     "security:collect-evidence": "tsx scripts/collect-compliance-evidence.ts",
     "compliance:validate-registry": "tsx scripts/validate-compliance-registry.ts",
     "test": "vitest run",
