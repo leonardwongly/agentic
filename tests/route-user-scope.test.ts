@@ -574,6 +574,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     saveProviderCredential: async (credential) => credential,
     getProviderCredentialSecret: async () => null,
     saveProviderCredentialSecret: async (record) => record,
+    reserveProviderSideEffect: async () => { throw new Error("reserveProviderSideEffect was not stubbed."); },
+    updateProviderSideEffect: async () => { throw new Error("updateProviderSideEffect was not stubbed."); },
     listTemplates: async () => [],
     saveTemplate: async (template) => template,
     deleteTemplate: async () => {},

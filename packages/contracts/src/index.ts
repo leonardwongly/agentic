@@ -1326,6 +1326,34 @@ export const ActionExecutionOutcomeSchema = z
   })
   .strict();
 
+export const providerSideEffectStatusValues = ["reserved", "partial_success", "completed", "failed"] as const;
+export const ProviderSideEffectStatusSchema = z.enum(providerSideEffectStatusValues);
+
+export const ProviderSideEffectRecordSchema = z
+  .object({
+    id: z.string().min(1).max(240),
+    userId: z.string().min(1),
+    workspaceId: z.string().min(1).max(200).nullable().default(null),
+    goalId: z.string().min(1).max(200),
+    taskId: z.string().min(1).max(200),
+    adapter: ActionAdapterKeySchema,
+    operation: ActionExecutionOperationSchema,
+    idempotencyKey: z.string().min(1).max(200),
+    sideEffectTarget: z.string().min(1).max(400),
+    status: ProviderSideEffectStatusSchema,
+    providerRef: z.string().min(1).max(200).nullable().default(null),
+    detail: z.string().min(1).max(1000).nullable().default(null),
+    error: z.string().min(1).max(1000).nullable().default(null),
+    attemptCount: z.number().int().min(1).max(25).default(1),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+    reservedAt: z.string().datetime(),
+    lastAttemptAt: z.string().datetime(),
+    completedAt: z.string().datetime().nullable().default(null),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime()
+  })
+  .strict();
+
 export const ApprovalDecisionRecordSchema = z.object({
   decision: ApprovalDecisionSchema.exclude(["pending"]),
   scope: ApprovalDecisionScopeSchema,
@@ -3756,6 +3784,8 @@ export type ActionExecutionRecovery = z.infer<typeof ActionExecutionRecoverySche
 export type ActionExecutionPlan = z.infer<typeof ActionExecutionPlanSchema>;
 export type ActionExecutionOutcomeStatus = z.infer<typeof ActionExecutionOutcomeStatusSchema>;
 export type ActionExecutionOutcome = z.infer<typeof ActionExecutionOutcomeSchema>;
+export type ProviderSideEffectStatus = z.infer<typeof ProviderSideEffectStatusSchema>;
+export type ProviderSideEffectRecord = z.infer<typeof ProviderSideEffectRecordSchema>;
 export type ApprovalDecisionRecord = z.infer<typeof ApprovalDecisionRecordSchema>;
 export type ApprovalExplanationEvidence = z.infer<typeof ApprovalExplanationEvidenceSchema>;
 export type ApprovalExplanation = z.infer<typeof ApprovalExplanationSchema>;

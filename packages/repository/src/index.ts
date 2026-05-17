@@ -55,6 +55,7 @@ import {
   ProviderCredentialSchema,
   ProviderCredentialSecretKindSchema,
   ProviderCredentialSecretRecordSchema,
+  ProviderSideEffectRecordSchema,
   RiskClassSchema,
   SYSTEM_USER_ID,
   TaskSchema,
@@ -107,6 +108,7 @@ import {
   type ProviderCredential,
   type ProviderCredentialSecretKind,
   type ProviderCredentialSecretRecord,
+  type ProviderSideEffectRecord,
   type JobKind,
   type JobRecord,
   type MemoryRecord,
@@ -130,6 +132,7 @@ import {
   buildFallbackApprovalActionIntent,
   buildFallbackApprovalPreview
 } from "./approval-fallbacks";
+import { isGoogleManagedIntegrationId, syncGoogleManagedIntegrations } from "./google-managed-integrations";
 import { assertWorkspaceGovernanceStartupConfig, resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults"; export { resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults";
 import { deriveAgentMetricsFromGoals } from "./agent-metrics";
 import {
@@ -162,6 +165,12 @@ import { buildBriefingHistory, buildDashboardControlPlane, buildNowQueue } from 
 import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 import { listContextPacketMemoryFromStore, listContextPacketMemoryWithPool } from "./repository-context-packet-memory";
+import {
+  reserveProviderSideEffectInStore,
+  reserveProviderSideEffectWithClient,
+  updateProviderSideEffectInStore,
+  updateProviderSideEffectWithClient
+} from "./provider-side-effect-ledger";
 import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
 import { mapMemoryRow } from "./repository-memory-row";
 import {
@@ -184,8 +193,10 @@ import {
   type GoalShareListFilters,
   type JobConcurrencyLimits,
   type PrivacyOperationListFilters,
+  type ReserveProviderSideEffectParams,
   type WatcherListFilters,
   type WatcherPageParams,
+  type UpdateProviderSideEffectParams,
   type WorkspaceAuditExport,
   type WorkspaceDeleteParams,
   type WorkspaceRetentionParams
@@ -223,6 +234,7 @@ const RuntimeStoreSchema = z.object({
   integrations: z.array(IntegrationAccountSchema),
   providerCredentials: z.array(ProviderCredentialSchema).default([]),
   providerCredentialSecrets: z.array(ProviderCredentialSecretRecordSchema).default([]),
+  providerSideEffects: z.array(ProviderSideEffectRecordSchema).default([]),
   artifacts: z.array(ArtifactSchema),
   workspaces: z.array(WorkspaceSchema).default([]),
   workspaceMembers: z.array(WorkspaceMemberSchema).default([]),
@@ -291,6 +303,7 @@ function createEmptyStore(): RuntimeStore {
     integrations: [],
     providerCredentials: [],
     providerCredentialSecrets: [],
+    providerSideEffects: [],
     artifacts: [],
     workspaces: [],
     workspaceMembers: [],
@@ -342,66 +355,6 @@ function providerCredentialSecretStoreKey(
 
 function goalShareFingerprintStoreKey(share: Pick<GoalShareRecord, "tokenFingerprint">): string {
   return share.tokenFingerprint.toLowerCase();
-}
-
-const GOOGLE_MANAGED_INTEGRATION_IDS = ["gmail", "google-calendar"] as const;
-
-function buildGoogleManagedIntegrationStatus(status: ProviderCredential["status"]): IntegrationAccount["status"] {
-  return status === "connected" ? "ready" : "manual";
-}
-
-function buildGoogleManagedIntegrationMetadata(credential: ProviderCredential): Record<string, unknown> {
-  return {
-    provider: "google",
-    managed: true,
-    providerCredentialId: credential.id,
-    providerCredentialStatus: credential.status,
-    workspaceId: credential.workspaceId,
-    accountId: credential.accountId,
-    accountEmail: credential.accountEmail,
-    displayName: credential.displayName
-  };
-}
-
-function syncGoogleManagedIntegrations(
-  integrations: IntegrationAccount[],
-  credential: ProviderCredential
-): IntegrationAccount[] {
-  if (credential.provider !== "google") {
-    return integrations;
-  }
-
-  const defaults = buildDefaultIntegrationAccounts(credential.userId);
-  let nextIntegrations = [...integrations];
-
-  for (const integrationId of GOOGLE_MANAGED_INTEGRATION_IDS) {
-    const defaultIntegration = defaults.find((candidate) => candidate.id === integrationId);
-
-    if (!defaultIntegration) {
-      continue;
-    }
-
-    const existing =
-      nextIntegrations.find((candidate) => candidate.userId === credential.userId && candidate.id === integrationId) ?? null;
-
-    const managedIntegration = IntegrationAccountSchema.parse({
-      ...(existing ?? defaultIntegration),
-      userId: credential.userId,
-      status: buildGoogleManagedIntegrationStatus(credential.status),
-      metadata: {
-        ...defaultIntegration.metadata,
-        ...(existing?.metadata ?? {}),
-        ...buildGoogleManagedIntegrationMetadata(credential)
-      },
-      actorContext: credential.actorContext,
-      createdAt: existing?.createdAt ?? defaultIntegration.createdAt,
-      updatedAt: credential.updatedAt
-    });
-
-    nextIntegrations = upsertByKey(nextIntegrations, managedIntegration, integrationStoreKey);
-  }
-
-  return nextIntegrations;
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {
@@ -2644,6 +2597,24 @@ class FileRepository implements AgenticRepository {
       );
       await this.writeStore(store);
       return ProviderCredentialSecretRecordSchema.parse(clone(validated));
+    });
+  }
+
+  async reserveProviderSideEffect(params: ReserveProviderSideEffectParams): Promise<ProviderSideEffectRecord> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const record = reserveProviderSideEffectInStore(store, params);
+      await this.writeStore(store);
+      return record;
+    });
+  }
+
+  async updateProviderSideEffect(params: UpdateProviderSideEffectParams): Promise<ProviderSideEffectRecord> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const record = updateProviderSideEffectInStore(store, params);
+      await this.writeStore(store);
+      return record;
     });
   }
 
@@ -7482,7 +7453,7 @@ class PostgresRepository implements AgenticRepository {
           })
         ),
         validated
-      ).filter((integration) => integration.userId === validated.userId && GOOGLE_MANAGED_INTEGRATION_IDS.includes(integration.id as (typeof GOOGLE_MANAGED_INTEGRATION_IDS)[number]));
+      ).filter((integration) => integration.userId === validated.userId && isGoogleManagedIntegrationId(integration.id));
 
       for (const integration of managedIntegrations) {
         await this.saveIntegrationWithClient(client, integration);
@@ -7532,6 +7503,14 @@ class PostgresRepository implements AgenticRepository {
       await this.saveProviderCredentialSecretWithClient(client, validated);
     });
     return ProviderCredentialSecretRecordSchema.parse(clone(validated));
+  }
+
+  async reserveProviderSideEffect(params: ReserveProviderSideEffectParams): Promise<ProviderSideEffectRecord> {
+    return this.withTransaction((client) => reserveProviderSideEffectWithClient(client, params));
+  }
+
+  async updateProviderSideEffect(params: UpdateProviderSideEffectParams): Promise<ProviderSideEffectRecord> {
+    return this.withTransaction((client) => updateProviderSideEffectWithClient(client, params));
   }
 
   async listTemplates(userId = SYSTEM_USER_ID): Promise<GoalTemplate[]> {

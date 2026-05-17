@@ -1100,7 +1100,34 @@ export async function executeApprovalFollowUpJob(params: {
         calendar: googleAdapters?.calendar,
         notes: { createLocalNote }
       },
-      governance: workspaceGovernance
+      governance: workspaceGovernance,
+      sideEffectLedger: {
+        reserve: ({ plan, task, actionIntent }) =>
+          repository.reserveProviderSideEffect({
+            userId: job.userId,
+            workspaceId: job.payload.workspaceId,
+            goalId: task.goalId,
+            taskId: task.id,
+            adapter: plan.adapter,
+            operation: plan.operation,
+            idempotencyKey: plan.idempotencyKey ?? "",
+            sideEffectTarget: plan.sideEffectTarget ?? "",
+            metadata: {
+              approvalId: job.payload.approvalId,
+              jobId: job.id,
+              actionIntentType: actionIntent.type
+            }
+          }),
+        update: ({ record, status, providerRef, detail, error, metadata }) =>
+          repository.updateProviderSideEffect({
+            id: record.id,
+            status,
+            providerRef,
+            detail,
+            error,
+            metadata
+          })
+      }
     });
     updatedBundle = reconcileExecutionResults({
       bundle,
