@@ -152,10 +152,17 @@ Inspect the current status of all planned worktrees:
 npm run worktree:status
 ```
 
+Inspect stale branches, stale PRs, and dirty worktrees without mutating anything:
+
+```bash
+npm run hygiene:repo -- --max-age-days 21
+```
+
 Emit machine-readable status for automation or dashboards:
 
 ```bash
 npm run worktree:status -- --json
+npm run hygiene:repo -- --json
 ```
 
 Preview safe cleanup after the integrated branch is committed:
@@ -201,6 +208,7 @@ After the integrated branch is committed:
 
 ```bash
 npm run worktree:cleanup -- --print-only
+npm run hygiene:repo -- --max-age-days 21
 ```
 
 3. Run cleanup once the plan looks correct:

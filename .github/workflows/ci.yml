@@ -95,6 +95,23 @@ jobs:
 
       - run: npm ci
 
+      - name: Run lint gate
+        run: npm run lint
+
+      - name: Run typecheck gate
+        run: npm run typecheck
+
+      - name: Run format gate
+        run: npm run format:check
+
+      - name: Check release context
+        run: npm run release:check-context
+
+      - name: Validate docs inventory
+        run: |
+          npm run docs:render
+          npm run docs:validate
+
       - name: Create security artifact directories
         run: mkdir -p artifacts/security artifacts/build artifacts/compliance
 
