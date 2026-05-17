@@ -269,7 +269,8 @@ describe("compliance evidence collector", () => {
 
     writeFixture(root, "scripts/collect-compliance-evidence.ts");
     writeFixture(root, "docs/runbooks/security-incident-response.md");
-    writeFixture(root, ".github/ISSUE_TEMPLATE/security-vulnerability-report.yml");
+    writeFixture(root, ".github/ISSUE_TEMPLATE/config.yml");
+    writeFixture(root, "SECURITY.md");
 
     const bundle = buildComplianceEvidenceBundle(
       {
@@ -285,7 +286,7 @@ describe("compliance evidence collector", () => {
             owner: "platform-security",
             trustBoundaries: ["ci to artifact store"],
             productSurfaces: ["compliance evidence"],
-            codePaths: [".github/ISSUE_TEMPLATE/security-vulnerability-report.yml"],
+            codePaths: [".github/ISSUE_TEMPLATE/config.yml", "SECURITY.md"],
             runbooks: ["docs/runbooks/security-incident-response.md"],
             automatedChecks: [
               {

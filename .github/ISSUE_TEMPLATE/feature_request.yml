@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a capability, workflow, or integration.
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: What user workflow is blocked or inefficient today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe the desired behavior without assuming a specific implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable behaviors, tests, or docs that would make the work complete.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - dashboard
+        - API
+        - worker
+        - integrations
+        - governance
+        - memory
+        - docs
+        - CI / release
+        - other
