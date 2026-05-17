@@ -163,6 +163,7 @@ import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 import { listContextPacketMemoryFromStore, listContextPacketMemoryWithPool } from "./repository-context-packet-memory";
 import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
+import { mapMemoryRow } from "./repository-memory-row";
 import {
   assertRunningJobOwner, autopilotEventMatchesBudget, buildDeletedWorkspaceTombstone, buildJobLifecycleJournal,
   goalShareTerminalAt, isJobScopedToWorkspace, normalizeAutopilotEventDetails, resolveRetentionWindow,
@@ -7059,27 +7060,7 @@ class PostgresRepository implements AgenticRepository {
   async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
     await this.ready;
     const result = await this.pool.query("select * from memory_records where user_id = $1 order by created_at desc, id desc", [userId]);
-    return result.rows.map((row) =>
-      MemoryRecordSchema.parse({
-        id: row.id,
-        userId: row.user_id,
-        category: row.category,
-        memoryType: row.memory_type,
-        content: row.content,
-        confidence: Number(row.confidence),
-        source: row.source,
-        sensitivity: row.sensitivity,
-        permissions: row.permissions ?? [],
-        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-        contextPacketConsent: row.context_packet_consent ?? null,
-        agentId: typeof row.agent_id === "string" ? row.agent_id : null,
-        agentScope: typeof row.agent_scope === "string" ? row.agent_scope : "global",
-        reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
-        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-        createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
-      })
-    );
+    return result.rows.map(mapMemoryRow);
   }
 
   async listContextPacketMemory(params: {
@@ -7122,27 +7103,7 @@ class PostgresRepository implements AgenticRepository {
       `,
       values
     );
-    const items = result.rows.slice(0, limit).map((row) =>
-      MemoryRecordSchema.parse({
-        id: row.id,
-        userId: row.user_id,
-        category: row.category,
-        memoryType: row.memory_type,
-        content: row.content,
-        confidence: Number(row.confidence),
-        source: row.source,
-        sensitivity: row.sensitivity,
-        permissions: row.permissions ?? [],
-        actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
-        contextPacketConsent: row.context_packet_consent ?? null,
-        agentId: typeof row.agent_id === "string" ? row.agent_id : null,
-        agentScope: typeof row.agent_scope === "string" ? row.agent_scope : "global",
-        reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
-        expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
-        createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
-      })
-    );
+    const items = result.rows.slice(0, limit).map(mapMemoryRow);
     const last = items.at(-1);
     return MemoryRecordPageSchema.parse({
       items,
