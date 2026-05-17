@@ -56,6 +56,13 @@ const READINESS_MODES: Record<IntegrationReadinessTier, IntegrationExecutionMode
   "autonomous-grade": ["draft", "approval", "autonomous"]
 };
 
+const READINESS_RANK: Record<IntegrationReadinessTier, number> = {
+  experimental: 0,
+  "draft-grade": 1,
+  "approval-grade": 2,
+  "autonomous-grade": 3
+};
+
 function buildModeSupport(tier: IntegrationReadinessTier): Record<IntegrationExecutionMode, boolean> {
   const supportedModes = READINESS_MODES[tier];
   return {
@@ -186,4 +193,11 @@ export function integrationSupportsExecutionMode(
   mode: IntegrationExecutionMode
 ): boolean {
   return describeIntegrationReadiness(account).supportedModes.includes(mode);
+}
+
+export function integrationReadinessMeetsTier(
+  actual: IntegrationReadinessTier,
+  required: IntegrationReadinessTier
+): boolean {
+  return READINESS_RANK[actual] >= READINESS_RANK[required];
 }

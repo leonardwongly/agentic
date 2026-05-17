@@ -1,4 +1,9 @@
-import { buildDefaultIntegrationAccounts, describeIntegrationReadiness, integrationSupportsExecutionMode } from "@agentic/integrations";
+import {
+  buildDefaultIntegrationAccounts,
+  describeIntegrationReadiness,
+  integrationReadinessMeetsTier,
+  integrationSupportsExecutionMode
+} from "@agentic/integrations";
 import type { ProviderCredential } from "@agentic/contracts";
 
 function buildGoogleCredential(overrides?: Partial<ProviderCredential>): ProviderCredential {
@@ -27,6 +32,14 @@ function buildGoogleCredential(overrides?: Partial<ProviderCredential>): Provide
 }
 
 describe("describeIntegrationReadiness", () => {
+  it("compares readiness tiers monotonically for execution gates", () => {
+    expect(integrationReadinessMeetsTier("approval-grade", "draft-grade")).toBe(true);
+    expect(integrationReadinessMeetsTier("approval-grade", "approval-grade")).toBe(true);
+    expect(integrationReadinessMeetsTier("draft-grade", "approval-grade")).toBe(false);
+    expect(integrationReadinessMeetsTier("experimental", "draft-grade")).toBe(false);
+    expect(integrationReadinessMeetsTier("autonomous-grade", "approval-grade")).toBe(true);
+  });
+
   it("marks live notes as autonomous-grade", () => {
     const notes = buildDefaultIntegrationAccounts("user-1").find((integration) => integration.system === "notes");
 

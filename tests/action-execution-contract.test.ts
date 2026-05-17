@@ -6,7 +6,14 @@ import {
   type Capability,
   type ProviderSideEffectRecord
 } from "@agentic/contracts";
-import { executeTypedAction, planActionExecution, type ActionExecutionSideEffectLedger } from "@agentic/integrations";
+import {
+  executeTypedAction,
+  planActionExecution,
+  type ActionExecutionConnectorReadiness,
+  type ActionExecutionSideEffectLedger,
+  type IntegrationReadinessProfile,
+  type IntegrationReadinessTier
+} from "@agentic/integrations";
 import { vi } from "vitest";
 
 function buildTask(capabilities: Capability[] = ["read", "send"]) {
@@ -96,6 +103,36 @@ function buildLedger() {
   return { ledger, calls, records };
 }
 
+function buildReadiness(tier: IntegrationReadinessTier, reason = `${tier} test readiness`): IntegrationReadinessProfile {
+  const supportedModes =
+    tier === "autonomous-grade"
+      ? ["draft", "approval", "autonomous"]
+      : tier === "approval-grade"
+        ? ["draft", "approval"]
+        : tier === "draft-grade"
+          ? ["draft"]
+          : [];
+
+  return {
+    tier,
+    label: tier,
+    reason,
+    supportedModes,
+    modeSupport: {
+      draft: supportedModes.includes("draft"),
+      approval: supportedModes.includes("approval"),
+      autonomous: supportedModes.includes("autonomous")
+    },
+    issues: [],
+    managedProvider: null
+  };
+}
+
+const approvalGradeConnectors: ActionExecutionConnectorReadiness = {
+  gmail: buildReadiness("approval-grade"),
+  calendar: buildReadiness("approval-grade")
+};
+
 describe("action execution contract", () => {
   it("builds a stable preview, idempotency key, and side-effect target for duplicate invocations", () => {
     const task = buildTask(["read", "send"]);
@@ -139,7 +176,8 @@ describe("action execution contract", () => {
           sendDraft: vi.fn(),
           listRecentEmails: vi.fn()
         }
-      }
+      },
+      connectorReadiness: approvalGradeConnectors
     });
 
     expect(plan.adapter).toBe("gmail");
@@ -155,6 +193,45 @@ describe("action execution contract", () => {
       }
     });
     expect(createDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips Gmail mutation when approval-grade connector readiness is missing", async () => {
+    const task = buildTask(["read", "draft", "send"]);
+    const actionIntent = ActionIntentSchema.parse({
+      type: "send_message",
+      to: "client@example.com",
+      subject: "Follow-up",
+      body: "Approved response body.",
+      mode: "draft"
+    });
+    const createDraft = vi.fn().mockResolvedValue({ id: "draft-should-not-exist" });
+    const { ledger, calls } = buildLedger();
+
+    const { outcome } = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        gmail: {
+          createDraft,
+          sendDraft: vi.fn(),
+          listRecentEmails: vi.fn()
+        }
+      },
+      sideEffectLedger: ledger
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      retryable: false,
+      providerRef: null,
+      recovery: {
+        strategy: "manual_review",
+        note: "Repair connector readiness before retrying this side effect."
+      }
+    });
+    expect(outcome.detail).toContain("gmail connector readiness is missing");
+    expect(createDraft).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
   it("records provider side effects before Gmail mutation and suppresses duplicate drafts", async () => {
@@ -179,6 +256,7 @@ describe("action execution contract", () => {
           listRecentEmails: vi.fn()
         }
       },
+      connectorReadiness: approvalGradeConnectors,
       sideEffectLedger: ledger
     });
     const second = await executeTypedAction({
@@ -191,6 +269,7 @@ describe("action execution contract", () => {
           listRecentEmails: vi.fn()
         }
       },
+      connectorReadiness: approvalGradeConnectors,
       sideEffectLedger: ledger
     });
 
@@ -229,6 +308,7 @@ describe("action execution contract", () => {
           listRecentEmails: vi.fn()
         }
       },
+      connectorReadiness: approvalGradeConnectors,
       sideEffectLedger: ledger
     });
     const second = await executeTypedAction({
@@ -241,6 +321,7 @@ describe("action execution contract", () => {
           listRecentEmails: vi.fn()
         }
       },
+      connectorReadiness: approvalGradeConnectors,
       sideEffectLedger: ledger
     });
 
@@ -287,7 +368,8 @@ describe("action execution contract", () => {
           sendDraft: vi.fn().mockRejectedValue(timeoutError),
           listRecentEmails: vi.fn()
         }
-      }
+      },
+      connectorReadiness: approvalGradeConnectors
     });
 
     expect(outcome).toMatchObject({
@@ -326,7 +408,8 @@ describe("action execution contract", () => {
           updateEvent: vi.fn(),
           listUpcomingEvents: vi.fn()
         }
-      }
+      },
+      connectorReadiness: approvalGradeConnectors
     });
 
     expect(outcome).toMatchObject({
@@ -337,6 +420,54 @@ describe("action execution contract", () => {
       }
     });
     expect(outcome.detail).toContain("Calendar event creation failed");
+  });
+
+  it("skips Calendar mutation when connector readiness is below approval-grade", async () => {
+    const task = TaskSchema.parse({
+      ...buildTask(["read", "schedule"]),
+      assignedAgent: "calendar"
+    });
+    const actionIntent = ActionIntentSchema.parse({
+      type: "schedule_event",
+      summary: "Customer handoff",
+      start: "2026-04-20T09:00:00.000Z",
+      end: "2026-04-20T09:30:00.000Z",
+      attendees: ["owner@example.com"]
+    });
+    const createEvent = vi.fn().mockResolvedValue({
+      id: "event-should-not-exist",
+      htmlLink: "https://calendar.example.com/event"
+    });
+    const { ledger, calls } = buildLedger();
+
+    const { outcome } = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        calendar: {
+          createEvent,
+          updateEvent: vi.fn(),
+          listUpcomingEvents: vi.fn()
+        }
+      },
+      connectorReadiness: {
+        calendar: buildReadiness("draft-grade", "Calendar only supports draft planning.")
+      },
+      sideEffectLedger: ledger
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      retryable: false,
+      providerRef: null,
+      recovery: {
+        strategy: "manual_review",
+        note: "Repair connector readiness before retrying this side effect."
+      }
+    });
+    expect(outcome.detail).toContain("calendar connector readiness is draft-grade");
+    expect(createEvent).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
   it("keeps local note failures in manual review instead of blind retries", async () => {

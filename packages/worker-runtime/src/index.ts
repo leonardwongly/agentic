@@ -29,13 +29,7 @@ import {
   type JobRetryPolicy
 } from "@agentic/execution";
 import {
-  assessManagedGoogleCredential,
-  createCalendarAdapter,
-  createGmailAdapter,
-  decryptProviderCredentialSecret,
   createLocalNote,
-  createProviderCredentialSecretStore,
-  googleWorkspaceRequiredScopes,
   isSlackReady,
   isTelegramReady,
   logError,
@@ -110,6 +104,7 @@ import {
 } from "./privacy-share-executors";
 import { persistCapturedSignals } from "./memory-capture-signals";
 import { createPublicShareViewedLog } from "./public-share-log";
+import { resolveGoogleWorkspaceAdapters } from "./google-workspace-adapters";
 
 export {
   enqueueApprovalFollowUpJob,
@@ -198,102 +193,6 @@ export type WorkerQueueHealthSummary = {
 
 class AutopilotExecutionError extends Error {
   readonly safeForUsers = true;
-}
-
-function listGoogleCredentialCandidatesForWorkspace(
-  credentials: Awaited<ReturnType<AgenticRepository["listProviderCredentials"]>>,
-  workspaceId: string | null | undefined
-) {
-  const connected = credentials
-    .filter((credential) => credential.provider === "google" && credential.status === "connected")
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-
-  if (workspaceId) {
-    const exact = connected.filter((credential) => credential.workspaceId === workspaceId);
-
-    if (exact.length > 0) {
-      return exact;
-    }
-  }
-
-  return connected.filter((credential) => credential.workspaceId === null);
-}
-
-async function resolveGoogleWorkspaceAdapters(params: {
-  repository: AgenticRepository;
-  userId: string;
-  workspaceId?: string | null;
-}) {
-  const candidates = listGoogleCredentialCandidatesForWorkspace(
-    await params.repository.listProviderCredentials(params.userId),
-    params.workspaceId ?? null
-  );
-
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  const candidateFailures: string[] = [];
-
-  for (const credential of candidates) {
-    const secretRecord = await params.repository.getProviderCredentialSecret(
-      credential.id,
-      "oauth_refresh_token",
-      params.userId
-    );
-    const assessment = assessManagedGoogleCredential({
-      account: {
-        id: "google-workspace",
-        name: "Google workspace adapters",
-        metadata: {
-          provider: "google",
-          managed: true,
-          providerCredentialId: credential.id
-        }
-      },
-      credential,
-      hasRefreshTokenSecret: Boolean(secretRecord)
-    });
-
-    const missingWorkspaceScopes = googleWorkspaceRequiredScopes.filter((scope) => !credential.scopes.includes(scope));
-    const blockedByWorkspaceScopes = missingWorkspaceScopes.length > 0;
-    const workspaceIssues = blockedByWorkspaceScopes
-      ? [`missing required Google scopes: ${missingWorkspaceScopes.join(", ")}`]
-      : [];
-
-    if (!assessment?.ready || blockedByWorkspaceScopes) {
-      candidateFailures.push(
-        `${credential.id}: ${[...(assessment?.issues.map((issue) => issue.message) ?? []), ...workspaceIssues].join("; ")}`
-      );
-      continue;
-    }
-
-    try {
-      const refreshToken = decryptProviderCredentialSecret({
-        store: createProviderCredentialSecretStore(),
-        envelope: secretRecord!.secret,
-        context: {
-          credentialId: credential.id,
-          userId: params.userId,
-          kind: "oauth_refresh_token"
-        }
-      });
-
-      return {
-        credential,
-        gmail: createGmailAdapter({ refreshToken }),
-        calendar: createCalendarAdapter({ refreshToken })
-      };
-    } catch (error) {
-      candidateFailures.push(
-        `${credential.id}: ${error instanceof Error ? error.message : "failed to decrypt refresh token"}`
-      );
-    }
-  }
-
-  throw new Error(
-    `No approval-safe Google credential is available for workspace adapters. ${candidateFailures.join(" | ")}`
-  );
 }
 
 function mergeIds(...groups: Array<string[] | undefined>): string[] {
@@ -1099,6 +998,10 @@ export async function executeApprovalFollowUpJob(params: {
         gmail: googleAdapters?.gmail,
         calendar: googleAdapters?.calendar,
         notes: { createLocalNote }
+      },
+      connectorReadiness: {
+        gmail: googleAdapters?.readiness.gmail,
+        calendar: googleAdapters?.readiness.calendar
       },
       governance: workspaceGovernance,
       sideEffectLedger: {

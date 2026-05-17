@@ -1,5 +1,34 @@
-import { executeTypedAction } from "@agentic/integrations";
+import { executeTypedAction, type ActionExecutionConnectorReadiness } from "@agentic/integrations";
 import { createTask } from "@agentic/execution";
+
+const approvalGradeConnectors: ActionExecutionConnectorReadiness = {
+  gmail: {
+    tier: "approval-grade",
+    label: "Approval-grade",
+    reason: "Test Gmail readiness.",
+    supportedModes: ["draft", "approval"],
+    modeSupport: {
+      draft: true,
+      approval: true,
+      autonomous: false
+    },
+    issues: [],
+    managedProvider: null
+  },
+  calendar: {
+    tier: "approval-grade",
+    label: "Approval-grade",
+    reason: "Test Calendar readiness.",
+    supportedModes: ["draft", "approval"],
+    modeSupport: {
+      draft: true,
+      approval: true,
+      autonomous: false
+    },
+    issues: [],
+    managedProvider: null
+  }
+};
 
 describe("action execution idempotency propagation", () => {
   it("passes idempotency key to gmail draft creation and send", async () => {
@@ -33,7 +62,8 @@ describe("action execution idempotency propagation", () => {
           sendDraft,
           listRecentEmails: async () => []
         }
-      }
+      },
+      connectorReadiness: approvalGradeConnectors
     });
 
     expect(createDraft).toHaveBeenCalledWith(
@@ -74,7 +104,8 @@ describe("action execution idempotency propagation", () => {
           updateEvent: async () => ({ id: "event-1" }),
           listUpcomingEvents: async () => []
         }
-      }
+      },
+      connectorReadiness: approvalGradeConnectors
     });
 
     expect(createEvent).toHaveBeenCalledWith(
