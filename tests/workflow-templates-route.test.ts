@@ -31,6 +31,23 @@ function buildAuthorizedJsonRequest(url: string, method: "POST" | "PUT" | "DELET
   });
 }
 
+function buildAuthorizedJsonRequestWithIfMatch(
+  url: string,
+  method: "PUT" | "DELETE",
+  ifMatch: string,
+  body?: unknown
+): Request {
+  return new Request(url, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      "if-match": `"${ifMatch}"`,
+      [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+}
+
 describe("workflow templates routes", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
@@ -76,7 +93,7 @@ describe("workflow templates routes", () => {
       })
     );
     const createdPayload = (await createResponse.json()) as {
-      template: { id: string; name: string; description: string; actorContext: unknown };
+      template: { id: string; name: string; description: string; actorContext: unknown; updatedAt: string };
     };
 
     expect(createResponse.status).toBe(201);
@@ -116,20 +133,29 @@ describe("workflow templates routes", () => {
     expect(itemPayload.template.description).toBe("Review all fresh signals before noon.");
 
     const updateResponse = await PUT(
-      buildAuthorizedJsonRequest(`http://localhost/api/workflow-templates/${createdPayload.template.id}`, "PUT", {
-        description: "Review only urgent and blocked signals before noon."
-      }),
+      buildAuthorizedJsonRequestWithIfMatch(
+        `http://localhost/api/workflow-templates/${createdPayload.template.id}`,
+        "PUT",
+        createdPayload.template.updatedAt,
+        {
+          description: "Review only urgent and blocked signals before noon."
+        }
+      ),
       { params: Promise.resolve({ id: createdPayload.template.id }) }
     );
     const updatePayload = (await updateResponse.json()) as {
-      template: { description: string; actorContext: unknown };
+      template: { description: string; actorContext: unknown; updatedAt: string };
     };
 
     expect(updatePayload.template.description).toBe("Review only urgent and blocked signals before noon.");
     expect(updatePayload.template.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
 
     const deleteResponse = await DELETE(
-      buildAuthorizedJsonRequest(`http://localhost/api/workflow-templates/${createdPayload.template.id}`, "DELETE"),
+      buildAuthorizedJsonRequestWithIfMatch(
+        `http://localhost/api/workflow-templates/${createdPayload.template.id}`,
+        "DELETE",
+        updatePayload.template.updatedAt
+      ),
       { params: Promise.resolve({ id: createdPayload.template.id }) }
     );
     expect(deleteResponse.status).toBe(200);
@@ -142,6 +168,75 @@ describe("workflow templates routes", () => {
     };
 
     expect(emptyListPayload.templates).toHaveLength(0);
+  });
+
+  it("rejects workflow template updates without an If-Match precondition", async () => {
+    const createResponse = await createWorkflowTemplateRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/workflow-templates", "POST", {
+        name: "Guarded triage",
+        nodes: [],
+        edges: [],
+        triggers: [{ type: "manual", config: {} }]
+      })
+    );
+    const createdPayload = (await createResponse.json()) as {
+      template: { id: string };
+    };
+
+    const updateResponse = await PUT(
+      buildAuthorizedJsonRequest(`http://localhost/api/workflow-templates/${createdPayload.template.id}`, "PUT", {
+        description: "Attempt without precondition."
+      }),
+      { params: Promise.resolve({ id: createdPayload.template.id }) }
+    );
+    const payload = (await updateResponse.json()) as { error?: string };
+
+    expect(updateResponse.status).toBe(428);
+    expect(payload.error).toContain("If-Match");
+    expectNoStoreHeaders(updateResponse);
+  });
+
+  it("rejects stale workflow template update and delete preconditions", async () => {
+    const createResponse = await createWorkflowTemplateRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/workflow-templates", "POST", {
+        name: "Stale guarded triage",
+        nodes: [],
+        edges: [],
+        triggers: [{ type: "manual", config: {} }]
+      })
+    );
+    const createdPayload = (await createResponse.json()) as {
+      template: { id: string; updatedAt: string };
+    };
+
+    const updateResponse = await PUT(
+      buildAuthorizedJsonRequestWithIfMatch(
+        `http://localhost/api/workflow-templates/${createdPayload.template.id}`,
+        "PUT",
+        "2026-01-01T00:00:00.000Z",
+        { description: "Attempt with stale precondition." }
+      ),
+      { params: Promise.resolve({ id: createdPayload.template.id }) }
+    );
+    const updatePayload = (await updateResponse.json()) as { error?: string };
+
+    expect(updateResponse.status).toBe(412);
+    expect(updatePayload.error).toContain("changed before this action");
+    expectNoStoreHeaders(updateResponse);
+
+    const deleteResponse = await DELETE(
+      buildAuthorizedJsonRequestWithIfMatch(
+        `http://localhost/api/workflow-templates/${createdPayload.template.id}`,
+        "DELETE",
+        "2026-01-01T00:00:00.000Z"
+      ),
+      { params: Promise.resolve({ id: createdPayload.template.id }) }
+    );
+    const deletePayload = (await deleteResponse.json()) as { error?: string };
+
+    expect(deleteResponse.status).toBe(412);
+    expect(deletePayload.error).toContain("changed before this action");
+    expectNoStoreHeaders(deleteResponse);
   });
 
   it("returns 404 for missing workflow templates", async () => {

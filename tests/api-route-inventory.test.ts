@@ -24,6 +24,11 @@ type MutatingRouteGovernanceEntry = {
   auditBehavior: string;
 };
 
+type ActualRouteEntry = RouteInventoryEntry & {
+  filePath: string;
+  source: string;
+};
+
 async function listRouteFiles(dir = apiRoot): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const childFiles = await Promise.all(
@@ -118,15 +123,22 @@ function parseMutatingGovernanceMatrix(markdown: string): Map<string, MutatingRo
 }
 
 describe("API route inventory", () => {
-  it("documents every app route handler with exact HTTP methods", async () => {
+  async function listActualRouteEntries(): Promise<ActualRouteEntry[]> {
     const routeFiles = await listRouteFiles();
-    const inventory = parseInventory(await readFile(inventoryPath, "utf8"));
-    const actualEntries = await Promise.all(
+
+    return Promise.all(
       routeFiles.map(async (filePath) => ({
         endpoint: routeFileToEndpoint(filePath),
-        methods: extractMethods(await readFile(filePath, "utf8"))
+        methods: extractMethods(await readFile(filePath, "utf8")),
+        filePath,
+        source: await readFile(filePath, "utf8")
       }))
     );
+  }
+
+  it("documents every app route handler with exact HTTP methods", async () => {
+    const inventory = parseInventory(await readFile(inventoryPath, "utf8"));
+    const actualEntries = await listActualRouteEntries();
 
     expect(actualEntries.length).toBeGreaterThan(0);
 
@@ -174,5 +186,22 @@ describe("API route inventory", () => {
     const mutatingEndpointSet = new Set(mutatingEntries.map((entry) => entry.endpoint));
     const staleGovernanceEntries = [...governanceMatrix.keys()].filter((endpoint) => !mutatingEndpointSet.has(endpoint));
     expect(staleGovernanceEntries).toEqual([]);
+  });
+
+  it("requires implementation evidence for declared concrete If-Match stale-write protection", async () => {
+    const inventoryMarkdown = await readFile(inventoryPath, "utf8");
+    const governanceMatrix = parseMutatingGovernanceMatrix(inventoryMarkdown);
+    const actualEntriesByEndpoint = new Map((await listActualRouteEntries()).map((entry) => [entry.endpoint, entry]));
+    const ifMatchProtectedEntries = [...governanceMatrix.values()].filter((entry) =>
+      /requires concrete `?If-Match`?/iu.test(entry.staleWritePosture)
+    );
+
+    expect(ifMatchProtectedEntries.length).toBeGreaterThan(0);
+
+    for (const entry of ifMatchProtectedEntries) {
+      const route = actualEntriesByEndpoint.get(entry.endpoint);
+
+      expect(route?.source, `${entry.endpoint} route source`).toContain("requireUpdatedAtPrecondition");
+    }
   });
 });
