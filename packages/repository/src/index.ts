@@ -132,6 +132,7 @@ import {
   buildFallbackApprovalActionIntent,
   buildFallbackApprovalPreview
 } from "./approval-fallbacks";
+import { isGoogleManagedIntegrationId, syncGoogleManagedIntegrations } from "./google-managed-integrations";
 import { assertWorkspaceGovernanceStartupConfig, resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults"; export { resolveWorkspaceGovernanceDefaultsFromEnv } from "./governance-defaults";
 import { deriveAgentMetricsFromGoals } from "./agent-metrics";
 import {
@@ -164,6 +165,12 @@ import { buildBriefingHistory, buildDashboardControlPlane, buildNowQueue } from 
 import { buildDashboardOperationsTower, type DashboardOperationsTower } from "./dashboard-operations";
 import { buildDashboardOperatingSections } from "./dashboard-operating-sections";
 import { listContextPacketMemoryFromStore, listContextPacketMemoryWithPool } from "./repository-context-packet-memory";
+import {
+  reserveProviderSideEffectInStore,
+  reserveProviderSideEffectWithClient,
+  updateProviderSideEffectInStore,
+  updateProviderSideEffectWithClient
+} from "./provider-side-effect-ledger";
 import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
 import { mapMemoryRow } from "./repository-memory-row";
 import {
@@ -346,80 +353,8 @@ function providerCredentialSecretStoreKey(
   return `${record.userId}:${record.credentialId}:${record.kind}`;
 }
 
-function providerSideEffectStoreKey(record: Pick<ProviderSideEffectRecord, "userId" | "idempotencyKey">): string {
-  return `${record.userId}:${record.idempotencyKey}`;
-}
-
-function buildProviderSideEffectId(userId: string, idempotencyKey: string): string {
-  return `provider-side-effect:${crypto
-    .createHash("sha256")
-    .update(`${userId}:${idempotencyKey}`)
-    .digest("hex")
-    .slice(0, 32)}`;
-}
-
 function goalShareFingerprintStoreKey(share: Pick<GoalShareRecord, "tokenFingerprint">): string {
   return share.tokenFingerprint.toLowerCase();
-}
-
-const GOOGLE_MANAGED_INTEGRATION_IDS = ["gmail", "google-calendar"] as const;
-
-function buildGoogleManagedIntegrationStatus(status: ProviderCredential["status"]): IntegrationAccount["status"] {
-  return status === "connected" ? "ready" : "manual";
-}
-
-function buildGoogleManagedIntegrationMetadata(credential: ProviderCredential): Record<string, unknown> {
-  return {
-    provider: "google",
-    managed: true,
-    providerCredentialId: credential.id,
-    providerCredentialStatus: credential.status,
-    workspaceId: credential.workspaceId,
-    accountId: credential.accountId,
-    accountEmail: credential.accountEmail,
-    displayName: credential.displayName
-  };
-}
-
-function syncGoogleManagedIntegrations(
-  integrations: IntegrationAccount[],
-  credential: ProviderCredential
-): IntegrationAccount[] {
-  if (credential.provider !== "google") {
-    return integrations;
-  }
-
-  const defaults = buildDefaultIntegrationAccounts(credential.userId);
-  let nextIntegrations = [...integrations];
-
-  for (const integrationId of GOOGLE_MANAGED_INTEGRATION_IDS) {
-    const defaultIntegration = defaults.find((candidate) => candidate.id === integrationId);
-
-    if (!defaultIntegration) {
-      continue;
-    }
-
-    const existing =
-      nextIntegrations.find((candidate) => candidate.userId === credential.userId && candidate.id === integrationId) ?? null;
-
-    const managedIntegration = IntegrationAccountSchema.parse({
-      ...(existing ?? defaultIntegration),
-      userId: credential.userId,
-      status: buildGoogleManagedIntegrationStatus(credential.status),
-      metadata: {
-        ...defaultIntegration.metadata,
-        ...(existing?.metadata ?? {}),
-        ...buildGoogleManagedIntegrationMetadata(credential)
-      },
-      actorContext: credential.actorContext,
-      createdAt: existing?.createdAt ?? defaultIntegration.createdAt,
-      updatedAt: credential.updatedAt
-    });
-
-    nextIntegrations = upsertByKey(nextIntegrations, managedIntegration, integrationStoreKey);
-  }
-
-  return nextIntegrations;
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {
@@ -2668,86 +2603,18 @@ class FileRepository implements AgenticRepository {
   async reserveProviderSideEffect(params: ReserveProviderSideEffectParams): Promise<ProviderSideEffectRecord> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const now = params.now ?? nowIso();
-      const idempotencyKey = params.idempotencyKey.trim();
-      const sideEffectTarget = params.sideEffectTarget.trim();
-      const existing = store.providerSideEffects.find(
-        (candidate) => candidate.userId === params.userId && candidate.idempotencyKey === idempotencyKey
-      );
-
-      if (existing) {
-        const nextRecord =
-          existing.status === "completed"
-            ? existing
-            : ProviderSideEffectRecordSchema.parse({
-                ...existing,
-                attemptCount: Math.min(existing.attemptCount + 1, 25),
-                lastAttemptAt: now,
-                metadata: {
-                  ...existing.metadata,
-                  ...(params.metadata ?? {})
-                },
-                updatedAt: now
-              });
-        store.providerSideEffects = upsertByKey(store.providerSideEffects, nextRecord, providerSideEffectStoreKey);
-        await this.writeStore(store);
-        return ProviderSideEffectRecordSchema.parse(clone(nextRecord));
-      }
-
-      const record = ProviderSideEffectRecordSchema.parse({
-        id: buildProviderSideEffectId(params.userId, idempotencyKey),
-        userId: params.userId,
-        workspaceId: params.workspaceId ?? null,
-        goalId: params.goalId,
-        taskId: params.taskId,
-        adapter: params.adapter,
-        operation: params.operation,
-        idempotencyKey,
-        sideEffectTarget,
-        status: "reserved",
-        providerRef: null,
-        detail: null,
-        error: null,
-        attemptCount: 1,
-        metadata: params.metadata ?? {},
-        reservedAt: now,
-        lastAttemptAt: now,
-        completedAt: null,
-        createdAt: now,
-        updatedAt: now
-      });
-      store.providerSideEffects = upsertByKey(store.providerSideEffects, record, providerSideEffectStoreKey);
+      const record = reserveProviderSideEffectInStore(store, params);
       await this.writeStore(store);
-      return ProviderSideEffectRecordSchema.parse(clone(record));
+      return record;
     });
   }
 
   async updateProviderSideEffect(params: UpdateProviderSideEffectParams): Promise<ProviderSideEffectRecord> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const now = params.now ?? nowIso();
-      const existing = store.providerSideEffects.find((candidate) => candidate.id === params.id);
-
-      if (!existing) {
-        throw new Error(`Provider side-effect record ${params.id} was not found.`);
-      }
-
-      const record = ProviderSideEffectRecordSchema.parse({
-        ...existing,
-        status: params.status,
-        providerRef: params.providerRef === undefined ? existing.providerRef : params.providerRef?.trim() || null,
-        detail: params.detail === undefined ? existing.detail : params.detail?.trim() || null,
-        error: params.error === undefined ? existing.error : params.error?.trim() || null,
-        metadata: {
-          ...existing.metadata,
-          ...(params.metadata ?? {})
-        },
-        completedAt: params.status === "completed" ? now : existing.completedAt,
-        updatedAt: now
-      });
-      store.providerSideEffects = upsertByKey(store.providerSideEffects, record, providerSideEffectStoreKey);
+      const record = updateProviderSideEffectInStore(store, params);
       await this.writeStore(store);
-      return ProviderSideEffectRecordSchema.parse(clone(record));
+      return record;
     });
   }
 
@@ -3302,86 +3169,6 @@ class PostgresRepository implements AgenticRepository {
         validated.updatedAt
       ]
     );
-  }
-
-  private async saveProviderSideEffectWithClient(client: PoolClient, record: ProviderSideEffectRecord): Promise<void> {
-    const validated = ProviderSideEffectRecordSchema.parse(record);
-    await client.query(
-      `
-        insert into provider_side_effects (
-          id, user_id, workspace_id, goal_id, task_id, adapter, operation, idempotency_key, side_effect_target,
-          status, provider_ref, detail, error, attempt_count, metadata, reserved_at, last_attempt_at, completed_at,
-          created_at, updated_at
-        )
-        values (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19, $20
-        )
-        on conflict (user_id, idempotency_key) do update
-        set workspace_id = excluded.workspace_id,
-            goal_id = excluded.goal_id,
-            task_id = excluded.task_id,
-            adapter = excluded.adapter,
-            operation = excluded.operation,
-            side_effect_target = excluded.side_effect_target,
-            status = excluded.status,
-            provider_ref = excluded.provider_ref,
-            detail = excluded.detail,
-            error = excluded.error,
-            attempt_count = excluded.attempt_count,
-            metadata = excluded.metadata,
-            last_attempt_at = excluded.last_attempt_at,
-            completed_at = excluded.completed_at,
-            updated_at = excluded.updated_at
-      `,
-      [
-        validated.id,
-        validated.userId,
-        validated.workspaceId,
-        validated.goalId,
-        validated.taskId,
-        validated.adapter,
-        validated.operation,
-        validated.idempotencyKey,
-        validated.sideEffectTarget,
-        validated.status,
-        validated.providerRef,
-        validated.detail,
-        validated.error,
-        validated.attemptCount,
-        JSON.stringify(validated.metadata),
-        validated.reservedAt,
-        validated.lastAttemptAt,
-        validated.completedAt,
-        validated.createdAt,
-        validated.updatedAt
-      ]
-    );
-  }
-
-  private mapProviderSideEffectRow(row: Record<string, unknown>): ProviderSideEffectRecord {
-    return ProviderSideEffectRecordSchema.parse({
-      id: row.id,
-      userId: row.user_id,
-      workspaceId: typeof row.workspace_id === "string" ? row.workspace_id : null,
-      goalId: row.goal_id,
-      taskId: row.task_id,
-      adapter: row.adapter,
-      operation: row.operation,
-      idempotencyKey: row.idempotency_key,
-      sideEffectTarget: row.side_effect_target,
-      status: row.status,
-      providerRef: typeof row.provider_ref === "string" ? row.provider_ref : null,
-      detail: typeof row.detail === "string" ? row.detail : null,
-      error: typeof row.error === "string" ? row.error : null,
-      attemptCount: Number(row.attempt_count),
-      metadata: (row.metadata as Record<string, unknown> | null) ?? {},
-      reservedAt: new Date(row.reserved_at as string | Date).toISOString(),
-      lastAttemptAt: new Date(row.last_attempt_at as string | Date).toISOString(),
-      completedAt: row.completed_at ? new Date(row.completed_at as string | Date).toISOString() : null,
-      createdAt: new Date(row.created_at as string | Date).toISOString(),
-      updatedAt: new Date(row.updated_at as string | Date).toISOString()
-    });
   }
 
   private mapAgentRow(row: Record<string, unknown>): AgentDefinition {
@@ -7666,7 +7453,7 @@ class PostgresRepository implements AgenticRepository {
           })
         ),
         validated
-      ).filter((integration) => integration.userId === validated.userId && GOOGLE_MANAGED_INTEGRATION_IDS.includes(integration.id as (typeof GOOGLE_MANAGED_INTEGRATION_IDS)[number]));
+      ).filter((integration) => integration.userId === validated.userId && isGoogleManagedIntegrationId(integration.id));
 
       for (const integration of managedIntegrations) {
         await this.saveIntegrationWithClient(client, integration);
@@ -7719,89 +7506,11 @@ class PostgresRepository implements AgenticRepository {
   }
 
   async reserveProviderSideEffect(params: ReserveProviderSideEffectParams): Promise<ProviderSideEffectRecord> {
-    return this.withTransaction(async (client) => {
-      const now = params.now ?? nowIso();
-      const idempotencyKey = params.idempotencyKey.trim();
-      const sideEffectTarget = params.sideEffectTarget.trim();
-      const existingResult = await client.query(
-        "select * from provider_side_effects where user_id = $1 and idempotency_key = $2 limit 1 for update",
-        [params.userId, idempotencyKey]
-      );
-      const existing = existingResult.rows[0] ? this.mapProviderSideEffectRow(existingResult.rows[0]) : null;
-
-      if (existing) {
-        const nextRecord =
-          existing.status === "completed"
-            ? existing
-            : ProviderSideEffectRecordSchema.parse({
-                ...existing,
-                attemptCount: Math.min(existing.attemptCount + 1, 25),
-                lastAttemptAt: now,
-                metadata: {
-                  ...existing.metadata,
-                  ...(params.metadata ?? {})
-                },
-                updatedAt: now
-              });
-        await this.saveProviderSideEffectWithClient(client, nextRecord);
-        return ProviderSideEffectRecordSchema.parse(clone(nextRecord));
-      }
-
-      const record = ProviderSideEffectRecordSchema.parse({
-        id: buildProviderSideEffectId(params.userId, idempotencyKey),
-        userId: params.userId,
-        workspaceId: params.workspaceId ?? null,
-        goalId: params.goalId,
-        taskId: params.taskId,
-        adapter: params.adapter,
-        operation: params.operation,
-        idempotencyKey,
-        sideEffectTarget,
-        status: "reserved",
-        providerRef: null,
-        detail: null,
-        error: null,
-        attemptCount: 1,
-        metadata: params.metadata ?? {},
-        reservedAt: now,
-        lastAttemptAt: now,
-        completedAt: null,
-        createdAt: now,
-        updatedAt: now
-      });
-      await this.saveProviderSideEffectWithClient(client, record);
-      return ProviderSideEffectRecordSchema.parse(clone(record));
-    });
+    return this.withTransaction((client) => reserveProviderSideEffectWithClient(client, params));
   }
 
   async updateProviderSideEffect(params: UpdateProviderSideEffectParams): Promise<ProviderSideEffectRecord> {
-    return this.withTransaction(async (client) => {
-      const now = params.now ?? nowIso();
-      const existingResult = await client.query("select * from provider_side_effects where id = $1 limit 1 for update", [
-        params.id
-      ]);
-      const existing = existingResult.rows[0] ? this.mapProviderSideEffectRow(existingResult.rows[0]) : null;
-
-      if (!existing) {
-        throw new Error(`Provider side-effect record ${params.id} was not found.`);
-      }
-
-      const record = ProviderSideEffectRecordSchema.parse({
-        ...existing,
-        status: params.status,
-        providerRef: params.providerRef === undefined ? existing.providerRef : params.providerRef?.trim() || null,
-        detail: params.detail === undefined ? existing.detail : params.detail?.trim() || null,
-        error: params.error === undefined ? existing.error : params.error?.trim() || null,
-        metadata: {
-          ...existing.metadata,
-          ...(params.metadata ?? {})
-        },
-        completedAt: params.status === "completed" ? now : existing.completedAt,
-        updatedAt: now
-      });
-      await this.saveProviderSideEffectWithClient(client, record);
-      return ProviderSideEffectRecordSchema.parse(clone(record));
-    });
+    return this.withTransaction((client) => updateProviderSideEffectWithClient(client, params));
   }
 
   async listTemplates(userId = SYSTEM_USER_ID): Promise<GoalTemplate[]> {
