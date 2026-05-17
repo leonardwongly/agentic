@@ -1,4 +1,5 @@
 import { artifactTypeValues } from "@agentic/contracts";
+import { listDashboardArtifactsPage } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 import { buildDashboardCollectionPage, parseDashboardCollectionQuery } from "../../../../lib/dashboard-collection";
@@ -13,17 +14,17 @@ export async function GET(request: Request) {
         allowedKindValues: artifactTypeValues
       });
       const repository = await getSeededRepository();
-      const dashboard = await repository.getDashboardData(principal.userId);
-      const artifacts = dashboard.goals.flatMap((bundle) => bundle.artifacts);
-      const filteredArtifacts = artifacts.filter((artifact) => !query.kind || artifact.artifactType === query.kind);
+      const page = await listDashboardArtifactsPage(repository, {
+        userId: principal.userId,
+        limit: query.limit,
+        cursor: query.cursor,
+        sort: query.sort,
+        q: query.q,
+        kind: query.kind
+      });
 
       return authenticatedJson({
-        page: buildDashboardCollectionPage(filteredArtifacts, query, {
-          getId: (artifact) => artifact.id,
-          getCreatedAt: (artifact) => artifact.createdAt,
-          getTitle: (artifact) => artifact.title,
-          getSearchText: (artifact) => [artifact.id, artifact.title, artifact.artifactType, artifact.content].join(" ")
-        })
+        page: buildDashboardCollectionPage(page)
       });
     } catch (error) {
       return handleApiError(error, "Failed to load dashboard artifacts.");
