@@ -7,6 +7,7 @@ import {
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
+import { requireUpdatedAtPrecondition } from "../../../../lib/mutation-preconditions";
 import { getSeededRepository } from "../../../../lib/server";
 
 const TemplateIdSchema = z.string().trim().min(1).max(200);
@@ -44,6 +45,8 @@ export async function PUT(request: Request, { params }: { params: Params }) {
       return authenticatedJson({ error: "Workflow template not found" }, { status: 404 });
     }
 
+    requireUpdatedAtPrecondition(request, template.updatedAt);
+
     const updated = WorkflowCanvasTemplateSchema.parse({
       ...template,
       ...body,
@@ -70,6 +73,8 @@ export async function DELETE(request: Request, { params }: { params: Params }) {
     if (!template) {
       return authenticatedJson({ error: "Workflow template not found" }, { status: 404 });
     }
+
+    requireUpdatedAtPrecondition(request, template.updatedAt);
 
     await repository.deleteWorkflowTemplate(templateId, principal.userId);
 
