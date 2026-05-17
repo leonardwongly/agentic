@@ -13,6 +13,7 @@ import {
   type ApprovalRequest,
   type Artifact,
   type Commitment,
+  type GoalBundle,
   type JobRecord,
   type MemoryRecord
 } from "@agentic/contracts";
@@ -31,6 +32,8 @@ const DashboardCollectionCursorSchema = z
 type DashboardCollectionCursor = z.infer<typeof DashboardCollectionCursorSchema>;
 
 const DASHBOARD_DUE_SOON_MS = 72 * 60 * 60 * 1000;
+const DASHBOARD_COLLECTION_SCAN_PAGE_LIMIT = 100;
+const DASHBOARD_COLLECTION_MAX_SCAN_ITEMS = 1_000;
 
 function isDashboardCommitmentDueSoon(commitment: Commitment): boolean {
   if (!commitment.dueAt) {
@@ -308,11 +311,67 @@ export function buildDashboardArtifactsPage(
   });
 }
 
+async function collectDashboardGoalBundles(
+  repository: AgenticRepository,
+  userId: string
+): Promise<GoalBundle[]> {
+  const bundles: GoalBundle[] = [];
+  let cursor: string | null = null;
+
+  while (bundles.length < DASHBOARD_COLLECTION_MAX_SCAN_ITEMS) {
+    const remaining = DASHBOARD_COLLECTION_MAX_SCAN_ITEMS - bundles.length;
+    const page = await repository.listGoalsPage({
+      userId,
+      limit: Math.min(DASHBOARD_COLLECTION_SCAN_PAGE_LIMIT, remaining),
+      cursor
+    });
+
+    bundles.push(...page.items);
+
+    if (!page.nextCursor || page.items.length === 0) {
+      break;
+    }
+
+    cursor = page.nextCursor;
+  }
+
+  return bundles;
+}
+
+async function collectDashboardMemories(
+  repository: AgenticRepository,
+  userId: string
+): Promise<MemoryRecord[]> {
+  const memories: MemoryRecord[] = [];
+  let cursor: string | null = null;
+
+  while (memories.length < DASHBOARD_COLLECTION_MAX_SCAN_ITEMS) {
+    const remaining = DASHBOARD_COLLECTION_MAX_SCAN_ITEMS - memories.length;
+    const page = await repository.listMemoryPage({
+      userId,
+      limit: Math.min(DASHBOARD_COLLECTION_SCAN_PAGE_LIMIT, remaining),
+      cursor
+    });
+
+    memories.push(...page.items);
+
+    if (!page.nextCursor || page.items.length === 0) {
+      break;
+    }
+
+    cursor = page.nextCursor;
+  }
+
+  return memories;
+}
+
 export async function listDashboardApprovalsPage(
   repository: AgenticRepository,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<ApprovalRequest>> {
-  const approvals = (await repository.listApprovals(params?.userId)).filter(
+  const userId = params?.userId ?? SYSTEM_USER_ID;
+  const bundles = await collectDashboardGoalBundles(repository, userId);
+  const approvals = bundles.flatMap((bundle) => bundle.approvals).filter(
     (approval) =>
       (!params?.status || approval.decision === params.status) &&
       (!params?.riskClass || approval.riskClass === params.riskClass)
@@ -326,11 +385,11 @@ export async function listDashboardCommitmentsPage(
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<Commitment>> {
   const userId = params?.userId ?? SYSTEM_USER_ID;
-  const [goals, approvals, persisted] = await Promise.all([
-    repository.listGoals(userId),
-    repository.listApprovals(userId),
+  const [goals, persisted] = await Promise.all([
+    collectDashboardGoalBundles(repository, userId),
     repository.listCommitments(userId)
   ]);
+  const approvals = goals.flatMap((bundle) => bundle.approvals);
   const bucket = params?.bucket ?? "all";
   const commitments = mergeCommitments({ goals, approvals, persisted, userId }).filter(
     (commitment) =>
@@ -349,7 +408,8 @@ export async function listDashboardJobsPage(
   const jobs = await repository.listJobs({
     userId: params?.userId,
     kinds: params?.kinds,
-    statuses: params?.statuses
+    statuses: params?.statuses,
+    limit: DASHBOARD_COLLECTION_MAX_SCAN_ITEMS
   });
 
   return buildDashboardJobsPage(jobs, params);
@@ -359,7 +419,9 @@ export async function listDashboardMemoryPage(
   repository: AgenticRepository,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<MemoryRecord>> {
-  const memories = (await repository.listMemory(params?.userId)).filter((memory) => !params?.kind || memory.memoryType === params.kind);
+  const memories = (await collectDashboardMemories(repository, params?.userId ?? SYSTEM_USER_ID)).filter(
+    (memory) => !params?.kind || memory.memoryType === params.kind
+  );
   return buildDashboardMemoryPage(memories, params);
 }
 
@@ -367,7 +429,7 @@ export async function listDashboardActionLogsPage(
   repository: AgenticRepository,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<ActionLog>> {
-  const goals = await repository.listGoals(params?.userId ?? SYSTEM_USER_ID);
+  const goals = await collectDashboardGoalBundles(repository, params?.userId ?? SYSTEM_USER_ID);
   const logs = goals.flatMap((bundle) => bundle.actionLogs).filter((log) => !params?.kind || log.kind === params.kind);
   return buildDashboardActionLogsPage(logs, params);
 }
@@ -376,7 +438,7 @@ export async function listDashboardArtifactsPage(
   repository: AgenticRepository,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<Artifact>> {
-  const goals = await repository.listGoals(params?.userId ?? SYSTEM_USER_ID);
+  const goals = await collectDashboardGoalBundles(repository, params?.userId ?? SYSTEM_USER_ID);
   const artifacts = goals.flatMap((bundle) => bundle.artifacts).filter((artifact) => !params?.kind || artifact.artifactType === params.kind);
   return buildDashboardArtifactsPage(artifacts, params);
 }

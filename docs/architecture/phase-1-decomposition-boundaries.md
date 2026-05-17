@@ -149,11 +149,18 @@ Dedicated helper ownership:
 - shared page-size, cursor, sort, filter, and search behavior
 - bounded page response construction for dashboard collection routes
 
+`packages/repository/src/dashboard-collection-page.ts` owns:
+
+- repository-backed dashboard collection page assembly
+- capped scans through paged repository APIs before applying dashboard search/sort/cursor contracts
+- regression coverage that prevents collection routes from reintroducing unbounded `listGoals`, `listApprovals`, or `listMemory` reads
+
 `apps/web/app/api/dashboard/*/route.ts` collection routes own:
 
 - principal-scoped repository reads
 - route-specific filters for approvals, commitments, jobs, activity, memories, and artifacts
 - no unbounded collection responses
+- no direct full-collection repository reads for dashboard collection pages
 
 ## Line Budgets
 
