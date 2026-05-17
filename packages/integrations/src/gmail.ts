@@ -76,8 +76,14 @@ export function isGmailReady(): boolean {
 export type GmailAdapter = {
   listRecentEmails: (maxResults?: number, query?: string) => Promise<EmailMessage[]>;
   searchEmails: (query: string, maxResults?: number) => Promise<EmailMessage[]>;
-  createDraft: (params: { to: string; subject: string; body: string; threadId?: string }) => Promise<DraftResult>;
-  sendDraft: (draftId: string) => Promise<{ messageId: string }>;
+  createDraft: (params: {
+    to: string;
+    subject: string;
+    body: string;
+    threadId?: string;
+    idempotencyKey?: string;
+  }) => Promise<DraftResult>;
+  sendDraft: (draftId: string, options?: { idempotencyKey?: string }) => Promise<{ messageId: string }>;
 };
 
 export function createGmailAdapter(params: { refreshToken: string }): GmailAdapter {
@@ -185,7 +191,7 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
     async searchEmails(query: string, maxResults = 10) {
       return listMessages(maxResults, query);
     },
-    async createDraft(paramsDraft: { to: string; subject: string; body: string; threadId?: string }) {
+    async createDraft(paramsDraft: { to: string; subject: string; body: string; threadId?: string; idempotencyKey?: string }) {
       return instrumentGmailCall(
         "drafts.create",
         {
@@ -225,10 +231,10 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
         }
       );
     },
-    async sendDraft(draftId: string) {
+    async sendDraft(draftId: string, options?: { idempotencyKey?: string }) {
       return instrumentGmailCall(
         "drafts.send",
-        {},
+        { hasIdempotencyKey: Boolean(options?.idempotencyKey) },
         async () => {
           const gmail = getClient();
           const response = await gmail.users.drafts.send({
@@ -263,7 +269,7 @@ export async function searchEmails(query: string, maxResults = 10): Promise<Emai
   return createGmailAdapter({ refreshToken }).searchEmails(query, maxResults);
 }
 
-export async function createDraft(params: { to: string; subject: string; body: string; threadId?: string }): Promise<DraftResult> {
+export async function createDraft(params: { to: string; subject: string; body: string; threadId?: string; idempotencyKey?: string }): Promise<DraftResult> {
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
 
   if (!refreshToken) {
@@ -273,12 +279,12 @@ export async function createDraft(params: { to: string; subject: string; body: s
   return createGmailAdapter({ refreshToken }).createDraft(params);
 }
 
-export async function sendDraft(draftId: string): Promise<{ messageId: string }> {
+export async function sendDraft(draftId: string, options?: { idempotencyKey?: string }): Promise<{ messageId: string }> {
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
 
   if (!refreshToken) {
     throw new Error("Gmail not configured.");
   }
 
-  return createGmailAdapter({ refreshToken }).sendDraft(draftId);
+  return createGmailAdapter({ refreshToken }).sendDraft(draftId, options);
 }

@@ -148,7 +148,8 @@ describe("execution dispatch", () => {
     expect(createDraft).toHaveBeenCalledWith({
       to: "client@example.com",
       subject: "Follow-up",
-      body: "Here is the approved response."
+      body: "Here is the approved response.",
+      idempotencyKey: result.idempotencyKey
     });
     expect(log.kind).toBe("execution.completed");
   });
@@ -220,7 +221,8 @@ describe("execution dispatch", () => {
       start: "2026-04-20T09:00:00.000Z",
       end: "2026-04-20T09:30:00.000Z",
       description: "Share next steps and owners.",
-      attendees: ["owner@example.com", "client@example.com"]
+      attendees: ["owner@example.com", "client@example.com"],
+      idempotencyKey: result.idempotencyKey
     });
     expect(log.kind).toBe("execution.completed");
   });

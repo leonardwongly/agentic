@@ -254,8 +254,12 @@ describe("action execution contract", () => {
       providerRef: "message-resume-1"
     });
     expect(createDraft).toHaveBeenCalledTimes(1);
-    expect(sendDraft).toHaveBeenNthCalledWith(1, "draft-resume-1");
-    expect(sendDraft).toHaveBeenNthCalledWith(2, "draft-resume-1");
+    expect(sendDraft).toHaveBeenNthCalledWith(1, "draft-resume-1", {
+      idempotencyKey: first.plan.idempotencyKey
+    });
+    expect(sendDraft).toHaveBeenNthCalledWith(2, "draft-resume-1", {
+      idempotencyKey: second.plan.idempotencyKey
+    });
     expect([...records.values()][0]).toMatchObject({
       status: "completed",
       providerRef: "message-resume-1"

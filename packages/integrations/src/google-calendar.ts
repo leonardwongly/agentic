@@ -64,6 +64,7 @@ export type GoogleCalendarAdapter = {
     location?: string;
     attendees?: string[];
     calendarId?: string;
+    idempotencyKey?: string;
   }) => Promise<CreatedEvent>;
   updateEvent: (params: {
     eventId: string;
@@ -209,13 +210,14 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
         }
       );
     },
-    async createEvent(paramsCreate) {
+    async createEvent(paramsCreate: { summary: string; start: string; end: string; description?: string; location?: string; attendees?: string[]; calendarId?: string; idempotencyKey?: string }) {
       return instrumentCalendarCall(
         "events.create",
         {
           attendeeCount: paramsCreate.attendees?.length ?? 0,
           isAllDay: paramsCreate.start.length === 10,
-          hasLocation: Boolean(paramsCreate.location)
+          hasLocation: Boolean(paramsCreate.location),
+          hasIdempotencyKey: Boolean(paramsCreate.idempotencyKey)
         },
         async () => {
           const calendar = getClient();
