@@ -76,7 +76,7 @@ New route handlers must update this file in the same change unless they are dele
 | `/api/integrations/local-notes/:slug` | `GET, PUT` | Authenticated UI/internal | Session or access key | Stable | Local notes | Read or update one local Markdown note. |
 | `/api/jobs/:id` | `GET` | Worker/job | Session or access key | Stable | Worker runtime | Poll a durable job through the generic job surface. |
 | `/api/jobs/:id/events` | `GET` | Worker/job | Session or access key | Preview | Worker runtime | Stream one durable job event feed. |
-| `/api/jobs/:id/replay` | `POST` | Admin/governance | Session or access key | Stable | Worker runtime | Replay a permitted dead-letter job. |
+| `/api/jobs/:id/replay` | `POST` | Admin/governance | Session or access key | Stable | Worker runtime | Replay a permitted dead-letter job through the governed mutation boundary. |
 | `/api/memory` | `GET, POST` | Authenticated UI/internal | Session or access key | Stable | Memory | Review or add memory records. |
 | `/api/memory/:id` | `PATCH` | Authenticated UI/internal | Session or access key | Stable | Memory | Review, confirm, or update one memory record. |
 | `/api/memory/recommendations` | `GET` | Authenticated UI/internal | Session or access key | Preview | Learning flywheel | Load memory-backed workflow recommendations. |

@@ -1,6 +1,7 @@
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
-import { requireApiSession } from "../../../../../lib/auth";
-import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../../lib/api-response";
+import { type AuthPrincipal } from "../../../../../lib/auth";
+import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
+import { createGovernedMutationRoute } from "../../../../../lib/governed-route";
 import { getSeededRepository } from "../../../../../lib/server";
 import { recordHistogram } from "@agentic/observability";
 import { resolveDashboardCockpitRollout } from "@agentic/repository";
@@ -49,180 +50,192 @@ type RouteContext = {
   }>;
 };
 
-export async function POST(request: Request, context: RouteContext) {
-  try {
-    const principal = await requireApiSession(request);
-    const actorContext = createActorContextFromPrincipal(principal);
-    const { id } = await context.params;
+async function replayDeadLetterJob(params: { principal: AuthPrincipal; context: RouteContext }) {
+  const principal = params.principal;
+  const actorContext = createActorContextFromPrincipal(principal);
+  const { id } = await params.context.params;
 
-    if (!id.trim()) {
-      throw new ApiRouteError(400, "Job id is required.");
+  if (!id.trim()) {
+    throw new ApiRouteError(400, "Job id is required.");
+  }
+
+  const repository = await getSeededRepository();
+  const job = await repository.getJob(id, principal.userId);
+
+  if (!job) {
+    throw new ApiRouteError(404, `Job ${id} was not found.`);
+  }
+
+  const sharedWorkspaceId = "workspaceId" in job.payload ? job.payload.workspaceId ?? null : null;
+
+  if (sharedWorkspaceId) {
+    const workspaceMembers = await repository.listWorkspaceMembers(sharedWorkspaceId, principal.userId);
+    const workspaceRole = resolveWorkspaceRoleForUser(workspaceMembers, sharedWorkspaceId, principal.userId);
+
+    if (!canOperateSharedWorkflow({ workspaceId: sharedWorkspaceId, role: workspaceRole })) {
+      throw new ApiRouteError(403, getSharedWorkflowDeniedReason("replay_dead_letter_job"));
     }
+  }
 
-    const repository = await getSeededRepository();
-    const job = await repository.getJob(id, principal.userId);
+  if (job.status !== "dead_letter") {
+    throw new ApiRouteError(409, `Job ${id} is not dead-lettered and cannot be replayed.`);
+  }
 
-    if (!job) {
-      throw new ApiRouteError(404, `Job ${id} was not found.`);
-    }
+  if (job.kind === "approval_follow_up" && job.payload.type === "approval_follow_up") {
+    const followUpPayload = ApprovalFollowUpJobPayloadSchema.parse(job.payload);
+    const bundleForActionIntent = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
+    const currentApproval = bundleForActionIntent?.approvals.find(
+      (approval) => approval.id === followUpPayload.approvalId && approval.taskId === followUpPayload.taskId
+    );
+    const replayedJob = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: principal.userId,
+      approvalId: followUpPayload.approvalId,
+      goalId: followUpPayload.goalId,
+      taskId: followUpPayload.taskId,
+      decision: followUpPayload.decision,
+      workspaceId: followUpPayload.workspaceId,
+      actorContext,
+      actionId: followUpPayload.metadata.actionId,
+      actionIntent: followUpPayload.metadata.actionId ? null : currentApproval?.actionIntent ?? null,
+      replayedFromJobId: job.id
+    });
+    const bundleForReplayLog = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
+    const recoveryLatencyMs = recordDeadLetterRecoveryMetric({
+      failedAt: job.updatedAt,
+      replayedAt: replayedJob.createdAt,
+      jobKind: job.kind,
+      surface: "approval_follow_up"
+    });
 
-    const sharedWorkspaceId = "workspaceId" in job.payload ? job.payload.workspaceId ?? null : null;
-
-    if (sharedWorkspaceId) {
-      const workspaceMembers = await repository.listWorkspaceMembers(sharedWorkspaceId, principal.userId);
-      const workspaceRole = resolveWorkspaceRoleForUser(workspaceMembers, sharedWorkspaceId, principal.userId);
-
-      if (!canOperateSharedWorkflow({ workspaceId: sharedWorkspaceId, role: workspaceRole })) {
-        throw new ApiRouteError(403, getSharedWorkflowDeniedReason("replay_dead_letter_job"));
-      }
-    }
-
-    if (job.status !== "dead_letter") {
-      throw new ApiRouteError(409, `Job ${id} is not dead-lettered and cannot be replayed.`);
-    }
-
-    if (job.kind === "approval_follow_up" && job.payload.type === "approval_follow_up") {
-      const followUpPayload = ApprovalFollowUpJobPayloadSchema.parse(job.payload);
-      const bundleForActionIntent = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
-      const currentApproval = bundleForActionIntent?.approvals.find(
-        (approval) => approval.id === followUpPayload.approvalId && approval.taskId === followUpPayload.taskId
-      );
-      const replayedJob = await enqueueApprovalFollowUpJob({
-        repository,
-        userId: principal.userId,
-        approvalId: followUpPayload.approvalId,
-        goalId: followUpPayload.goalId,
-        taskId: followUpPayload.taskId,
-        decision: followUpPayload.decision,
-        workspaceId: followUpPayload.workspaceId,
-        actorContext,
-        actionId: followUpPayload.metadata.actionId,
-        actionIntent: followUpPayload.metadata.actionId ? null : currentApproval?.actionIntent ?? null,
-        replayedFromJobId: job.id
-      });
-      const bundleForReplayLog = await repository.getGoalBundleForUser(followUpPayload.goalId, principal.userId);
-      const recoveryLatencyMs = recordDeadLetterRecoveryMetric({
-        failedAt: job.updatedAt,
-        replayedAt: replayedJob.createdAt,
-        jobKind: job.kind,
-        surface: "approval_follow_up"
-      });
-
-      if (bundleForReplayLog) {
-        bundleForReplayLog.actionLogs.push(
-          createActionLog({
-            goalId: bundleForReplayLog.goal.id,
-            taskId: followUpPayload.taskId,
-            workflowId: bundleForReplayLog.workflow.id,
-            actor: actorContext.executor.label,
-            kind: "approval_follow_up.replayed",
-            message: `Replayed approval follow-up job ${job.id} after dead-letter recovery.`,
-            details: {
-              replayedFromJobId: job.id,
-              replayedJobId: replayedJob.id,
-              approvalId: followUpPayload.approvalId,
-              decision: followUpPayload.decision,
-              statusUrl: `/api/approvals/jobs/${replayedJob.id}`,
-              recoveryLatencyMs
-            },
-            prevLog: bundleForReplayLog.actionLogs.at(-1) ?? null
-          })
-        );
-
-        await repository.saveGoalBundle(bundleForReplayLog);
-      }
-
-      return authenticatedJson(
-        {
-          replayedFromJobId: job.id,
-          job: {
-            id: replayedJob.id,
-            kind: replayedJob.kind,
-            status: replayedJob.status,
-            goalId: replayedJob.payload.goalId,
-            approvalId: replayedJob.payload.approvalId,
-            taskId: replayedJob.payload.taskId,
-            decision: replayedJob.payload.decision,
-            actionId: replayedJob.payload.metadata.actionId,
-            attemptCount: replayedJob.attemptCount,
-            maxAttempts: replayedJob.maxAttempts,
-            createdAt: replayedJob.createdAt,
-            updatedAt: replayedJob.updatedAt
+    if (bundleForReplayLog) {
+      bundleForReplayLog.actionLogs.push(
+        createActionLog({
+          goalId: bundleForReplayLog.goal.id,
+          taskId: followUpPayload.taskId,
+          workflowId: bundleForReplayLog.workflow.id,
+          actor: actorContext.executor.label,
+          kind: "approval_follow_up.replayed",
+          message: `Replayed approval follow-up job ${job.id} after dead-letter recovery.`,
+          details: {
+            replayedFromJobId: job.id,
+            replayedJobId: replayedJob.id,
+            approvalId: followUpPayload.approvalId,
+            decision: followUpPayload.decision,
+            statusUrl: `/api/approvals/jobs/${replayedJob.id}`,
+            recoveryLatencyMs
           },
-          statusUrl: `/api/approvals/jobs/${replayedJob.id}`,
-          dashboard: await repository.getDashboardData(principal.userId)
-        },
-        { status: 202 }
+          prevLog: bundleForReplayLog.actionLogs.at(-1) ?? null
+        })
       );
+
+      await repository.saveGoalBundle(bundleForReplayLog);
     }
 
-    if (job.kind === "autopilot_process" && job.payload.type === "autopilot_process") {
-      const autopilotPayload = AutopilotProcessJobPayloadSchema.parse(job.payload);
-      const autopilotEvent = (await repository.listAutopilotEvents(principal.userId)).find(
-        (candidate) => candidate.id === autopilotPayload.autopilotEventId
-      );
+    return authenticatedJson(
+      {
+        replayedFromJobId: job.id,
+        job: {
+          id: replayedJob.id,
+          kind: replayedJob.kind,
+          status: replayedJob.status,
+          goalId: replayedJob.payload.goalId,
+          approvalId: replayedJob.payload.approvalId,
+          taskId: replayedJob.payload.taskId,
+          decision: replayedJob.payload.decision,
+          actionId: replayedJob.payload.metadata.actionId,
+          attemptCount: replayedJob.attemptCount,
+          maxAttempts: replayedJob.maxAttempts,
+          createdAt: replayedJob.createdAt,
+          updatedAt: replayedJob.updatedAt
+        },
+        statusUrl: `/api/approvals/jobs/${replayedJob.id}`,
+        dashboard: await repository.getDashboardData(principal.userId)
+      },
+      { status: 202 }
+    );
+  }
 
-      if (!autopilotEvent) {
-        throw new ApiRouteError(404, `Autopilot event ${autopilotPayload.autopilotEventId} was not found.`);
+  if (job.kind === "autopilot_process" && job.payload.type === "autopilot_process") {
+    const autopilotPayload = AutopilotProcessJobPayloadSchema.parse(job.payload);
+    const autopilotEvent = (await repository.listAutopilotEvents(principal.userId)).find(
+      (candidate) => candidate.id === autopilotPayload.autopilotEventId
+    );
+
+    if (!autopilotEvent) {
+      throw new ApiRouteError(404, `Autopilot event ${autopilotPayload.autopilotEventId} was not found.`);
+    }
+
+    const replayedJob = await enqueueAutopilotProcessJob({
+      repository,
+      autopilotEvent,
+      replayedFromJobId: job.id
+    });
+    recordDeadLetterRecoveryMetric({
+      failedAt: job.updatedAt,
+      replayedAt: replayedJob.createdAt,
+      jobKind: job.kind,
+      surface: "autopilot"
+    });
+
+    await repository.saveAutopilotEvent({
+      ...autopilotEvent,
+      status: "pending",
+      processedAt: null,
+      resultGoalId: null,
+      error: null,
+      details: {
+        ...autopilotEvent.details,
+        jobId: replayedJob.id,
+        jobStatus: "queued",
+        replayRequestedAt: replayedJob.createdAt,
+        replayRequestedFromJobId: job.id,
+        replayedJobId: replayedJob.id,
+        recoveryAction: "replay_job",
+        requiresReview: false
       }
+    });
 
-      const replayedJob = await enqueueAutopilotProcessJob({
-        repository,
-        autopilotEvent,
-        replayedFromJobId: job.id
-      });
-      recordDeadLetterRecoveryMetric({
-        failedAt: job.updatedAt,
-        replayedAt: replayedJob.createdAt,
-        jobKind: job.kind,
-        surface: "autopilot"
-      });
-
-      await repository.saveAutopilotEvent({
-        ...autopilotEvent,
-        status: "pending",
-        processedAt: null,
-        resultGoalId: null,
-        error: null,
-        details: {
-          ...autopilotEvent.details,
-          jobId: replayedJob.id,
-          jobStatus: "queued",
-          replayRequestedAt: replayedJob.createdAt,
-          replayRequestedFromJobId: job.id,
-          replayedJobId: replayedJob.id,
-          recoveryAction: "replay_job",
-          requiresReview: false
-        }
-      });
-
-      return authenticatedJson(
-        {
-          replayedFromJobId: job.id,
-          job: {
-            id: replayedJob.id,
-            kind: replayedJob.kind,
-            status: replayedJob.status,
-            autopilotEventId: replayedJob.payload.autopilotEventId,
-            eventKind: replayedJob.payload.kind,
-            sourceId: replayedJob.payload.sourceId,
-            mode: replayedJob.payload.mode,
-            attemptCount: replayedJob.attemptCount,
-            maxAttempts: replayedJob.maxAttempts,
-            createdAt: replayedJob.createdAt,
-            updatedAt: replayedJob.updatedAt
-          },
-          statusUrl: `/api/jobs/${replayedJob.id}`,
-          dashboard: await repository.getDashboardData(principal.userId)
+    return authenticatedJson(
+      {
+        replayedFromJobId: job.id,
+        job: {
+          id: replayedJob.id,
+          kind: replayedJob.kind,
+          status: replayedJob.status,
+          autopilotEventId: replayedJob.payload.autopilotEventId,
+          eventKind: replayedJob.payload.kind,
+          sourceId: replayedJob.payload.sourceId,
+          mode: replayedJob.payload.mode,
+          attemptCount: replayedJob.attemptCount,
+          maxAttempts: replayedJob.maxAttempts,
+          createdAt: replayedJob.createdAt,
+          updatedAt: replayedJob.updatedAt
         },
-        { status: 202 }
-      );
-    }
+        statusUrl: `/api/jobs/${replayedJob.id}`,
+        dashboard: await repository.getDashboardData(principal.userId)
+      },
+      { status: 202 }
+    );
+  }
 
-    if (job.kind === "approval_notification" && job.payload.type === "approval_notification") {
-      const notificationPayload = ApprovalNotificationJobPayloadSchema.parse(job.payload);
-      const replayedJob = await enqueueApprovalNotificationJob(
-        notificationPayload.channel === "slack"
+  if (job.kind === "approval_notification" && job.payload.type === "approval_notification") {
+    const notificationPayload = ApprovalNotificationJobPayloadSchema.parse(job.payload);
+    const replayedJob = await enqueueApprovalNotificationJob(
+      notificationPayload.channel === "slack"
+        ? {
+            repository,
+            userId: principal.userId,
+            approvalId: notificationPayload.approvalId,
+            goalId: notificationPayload.goalId,
+            taskId: notificationPayload.taskId,
+            decision: notificationPayload.decision,
+            channel: "slack",
+            workspaceId: notificationPayload.workspaceId,
+            actorContext,
+            replayedFromJobId: job.id
+          }
+        : notificationPayload.channel === "slack_receipt"
           ? {
               repository,
               userId: principal.userId,
@@ -230,101 +243,98 @@ export async function POST(request: Request, context: RouteContext) {
               goalId: notificationPayload.goalId,
               taskId: notificationPayload.taskId,
               decision: notificationPayload.decision,
-              channel: "slack",
+              channel: "slack_receipt",
+              slackChannelId: notificationPayload.slackChannelId,
+              slackMessageTs: notificationPayload.slackMessageTs,
               workspaceId: notificationPayload.workspaceId,
               actorContext,
               replayedFromJobId: job.id
             }
-          : notificationPayload.channel === "slack_receipt"
-            ? {
-                repository,
-                userId: principal.userId,
-                approvalId: notificationPayload.approvalId,
-                goalId: notificationPayload.goalId,
-                taskId: notificationPayload.taskId,
-                decision: notificationPayload.decision,
-                channel: "slack_receipt",
-                slackChannelId: notificationPayload.slackChannelId,
-                slackMessageTs: notificationPayload.slackMessageTs,
-                workspaceId: notificationPayload.workspaceId,
-                actorContext,
-                replayedFromJobId: job.id
-              }
-            : {
-                repository,
-                userId: principal.userId,
-                approvalId: notificationPayload.approvalId,
-                goalId: notificationPayload.goalId,
-                taskId: notificationPayload.taskId,
-                decision: notificationPayload.decision,
-                channel: "telegram_receipt",
-                telegramChatId: notificationPayload.telegramChatId,
-                telegramMessageId: notificationPayload.telegramMessageId,
-                workspaceId: notificationPayload.workspaceId,
-                actorContext,
-                replayedFromJobId: job.id
-              }
-      );
-
-      const bundle = await repository.getGoalBundleForUser(notificationPayload.goalId, principal.userId);
-      const recoveryLatencyMs = recordDeadLetterRecoveryMetric({
-        failedAt: job.updatedAt,
-        replayedAt: replayedJob.createdAt,
-        jobKind: job.kind,
-        surface: "approval_notification"
-      });
-
-      if (bundle) {
-        bundle.actionLogs.push(
-          createActionLog({
-            goalId: bundle.goal.id,
-            taskId: notificationPayload.taskId,
-            workflowId: bundle.workflow.id,
-            actor: actorContext.executor.label,
-            kind: "approval_notification.replayed",
-            message: `Replayed approval notification job ${job.id} after dead-letter recovery.`,
-            details: {
-              replayedFromJobId: job.id,
-              replayedJobId: replayedJob.id,
+          : {
+              repository,
+              userId: principal.userId,
               approvalId: notificationPayload.approvalId,
+              goalId: notificationPayload.goalId,
+              taskId: notificationPayload.taskId,
               decision: notificationPayload.decision,
-              channel: notificationPayload.channel,
-              statusUrl: `/api/jobs/${replayedJob.id}`,
-              recoveryLatencyMs
-            },
-            prevLog: bundle.actionLogs.at(-1) ?? null
-          })
-        );
+              channel: "telegram_receipt",
+              telegramChatId: notificationPayload.telegramChatId,
+              telegramMessageId: notificationPayload.telegramMessageId,
+              workspaceId: notificationPayload.workspaceId,
+              actorContext,
+              replayedFromJobId: job.id
+            }
+    );
 
-        await repository.saveGoalBundle(bundle);
-      }
+    const bundle = await repository.getGoalBundleForUser(notificationPayload.goalId, principal.userId);
+    const recoveryLatencyMs = recordDeadLetterRecoveryMetric({
+      failedAt: job.updatedAt,
+      replayedAt: replayedJob.createdAt,
+      jobKind: job.kind,
+      surface: "approval_notification"
+    });
 
-      return authenticatedJson(
-        {
-          replayedFromJobId: job.id,
-          job: {
-            id: replayedJob.id,
-            kind: replayedJob.kind,
-            status: replayedJob.status,
-            goalId: notificationPayload.goalId,
+    if (bundle) {
+      bundle.actionLogs.push(
+        createActionLog({
+          goalId: bundle.goal.id,
+          taskId: notificationPayload.taskId,
+          workflowId: bundle.workflow.id,
+          actor: actorContext.executor.label,
+          kind: "approval_notification.replayed",
+          message: `Replayed approval notification job ${job.id} after dead-letter recovery.`,
+          details: {
+            replayedFromJobId: job.id,
+            replayedJobId: replayedJob.id,
             approvalId: notificationPayload.approvalId,
-            taskId: notificationPayload.taskId,
             decision: notificationPayload.decision,
             channel: notificationPayload.channel,
-            attemptCount: replayedJob.attemptCount,
-            maxAttempts: replayedJob.maxAttempts,
-            createdAt: replayedJob.createdAt,
-            updatedAt: replayedJob.updatedAt
+            statusUrl: `/api/jobs/${replayedJob.id}`,
+            recoveryLatencyMs
           },
-          statusUrl: `/api/jobs/${replayedJob.id}`,
-          dashboard: await repository.getDashboardData(principal.userId)
-        },
-        { status: 202 }
+          prevLog: bundle.actionLogs.at(-1) ?? null
+        })
       );
+
+      await repository.saveGoalBundle(bundle);
     }
 
-    throw new ApiRouteError(409, `Job ${id} cannot be replayed from this endpoint.`);
-  } catch (error) {
-    return handleApiError(error, "Failed to replay job.");
+    return authenticatedJson(
+      {
+        replayedFromJobId: job.id,
+        job: {
+          id: replayedJob.id,
+          kind: replayedJob.kind,
+          status: replayedJob.status,
+          goalId: notificationPayload.goalId,
+          approvalId: notificationPayload.approvalId,
+          taskId: notificationPayload.taskId,
+          decision: notificationPayload.decision,
+          channel: notificationPayload.channel,
+          attemptCount: replayedJob.attemptCount,
+          maxAttempts: replayedJob.maxAttempts,
+          createdAt: replayedJob.createdAt,
+          updatedAt: replayedJob.updatedAt
+        },
+        statusUrl: `/api/jobs/${replayedJob.id}`,
+        dashboard: await repository.getDashboardData(principal.userId)
+      },
+      { status: 202 }
+    );
   }
+
+  throw new ApiRouteError(409, `Job ${id} cannot be replayed from this endpoint.`);
 }
+
+export const POST = createGovernedMutationRoute<undefined, RouteContext>(
+  {
+    route: "api.jobs.replay",
+    fallbackError: "Failed to replay job.",
+    rateLimit: {
+      namespace: "job-replay",
+      error: "Too many job replay requests. Try again later."
+    },
+    idempotency: "optional"
+  },
+  async ({ principal, routeContext }) => replayDeadLetterJob({ principal, context: routeContext })
+);
