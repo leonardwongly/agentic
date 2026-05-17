@@ -1,3 +1,4 @@
+import { listDashboardActionLogsPage } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 import { buildDashboardCollectionPage, parseDashboardCollectionQuery } from "../../../../lib/dashboard-collection";
@@ -11,16 +12,17 @@ export async function GET(request: Request) {
         allowedFilters: ["kind"]
       });
       const repository = await getSeededRepository();
-      const dashboard = await repository.getDashboardData(principal.userId);
-      const logs = dashboard.actionLogs.filter((log) => !query.kind || log.kind === query.kind);
+      const page = await listDashboardActionLogsPage(repository, {
+        userId: principal.userId,
+        limit: query.limit,
+        cursor: query.cursor,
+        sort: query.sort,
+        q: query.q,
+        kind: query.kind
+      });
 
       return authenticatedJson({
-        page: buildDashboardCollectionPage(logs, query, {
-          getId: (log) => log.id,
-          getCreatedAt: (log) => log.createdAt,
-          getTitle: (log) => log.kind,
-          getSearchText: (log) => [log.id, log.kind, log.message, log.actor].join(" ")
-        })
+        page: buildDashboardCollectionPage(page)
       });
     } catch (error) {
       return handleApiError(error, "Failed to load dashboard activity.");

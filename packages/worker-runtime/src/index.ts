@@ -32,6 +32,7 @@ import {
   assessManagedGoogleCredential,
   createCalendarAdapter,
   createGmailAdapter,
+  decryptProviderCredentialSecret,
   createLocalNote,
   createProviderCredentialSecretStore,
   googleWorkspaceRequiredScopes,
@@ -49,7 +50,6 @@ import {
 } from "@agentic/integrations";
 import {
   captureExecutionOutcomeSignals,
-  type CapturedMemories,
   captureMemoriesFromBundle,
   computeNextRun,
   executeApprovedTasks,
@@ -60,10 +60,7 @@ import {
   processUserRequest
 } from "@agentic/orchestrator";
 import type { AgenticRepository } from "@agentic/repository";
-import {
-  SelfImprovementConflictError,
-  type SelfImprovementRepository
-} from "@agentic/self-improvement-memory";
+import type { SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import {
   buildAutopilotEventFabricRequest,
   getAutopilotEventFabricEnvelope,
@@ -111,6 +108,7 @@ import {
   executePrivacyOperationJob,
   executePublicShareViewJob
 } from "./privacy-share-executors";
+import { persistCapturedSignals } from "./memory-capture-signals";
 import { createPublicShareViewedLog } from "./public-share-log";
 
 export {
@@ -202,44 +200,6 @@ class AutopilotExecutionError extends Error {
   readonly safeForUsers = true;
 }
 
-async function persistCapturedSignals(params: {
-  repository: AgenticRepository;
-  selfImprovementRepository: SelfImprovementRepository;
-  captured: CapturedMemories;
-  userId: string;
-  jobId: string;
-  label: string;
-}) {
-  if (params.captured.memories.length === 0 && params.captured.episodes.length === 0) {
-    return [];
-  }
-
-  try {
-    await Promise.all(params.captured.memories.map((memory) => params.repository.saveMemory(memory)));
-
-    for (const episode of params.captured.episodes) {
-      try {
-        await params.selfImprovementRepository.appendEpisode(episode);
-      } catch (error) {
-        if (error instanceof SelfImprovementConflictError) {
-          continue;
-        }
-
-        throw error;
-      }
-    }
-
-    return params.captured.memories.map((memory) => memory.id);
-  } catch (error) {
-    logError("approval_follow_up.memory_capture_failed", error, {
-      jobId: params.jobId,
-      userId: params.userId,
-      label: params.label
-    });
-    return [];
-  }
-}
-
 function listGoogleCredentialCandidatesForWorkspace(
   credentials: Awaited<ReturnType<AgenticRepository["listProviderCredentials"]>>,
   workspaceId: string | null | undefined
@@ -309,7 +269,15 @@ async function resolveGoogleWorkspaceAdapters(params: {
     }
 
     try {
-      const refreshToken = createProviderCredentialSecretStore().decrypt(secretRecord!.secret);
+      const refreshToken = decryptProviderCredentialSecret({
+        store: createProviderCredentialSecretStore(),
+        envelope: secretRecord!.secret,
+        context: {
+          credentialId: credential.id,
+          userId: params.userId,
+          kind: "oauth_refresh_token"
+        }
+      });
 
       return {
         credential,
@@ -609,7 +577,8 @@ async function executeGenericAutopilotEvent(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance: workspaceGovernance
   });
   return bundle;
 }
@@ -740,7 +709,8 @@ async function executeWatcherEvent(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance
   });
   return bundle;
 }
@@ -798,7 +768,8 @@ async function runTemplateExecution(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance: params.workspaceGovernance
   });
   return bundle;
 }
@@ -875,7 +846,8 @@ async function executeBriefingEvent(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance: workspaceGovernance
   });
   return bundle;
 }
@@ -928,7 +900,8 @@ async function executeEventFabricEvent(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance: executionContext.workspaceGovernance
   });
   return bundle;
 }
@@ -1109,6 +1082,9 @@ export async function executeApprovalFollowUpJob(params: {
 
   let updatedBundle = bundle;
   const shouldExecuteApprovedTask = job.payload.decision === "approved" && task.state === "queued";
+  const workspaceGovernance = job.payload.workspaceId
+    ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
+    : null;
 
   if (shouldExecuteApprovedTask) {
     const googleAdapters = await resolveGoogleWorkspaceAdapters({
@@ -1124,9 +1100,7 @@ export async function executeApprovalFollowUpJob(params: {
         calendar: googleAdapters?.calendar,
         notes: { createLocalNote }
       },
-      governance: job.payload.workspaceId
-        ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId)
-        : null
+      governance: workspaceGovernance
     });
     updatedBundle = reconcileExecutionResults({
       bundle,
@@ -1142,11 +1116,15 @@ export async function executeApprovalFollowUpJob(params: {
         updatedBundle,
         job.userId,
         results,
-        job.actorContext ?? createSystemActorContext(job.userId)
+        job.actorContext ?? createSystemActorContext(job.userId),
+        {
+          governance: workspaceGovernance
+        }
       ),
       userId: job.userId,
       jobId: job.id,
-      label: "approval-execution-capture"
+      label: "approval-execution-capture",
+      workspaceId: updatedBundle.goal.workspaceId ?? null
     });
 
     await finalizeApprovalEvidenceRecord({
@@ -1165,11 +1143,15 @@ export async function executeApprovalFollowUpJob(params: {
       captured: captureMemoriesFromBundle(
         updatedBundle,
         job.userId,
-        job.actorContext ?? createSystemActorContext(job.userId)
+        job.actorContext ?? createSystemActorContext(job.userId),
+        {
+          governance: workspaceGovernance
+        }
       ),
       userId: job.userId,
       jobId: job.id,
-      label: "approval-auto-capture"
+      label: "approval-auto-capture",
+      workspaceId: updatedBundle.goal.workspaceId ?? null
     });
 
     if (capturedMemoryIds.length > 0) {

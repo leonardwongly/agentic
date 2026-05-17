@@ -4,6 +4,7 @@ import type { Pool } from "pg";
 export type ContextPacketMemoryQuery = {
   userId: string;
   agent?: AgentName;
+  agentId?: string;
   includeExpired?: boolean;
   allowedSensitivities?: string[];
   limit?: number;
@@ -34,6 +35,10 @@ function memoryMatchesContextPacketQuery(memory: MemoryRecord, params: ContextPa
     return false;
   }
 
+  if (memory.agentId && memory.agentId !== params.agentId) {
+    return false;
+  }
+
   const sensitivity = normalizeSensitivityForQuery(memory.sensitivity);
   if (!params.allowedSensitivities) {
     return sensitivity !== "restricted";
@@ -55,6 +60,8 @@ function mapMemoryRow(row: Record<string, unknown>): MemoryRecord {
     permissions: row.permissions ?? [],
     actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
     contextPacketConsent: row.context_packet_consent ?? null,
+    agentId: typeof row.agent_id === "string" ? row.agent_id : null,
+    agentScope: typeof row.agent_scope === "string" ? row.agent_scope : "global",
     reviewAt: row.review_at ? new Date(row.review_at as string | number | Date).toISOString() : null,
     expiryAt: row.expiry_at ? new Date(row.expiry_at as string | number | Date).toISOString() : null,
     createdAt: new Date(row.created_at as string | number | Date).toISOString(),
@@ -87,6 +94,13 @@ export async function listContextPacketMemoryWithPool(pool: Pool, params: Contex
   if (params.agent) {
     values.push(params.agent);
     predicates.push(`permissions @> jsonb_build_array($${values.length}::text)`);
+  }
+
+  if (params.agentId) {
+    values.push(params.agentId);
+    predicates.push(`(agent_id is null or agent_id = $${values.length})`);
+  } else {
+    predicates.push("agent_id is null");
   }
 
   if (params.allowedSensitivities) {

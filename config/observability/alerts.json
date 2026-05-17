@@ -108,7 +108,7 @@
       "filters": {
         "variant": "redesigned"
       },
-      "minimumSamples": 0,
+      "minimumSamples": 1,
       "severity": "critical",
       "rolloutGate": true,
       "description": "Excessive reconnects indicate the cockpit cannot keep live state stable."
@@ -123,7 +123,7 @@
       "filters": {
         "variant": "redesigned"
       },
-      "minimumSamples": 0,
+      "minimumSamples": 1,
       "severity": "critical",
       "rolloutGate": true,
       "description": "Approval decisions should remain inside the ten-minute operating-loop budget during rollout."
@@ -138,7 +138,7 @@
       "filters": {
         "variant": "redesigned"
       },
-      "minimumSamples": 0,
+      "minimumSamples": 1,
       "severity": "critical",
       "rolloutGate": true,
       "description": "Dead-letter replay should start within the fifteen-minute recovery objective."

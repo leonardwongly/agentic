@@ -56,8 +56,30 @@ jobs:
         with:
           fail-on-severity: high
 
-  validate:
+  issue-theme-gates:
     needs: provenance-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Validate issue-theme gate taxonomy
+        run: npm run ci:issue-theme-gates -- --assert-workflow
+
+  validate:
+    needs:
+      - provenance-gate
+      - issue-theme-gates
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -94,6 +116,23 @@ jobs:
           sudo apt-get install -y pandoc
 
       - run: npm ci
+
+      - name: Run lint gate
+        run: npm run lint
+
+      - name: Run typecheck gate
+        run: npm run typecheck
+
+      - name: Run format gate
+        run: npm run format:check
+
+      - name: Check release context
+        run: npm run release:check-context
+
+      - name: Validate docs inventory
+        run: |
+          npm run docs:render
+          npm run docs:validate
 
       - name: Create security artifact directories
         run: mkdir -p artifacts/security artifacts/build artifacts/compliance

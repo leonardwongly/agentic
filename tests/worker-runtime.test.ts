@@ -6,8 +6,10 @@ import {
   DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   GoalBundleSchema,
   SYSTEM_USER_ID,
+  WorkspaceGovernanceSchema,
   WatcherSchema,
-  createSystemActorContext
+  createSystemActorContext,
+  enterpriseWorkspaceGovernanceDefaults
 } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import * as orchestrator from "@agentic/orchestrator";
@@ -78,6 +80,7 @@ import {
   executePrivacyOperationJob,
   executePublicShareViewJob,
   executeTemplateRunJob,
+  persistCapturedMemories,
   runWorkerRuntime,
   summarizeWorkerQueueHealth
 } from "@agentic/worker-runtime";
@@ -791,6 +794,48 @@ describe("worker runtime", () => {
     expect(episodesAfterSecondAttempt.map((episode) => episode.id)).toEqual(
       episodesAfterFirstAttempt.map((episode) => episode.id)
     );
+  });
+
+  it("does not persist learning capture when workspace governance opts out", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const workspaceId = (await repository.getDashboardData(SYSTEM_USER_ID)).activeWorkspace!.id;
+    const baseBundle = buildCompletedBundle("goal-learning-opt-out", "workflow-learning-opt-out");
+    const bundle = GoalBundleSchema.parse({
+      ...baseBundle,
+      goal: {
+        ...baseBundle.goal,
+        workspaceId
+      },
+      workflow: {
+        ...baseBundle.workflow,
+        workspaceId
+      }
+    });
+    const governance = WorkspaceGovernanceSchema.parse({
+      workspaceId,
+      ...enterpriseWorkspaceGovernanceDefaults,
+      shadowReplayPolicy: {
+        ...enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy,
+        enabled: false
+      },
+      updatedBy: SYSTEM_USER_ID,
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    await persistCapturedMemories({
+      repository,
+      selfImprovementRepository,
+      userId: SYSTEM_USER_ID,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      jobId: "job-learning-opt-out",
+      bundle,
+      governance
+    });
+
+    const capturedMemories = (await repository.listMemory(SYSTEM_USER_ID)).filter((memory) => memory.source === "auto-capture");
+    expect(capturedMemories).toEqual([]);
+    await expect(selfImprovementRepository.listEpisodes()).resolves.toEqual([]);
   });
 
   it("processes queued goal-refine jobs through the worker loop and persists the refined bundle", async () => {
@@ -1799,7 +1844,22 @@ describe("worker runtime", () => {
           userFeedback: null,
           metadata: {
             goalId: job.payload.goalId,
-            taskId: "task-worker-runtime-completed"
+            taskId: "task-worker-runtime-completed",
+            learningPrivacy: {
+              datasetId: "learning-capture-records",
+              userId: SYSTEM_USER_ID,
+              workspaceId: null,
+              captureSource: "goal_bundle",
+              captureAllowed: true,
+              optOutApplied: false,
+              consentBasis: "system",
+              retentionDays: 90,
+              capturedAt: "2026-04-16T00:05:00.000Z",
+              expiresAt: "2026-07-15T00:05:00.000Z",
+              exportable: true,
+              deletable: true,
+              redacted: true
+            }
           }
         })
       ]

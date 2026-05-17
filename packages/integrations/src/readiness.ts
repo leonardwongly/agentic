@@ -1,5 +1,13 @@
-import type { IntegrationAccount, ProviderCredentialStatus } from "@agentic/contracts";
-import { assessManagedGoogleCredential, type GoogleCredentialIssue } from "./google-managed-readiness";
+import type { IntegrationAccount, ProviderCredential, ProviderCredentialStatus } from "@agentic/contracts";
+import {
+  assessManagedGoogleCredential,
+  type GoogleCredentialIssue,
+  type GoogleCredentialLifecycleState,
+  type GoogleCredentialReconciliationState,
+  type GoogleCredentialRecoveryAction,
+  type GoogleCredentialRepairState,
+  type GoogleCredentialSloGate
+} from "./google-managed-readiness";
 
 export const integrationReadinessTierValues = [
   "experimental",
@@ -24,8 +32,13 @@ export type IntegrationReadinessProfile = {
     provider: "google";
     providerCredentialId: string | null;
     credentialStatus: ProviderCredentialStatus | "missing";
+    lifecycleState: GoogleCredentialLifecycleState;
+    repairState: GoogleCredentialRepairState;
     hasRefreshToken: boolean;
     missingScopes: string[];
+    recoveryActions: GoogleCredentialRecoveryAction[];
+    sloGates: GoogleCredentialSloGate[];
+    reconciliation: GoogleCredentialReconciliationState;
   } | null;
 };
 
@@ -75,11 +88,10 @@ export function describeIntegrationReadiness(
   account: IntegrationAccount,
   options?: {
     providerCredential?: {
-      credential?: {
-        id: string;
-        status: ProviderCredentialStatus;
-        scopes: string[];
-      } | null;
+      credential?: Pick<
+        ProviderCredential,
+        "id" | "status" | "scopes" | "expiresAt" | "lastValidatedAt" | "updatedAt" | "metadata"
+      > | null;
       hasRefreshTokenSecret?: boolean;
     };
   }
@@ -115,8 +127,13 @@ export function describeIntegrationReadiness(
             provider: "google",
             providerCredentialId: googleAssessment.providerCredentialId,
             credentialStatus: googleAssessment.credentialStatus,
+            lifecycleState: googleAssessment.lifecycleState,
+            repairState: googleAssessment.repairState,
             hasRefreshToken: googleAssessment.hasRefreshToken,
-            missingScopes: googleAssessment.missingScopes
+            missingScopes: googleAssessment.missingScopes,
+            recoveryActions: googleAssessment.recoveryActions,
+            sloGates: googleAssessment.sloGates,
+            reconciliation: googleAssessment.reconciliation
           }
         });
       }
@@ -138,8 +155,13 @@ export function describeIntegrationReadiness(
                     provider: "google",
                     providerCredentialId: googleAssessment.providerCredentialId,
                     credentialStatus: googleAssessment.credentialStatus,
+                    lifecycleState: googleAssessment.lifecycleState,
+                    repairState: googleAssessment.repairState,
                     hasRefreshToken: googleAssessment.hasRefreshToken,
-                    missingScopes: googleAssessment.missingScopes
+                    missingScopes: googleAssessment.missingScopes,
+                    recoveryActions: googleAssessment.recoveryActions,
+                    sloGates: googleAssessment.sloGates,
+                    reconciliation: googleAssessment.reconciliation
                   }
                 }
               : undefined

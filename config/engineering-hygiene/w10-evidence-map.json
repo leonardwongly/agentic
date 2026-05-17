@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "workstream": 199,
+  "generatedFor": "task/w10-engineering-hygiene-tracker",
+  "entries": [
+    {
+      "issue": 199,
+      "title": "plan(w10): Engineering hygiene docs and tracker discipline",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "docs",
+          "path": "docs/runbooks/engineering-hygiene.md",
+          "note": "Defines the W10 gate contract, evidence map discipline, stale artifact triage, and rollback flow."
+        },
+        {
+          "kind": "config",
+          "path": "config/engineering-hygiene/w10-evidence-map.json",
+          "note": "Maps workstream issues to concrete evidence paths so strategy text is not treated as proof."
+        },
+        {
+          "kind": "test",
+          "path": "tests/engineering-hygiene.test.ts",
+          "note": "Covers happy-path, negative, stale, and onboarding validation behavior for the hygiene gates."
+        }
+      ]
+    },
+    {
+      "issue": 245,
+      "parent": 199,
+      "title": "task(w10-t01): Add lint typecheck format and release-context CI gates",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "ci",
+          "path": ".github/workflows/ci.yml",
+          "note": "Runs lint, typecheck, format, release-context, and docs validation before the heavier validation suite."
+        },
+        {
+          "kind": "script",
+          "path": "scripts/check-workspace-lint.ts",
+          "note": "Validates the repo-owned lint contract without adding a new dependency."
+        },
+        {
+          "kind": "script",
+          "path": "scripts/check-format.ts",
+          "note": "Checks changed text files for CRLF, trailing whitespace, and missing final newline."
+        },
+        {
+          "kind": "script",
+          "path": "scripts/check-release-context.ts",
+          "note": "Rejects local artifacts, environment files, logs, packaged outputs, and secret-like filenames in release context."
+        }
+      ]
+    },
+    {
+      "issue": 246,
+      "parent": 199,
+      "title": "task(w10-t02): Refresh docs specs and API inventory for runtime truth",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "docs",
+          "path": "docs/specs/api-route-inventory.md",
+          "note": "The canonical route inventory remains the runtime truth source and is covered by API route inventory tests."
+        },
+        {
+          "kind": "docs",
+          "path": "docs/specs/agentic.md",
+          "note": "The product spec links route truth to the canonical inventory."
+        },
+        {
+          "kind": "test",
+          "path": "tests/api-route-inventory.test.ts",
+          "note": "Ensures every app API route appears in the inventory with exact HTTP methods."
+        }
+      ]
+    },
+    {
+      "issue": 247,
+      "parent": 199,
+      "title": "task(w10-t03): Build issue-to-evidence map and stale artifact reconciliation",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "config",
+          "path": "config/engineering-hygiene/w10-evidence-map.json",
+          "note": "Requires every W10 issue to cite existing evidence paths and explicit blockers when blocked."
+        },
+        {
+          "kind": "script",
+          "path": "scripts/lib/engineering-hygiene.ts",
+          "note": "Contains the evidence map validator and release-context stale artifact checks."
+        },
+        {
+          "kind": "test",
+          "path": "tests/engineering-hygiene.test.ts",
+          "note": "Covers missing evidence path and blocked-without-blocker regressions."
+        }
+      ]
+    },
+    {
+      "issue": 248,
+      "parent": 199,
+      "title": "task(w10-t04): Triage stale branches PRs and worktree hygiene",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "script",
+          "path": "scripts/repo-hygiene-report.ts",
+          "note": "Reports stale branches, stale PRs, dirty worktrees, and missing worktrees without deleting or closing anything."
+        },
+        {
+          "kind": "docs",
+          "path": "docs/runbooks/parallel-worktrees.md",
+          "note": "Keeps cleanup and merge discipline anchored to the existing parallel worktree runbook."
+        },
+        {
+          "kind": "test",
+          "path": "tests/engineering-hygiene.test.ts",
+          "note": "Covers stale branch/PR and dirty worktree detection."
+        }
+      ]
+    },
+    {
+      "issue": 249,
+      "parent": 199,
+      "title": "task(w10-t05): Improve developer onboarding and first-run validation",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "script",
+          "path": "scripts/check-first-run.ts",
+          "note": "Reports first-run readiness for Node, dependencies, access key, database mode, and required repo files."
+        },
+        {
+          "kind": "docs",
+          "path": "README.md",
+          "note": "Documents the first-run validation command and release-quality gate ladder."
+        },
+        {
+          "kind": "test",
+          "path": "tests/engineering-hygiene.test.ts",
+          "note": "Covers supported and unsupported first-run readiness cases."
+        }
+      ]
+    }
+  ]
+}

@@ -25,14 +25,46 @@ describe("AOS remediation tracker", () => {
     spawnSyncMock.mockReset();
   });
 
-  it("keeps AOS-00 through AOS-18 covered by a valid manifest", () => {
+  it("keeps required AOS baseline items covered by a valid manifest", () => {
     const tracker = loadAosTracker();
+    const requiredIds = Array.from({ length: 19 }, (_, index) => `AOS-${String(index).padStart(2, "0")}`);
 
     expect(validateAosTracker(tracker)).toEqual([]);
-    expect(tracker.items.map((item) => item.id).sort()).toEqual(
-      Array.from({ length: 19 }, (_, index) => `AOS-${String(index).padStart(2, "0")}`)
-    );
+    expect(tracker.itemIdPolicy.requiredIds).toEqual(requiredIds);
+    expect(tracker.items.map((item) => item.id).sort()).toEqual(requiredIds);
     expect(new Set(tracker.items.map((item) => item.issue)).size).toBe(tracker.items.length);
+  });
+
+  it("accepts future canonical AOS tracker items without changing dashboard code", () => {
+    const tracker = loadAosTracker();
+    const expandedTracker = structuredClone(tracker);
+
+    expandedTracker.items.push({
+      id: "AOS-19",
+      issue: 721,
+      title: "Scale remediation tracker beyond 19 AOS items",
+      lane: "shell",
+      phase: "Phase 4 - Shell and maintainability",
+      priority: "critical",
+      dependencies: ["AOS-18"],
+      validationGates: ["npm run remediation:verify"]
+    });
+    expandedTracker.items.push({
+      id: "AOS-100",
+      issue: 722,
+      title: "Track future generated AOS plan item",
+      lane: "shell",
+      phase: "Phase 4 - Shell and maintainability",
+      priority: "medium",
+      dependencies: ["AOS-19"],
+      validationGates: ["npx vitest run tests/aos-remediation-dashboard.test.ts"]
+    });
+
+    expect(validateAosTracker(expandedTracker)).toEqual([]);
+    expect(summarizeAosTracker(expandedTracker).totalItems).toBe(21);
+    const dashboard = renderAosDashboard(expandedTracker);
+    expect(dashboard).toContain("| AOS-19 | #721 | shell | critical | AOS-18 |");
+    expect(dashboard.indexOf("| AOS-19 |")).toBeLessThan(dashboard.indexOf("| AOS-100 |"));
   });
 
   it("keeps strategic artifacts separate from implementation proof", () => {
@@ -97,6 +129,9 @@ describe("AOS remediation tracker", () => {
     malformedTracker.reviewedAt = 42 as unknown as string;
     malformedTracker.sourceOfTruth[0].path = null as unknown as string;
     malformedTracker.sourceOfTruth[0].authority = "   ";
+    malformedTracker.itemIdPolicy.rule = "";
+    malformedTracker.itemIdPolicy.requiredIds = ["AOS-00", "AOS-010"];
+    malformedTracker.itemIdPolicy.acceptedPrefixes = ["aos"];
     malformedTracker.baselineCommands[0].command = 42 as unknown as string;
     malformedTracker.baselineCommands[0].purpose = "";
     malformedTracker.lanes[0].label = null as unknown as string;
@@ -111,6 +146,11 @@ describe("AOS remediation tracker", () => {
         "reviewedAt must be a string.",
         "sourceOfTruth[0].path must be a string.",
         "sourceOfTruth[0].authority must not be empty.",
+        "itemIdPolicy.rule must not be empty.",
+        "itemIdPolicy.acceptedPrefixes[0] must be an uppercase alphanumeric prefix.",
+        "itemIdPolicy.requiredIds contains unsupported item id AOS-00.",
+        "itemIdPolicy.requiredIds contains unsupported item id AOS-010.",
+        "AOS-00 does not match accepted item ID policy.",
         "baselineCommands[0].command must be a string.",
         "baselineCommands[0].purpose must not be empty.",
         "trust-spine.label must be a string.",
@@ -244,7 +284,7 @@ describe("AOS remediation tracker", () => {
     expect(verifyLiveIssueCoverage(tracker)).toContain("Live issue #12 claims to be AOS-02, but manifest says AOS-02 is #13.");
   });
 
-  it("does not truncate longer AOS identifiers in live issue titles", () => {
+  it("accepts future live AOS identifiers while rejecting ambiguous padded identifiers", () => {
     const tracker = loadAosTracker();
     spawnSyncMock.mockReturnValue({
       error: undefined,
@@ -274,12 +314,7 @@ describe("AOS remediation tracker", () => {
       stderr: ""
     });
 
-    expect(verifyLiveIssueCoverage(tracker)).toEqual(
-      expect.arrayContaining([
-        "Unexpected live AOS issue id AOS-010 on #999.",
-        "Unexpected live AOS issue id AOS-100 on #1000."
-      ])
-    );
+    expect(verifyLiveIssueCoverage(tracker)).toEqual(["Unexpected live AOS issue id AOS-010 on #999."]);
   });
 
   it("references repo files that exist for local baseline evidence", () => {

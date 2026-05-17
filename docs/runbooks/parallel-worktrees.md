@@ -128,6 +128,18 @@ Do not treat a clean git merge as proof of correctness. Integration is complete 
 
 ## CLI Commands
 
+Resolve issue-theme validation gates before assigning a stream:
+
+```bash
+npm run ci:issue-theme-gates -- --label aos-shell
+```
+
+For a branch that already has local changes, resolve gates from the diff:
+
+```bash
+npm run ci:issue-theme-gates -- --from-git --base-ref origin/main
+```
+
 Create the standard sibling worktrees from the repo root:
 
 ```bash
@@ -152,10 +164,17 @@ Inspect the current status of all planned worktrees:
 npm run worktree:status
 ```
 
+Inspect stale branches, stale PRs, and dirty worktrees without mutating anything:
+
+```bash
+npm run hygiene:repo -- --max-age-days 21
+```
+
 Emit machine-readable status for automation or dashboards:
 
 ```bash
 npm run worktree:status -- --json
+npm run hygiene:repo -- --json
 ```
 
 Preview safe cleanup after the integrated branch is committed:
@@ -201,6 +220,7 @@ After the integrated branch is committed:
 
 ```bash
 npm run worktree:cleanup -- --print-only
+npm run hygiene:repo -- --max-age-days 21
 ```
 
 3. Run cleanup once the plan looks correct:

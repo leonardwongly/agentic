@@ -240,6 +240,47 @@ describe("runAgent", () => {
     expect(result.artifacts[0]?.content).not.toContain("secret-token-like");
   });
 
+  it("falls back when a custom runner returns output outside its declared contract", () => {
+    const runner: AgentRunner = {
+      contract: AgentRunnerContractSchema.parse({
+        id: "agentic.test.unsafe-output-runner",
+        version: "v1",
+        agentNames: ["communications"],
+        declaredCapabilities: [],
+        outputModes: ["governed_specialist"],
+        timeoutMs: 1000,
+        telemetryEvents: ["agent.started", "agent.completed", "agent.failed"],
+        failureCodes: ["unsafe_output"]
+      }),
+      run(input) {
+        return {
+          result: {
+            agent: "communications",
+            summary: "Returned undeclared scaffold output.",
+            confidence: 0.91,
+            executionMode: "deterministic_scaffold",
+            implementationTier: "experimental",
+            artifacts: [],
+            proposedToolCalls: [],
+            nextSteps: [],
+            explanation: "This output is deliberately outside the runner contract."
+          },
+          telemetry: {
+            ...input.telemetry,
+            completedAt: nowIso(),
+            durationMs: 0
+          }
+        };
+      }
+    };
+
+    const result = runAgent(buildTask("communications"), "Triage the inbox.", { runner });
+
+    expect(result.executionMode).toBe("manual_review_required");
+    expect(result.artifacts[0]?.metadata.requiresManualReview).toBe(true);
+    expect(result.artifacts[0]?.content).toContain("Failure code: unsafe_output");
+  });
+
   it("supports orchestrator coordination scaffolds without claiming external execution", () => {
     const result = runAgent(buildTask("orchestrator"), "Coordinate specialist agents.");
 

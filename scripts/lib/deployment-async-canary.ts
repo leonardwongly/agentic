@@ -25,6 +25,11 @@ export type DeploymentAsyncCanarySummary = {
   jobId: string;
   attempts: number;
   statusUrl: string;
+  requestId: string;
+  traceId: string;
+  idempotencyKey: string;
+  enqueueDurationMs: number;
+  pollDurationMs: number;
 };
 
 export type DeploymentAsyncCanaryOptions = {
@@ -34,6 +39,8 @@ export type DeploymentAsyncCanaryOptions = {
   pollIntervalMs?: number;
   requestText?: string;
   idempotencyKey?: string;
+  requestId?: string;
+  traceId?: string;
   fetchImpl?: typeof fetch;
   wait?: (ms: number) => Promise<void>;
 };
@@ -90,23 +97,29 @@ export async function runDeploymentAsyncCanary(options: DeploymentAsyncCanaryOpt
   const maxAttempts = Math.max(1, Math.ceil(timeoutMs / pollIntervalMs));
   const requestText = options.requestText?.trim() || "Deployment canary: prove queued goal work reaches durable completion.";
   const idempotencyKey = options.idempotencyKey?.trim() || `deploy-canary:${crypto.randomUUID()}`;
+  const requestId = options.requestId?.trim() || `deploy-canary-${crypto.randomUUID()}`;
+  const traceId = options.traceId?.trim() || requestId;
 
   assert(accessKey, "AGENTIC_SMOKE_ACCESS_KEY must be configured.");
   assert(requestText.length <= 2_000, "Deployment async canary request must be 2,000 characters or fewer.");
   assert(idempotencyKey.length <= 200, "Deployment async canary idempotency key must be 200 characters or fewer.");
 
+  const enqueueStartedAt = Date.now();
   const createResponse = await fetchImpl(`${baseUrl}/api/goals`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
       [AGENTIC_ACCESS_KEY_HEADER]: accessKey,
-      "x-idempotency-key": idempotencyKey
+      "x-idempotency-key": idempotencyKey,
+      "x-request-id": requestId,
+      "x-trace-id": traceId
     },
     body: JSON.stringify({
       request: requestText
     })
   });
+  const enqueueDurationMs = Math.max(0, Date.now() - enqueueStartedAt);
 
   const createPayload = await readJson<GoalCreatePayload>(createResponse);
   assert(createResponse.status === 202, `Expected goal enqueue to return 202, received ${createResponse.status}.`);
@@ -114,12 +127,15 @@ export async function runDeploymentAsyncCanary(options: DeploymentAsyncCanaryOpt
   assert(createPayload.statusUrl, "Goal enqueue response did not include a status URL.");
 
   const statusUrl = resolveStatusUrl(baseUrl, createPayload.statusUrl);
+  const pollStartedAt = Date.now();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const jobResponse = await fetchImpl(statusUrl, {
       headers: {
         Accept: "application/json",
-        [AGENTIC_ACCESS_KEY_HEADER]: accessKey
+        [AGENTIC_ACCESS_KEY_HEADER]: accessKey,
+        "x-request-id": requestId,
+        "x-trace-id": traceId
       }
     });
     const jobPayload = await readJson<GoalJobPayload>(jobResponse);
@@ -131,7 +147,12 @@ export async function runDeploymentAsyncCanary(options: DeploymentAsyncCanaryOpt
       return {
         jobId: createPayload.job.id,
         attempts: attempt,
-        statusUrl
+        statusUrl,
+        requestId,
+        traceId,
+        idempotencyKey,
+        enqueueDurationMs,
+        pollDurationMs: Math.max(0, Date.now() - pollStartedAt)
       };
     }
 

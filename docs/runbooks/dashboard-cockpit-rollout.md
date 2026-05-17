@@ -36,6 +36,28 @@ The canary must keep these critical gates green:
 - `product.dashboard.approval_latency_ms` p95 at or below 600000 ms.
 - `product.dashboard.dead_letter_recovery_ms` p95 at or below 900000 ms.
 
+## Exception-First Operator Loop
+
+The cockpit renders a bounded operator priority queue before lower-priority dashboard sections. The model is deterministic and capped so the first viewport cannot grow without review:
+
+- Maximum visible priorities: 8.
+- Maximum recovery actions: 12.
+- Maximum evidence strings per priority: 4.
+- Maximum display text per priority field: 220 characters.
+
+Triage in this order:
+
+1. Recover async execution when dead letters, expired leases, stale queue items, or retry loops are present.
+2. Resolve pending approvals, with R4 and R3 decisions first.
+3. Repair degraded connectors before widening automation or trusting provider-backed actions.
+4. Keep autonomy held behind governance controls while runtime health, connector health, or approval debt is degraded.
+5. Clear blocked and overdue commitments before inspecting decorative dashboard data.
+6. Review remaining diagnostics only after the higher-priority operating lanes are clear.
+
+Recovery actions remain governed. Connector revalidation, reconnect marking, expired-lease release, queued-job cancellation, and dead-letter replay still run through the operations recovery or job replay boundaries; the cockpit only exposes the next safe target and does not bypass owner permissions, confirmation prompts, idempotency, or audit logging.
+
+Rollback is simple because the priority model is read-only and derives from the existing dashboard payload. Disable the cockpit flag or revert this runbook/component change; no data migration is required.
+
 ## Privacy Rules
 
 Cockpit telemetry must stay categorical. Do not emit command-palette query text, free-form recommendation notes, user ids, workspace ids, raw payloads, provider headers, tokens, cookies, or URLs with query strings. Recommendation feedback may record whether notes were supplied and the note length, but not the note body in telemetry or action-log feedback metadata.

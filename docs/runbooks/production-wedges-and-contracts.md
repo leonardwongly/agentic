@@ -43,10 +43,24 @@ These are intentionally marked as supporting rather than selected production wed
 
 ## Runtime Source Of Truth
 
-The canonical source is [packages/contracts/src/index.ts](/Users/leonardwongly/.codex/worktrees/24f9/Agentic/packages/contracts/src/index.ts), via:
+The canonical source is [packages/contracts/src/index.ts](https://github.com/leonardwongly/agentic/blob/main/packages/contracts/src/index.ts), via:
 
 - `GoalWedgeSchema`
 - `GoalCompletionContractSchema`
 - `deriveGoalContract(intent)`
 
 Goals created after this change persist the chosen wedge and completion contract in the `goals.goal_contract` JSONB column. Legacy rows derive the same profile from `goal.intent` during parsing, so the contract stays backwards-compatible.
+
+## Execution-Grade Vertical Evaluation
+
+The execution-grade proof harness lives in [packages/observability/src/execution-grade-wedge.ts](https://github.com/leonardwongly/agentic/blob/main/packages/observability/src/execution-grade-wedge.ts).
+
+Use `evaluateExecutionGradeVerticalWorkflow(...)` when promoting one selected wedge from control-plane readiness into end-to-end operator evidence. The evaluator fails closed unless the bundle proves all of the following:
+
+- selected production wedge contract with success criteria and evidence signals
+- production `governed_specialist` runner output
+- approval previews with summary, target, concrete changes, permissions, and affected systems
+- responded approvals connected to `approval_follow_up` worker jobs with stable idempotency and action ids
+- no approval follow-up job queued while the approval is still pending
+
+This harness is intentionally read-only. Rollback is reverting the evaluator and tests; it does not migrate data, enqueue jobs, call providers, or change approval decisions by itself.

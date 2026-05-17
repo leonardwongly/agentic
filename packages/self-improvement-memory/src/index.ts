@@ -83,6 +83,62 @@ export const OutcomeLinkSchema = z
     notes: z.string().trim().max(500).nullable().default(null)
   })
   .strict();
+export const EpisodeProvenanceSchema = z
+  .object({
+    ownerUserId: z.string().trim().min(1).max(120).nullable().default(null),
+    workspaceId: z.string().trim().min(1).max(120).nullable().default(null),
+    source: z.enum(["goal", "approval", "execution", "feedback", "replay"]).default("goal"),
+    memoryIds: z.array(boundedString(160)).max(50).default([]),
+    actionLogIds: z.array(boundedString(160)).max(50).default([]),
+    evidenceRecordIds: z.array(boundedString(160)).max(50).default([]),
+    recommendationKeys: z.array(boundedString(200)).max(20).default([])
+  })
+  .strict();
+export const EpisodePrivacySchema = z
+  .object({
+    sensitivity: z.string().trim().min(1).max(80).default("internal"),
+    retention: z
+      .object({
+        policy: z.string().trim().min(1).max(120).default("learning-outcome-365d"),
+        reviewAt: IsoDateTimeSchema.nullable().default(null),
+        expiresAt: IsoDateTimeSchema.nullable().default(null)
+      })
+      .strict()
+      .default({
+        policy: "learning-outcome-365d",
+        reviewAt: null,
+        expiresAt: null
+      }),
+    redaction: z
+      .object({
+        applied: z.boolean().default(false),
+        fields: z.array(boundedString(120)).max(50).default([]),
+        rules: z.array(boundedString(120)).max(20).default([]),
+        reason: z.string().trim().max(300).nullable().default(null)
+      })
+      .strict()
+      .default({
+        applied: false,
+        fields: [],
+        rules: [],
+        reason: null
+      })
+  })
+  .strict()
+  .default({
+    sensitivity: "internal",
+    retention: {
+      policy: "learning-outcome-365d",
+      reviewAt: null,
+      expiresAt: null
+    },
+    redaction: {
+      applied: false,
+      fields: [],
+      rules: [],
+      reason: null
+    }
+  });
 export const SemanticPatternSchema = z
   .object({
     id: boundedString(80),
@@ -131,7 +187,35 @@ export const EpisodeRecordSchema = z
     outcomeLink: OutcomeLinkSchema.nullable().optional().default(null),
     relatedPatternId: z.string().trim().max(80).nullable().default(null),
     userFeedback: UserFeedbackSchema.nullable().optional().default(null),
+    provenance: EpisodeProvenanceSchema.default({
+      ownerUserId: null,
+      workspaceId: null,
+      source: "goal",
+      memoryIds: [],
+      actionLogIds: [],
+      evidenceRecordIds: [],
+      recommendationKeys: []
+    }),
+    privacy: EpisodePrivacySchema,
     metadata: MetadataSchema.default({})
+  })
+  .strict();
+
+export const LearningEpisodePrivacySchema = z
+  .object({
+    datasetId: z.literal("learning-capture-records"),
+    userId: boundedString(120),
+    workspaceId: z.string().trim().min(1).max(120).nullable().default(null),
+    captureSource: z.enum(["goal_bundle", "execution_outcome"]),
+    captureAllowed: z.literal(true),
+    optOutApplied: z.literal(false),
+    consentBasis: z.enum(["system", "derived", "explicit"]),
+    retentionDays: z.number().int().min(7).max(3650),
+    capturedAt: IsoDateTimeSchema,
+    expiresAt: IsoDateTimeSchema,
+    exportable: z.literal(true),
+    deletable: z.literal(true),
+    redacted: z.literal(true)
   })
   .strict();
 
@@ -191,7 +275,10 @@ export type RecommendationEvidenceHint = z.infer<typeof RecommendationEvidenceHi
 export type RecommendationTrace = z.infer<typeof RecommendationTraceSchema>;
 export type OutcomeExecutionKind = z.infer<typeof OutcomeExecutionKindSchema>;
 export type OutcomeLink = z.infer<typeof OutcomeLinkSchema>;
+export type EpisodeProvenance = z.infer<typeof EpisodeProvenanceSchema>;
+export type EpisodePrivacy = z.infer<typeof EpisodePrivacySchema>;
 export type EpisodeRecord = z.infer<typeof EpisodeRecordSchema>;
+export type LearningEpisodePrivacy = z.infer<typeof LearningEpisodePrivacySchema>;
 export type CurrentSession = z.infer<typeof CurrentSessionSchema>;
 export type LastError = z.infer<typeof LastErrorSchema>;
 export type SessionEnd = z.infer<typeof SessionEndSchema>;
@@ -233,6 +320,41 @@ export class SelfImprovementStorageError extends Error {
   }
 }
 
+export function getEpisodeLearningPrivacy(episode: EpisodeRecord): LearningEpisodePrivacy | null {
+  if (!episode.metadata || typeof episode.metadata !== "object" || Array.isArray(episode.metadata)) {
+    return null;
+  }
+
+  const raw = (episode.metadata as Record<string, JsonValue>).learningPrivacy;
+  const parsed = LearningEpisodePrivacySchema.safeParse(raw);
+
+  return parsed.success ? parsed.data : null;
+}
+
+export function assertEpisodeLearningPrivacyPreflight(
+  episode: EpisodeRecord,
+  expected?: {
+    userId?: string;
+    workspaceId?: string | null;
+  }
+): LearningEpisodePrivacy {
+  const privacy = getEpisodeLearningPrivacy(episode);
+
+  if (!privacy) {
+    throw new SelfImprovementValidationError(`Episode ${episode.id} is missing learning privacy preflight metadata.`);
+  }
+
+  if (expected?.userId && privacy.userId !== expected.userId) {
+    throw new SelfImprovementValidationError(`Episode ${episode.id} crosses the expected user boundary.`);
+  }
+
+  if ("workspaceId" in (expected ?? {}) && privacy.workspaceId !== (expected?.workspaceId ?? null)) {
+    throw new SelfImprovementValidationError(`Episode ${episode.id} crosses the expected workspace boundary.`);
+  }
+
+  return privacy;
+}
+
 export type RecommendationReplayMode = "draft_only" | "review_required" | "approval_required" | "suggest";
 
 export type RecommendationInsight = {
@@ -254,6 +376,15 @@ export type RecommendationInsight = {
   score: number;
   replayMode: RecommendationReplayMode;
   rationale: string;
+  provenance: {
+    episodeIds: string[];
+    goalIds: string[];
+    taskIds: string[];
+    memoryIds: string[];
+    actionLogIds: string[];
+    evidenceRecordIds: string[];
+    graphRootIds: string[];
+  };
 };
 
 export type RecommendationReplayCase = {
@@ -365,6 +496,7 @@ export type WorkflowRecommendation = {
     score: number;
     lastSeenAt: string;
   };
+  provenance: RecommendationInsight["provenance"];
 };
 
 export type WorkflowRecommendationFilters = {
@@ -424,6 +556,34 @@ function normalizeRecommendationCapabilities(capabilities?: string[]): string[] 
   }
 
   return [...new Set(capabilities)].sort((left, right) => left.localeCompare(right));
+}
+
+function appendUnique(target: string[], values: Array<string | null | undefined>, limit = 20): void {
+  for (const value of values) {
+    if (!value || target.includes(value)) {
+      continue;
+    }
+
+    target.push(value);
+
+    if (target.length >= limit) {
+      return;
+    }
+  }
+}
+
+function buildGraphRootIds(params: {
+  goalIds: string[];
+  taskIds: string[];
+  memoryIds: string[];
+  actionLogIds: string[];
+}): string[] {
+  const roots: string[] = [];
+  appendUnique(roots, params.goalIds.map((id) => `goal:${id}`), 10);
+  appendUnique(roots, params.taskIds.map((id) => `task:${id}`), 10);
+  appendUnique(roots, params.memoryIds.map((id) => `memory:${id}`), 10);
+  appendUnique(roots, params.actionLogIds.map((id) => `action:${id}`), 10);
+  return roots;
 }
 
 function matchesRecommendationEvidenceFilters(
@@ -704,6 +864,7 @@ export function deriveRecommendationInsights(
       approvalCount: number;
       outcomeScoreTotal: number;
       lastSeenAt: string;
+      provenance: RecommendationInsight["provenance"];
     }
   >();
 
@@ -723,7 +884,16 @@ export function deriveRecommendationInsights(
       userCorrectionCount: 0,
       approvalCount: 0,
       outcomeScoreTotal: 0,
-      lastSeenAt: episode.timestamp
+      lastSeenAt: episode.timestamp,
+      provenance: {
+        episodeIds: [],
+        goalIds: [],
+        taskIds: [],
+        memoryIds: [],
+        actionLogIds: [],
+        evidenceRecordIds: [],
+        graphRootIds: []
+      }
     };
 
     existing.evidenceCount += 1;
@@ -750,6 +920,14 @@ export function deriveRecommendationInsights(
     if (episode.outcomeLink.userCorrection) {
       existing.userCorrectionCount += 1;
     }
+
+    appendUnique(existing.provenance.episodeIds, [episode.id], 20);
+    appendUnique(existing.provenance.goalIds, [episode.outcomeLink.goalId, episode.recommendation.sourceGoalId], 20);
+    appendUnique(existing.provenance.taskIds, [episode.outcomeLink.taskId, episode.recommendation.sourceTaskId], 20);
+    appendUnique(existing.provenance.memoryIds, episode.provenance.memoryIds, 20);
+    appendUnique(existing.provenance.actionLogIds, episode.provenance.actionLogIds, 20);
+    appendUnique(existing.provenance.evidenceRecordIds, episode.provenance.evidenceRecordIds, 20);
+    existing.provenance.graphRootIds = buildGraphRootIds(existing.provenance);
 
     grouped.set(episode.recommendation.key, existing);
   }
@@ -805,7 +983,16 @@ export function deriveRecommendationInsights(
           userCorrectionCount: entry.userCorrectionCount,
           averageConfidence,
           replayMode
-        })
+        }),
+        provenance: {
+          episodeIds: [...entry.provenance.episodeIds],
+          goalIds: [...entry.provenance.goalIds],
+          taskIds: [...entry.provenance.taskIds],
+          memoryIds: [...entry.provenance.memoryIds],
+          actionLogIds: [...entry.provenance.actionLogIds],
+          evidenceRecordIds: [...entry.provenance.evidenceRecordIds],
+          graphRootIds: [...entry.provenance.graphRootIds]
+        }
       } satisfies RecommendationInsight;
     })
     .sort((left, right) => {
@@ -1145,6 +1332,15 @@ export function deriveWorkflowRecommendations(
           negativeRate,
           score: insight.score,
           lastSeenAt: insight.lastSeenAt
+        },
+        provenance: {
+          episodeIds: [...insight.provenance.episodeIds],
+          goalIds: [...insight.provenance.goalIds],
+          taskIds: [...insight.provenance.taskIds],
+          memoryIds: [...insight.provenance.memoryIds],
+          actionLogIds: [...insight.provenance.actionLogIds],
+          evidenceRecordIds: [...insight.provenance.evidenceRecordIds],
+          graphRootIds: [...insight.provenance.graphRootIds]
         }
       } satisfies WorkflowRecommendation;
     });
@@ -1154,7 +1350,32 @@ export type ListEpisodesFilters = {
   year?: string;
   skill?: string;
   outcome?: EpisodeOutcome;
+  ownerUserId?: string;
+  workspaceId?: string;
+  includeExpired?: boolean;
+  now?: string;
   limit?: number;
+};
+
+export type LearningEpisodeScope = {
+  userId: string;
+  workspaceId: string | null;
+};
+
+export type LearningEpisodeRetentionParams = LearningEpisodeScope & {
+  now?: string;
+};
+
+export type LearningEpisodeDeleteParams = LearningEpisodeScope & {
+  now?: string;
+  expiredOnly?: boolean;
+};
+
+export type LearningEpisodeDeleteResult = {
+  userId: string;
+  workspaceId: string | null;
+  evaluatedAt: string;
+  deletedEpisodeCount: number;
 };
 
 export type SelfImprovementRepository = {
@@ -1166,6 +1387,9 @@ export type SelfImprovementRepository = {
   appendEpisode(episode: EpisodeRecord): Promise<EpisodeRecord>;
   getEpisode(id: string, yearHint?: string): Promise<EpisodeRecord | null>;
   listEpisodes(filters?: ListEpisodesFilters): Promise<EpisodeRecord[]>;
+  exportLearningEpisodes?(scope: LearningEpisodeScope): Promise<EpisodeRecord[]>;
+  deleteLearningEpisodes?(params: LearningEpisodeDeleteParams): Promise<LearningEpisodeDeleteResult>;
+  enforceLearningRetention?(params: LearningEpisodeRetentionParams): Promise<LearningEpisodeDeleteResult>;
   readWorkingMemory(): Promise<WorkingMemoryState>;
   writeCurrentSession(session: CurrentSession | null): Promise<CurrentSession | null>;
   writeLastError(error: LastError | null): Promise<LastError | null>;
@@ -1398,15 +1622,70 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
 
     const year = normalizeOptionalTrimmedString(filters.year);
     const skill = normalizeOptionalTrimmedString(filters.skill);
+    const ownerUserId = normalizeOptionalTrimmedString(filters.ownerUserId);
+    const workspaceId = normalizeOptionalTrimmedString(filters.workspaceId);
+    const now = normalizeOptionalTrimmedString(filters.now);
 
     return {
       year: year ? validateInput(YearSchema, year, "Episode year filter is invalid.") : undefined,
       skill,
       outcome: filters.outcome,
+      ownerUserId: ownerUserId ? validateInput(boundedString(120), ownerUserId, "Episode owner filter is invalid.") : undefined,
+      workspaceId: workspaceId ? validateInput(boundedString(120), workspaceId, "Episode workspace filter is invalid.") : undefined,
+      includeExpired: filters.includeExpired ?? false,
+      now: now ? validateInput(IsoDateTimeSchema, now, "Episode now filter is invalid.") : undefined,
       limit:
         filters.limit === undefined
           ? undefined
           : Math.max(1, Math.min(500, Math.trunc(validateInput(z.number().finite(), filters.limit, "Episode limit is invalid."))))
+    };
+  }
+
+  function learningPrivacyMatchesScope(
+    privacy: LearningEpisodePrivacy | null,
+    scope: LearningEpisodeScope
+  ): privacy is LearningEpisodePrivacy {
+    return privacy?.userId === scope.userId && privacy.workspaceId === scope.workspaceId;
+  }
+
+  function isLearningPrivacyExpired(privacy: LearningEpisodePrivacy, now: string): boolean {
+    const expiresAtMs = Date.parse(privacy.expiresAt);
+    const nowMs = Date.parse(now);
+
+    return Number.isFinite(expiresAtMs) && Number.isFinite(nowMs) && expiresAtMs <= nowMs;
+  }
+
+  async function deleteLearningEpisodes(params: LearningEpisodeDeleteParams): Promise<LearningEpisodeDeleteResult> {
+    const normalizedScope = {
+      userId: validateInput(boundedString(120), params.userId, "Learning delete user id is invalid."),
+      workspaceId: params.workspaceId ? validateInput(boundedString(120), params.workspaceId, "Learning delete workspace id is invalid.") : null
+    };
+    const evaluatedAt = params.now ?? new Date().toISOString();
+    const candidateFiles = await listEpisodeFiles();
+    let deletedEpisodeCount = 0;
+
+    for (const filePath of candidateFiles) {
+      const episode = await readEpisodeFile(filePath);
+      const privacy = getEpisodeLearningPrivacy(episode);
+
+      if (!learningPrivacyMatchesScope(privacy, normalizedScope)) {
+        continue;
+      }
+
+      assertEpisodeLearningPrivacyPreflight(episode, normalizedScope);
+
+      if (params.expiredOnly && !isLearningPrivacyExpired(privacy, evaluatedAt)) {
+        continue;
+      }
+
+      await unlink(filePath);
+      deletedEpisodeCount += 1;
+    }
+
+    return {
+      ...normalizedScope,
+      evaluatedAt,
+      deletedEpisodeCount
     };
   }
 
@@ -1460,7 +1739,14 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
 
       const slug = sanitizeSlug(`${validated.skill}-${validated.task}`);
       const datePrefix = validated.timestamp.slice(0, 10);
-      const filePath = resolveWithinBase("episodic", year, `${datePrefix}-${slug}.json`);
+      let filePath = resolveWithinBase("episodic", year, `${datePrefix}-${slug}.json`);
+
+      if (await pathExists(filePath)) {
+        const existingEpisodeAtPath = await readEpisodeFile(filePath);
+        if (existingEpisodeAtPath.id !== validated.id) {
+          filePath = resolveWithinBase("episodic", year, `${datePrefix}-${slug}-${sanitizeSlug(validated.id)}.json`);
+        }
+      }
 
       await mkdir(episodicYearPath(year), { recursive: true });
       await writeJsonFile(filePath, validated);
@@ -1502,12 +1788,63 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
           continue;
         }
 
+        if (normalizedFilters.ownerUserId && episode.provenance.ownerUserId !== normalizedFilters.ownerUserId) {
+          continue;
+        }
+
+        if (normalizedFilters.workspaceId && episode.provenance.workspaceId !== normalizedFilters.workspaceId) {
+          continue;
+        }
+
+        if (!normalizedFilters.includeExpired && episode.privacy.retention.expiresAt) {
+          const nowMs = Date.parse(normalizedFilters.now ?? new Date().toISOString());
+          const expiresAtMs = Date.parse(episode.privacy.retention.expiresAt);
+
+          if (Number.isFinite(nowMs) && Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs) {
+            continue;
+          }
+        }
+
         episodes.push(episode);
       }
 
       const sorted = episodes.sort((left, right) => right.timestamp.localeCompare(left.timestamp));
 
       return normalizedFilters.limit ? sorted.slice(0, normalizedFilters.limit) : sorted;
+    },
+
+    async exportLearningEpisodes(scope) {
+      const normalizedScope = {
+        userId: validateInput(boundedString(120), scope.userId, "Learning export user id is invalid."),
+        workspaceId: scope.workspaceId ? validateInput(boundedString(120), scope.workspaceId, "Learning export workspace id is invalid.") : null
+      };
+      const candidateFiles = await listEpisodeFiles();
+      const episodes: EpisodeRecord[] = [];
+
+      for (const filePath of candidateFiles) {
+        const episode = await readEpisodeFile(filePath);
+        const privacy = getEpisodeLearningPrivacy(episode);
+
+        if (!learningPrivacyMatchesScope(privacy, normalizedScope)) {
+          continue;
+        }
+
+        assertEpisodeLearningPrivacyPreflight(episode, normalizedScope);
+        episodes.push(episode);
+      }
+
+      return episodes.sort((left, right) => right.timestamp.localeCompare(left.timestamp));
+    },
+
+    async deleteLearningEpisodes(params) {
+      return deleteLearningEpisodes(params);
+    },
+
+    async enforceLearningRetention(params) {
+      return deleteLearningEpisodes({
+        ...params,
+        expiredOnly: true
+      });
     },
 
     async readWorkingMemory() {

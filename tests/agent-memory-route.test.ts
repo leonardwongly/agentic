@@ -233,6 +233,33 @@ describe("agent memory route", () => {
     expectNoStoreHeaders(response);
   });
 
+  it("rejects attempts to make agent route memory global", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const agent = buildCustomAgent(SYSTEM_USER_ID, "agent-memory-global-scope", "memory-global-scope");
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveAgent(agent);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await postAgentMemoriesRoute(
+      buildAuthorizedPostRequest("http://localhost/api/agents/agent-memory-global-scope/memories", {
+        category: "workflow",
+        content: "This should not be promoted into global memory from an agent route.",
+        agentScope: "global"
+      }),
+      {
+        params: Promise.resolve({ id: agent.id })
+      }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toContain("Agent memory scope must remain agent-scoped");
+    expectNoStoreHeaders(response);
+  });
+
   it("returns 404 for agents outside the current user's scope", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH

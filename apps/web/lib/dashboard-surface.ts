@@ -17,6 +17,19 @@ export type AdvancedDashboardSection = (typeof advancedDashboardSections)[number
 
 const dashboardOsSurfaces = [
   {
+    id: "cockpit",
+    label: "Cockpit",
+    routeBoundary: "#section-operate",
+    componentBoundary: "DashboardCockpitLanes",
+    sections: ["operate", "now", "approvals", "operations"],
+    states: {
+      loading: "Loading cockpit priorities.",
+      empty: "No operator priorities are open.",
+      error: "Cockpit priority state could not be loaded.",
+      permission: "Cockpit recovery actions require an authenticated operator."
+    }
+  },
+  {
     id: "command",
     label: "Command",
     routeBoundary: "#section-approvals",

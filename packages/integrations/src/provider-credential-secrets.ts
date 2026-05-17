@@ -18,9 +18,38 @@ export class ProviderCredentialSecretError extends Error {
 }
 
 export type ProviderCredentialSecretStore = {
-  encrypt(secret: string): EncryptedSecretEnvelope;
-  decrypt(envelope: EncryptedSecretEnvelope): string;
+  encrypt(secret: string, context?: ProviderCredentialSecretContext): EncryptedSecretEnvelope;
+  decrypt(envelope: EncryptedSecretEnvelope, context?: ProviderCredentialSecretContext): string;
 };
+
+export type ProviderCredentialSecretContext = {
+  credentialId: string;
+  userId: string;
+  kind: string;
+};
+
+function buildSecretAdditionalData(context: ProviderCredentialSecretContext | undefined): Buffer | null {
+  if (!context) {
+    return null;
+  }
+
+  const credentialId = context.credentialId.trim();
+  const userId = context.userId.trim();
+  const kind = context.kind.trim();
+
+  if (!credentialId || !userId || !kind) {
+    throw new ProviderCredentialSecretError("Provider secret context is incomplete.");
+  }
+
+  return Buffer.from(
+    JSON.stringify({
+      credentialId,
+      kind,
+      userId
+    }),
+    "utf8"
+  );
+}
 
 export function createProviderCredentialSecretStore(options?: {
   masterKey?: string;
@@ -42,7 +71,7 @@ export function createProviderCredentialSecretStore(options?: {
   );
 
   return {
-    encrypt(secret: string): EncryptedSecretEnvelope {
+    encrypt(secret: string, context?: ProviderCredentialSecretContext): EncryptedSecretEnvelope {
       if (secret.length === 0) {
         throw new ProviderCredentialSecretError("Provider secret cannot be empty.");
       }
@@ -53,6 +82,12 @@ export function createProviderCredentialSecretStore(options?: {
 
       const iv = crypto.randomBytes(PROVIDER_SECRET_IV_BYTES);
       const cipher = crypto.createCipheriv(PROVIDER_SECRET_ALGORITHM, derivedKey, iv);
+      const additionalData = buildSecretAdditionalData(context);
+
+      if (additionalData) {
+        cipher.setAAD(additionalData);
+      }
+
       const ciphertext = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
       const authTag = cipher.getAuthTag();
 
@@ -66,7 +101,7 @@ export function createProviderCredentialSecretStore(options?: {
       });
     },
 
-    decrypt(envelope: EncryptedSecretEnvelope): string {
+    decrypt(envelope: EncryptedSecretEnvelope, context?: ProviderCredentialSecretContext): string {
       const validated = EncryptedSecretEnvelopeSchema.parse(envelope);
 
       try {
@@ -75,6 +110,12 @@ export function createProviderCredentialSecretStore(options?: {
           derivedKey,
           Buffer.from(validated.iv, "base64")
         );
+        const additionalData = buildSecretAdditionalData(context);
+
+        if (additionalData) {
+          decipher.setAAD(additionalData);
+        }
+
         decipher.setAuthTag(Buffer.from(validated.authTag, "base64"));
 
         const plaintext = Buffer.concat([
@@ -92,4 +133,20 @@ export function createProviderCredentialSecretStore(options?: {
       }
     }
   };
+}
+
+export function decryptProviderCredentialSecret(params: {
+  store: ProviderCredentialSecretStore;
+  envelope: EncryptedSecretEnvelope;
+  context: ProviderCredentialSecretContext;
+}): string {
+  try {
+    return params.store.decrypt(params.envelope, params.context);
+  } catch (error) {
+    try {
+      return params.store.decrypt(params.envelope);
+    } catch {
+      throw error;
+    }
+  }
 }

@@ -412,8 +412,8 @@ describe("dashboard command center", () => {
     expect(model.approvalCount).toBe(1);
     expect(model.failureCount).toBe(4);
     expect(model.nextBestAction?.label).toBe("Open operations");
-    expect(model.priorities[0]?.title).toBe("Async execution issues");
-    expect(model.priorities.some((priority) => priority.title === "Decision backlog is accumulating")).toBe(true);
+    expect(model.priorities[0]?.title).toBe("Recover async execution");
+    expect(model.priorities.some((priority) => priority.title === "Resolve approval debt")).toBe(true);
     expect(model.roleViews.communications.description).toContain("Run inbox, follow-up, and escalation workflows");
   });
 

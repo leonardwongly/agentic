@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -31,6 +31,20 @@ const REQUIRED_HEADINGS = [
 ];
 
 const REQUIRED_TABLE_TERMS = ["Phase", "Outcome", "Key additions"];
+const PORTABLE_REFERENCE_SCAN_TARGETS = ["README.md", "docs", ".github", "config"];
+const PORTABLE_REFERENCE_TEXT_EXTENSIONS = new Set([".json", ".md", ".mdx", ".toml", ".yaml", ".yml"]);
+const NON_PORTABLE_REFERENCE_PATTERNS = [
+  {
+    id: "local-home-path",
+    pattern: /\/Users\/[^\s)`"']+/gu,
+    message: "Use a repo-relative path or GitHub URL instead of a local /Users path."
+  },
+  {
+    id: "codex-worktree-path",
+    pattern: /\.codex\/worktrees[^\s)`"']*/gu,
+    message: "Do not commit Codex worktree paths into docs or config evidence."
+  }
+];
 
 function isoWithoutMillis(date = new Date()) {
   return date.toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -145,6 +159,7 @@ export async function renderPdfSmoke(docxPath = paths.outputDocx) {
 }
 
 export async function validateDocx(docxPath = paths.outputDocx) {
+  const portableReferenceResult = await validatePortableDocReferences();
   const exists = await fileExists(docxPath);
 
   if (!exists) {
@@ -193,6 +208,7 @@ export async function validateDocx(docxPath = paths.outputDocx) {
     docxPath,
     fileSize: fileInfo.size,
     extractedMarkdownLength: extractedMarkdown.length,
+    portableReferences: portableReferenceResult,
     metadataNormalized: true,
     tocSmokePassed: extractedMarkdown.includes("Delivery Roadmap"),
     pdfSmoke
@@ -202,4 +218,92 @@ export async function validateDocx(docxPath = paths.outputDocx) {
 export async function cleanBuildArtifacts() {
   await rm(paths.outputDocx, { force: true });
   await rm(paths.outputPdf, { force: true });
+}
+
+async function collectPortableReferenceFiles(target, files = []) {
+  const targetInfo = await stat(target).catch(() => null);
+
+  if (!targetInfo) {
+    return files;
+  }
+
+  if (targetInfo.isDirectory()) {
+    const entries = await readdir(target, { withFileTypes: true });
+    for (const entry of entries) {
+      await collectPortableReferenceFiles(path.join(target, entry.name), files);
+    }
+    return files;
+  }
+
+  if (PORTABLE_REFERENCE_TEXT_EXTENSIONS.has(path.extname(target)) || path.basename(target) === "README.md") {
+    files.push(target);
+  }
+
+  return files;
+}
+
+export function findNonPortableReferences(content) {
+  const violations = [];
+  const lineStarts = [0];
+
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] === "\n") {
+      lineStarts.push(index + 1);
+    }
+  }
+
+  for (const definition of NON_PORTABLE_REFERENCE_PATTERNS) {
+    definition.pattern.lastIndex = 0;
+    for (const match of content.matchAll(definition.pattern)) {
+      const start = match.index ?? 0;
+      const lineIndex = lineStarts.findLastIndex(lineStart => lineStart <= start);
+      const lineStart = lineStarts[lineIndex] ?? 0;
+
+      violations.push({
+        id: definition.id,
+        value: match[0],
+        line: lineIndex + 1,
+        column: start - lineStart + 1,
+        message: definition.message
+      });
+    }
+  }
+
+  return violations;
+}
+
+export async function validatePortableDocReferences(options = {}) {
+  const root = options.root ?? paths.root;
+  const targets = options.targets ?? PORTABLE_REFERENCE_SCAN_TARGETS;
+  const files = [];
+  const violations = [];
+
+  for (const target of targets) {
+    await collectPortableReferenceFiles(path.resolve(root, target), files);
+  }
+
+  for (const file of files.sort()) {
+    const content = await readFile(file, "utf8");
+    const fileViolations = findNonPortableReferences(content);
+    const relativePath = path.relative(root, file);
+
+    for (const violation of fileViolations) {
+      violations.push({
+        ...violation,
+        file: relativePath
+      });
+    }
+  }
+
+  if (violations.length > 0) {
+    const details = violations
+      .map(violation => `${violation.file}:${violation.line}:${violation.column} ${violation.message} (${violation.value})`)
+      .join("\n");
+    throw new Error(`Found non-portable documentation references:\n${details}`);
+  }
+
+  return {
+    checkedFiles: files.length,
+    violations
+  };
 }

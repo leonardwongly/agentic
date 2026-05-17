@@ -5,7 +5,8 @@ import type {
   GoalBundle,
   OperatorProduct
 } from "@agentic/contracts";
-import type { DashboardData, DashboardDiagnostic } from "@agentic/repository";
+import type { DashboardData } from "@agentic/repository";
+import { buildOperatorPriorityModel, type OperatorPriority } from "./operator-priority-model";
 
 export type CommandCenterRole = "command" | "communications" | "executive";
 
@@ -106,155 +107,49 @@ function severityCountLabel(severity: CommandCenterPriority["severity"]): string
   return severity === "critical" ? "Critical" : "Attention";
 }
 
-function diagnosticPriority(diagnostic: DashboardDiagnostic): CommandCenterPriority {
-  const primaryTarget = diagnostic.targets[0];
-
-  return {
-    id: `diagnostic-${diagnostic.kind}`,
-    title: diagnostic.title,
-    summary: diagnostic.reasons[0] ?? `${pluralize(diagnostic.count, "signal")} need operator review.`,
-    severity: diagnostic.severity === "critical" ? "critical" : "attention",
-    kind: "failure",
-    countLabel: `${severityCountLabel(diagnostic.severity === "critical" ? "critical" : "attention")} · ${pluralize(diagnostic.count, "signal")}`,
-    action: {
-      id: `diagnostic-action-${diagnostic.kind}`,
-      label: primaryTarget?.label ?? "Open reliability view",
-      targetSection: primaryTarget?.section ?? "approvals",
-      targetItemId: primaryTarget?.itemId
-    }
-  };
+function mapOperatorPriorityKind(kind: OperatorPriority["kind"]): CommandCenterPriority["kind"] {
+  switch (kind) {
+    case "approval_debt":
+      return "approval";
+    case "connector_recovery":
+      return "connector";
+    case "autonomy_blocker":
+      return "automation";
+    case "blocked_work":
+    case "overdue_commitment":
+      return "blocked";
+    case "async_recovery":
+    case "diagnostic":
+      return "failure";
+  }
 }
 
 function buildPriorityList(data: DashboardData): CommandCenterPriority[] {
-  const pendingApprovals = findOpenApprovals(data.approvals);
-  const blockedCommitments = findOpenCommitments(data.commitments).filter(
-    (commitment) => commitment.status === "blocked" || commitment.status === "needs-review" || commitment.status === "stale"
-  );
-  const failedEvents = data.autopilotEvents.filter((event) => event.status === "failed");
-  const asyncExecution = data.operations?.asyncExecution;
-  const connectorHealth = data.operations?.connectorHealth;
-  const connectorIssue = connectorHealth?.items[0] ?? null;
-  const asyncIssue = asyncExecution?.items[0] ?? null;
-  const criticalDiagnostics = data.diagnostics.items.filter((item) => item.severity === "critical");
-  const warningDiagnostics = data.diagnostics.items.filter((item) => item.severity === "warning");
-  const priorities: CommandCenterPriority[] = [];
+  return buildOperatorPriorityModel(data).priorities.slice(0, 5).map((operatorPriority) => {
+    const primaryAction = operatorPriority.recoveryActions[0];
+    const severity: CommandCenterPriority["severity"] =
+      operatorPriority.severity === "critical" ? "critical" : "attention";
+    const actionLabel = primaryAction
+      ? primaryAction.sideEffecting
+        ? `Inspect ${operatorPriority.kind === "async_recovery" ? "operations" : "recovery"}`
+        : primaryAction.label
+      : "Open priority";
 
-  if (criticalDiagnostics.length > 0) {
-    priorities.push(...criticalDiagnostics.slice(0, 2).map(diagnosticPriority));
-  } else if (warningDiagnostics.length > 0) {
-    priorities.push(diagnosticPriority(warningDiagnostics[0]));
-  }
-
-  if (pendingApprovals.length > 0) {
-    const highestRiskApproval = pendingApprovals
-      .slice()
-      .sort((left, right) => right.riskClass.localeCompare(left.riskClass))[0];
-
-    priorities.push({
-      id: "pending-approvals",
-      title: "Decision backlog is accumulating",
-      summary:
-        highestRiskApproval !== undefined
-          ? `${highestRiskApproval.title} is waiting on a ${highestRiskApproval.riskClass} decision.`
-          : "Operator decisions are waiting in the approvals inbox.",
-      severity:
-        pendingApprovals.some((approval) => approval.riskClass === "R4" || approval.riskClass === "R3")
-          ? "critical"
-          : "attention",
-      kind: "approval",
-      countLabel: `${pluralize(pendingApprovals.length, "pending approval")}`,
+    return {
+      id: operatorPriority.id,
+      title: operatorPriority.title,
+      summary: operatorPriority.summary,
+      severity,
+      kind: mapOperatorPriorityKind(operatorPriority.kind),
+      countLabel: `${severityCountLabel(severity)} · ${operatorPriority.countLabel}`,
       action: {
-        id: "open-approvals",
-        label: "Review approvals",
-        targetSection: "approvals",
-        targetItemId: highestRiskApproval?.id
+        id: primaryAction?.id ?? `open-${operatorPriority.id}`,
+        label: actionLabel,
+        targetSection: primaryAction?.targetSection ?? operatorPriority.targetSection,
+        targetItemId: primaryAction?.targetItemId ?? operatorPriority.targetItemId
       }
-    });
-  }
-
-  if (blockedCommitments.length > 0) {
-    const blockedCommitment = blockedCommitments[0];
-
-    priorities.push({
-      id: "blocked-commitments",
-      title: "Blocked work is leading the queue",
-      summary: blockedCommitment.summary,
-      severity:
-        blockedCommitment.status === "needs-review" || blockedCommitment.status === "stale" ? "critical" : "attention",
-      kind: "blocked",
-      countLabel: `${pluralize(blockedCommitments.length, "blocked lane")}`,
-      action: {
-        id: "open-now-queue",
-        label: blockedCommitment.suggestedNextAction?.label ?? "Open now queue",
-        targetSection: blockedCommitment.suggestedNextAction?.section ?? "now",
-        targetItemId: blockedCommitment.suggestedNextAction?.itemId ?? blockedCommitment.id
-      }
-    });
-  }
-
-  if (asyncIssue) {
-    priorities.push({
-      id: "async-execution",
-      title: "Async execution needs recovery",
-      summary: asyncIssue.summary,
-      severity: asyncIssue.severity === "critical" ? "critical" : "attention",
-      kind: "failure",
-      countLabel: `${pluralize(asyncExecution?.issueCount ?? 0, "queue issue")}`,
-      action: {
-        id: "open-operations",
-        label: asyncIssue.target?.label ?? "Open operations",
-        targetSection: asyncIssue.target?.section ?? "operations",
-        targetItemId: asyncIssue.target?.itemId ?? asyncIssue.id
-      }
-    });
-  }
-
-  if (failedEvents.length > 0) {
-    priorities.push({
-      id: "autopilot-failures",
-      title: "Automation failures need bounded review",
-      summary: failedEvents[0]?.summary ?? "One or more autopilot events failed and need operator recovery.",
-      severity: "critical",
-      kind: "automation",
-      countLabel: `${pluralize(failedEvents.length, "failed event")}`,
-      action: {
-        id: "open-autopilot",
-        label: "Open autopilot",
-        targetSection: "autopilot",
-        targetItemId: failedEvents[0]?.id
-      }
-    });
-  }
-
-  if (connectorIssue) {
-    priorities.push({
-      id: "connector-health",
-      title: "Connector health is reducing trust",
-      summary: connectorIssue.summary,
-      severity: connectorIssue.severity === "critical" ? "critical" : "attention",
-      kind: "connector",
-      countLabel: `${pluralize(connectorHealth?.issueCount ?? 0, "connector issue")}`,
-      action: {
-        id: "open-connector-health",
-        label: connectorIssue.target.label,
-        targetSection: connectorIssue.target.section,
-        targetItemId: connectorIssue.target.itemId
-      }
-    });
-  }
-
-  return priorities
-    .sort((left, right) => {
-      const severityDelta =
-        (left.severity === "critical" ? 2 : 1) - (right.severity === "critical" ? 2 : 1);
-
-      if (severityDelta !== 0) {
-        return severityDelta * -1;
-      }
-
-      return left.title.localeCompare(right.title);
-    })
-    .slice(0, 5);
+    };
+  });
 }
 
 function toFocusArea(section: DashboardOperatingSection): CommandCenterFocusArea {

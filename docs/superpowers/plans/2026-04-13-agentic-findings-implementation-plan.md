@@ -2,7 +2,7 @@
 
 Date: 2026-04-13
 Status: In progress
-Source analysis: [.claude/docs/ai/agentic/10x/session-10.md](/Users/leonardwongly/Developer/Agentic/.claude/docs/ai/agentic/10x/session-10.md)
+Source analysis: [.claude/docs/ai/agentic/10x/session-10.md](https://github.com/leonardwongly/agentic/blob/main/.claude/docs/ai/agentic/10x/session-10.md)
 
 ## Quick Understanding
 

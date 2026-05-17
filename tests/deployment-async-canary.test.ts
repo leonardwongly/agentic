@@ -42,14 +42,21 @@ describe("deployment async canary", () => {
       pollIntervalMs: 10,
       timeoutMs: 30,
       idempotencyKey: "deploy-canary:test",
+      requestId: "canary-request-1",
+      traceId: "canary-trace-1",
       fetchImpl,
       wait
     });
 
-    expect(summary).toEqual({
+    expect(summary).toMatchObject({
       jobId: "job-1",
       attempts: 2,
-      statusUrl: "https://agentic.example.com/api/goals/jobs/job-1"
+      statusUrl: "https://agentic.example.com/api/goals/jobs/job-1",
+      requestId: "canary-request-1",
+      traceId: "canary-trace-1",
+      idempotencyKey: "deploy-canary:test",
+      enqueueDurationMs: expect.any(Number),
+      pollDurationMs: expect.any(Number)
     });
 
     expect(fetchImpl).toHaveBeenNthCalledWith(
@@ -59,7 +66,9 @@ describe("deployment async canary", () => {
         method: "POST",
         headers: expect.objectContaining({
           [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
-          "x-idempotency-key": "deploy-canary:test"
+          "x-idempotency-key": "deploy-canary:test",
+          "x-request-id": "canary-request-1",
+          "x-trace-id": "canary-trace-1"
         })
       })
     );
@@ -68,7 +77,9 @@ describe("deployment async canary", () => {
       "https://agentic.example.com/api/goals/jobs/job-1",
       expect.objectContaining({
         headers: expect.objectContaining({
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "x-request-id": "canary-request-1",
+          "x-trace-id": "canary-trace-1"
         })
       })
     );

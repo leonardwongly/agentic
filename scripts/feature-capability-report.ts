@@ -1,11 +1,16 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { FEATURE_CAPABILITIES, summarizeFeatureCapabilities } from "../apps/web/lib/feature-capabilities";
+import {
+  collectFeatureCapabilityContractDrift,
+  formatFeatureCapabilityContractDrift
+} from "./lib/feature-capability-contracts";
 
 const repoRoot = process.cwd();
 const seenIds = new Set<string>();
 const duplicateIds: string[] = [];
 const missingContractFiles: string[] = [];
+const contractDrift = collectFeatureCapabilityContractDrift(FEATURE_CAPABILITIES, repoRoot);
 const summary = summarizeFeatureCapabilities();
 
 for (const feature of FEATURE_CAPABILITIES) {
@@ -48,6 +53,13 @@ if (missingContractFiles.length > 0) {
   }
 }
 
-if (duplicateIds.length > 0 || missingContractFiles.length > 0) {
+if (contractDrift.length > 0) {
+  console.error("Feature contract route-method drift detected:");
+  for (const drift of contractDrift) {
+    console.error(`- ${formatFeatureCapabilityContractDrift(drift)}`);
+  }
+}
+
+if (duplicateIds.length > 0 || missingContractFiles.length > 0 || contractDrift.length > 0) {
   process.exitCode = 1;
 }

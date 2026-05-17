@@ -10,7 +10,7 @@ import {
 } from "../scripts/lib/parallel-worktrees";
 
 describe("parallel worktree planning", () => {
-  const repoRoot = "/Users/leonardwongly/Developer/Agentic";
+  const repoRoot = "/workspace/Agentic";
 
   it("builds the default five-stream plan with a shared spine", () => {
     const plan = buildParallelWorktreePlan({
@@ -29,11 +29,11 @@ describe("parallel worktree planning", () => {
     ]);
     expect(plan.streams[0]).toMatchObject({
       branch: "feat/parallel-spine",
-      path: "/Users/leonardwongly/Developer/Agentic-spine"
+      path: "/workspace/Agentic-spine"
     });
     expect(plan.streams[4]).toMatchObject({
       branch: "feat/parallel-intelligence",
-      path: "/Users/leonardwongly/Developer/Agentic-intelligence"
+      path: "/workspace/Agentic-intelligence"
     });
   });
 
@@ -71,7 +71,7 @@ describe("parallel worktree planning", () => {
     );
 
     expect(parsed).toEqual({
-      worktreeRoot: "/Users/leonardwongly/Developer/parallel",
+      worktreeRoot: "/workspace/parallel",
       baseBranch: "release/2026.04",
       branchPrefix: "feat/worktree",
       includeSpine: false,
@@ -88,7 +88,7 @@ describe("parallel worktree planning", () => {
 
     const summary = renderParallelWorktreePlan(plan);
 
-    expect(summary).toContain("Repo root: /Users/leonardwongly/Developer/Agentic");
+    expect(summary).toContain("Repo root: /workspace/Agentic");
     expect(summary).toContain("CONNECTORS :: Connector readiness and certification");
     expect(summary).toContain("issues: LEO-72");
     expect(summary).toContain("dependsOn: spine");
@@ -177,9 +177,7 @@ describe("parallel worktree planning", () => {
     });
 
     expect(parsed).toEqual({
-      worktreeRoot: "/Users/leonardwongly/Developer/parallel",
-      baseBranch: undefined,
-      branchPrefix: undefined,
+      worktreeRoot: "/workspace/parallel",
       includeSpine: true,
       printOnly: false,
       json: true,
