@@ -135,6 +135,24 @@ export const EpisodeRecordSchema = z
   })
   .strict();
 
+export const LearningEpisodePrivacySchema = z
+  .object({
+    datasetId: z.literal("learning-capture-records"),
+    userId: boundedString(120),
+    workspaceId: z.string().trim().min(1).max(120).nullable().default(null),
+    captureSource: z.enum(["goal_bundle", "execution_outcome"]),
+    captureAllowed: z.literal(true),
+    optOutApplied: z.literal(false),
+    consentBasis: z.enum(["system", "derived", "explicit"]),
+    retentionDays: z.number().int().min(7).max(3650),
+    capturedAt: IsoDateTimeSchema,
+    expiresAt: IsoDateTimeSchema,
+    exportable: z.literal(true),
+    deletable: z.literal(true),
+    redacted: z.literal(true)
+  })
+  .strict();
+
 export const SessionStatusSchema = z.enum(["running", "completed", "failed", "cancelled"]);
 
 export const CurrentSessionSchema = z
@@ -192,6 +210,7 @@ export type RecommendationTrace = z.infer<typeof RecommendationTraceSchema>;
 export type OutcomeExecutionKind = z.infer<typeof OutcomeExecutionKindSchema>;
 export type OutcomeLink = z.infer<typeof OutcomeLinkSchema>;
 export type EpisodeRecord = z.infer<typeof EpisodeRecordSchema>;
+export type LearningEpisodePrivacy = z.infer<typeof LearningEpisodePrivacySchema>;
 export type CurrentSession = z.infer<typeof CurrentSessionSchema>;
 export type LastError = z.infer<typeof LastErrorSchema>;
 export type SessionEnd = z.infer<typeof SessionEndSchema>;
@@ -231,6 +250,41 @@ export class SelfImprovementStorageError extends Error {
     super(message);
     this.name = "SelfImprovementStorageError";
   }
+}
+
+export function getEpisodeLearningPrivacy(episode: EpisodeRecord): LearningEpisodePrivacy | null {
+  if (!episode.metadata || typeof episode.metadata !== "object" || Array.isArray(episode.metadata)) {
+    return null;
+  }
+
+  const raw = (episode.metadata as Record<string, JsonValue>).learningPrivacy;
+  const parsed = LearningEpisodePrivacySchema.safeParse(raw);
+
+  return parsed.success ? parsed.data : null;
+}
+
+export function assertEpisodeLearningPrivacyPreflight(
+  episode: EpisodeRecord,
+  expected?: {
+    userId?: string;
+    workspaceId?: string | null;
+  }
+): LearningEpisodePrivacy {
+  const privacy = getEpisodeLearningPrivacy(episode);
+
+  if (!privacy) {
+    throw new SelfImprovementValidationError(`Episode ${episode.id} is missing learning privacy preflight metadata.`);
+  }
+
+  if (expected?.userId && privacy.userId !== expected.userId) {
+    throw new SelfImprovementValidationError(`Episode ${episode.id} crosses the expected user boundary.`);
+  }
+
+  if ("workspaceId" in (expected ?? {}) && privacy.workspaceId !== (expected?.workspaceId ?? null)) {
+    throw new SelfImprovementValidationError(`Episode ${episode.id} crosses the expected workspace boundary.`);
+  }
+
+  return privacy;
 }
 
 export type RecommendationReplayMode = "draft_only" | "review_required" | "approval_required" | "suggest";
@@ -1157,6 +1211,27 @@ export type ListEpisodesFilters = {
   limit?: number;
 };
 
+export type LearningEpisodeScope = {
+  userId: string;
+  workspaceId: string | null;
+};
+
+export type LearningEpisodeRetentionParams = LearningEpisodeScope & {
+  now?: string;
+};
+
+export type LearningEpisodeDeleteParams = LearningEpisodeScope & {
+  now?: string;
+  expiredOnly?: boolean;
+};
+
+export type LearningEpisodeDeleteResult = {
+  userId: string;
+  workspaceId: string | null;
+  evaluatedAt: string;
+  deletedEpisodeCount: number;
+};
+
 export type SelfImprovementRepository = {
   readonly baseDir: string;
   seed(): Promise<void>;
@@ -1166,6 +1241,9 @@ export type SelfImprovementRepository = {
   appendEpisode(episode: EpisodeRecord): Promise<EpisodeRecord>;
   getEpisode(id: string, yearHint?: string): Promise<EpisodeRecord | null>;
   listEpisodes(filters?: ListEpisodesFilters): Promise<EpisodeRecord[]>;
+  exportLearningEpisodes?(scope: LearningEpisodeScope): Promise<EpisodeRecord[]>;
+  deleteLearningEpisodes?(params: LearningEpisodeDeleteParams): Promise<LearningEpisodeDeleteResult>;
+  enforceLearningRetention?(params: LearningEpisodeRetentionParams): Promise<LearningEpisodeDeleteResult>;
   readWorkingMemory(): Promise<WorkingMemoryState>;
   writeCurrentSession(session: CurrentSession | null): Promise<CurrentSession | null>;
   writeLastError(error: LastError | null): Promise<LastError | null>;
@@ -1410,6 +1488,54 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
     };
   }
 
+  function learningPrivacyMatchesScope(
+    privacy: LearningEpisodePrivacy | null,
+    scope: LearningEpisodeScope
+  ): privacy is LearningEpisodePrivacy {
+    return privacy?.userId === scope.userId && privacy.workspaceId === scope.workspaceId;
+  }
+
+  function isLearningPrivacyExpired(privacy: LearningEpisodePrivacy, now: string): boolean {
+    const expiresAtMs = Date.parse(privacy.expiresAt);
+    const nowMs = Date.parse(now);
+
+    return Number.isFinite(expiresAtMs) && Number.isFinite(nowMs) && expiresAtMs <= nowMs;
+  }
+
+  async function deleteLearningEpisodes(params: LearningEpisodeDeleteParams): Promise<LearningEpisodeDeleteResult> {
+    const normalizedScope = {
+      userId: validateInput(boundedString(120), params.userId, "Learning delete user id is invalid."),
+      workspaceId: params.workspaceId ? validateInput(boundedString(120), params.workspaceId, "Learning delete workspace id is invalid.") : null
+    };
+    const evaluatedAt = params.now ?? new Date().toISOString();
+    const candidateFiles = await listEpisodeFiles();
+    let deletedEpisodeCount = 0;
+
+    for (const filePath of candidateFiles) {
+      const episode = await readEpisodeFile(filePath);
+      const privacy = getEpisodeLearningPrivacy(episode);
+
+      if (!learningPrivacyMatchesScope(privacy, normalizedScope)) {
+        continue;
+      }
+
+      assertEpisodeLearningPrivacyPreflight(episode, normalizedScope);
+
+      if (params.expiredOnly && !isLearningPrivacyExpired(privacy, evaluatedAt)) {
+        continue;
+      }
+
+      await unlink(filePath);
+      deletedEpisodeCount += 1;
+    }
+
+    return {
+      ...normalizedScope,
+      evaluatedAt,
+      deletedEpisodeCount
+    };
+  }
+
   return {
     baseDir,
 
@@ -1508,6 +1634,40 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
       const sorted = episodes.sort((left, right) => right.timestamp.localeCompare(left.timestamp));
 
       return normalizedFilters.limit ? sorted.slice(0, normalizedFilters.limit) : sorted;
+    },
+
+    async exportLearningEpisodes(scope) {
+      const normalizedScope = {
+        userId: validateInput(boundedString(120), scope.userId, "Learning export user id is invalid."),
+        workspaceId: scope.workspaceId ? validateInput(boundedString(120), scope.workspaceId, "Learning export workspace id is invalid.") : null
+      };
+      const candidateFiles = await listEpisodeFiles();
+      const episodes: EpisodeRecord[] = [];
+
+      for (const filePath of candidateFiles) {
+        const episode = await readEpisodeFile(filePath);
+        const privacy = getEpisodeLearningPrivacy(episode);
+
+        if (!learningPrivacyMatchesScope(privacy, normalizedScope)) {
+          continue;
+        }
+
+        assertEpisodeLearningPrivacyPreflight(episode, normalizedScope);
+        episodes.push(episode);
+      }
+
+      return episodes.sort((left, right) => right.timestamp.localeCompare(left.timestamp));
+    },
+
+    async deleteLearningEpisodes(params) {
+      return deleteLearningEpisodes(params);
+    },
+
+    async enforceLearningRetention(params) {
+      return deleteLearningEpisodes({
+        ...params,
+        expiredOnly: true
+      });
     },
 
     async readWorkingMemory() {

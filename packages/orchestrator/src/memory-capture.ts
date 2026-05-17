@@ -1,12 +1,25 @@
 import crypto from "node:crypto";
-import { type ActorContext, type GoalBundle, type MemoryRecord, type Task } from "@agentic/contracts";
+import { type ActorContext, type GoalBundle, type MemoryRecord, type Task, type WorkspaceGovernance } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
+import {
+  applyLearningPrivacyToMemoryRecord,
+  evaluateLearningPrivacyPreflight,
+  redactLearningCaptureJson,
+  redactLearningCaptureText,
+  type LearningCaptureSource,
+  type LearningPrivacyMetadata
+} from "@agentic/policy";
 import { type EpisodeRecord, EpisodeRecordSchema } from "@agentic/self-improvement-memory";
 import type { ExecutionResult } from "./execution-dispatch";
 
 export type CapturedMemories = {
   memories: MemoryRecord[];
   episodes: EpisodeRecord[];
+};
+
+export type LearningCapturePrivacyOptions = {
+  governance?: WorkspaceGovernance | null;
+  now?: string;
 };
 
 function summarizeExecutionDetail(detail: string): string {
@@ -434,10 +447,74 @@ function buildExecutionEpisodes(bundle: GoalBundle, results: ExecutionResult[]):
   });
 }
 
+function applyLearningPrivacyToEpisode(
+  episode: EpisodeRecord,
+  metadata: LearningPrivacyMetadata
+): EpisodeRecord {
+  return EpisodeRecordSchema.parse({
+    ...episode,
+    task: redactLearningCaptureText(episode.task),
+    situation: redactLearningCaptureText(episode.situation),
+    rootCause: episode.rootCause ? redactLearningCaptureText(episode.rootCause) : null,
+    solution: redactLearningCaptureText(episode.solution),
+    lesson: redactLearningCaptureText(episode.lesson),
+    recommendation: episode.recommendation
+      ? {
+          ...episode.recommendation,
+          rationale: episode.recommendation.rationale
+            ? redactLearningCaptureText(episode.recommendation.rationale)
+            : null
+        }
+      : null,
+    outcomeLink: episode.outcomeLink
+      ? {
+          ...episode.outcomeLink,
+          notes: episode.outcomeLink.notes ? redactLearningCaptureText(episode.outcomeLink.notes) : null
+        }
+      : null,
+    metadata: {
+      ...(redactLearningCaptureJson(episode.metadata) as Record<string, unknown>),
+      userId: metadata.userId,
+      workspaceId: metadata.workspaceId,
+      learningPrivacy: metadata
+    }
+  });
+}
+
+function applyLearningPrivacyControls(params: {
+  bundle: GoalBundle;
+  userId: string;
+  actorContext: ActorContext | null;
+  source: LearningCaptureSource;
+  captured: CapturedMemories;
+  options?: LearningCapturePrivacyOptions;
+  executionResultTaskIds?: string[];
+}): CapturedMemories {
+  const preflight = evaluateLearningPrivacyPreflight({
+    bundle: params.bundle,
+    userId: params.userId,
+    actorContext: params.actorContext,
+    governance: params.options?.governance ?? null,
+    source: params.source,
+    now: params.options?.now,
+    executionResultTaskIds: params.executionResultTaskIds
+  });
+
+  if (!preflight.allowed) {
+    return { memories: [], episodes: [] };
+  }
+
+  return {
+    memories: params.captured.memories.map((memory) => applyLearningPrivacyToMemoryRecord(memory, preflight)),
+    episodes: params.captured.episodes.map((episode) => applyLearningPrivacyToEpisode(episode, preflight.metadata))
+  };
+}
+
 export function captureMemoriesFromBundle(
   bundle: GoalBundle,
   userId: string,
-  actorContext: ActorContext | null = null
+  actorContext: ActorContext | null = null,
+  options?: LearningCapturePrivacyOptions
 ): CapturedMemories {
   const memories: MemoryRecord[] = [];
 
@@ -451,14 +528,22 @@ export function captureMemoriesFromBundle(
 
   const episodes = buildEpisodes(bundle);
 
-  return { memories, episodes };
+  return applyLearningPrivacyControls({
+    bundle,
+    userId,
+    actorContext,
+    source: "goal_bundle",
+    captured: { memories, episodes },
+    options
+  });
 }
 
 export function captureExecutionOutcomeSignals(
   bundle: GoalBundle,
   userId: string,
   results: ExecutionResult[],
-  actorContext: ActorContext | null = null
+  actorContext: ActorContext | null = null,
+  options?: LearningCapturePrivacyOptions
 ): CapturedMemories {
   if (results.length === 0) {
     return { memories: [], episodes: [] };
@@ -471,8 +556,16 @@ export function captureExecutionOutcomeSignals(
   }
   memories.push(...extractExecutionFailureMemories(bundle, userId, results, actorContext));
 
-  return {
-    memories,
-    episodes: buildExecutionEpisodes(bundle, results)
-  };
+  return applyLearningPrivacyControls({
+    bundle,
+    userId,
+    actorContext,
+    source: "execution_outcome",
+    captured: {
+      memories,
+      episodes: buildExecutionEpisodes(bundle, results)
+    },
+    options,
+    executionResultTaskIds: results.map((result) => result.taskId)
+  });
 }

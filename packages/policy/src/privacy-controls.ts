@@ -1,4 +1,12 @@
-import { privacyOperationKindValues, type PrivacyOperationKind } from "@agentic/contracts";
+import {
+  enterpriseWorkspaceGovernanceDefaults,
+  privacyOperationKindValues,
+  type ActorContext,
+  type GoalBundle,
+  type MemoryRecord,
+  type PrivacyOperationKind,
+  type WorkspaceGovernance
+} from "@agentic/contracts";
 import { z } from "zod";
 import privacyControlRegistrySource from "../../../config/privacy/data-controls.json";
 
@@ -49,6 +57,289 @@ export type PrivacyClassification = z.infer<typeof PrivacyClassificationSchema>;
 export type PrivacyDataset = z.infer<typeof PrivacyDatasetSchema>;
 export type PrivacyControlRegistry = z.infer<typeof PrivacyControlRegistrySchema>;
 export type PrivacyTokenizationStrategy = z.infer<typeof TokenizationStrategySchema>;
+
+export const LEARNING_CAPTURE_DATASET_ID = "learning-capture-records" as const;
+
+export type LearningCaptureSource = "goal_bundle" | "execution_outcome";
+
+export type LearningPrivacyMetadata = {
+  datasetId: typeof LEARNING_CAPTURE_DATASET_ID;
+  userId: string;
+  workspaceId: string | null;
+  captureSource: LearningCaptureSource;
+  captureAllowed: true;
+  optOutApplied: false;
+  consentBasis: "system" | "derived" | "explicit";
+  retentionDays: number;
+  capturedAt: string;
+  expiresAt: string;
+  exportable: true;
+  deletable: true;
+  redacted: true;
+};
+
+export type LearningPrivacyPreflight =
+  | {
+      allowed: true;
+      metadata: LearningPrivacyMetadata;
+      memoryRetention: {
+        reviewAt: string;
+        expiryAt: string;
+      };
+    }
+  | {
+      allowed: false;
+      reason: string;
+      metadata: {
+        datasetId: typeof LEARNING_CAPTURE_DATASET_ID;
+        userId: string;
+        workspaceId: string | null;
+        captureSource: LearningCaptureSource;
+        captureAllowed: false;
+        optOutApplied: true;
+        evaluatedAt: string;
+      };
+    };
+
+type LearningCaptureBoundaryParams = {
+  bundle: GoalBundle;
+  userId: string;
+  actorContext: ActorContext | null;
+  executionResultTaskIds?: string[];
+};
+
+const SECRET_ASSIGNMENT_PATTERN =
+  /\b(api[_-]?key|authorization|bearer|cookie|password|secret|session[_-]?id|token)\b\s*[:=]\s*([^\s,;"')\]}]+)/giu;
+const BEARER_TOKEN_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gu;
+const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
+const PRIVATE_KEY_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu;
+const SENSITIVE_METADATA_KEY_PATTERN = /\b(api[_-]?key|authorization|cookie|password|secret|session[_-]?id|token)\b/iu;
+
+function addDays(isoTimestamp: string, days: number): string {
+  const timestampMs = Date.parse(isoTimestamp);
+  const safeTimestampMs = Number.isFinite(timestampMs) ? timestampMs : Date.now();
+
+  return new Date(safeTimestampMs + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function earliestIso(left: string | null | undefined, right: string): string {
+  if (!left) {
+    return right;
+  }
+
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+
+  if (!Number.isFinite(leftMs)) {
+    return right;
+  }
+
+  if (!Number.isFinite(rightMs)) {
+    return left;
+  }
+
+  return leftMs <= rightMs ? left : right;
+}
+
+function resolveLearningRetentionDays(governance: WorkspaceGovernance | null | undefined): number {
+  return Math.max(7, Math.min(3650, governance?.retentionDays ?? enterpriseWorkspaceGovernanceDefaults.retentionDays));
+}
+
+function resolveLearningConsentBasis(actorContext: ActorContext | null): LearningPrivacyMetadata["consentBasis"] {
+  if (actorContext?.initiator.kind === "human") {
+    return "explicit";
+  }
+
+  return actorContext ? "derived" : "system";
+}
+
+function isLearningCaptureOptedOut(governance: WorkspaceGovernance | null | undefined): boolean {
+  const shadowReplayPolicy = governance?.shadowReplayPolicy ?? enterpriseWorkspaceGovernanceDefaults.shadowReplayPolicy;
+
+  return !shadowReplayPolicy.enabled || shadowReplayPolicy.promotionMode === "disabled";
+}
+
+function validateLearningCaptureBoundary(params: LearningCaptureBoundaryParams): string | null {
+  const { bundle, userId, actorContext } = params;
+
+  if (bundle.goal.userId !== userId) {
+    return `Goal ${bundle.goal.id} belongs to a different user.`;
+  }
+
+  if (bundle.workflow.goalId !== bundle.goal.id) {
+    return `Workflow ${bundle.workflow.id} is not scoped to goal ${bundle.goal.id}.`;
+  }
+
+  if ((bundle.workflow.workspaceId ?? null) !== (bundle.goal.workspaceId ?? null)) {
+    return `Workflow ${bundle.workflow.id} crosses workspace boundaries.`;
+  }
+
+  if (actorContext && actorContext.subjectUserId !== userId) {
+    return `Actor context subject ${actorContext.subjectUserId} does not match capture user ${userId}.`;
+  }
+
+  const taskIds = new Set(bundle.tasks.map((task) => task.id));
+  for (const task of bundle.tasks) {
+    if (task.goalId !== bundle.goal.id || task.workflowId !== bundle.workflow.id) {
+      return `Task ${task.id} crosses goal or workflow boundaries.`;
+    }
+  }
+
+  for (const approval of bundle.approvals) {
+    if (approval.goalId !== bundle.goal.id || !taskIds.has(approval.taskId)) {
+      return `Approval ${approval.id} is not scoped to this goal bundle.`;
+    }
+  }
+
+  for (const artifact of bundle.artifacts) {
+    if (artifact.goalId !== bundle.goal.id || (artifact.taskId && !taskIds.has(artifact.taskId))) {
+      return `Artifact ${artifact.id} is not scoped to this goal bundle.`;
+    }
+  }
+
+  for (const log of bundle.actionLogs) {
+    if (log.goalId !== bundle.goal.id || (log.workflowId && log.workflowId !== bundle.workflow.id)) {
+      return `Action log ${log.id} is not scoped to this goal bundle.`;
+    }
+  }
+
+  for (const taskId of params.executionResultTaskIds ?? []) {
+    if (!taskIds.has(taskId)) {
+      return `Execution result task ${taskId} is not scoped to this goal bundle.`;
+    }
+  }
+
+  return null;
+}
+
+export function redactLearningCaptureText(value: string): string {
+  return value
+    .replace(PRIVATE_KEY_PATTERN, "[redacted-private-key]")
+    .replace(BEARER_TOKEN_PATTERN, "Bearer [redacted-token]")
+    .replace(SECRET_ASSIGNMENT_PATTERN, "$1=[redacted-secret]")
+    .replace(EMAIL_PATTERN, "[redacted-email]");
+}
+
+export function redactLearningCaptureJson(value: unknown, depth = 0): unknown {
+  if (depth > 4) {
+    return "[redacted-depth-limit]";
+  }
+
+  if (typeof value === "string") {
+    return redactLearningCaptureText(value);
+  }
+
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactLearningCaptureJson(item, depth + 1));
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+      key,
+      SENSITIVE_METADATA_KEY_PATTERN.test(key) ? "[redacted-secret]" : redactLearningCaptureJson(entry, depth + 1)
+    ])
+  );
+}
+
+export function evaluateLearningPrivacyPreflight(params: {
+  bundle: GoalBundle;
+  userId: string;
+  actorContext: ActorContext | null;
+  governance?: WorkspaceGovernance | null;
+  source: LearningCaptureSource;
+  now?: string;
+  executionResultTaskIds?: string[];
+}): LearningPrivacyPreflight {
+  const evaluatedAt = params.now ?? new Date().toISOString();
+  const workspaceId = params.bundle.goal.workspaceId ?? null;
+  const boundaryError = validateLearningCaptureBoundary({
+    bundle: params.bundle,
+    userId: params.userId,
+    actorContext: params.actorContext,
+    executionResultTaskIds: params.executionResultTaskIds
+  });
+
+  if (boundaryError) {
+    return {
+      allowed: false,
+      reason: boundaryError,
+      metadata: {
+        datasetId: LEARNING_CAPTURE_DATASET_ID,
+        userId: params.userId,
+        workspaceId,
+        captureSource: params.source,
+        captureAllowed: false,
+        optOutApplied: true,
+        evaluatedAt
+      }
+    };
+  }
+
+  if (isLearningCaptureOptedOut(params.governance)) {
+    return {
+      allowed: false,
+      reason: "Workspace learning capture is disabled by shadow replay governance.",
+      metadata: {
+        datasetId: LEARNING_CAPTURE_DATASET_ID,
+        userId: params.userId,
+        workspaceId,
+        captureSource: params.source,
+        captureAllowed: false,
+        optOutApplied: true,
+        evaluatedAt
+      }
+    };
+  }
+
+  const retentionDays = resolveLearningRetentionDays(params.governance);
+  const expiresAt = addDays(evaluatedAt, retentionDays);
+  const reviewAt = addDays(evaluatedAt, Math.max(1, Math.floor(retentionDays / 2)));
+
+  return {
+    allowed: true,
+    metadata: {
+      datasetId: LEARNING_CAPTURE_DATASET_ID,
+      userId: params.userId,
+      workspaceId,
+      captureSource: params.source,
+      captureAllowed: true,
+      optOutApplied: false,
+      consentBasis: resolveLearningConsentBasis(params.actorContext),
+      retentionDays,
+      capturedAt: evaluatedAt,
+      expiresAt,
+      exportable: true,
+      deletable: true,
+      redacted: true
+    },
+    memoryRetention: {
+      reviewAt,
+      expiryAt: expiresAt
+    }
+  };
+}
+
+export function applyLearningPrivacyToMemoryRecord(
+  record: MemoryRecord,
+  preflight: Extract<LearningPrivacyPreflight, { allowed: true }>
+): MemoryRecord {
+  return {
+    ...record,
+    sensitivity: "learning-redacted",
+    content: redactLearningCaptureText(record.content),
+    reviewAt: earliestIso(record.reviewAt, preflight.memoryRetention.reviewAt),
+    expiryAt: earliestIso(record.expiryAt, preflight.memoryRetention.expiryAt),
+    contextPacketConsent: record.contextPacketConsent ?? {
+      basis: preflight.metadata.consentBasis,
+      grantedBy: record.actorContext?.initiator.userId ?? record.userId,
+      grantedAt: preflight.metadata.capturedAt
+    }
+  };
+}
 
 export type PrivacyControlSummary = {
   registryVersion: number;

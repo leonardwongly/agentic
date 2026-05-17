@@ -2,6 +2,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  assertEpisodeLearningPrivacyPreflight,
   buildPolicyLearningValidation,
   buildRecommendationPerformanceReport,
   buildRecommendationReplayReport,
@@ -9,6 +10,7 @@ import {
   deriveRecommendationInsights,
   deriveWorkflowRecommendations,
   EpisodeRecordSchema,
+  getEpisodeLearningPrivacy,
   SemanticPatternSchema,
   SelfImprovementConflictError,
   SelfImprovementIntegrityError,
@@ -50,6 +52,25 @@ function buildEpisode(overrides: Partial<ReturnType<typeof EpisodeRecordSchema.p
     },
     ...overrides
   });
+}
+
+function buildLearningPrivacy(overrides: Record<string, unknown> = {}) {
+  return {
+    datasetId: "learning-capture-records",
+    userId: "user-1",
+    workspaceId: "workspace-1",
+    captureSource: "goal_bundle",
+    captureAllowed: true,
+    optOutApplied: false,
+    consentBasis: "explicit",
+    retentionDays: 30,
+    capturedAt: "2026-04-02T09:00:00.000Z",
+    expiresAt: "2026-05-02T09:00:00.000Z",
+    exportable: true,
+    deletable: true,
+    redacted: true,
+    ...overrides
+  };
 }
 
 function buildSemanticPattern(overrides: Partial<ReturnType<typeof SemanticPatternSchema.parse>> = {}) {
@@ -256,6 +277,105 @@ describe("self improvement memory repository", () => {
     await expect(context.repository.listEpisodes({ year: "../2026" })).rejects.toBeInstanceOf(
       SelfImprovementValidationError
     );
+  });
+
+  it("validates learning privacy preflight metadata for auto-captured episodes", () => {
+    const episode = buildEpisode({
+      metadata: {
+        source: "unit-test",
+        learningPrivacy: buildLearningPrivacy()
+      }
+    });
+
+    expect(getEpisodeLearningPrivacy(episode)).toMatchObject({
+      datasetId: "learning-capture-records",
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      captureAllowed: true,
+      exportable: true,
+      deletable: true,
+      redacted: true
+    });
+    expect(() =>
+      assertEpisodeLearningPrivacyPreflight(episode, {
+        userId: "user-1",
+        workspaceId: "workspace-1"
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertEpisodeLearningPrivacyPreflight(episode, {
+        userId: "user-2",
+        workspaceId: "workspace-1"
+      })
+    ).toThrow(SelfImprovementValidationError);
+    expect(() => assertEpisodeLearningPrivacyPreflight(buildEpisode())).toThrow(SelfImprovementValidationError);
+  });
+
+  it("exports and deletes only scoped learning episodes for privacy lifecycle operations", async () => {
+    const context = await createTempRepository();
+    tempDirs.push(context.tempDir);
+
+    const scopedEpisode = buildEpisode({
+      id: "ep-learning-scoped",
+      metadata: {
+        learningPrivacy: buildLearningPrivacy()
+      }
+    });
+    const otherWorkspaceEpisode = buildEpisode({
+      id: "ep-learning-other-workspace",
+      task: "Other workspace task",
+      metadata: {
+        learningPrivacy: buildLearningPrivacy({ workspaceId: "workspace-2" })
+      }
+    });
+    const expiredEpisode = buildEpisode({
+      id: "ep-learning-expired",
+      task: "Expired workspace task",
+      metadata: {
+        learningPrivacy: buildLearningPrivacy({ expiresAt: "2026-04-01T00:00:00.000Z" })
+      }
+    });
+
+    await context.repository.appendEpisode(scopedEpisode);
+    await context.repository.appendEpisode(otherWorkspaceEpisode);
+    await context.repository.appendEpisode(expiredEpisode);
+
+    const exported = await context.repository.exportLearningEpisodes!({
+      userId: "user-1",
+      workspaceId: "workspace-1"
+    });
+    expect(exported.map((episode) => episode.id).sort()).toEqual(["ep-learning-expired", "ep-learning-scoped"]);
+
+    await expect(
+      context.repository.enforceLearningRetention!({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        now: "2026-04-03T00:00:00.000Z"
+      })
+    ).resolves.toMatchObject({
+      deletedEpisodeCount: 1
+    });
+
+    await expect(context.repository.getEpisode("ep-learning-expired", "2026")).resolves.toBeNull();
+    await expect(context.repository.getEpisode("ep-learning-scoped", "2026")).resolves.toMatchObject({
+      id: "ep-learning-scoped"
+    });
+    await expect(context.repository.getEpisode("ep-learning-other-workspace", "2026")).resolves.toMatchObject({
+      id: "ep-learning-other-workspace"
+    });
+
+    await expect(
+      context.repository.deleteLearningEpisodes!({
+        userId: "user-1",
+        workspaceId: "workspace-1"
+      })
+    ).resolves.toMatchObject({
+      deletedEpisodeCount: 1
+    });
+    await expect(context.repository.getEpisode("ep-learning-scoped", "2026")).resolves.toBeNull();
+    await expect(context.repository.getEpisode("ep-learning-other-workspace", "2026")).resolves.toMatchObject({
+      id: "ep-learning-other-workspace"
+    });
   });
 
   it("fails closed when persisted files are corrupt", async () => {

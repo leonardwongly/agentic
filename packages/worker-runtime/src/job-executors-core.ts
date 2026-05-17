@@ -27,6 +27,7 @@ import {
 } from "@agentic/orchestrator";
 import type { AgenticRepository } from "@agentic/repository";
 import {
+  assertEpisodeLearningPrivacyPreflight,
   SelfImprovementConflictError,
   buildPolicyLearningValidation,
   type SelfImprovementRepository
@@ -125,6 +126,7 @@ export async function persistCapturedMemories(params: {
   actorContext: ActorContext | null;
   jobId: string;
   bundle: GoalBundle;
+  governance?: WorkspaceGovernance | null;
 }) {
   if (params.bundle.goal.status !== "completed") {
     return;
@@ -134,13 +136,20 @@ export async function persistCapturedMemories(params: {
     const captured = captureMemoriesFromBundle(
       params.bundle,
       params.userId,
-      params.actorContext ?? createSystemActorContext(params.userId)
+      params.actorContext ?? createSystemActorContext(params.userId),
+      {
+        governance: params.governance ?? null
+      }
     );
 
     await Promise.all(captured.memories.map((memory) => params.repository.saveMemory(memory)));
 
     for (const episode of captured.episodes) {
       try {
+        assertEpisodeLearningPrivacyPreflight(episode, {
+          userId: params.userId,
+          workspaceId: params.bundle.goal.workspaceId ?? null
+        });
         await params.selfImprovementRepository.appendEpisode(episode);
       } catch (error) {
         if (error instanceof SelfImprovementConflictError) {
@@ -199,7 +208,8 @@ export async function executeGoalCreateJob(params: {
     userId: job.userId,
     actorContext: job.actorContext,
     jobId: job.id,
-    bundle
+    bundle,
+    governance
   });
 }
 
@@ -291,7 +301,8 @@ export async function executeBriefingCreateJob(params: {
     userId: job.userId,
     actorContext: job.actorContext,
     jobId: job.id,
-    bundle
+    bundle,
+    governance
   });
 }
 
@@ -348,7 +359,8 @@ export async function runTemplateExecution(params: {
     userId: params.userId,
     actorContext: params.actorContext,
     jobId: params.jobId,
-    bundle
+    bundle,
+    governance: params.workspaceGovernance
   });
   return bundle;
 }
