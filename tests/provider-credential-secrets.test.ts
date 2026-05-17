@@ -1,5 +1,6 @@
 import {
   createProviderCredentialSecretStore,
+  decryptProviderCredentialSecret,
   ProviderCredentialSecretError
 } from "@agentic/integrations";
 
@@ -56,5 +57,50 @@ describe("provider credential secrets", () => {
 
     expect(() => store.decrypt(tamperedEnvelope)).toThrow(ProviderCredentialSecretError);
     expect(() => store.decrypt(tamperedEnvelope)).toThrow("Provider secret decryption failed.");
+  });
+
+  it("binds encrypted provider secrets to credential tenant context", () => {
+    const store = createProviderCredentialSecretStore({
+      masterKey: "test-provider-master-key"
+    });
+    const envelope = store.encrypt("refresh-token-123", {
+      credentialId: "google:workspace-1:acct-1",
+      userId: "user-1",
+      kind: "oauth_refresh_token"
+    });
+
+    expect(
+      store.decrypt(envelope, {
+        credentialId: "google:workspace-1:acct-1",
+        userId: "user-1",
+        kind: "oauth_refresh_token"
+      })
+    ).toBe("refresh-token-123");
+    expect(() =>
+      store.decrypt(envelope, {
+        credentialId: "google:workspace-1:acct-1",
+        userId: "user-2",
+        kind: "oauth_refresh_token"
+      })
+    ).toThrow("Provider secret decryption failed.");
+  });
+
+  it("keeps legacy unbound provider secrets readable during rollout", () => {
+    const store = createProviderCredentialSecretStore({
+      masterKey: "test-provider-master-key"
+    });
+    const envelope = store.encrypt("legacy-refresh-token");
+
+    expect(
+      decryptProviderCredentialSecret({
+        store,
+        envelope,
+        context: {
+          credentialId: "google:workspace-1:acct-1",
+          userId: "user-1",
+          kind: "oauth_refresh_token"
+        }
+      })
+    ).toBe("legacy-refresh-token");
   });
 });

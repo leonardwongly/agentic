@@ -2,7 +2,8 @@ import { nowIso } from "@agentic/contracts";
 import {
   exchangeGoogleAuthorizationCode,
   fetchGoogleAccountProfile,
-  createProviderCredentialSecretStore
+  createProviderCredentialSecretStore,
+  decryptProviderCredentialSecret
 } from "@agentic/integrations";
 import { parseAuthorizedOAuthStateToken, requireApiSession } from "../../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
@@ -70,7 +71,15 @@ export async function GET(request: Request) {
       : null;
     const refreshToken = exchanged.refreshToken ?? (
       existingSecretRecord
-        ? createProviderCredentialSecretStore().decrypt(existingSecretRecord.secret)
+        ? decryptProviderCredentialSecret({
+            store: createProviderCredentialSecretStore(),
+            envelope: existingSecretRecord.secret,
+            context: {
+              credentialId,
+              userId: principal.userId,
+              kind: "oauth_refresh_token"
+            }
+          })
         : null
     );
 
@@ -113,7 +122,11 @@ export async function GET(request: Request) {
       credentialId: credential.id,
       userId: principal.userId,
       kind: "oauth_refresh_token",
-      secret: createProviderCredentialSecretStore().encrypt(refreshToken),
+      secret: createProviderCredentialSecretStore().encrypt(refreshToken, {
+        credentialId: credential.id,
+        userId: principal.userId,
+        kind: "oauth_refresh_token"
+      }),
       createdAt: existingSecretRecord?.createdAt ?? timestamp,
       updatedAt: timestamp
     });
