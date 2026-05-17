@@ -17,7 +17,8 @@ The checked-in manifest lives at `config/remediation/aos-tracker.json`.
 
 It records:
 
-- `AOS-00` through `AOS-18`
+- a required baseline of `AOS-00` through `AOS-18`
+- a scalable item ID policy for later generated `AOS-*` plan items
 - GitHub issue numbers
 - ownership lanes
 - priorities
@@ -37,6 +38,8 @@ Verify the manifest against the live GitHub tracker:
 npm run remediation:verify
 ```
 
+The tracker no longer treats the original 19-item baseline as the complete universe of valid remediation IDs. `config/remediation/aos-tracker.json` defines `itemIdPolicy.requiredIds` for the required baseline and `itemIdPolicy.acceptedPrefixes` for canonical generated IDs. Future items such as `AOS-19` and `AOS-100` may be added to the manifest or appear in live GitHub results without changing the dashboard script. Ambiguous padded IDs such as `AOS-010` remain invalid.
+
 ## Kickoff Branch Baseline
 
 Captured on 2026-04-28 after refreshing `origin` and fast-forwarding the local `feat/parallel-spine` worktree to `origin/feat/parallel-spine`.
@@ -48,7 +51,7 @@ Captured on 2026-04-28 after refreshing `origin` and fast-forwarding the local `
 | Divergence from `origin/main` | behind `42`, ahead `29` |
 | Divergence from `origin/feat/parallel-spine` | behind `0`, ahead `0` |
 | Working tree before AOS-00 edits | clean |
-| Live AOS issue coverage | `#11` through `#29`, representing `AOS-00` through `AOS-18` |
+| Live AOS issue coverage | `#11` through `#29`, representing required baseline `AOS-00` through `AOS-18`; later generated canonical `AOS-*` IDs are allowed by policy |
 
 ## Baseline Validation Commands
 
