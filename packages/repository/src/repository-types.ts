@@ -355,6 +355,7 @@ export type AgenticRepository = {
   listContextPacketMemory(params: {
     userId: string;
     agent?: AgentName;
+    agentId?: string;
     includeExpired?: boolean;
     allowedSensitivities?: string[];
     limit?: number;

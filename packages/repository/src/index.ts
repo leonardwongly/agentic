@@ -2406,6 +2406,7 @@ class FileRepository implements AgenticRepository {
   async listContextPacketMemory(params: {
     userId: string;
     agent?: AgentName;
+    agentId?: string;
     includeExpired?: boolean;
     allowedSensitivities?: string[];
     limit?: number;
@@ -2960,9 +2961,9 @@ class PostgresRepository implements AgenticRepository {
     await client.query(
       `
         insert into memory_records (
-          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, context_packet_consent, review_at, expiry_at, created_at, updated_at
+          id, user_id, category, memory_type, content, confidence, source, sensitivity, permissions, actor_context, context_packet_consent, agent_id, agent_scope, review_at, expiry_at, created_at, updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17)
         on conflict (id) do update
         set category = excluded.category,
             memory_type = excluded.memory_type,
@@ -2973,6 +2974,8 @@ class PostgresRepository implements AgenticRepository {
             permissions = excluded.permissions,
             actor_context = excluded.actor_context,
             context_packet_consent = excluded.context_packet_consent,
+            agent_id = excluded.agent_id,
+            agent_scope = excluded.agent_scope,
             review_at = excluded.review_at,
             expiry_at = excluded.expiry_at,
             updated_at = excluded.updated_at
@@ -2989,6 +2992,8 @@ class PostgresRepository implements AgenticRepository {
         JSON.stringify(memory.permissions),
         JSON.stringify(memory.actorContext),
         JSON.stringify(memory.contextPacketConsent),
+        memory.agentId,
+        memory.agentScope,
         memory.reviewAt,
         memory.expiryAt,
         memory.createdAt,
@@ -7067,6 +7072,8 @@ class PostgresRepository implements AgenticRepository {
         permissions: row.permissions ?? [],
         actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
         contextPacketConsent: row.context_packet_consent ?? null,
+        agentId: typeof row.agent_id === "string" ? row.agent_id : null,
+        agentScope: typeof row.agent_scope === "string" ? row.agent_scope : "global",
         reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
         createdAt: new Date(row.created_at).toISOString(),
@@ -7078,6 +7085,7 @@ class PostgresRepository implements AgenticRepository {
   async listContextPacketMemory(params: {
     userId: string;
     agent?: AgentName;
+    agentId?: string;
     includeExpired?: boolean;
     allowedSensitivities?: string[];
     limit?: number;
@@ -7127,6 +7135,8 @@ class PostgresRepository implements AgenticRepository {
         permissions: row.permissions ?? [],
         actorContext: row.actor_context ? ActorContextSchema.parse(row.actor_context) : null,
         contextPacketConsent: row.context_packet_consent ?? null,
+        agentId: typeof row.agent_id === "string" ? row.agent_id : null,
+        agentScope: typeof row.agent_scope === "string" ? row.agent_scope : "global",
         reviewAt: row.review_at ? new Date(row.review_at).toISOString() : null,
         expiryAt: row.expiry_at ? new Date(row.expiry_at).toISOString() : null,
         createdAt: new Date(row.created_at).toISOString(),
