@@ -15,6 +15,7 @@ import { GET as dashboardMemoriesRoute } from "../apps/web/app/api/dashboard/mem
 import { GET as dashboardSummaryRoute } from "../apps/web/app/api/dashboard/summary/route";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { expectNoStoreHeaders } from "./route-test-helpers";
+import { vi } from "vitest";
 
 function buildAuthorizedGetRequest(pathname: string) {
   return new Request(`http://localhost${pathname}`, {
@@ -430,5 +431,101 @@ describe("dashboard collection routes", () => {
     expect(firstPayload.page.items.some((item) => item.category.includes("private"))).toBe(false);
     expect(secondPayload.page.items.some((item) => item.category.includes("private"))).toBe(false);
     expect(firstPayloadBytes).toBeLessThan(12_000);
+  });
+
+  it("uses bounded repository page APIs instead of unbounded dashboard collection reads", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(
+      repository,
+      SYSTEM_USER_ID,
+      "Prepare a dashboard collection fixture that exercises bounded repository reads."
+    );
+    const createdAt = nowIso();
+
+    await repository.saveGoalBundle({
+      ...bundle,
+      artifacts: [
+        ...bundle.artifacts,
+        {
+          id: "artifact-bounded-contract",
+          goalId: bundle.goal.id,
+          artifactType: "summary",
+          title: "Bounded contract artifact",
+          content: "Bounded collection contract evidence.",
+          createdAt
+        }
+      ],
+      actionLogs: [
+        ...bundle.actionLogs,
+        {
+          id: "action-bounded-contract",
+          goalId: bundle.goal.id,
+          taskId: null,
+          workflowId: bundle.workflow.id,
+          actor: "orchestrator",
+          kind: "dashboard.bounded_contract",
+          message: "Bounded dashboard collection contract was exercised.",
+          details: {},
+          createdAt,
+          prevHash: null
+        }
+      ]
+    });
+    await repository.saveMemory(
+      createMemoryRecord({
+        userId: SYSTEM_USER_ID,
+        category: "bounded-dashboard-contract-memory",
+        memoryType: "observed",
+        content: "Bounded dashboard collection memory.",
+        confidence: 0.82,
+        source: "test",
+        sensitivity: "internal",
+        permissions: ["orchestrator"]
+      })
+    );
+    await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "goal_create",
+        payload: {
+          type: "goal_create",
+          goalId: bundle.goal.id,
+          workflowId: bundle.workflow.id,
+          request: "Create bounded dashboard collection job.",
+          workspaceId: null,
+          agentId: null,
+          metadata: {}
+        }
+      })
+    );
+
+    const unboundedRead = vi.fn(async () => {
+      throw new Error("Dashboard collection route attempted an unbounded repository read.");
+    });
+    vi.spyOn(repository, "listGoals").mockImplementation(unboundedRead as AgenticRepository["listGoals"]);
+    vi.spyOn(repository, "listApprovals").mockImplementation(unboundedRead as AgenticRepository["listApprovals"]);
+    vi.spyOn(repository, "listMemory").mockImplementation(unboundedRead as AgenticRepository["listMemory"]);
+    const listJobsSpy = vi.spyOn(repository, "listJobs");
+
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    const responses = await Promise.all([
+      dashboardApprovalsRoute(buildAuthorizedGetRequest("/api/dashboard/approvals?limit=5")),
+      dashboardCommitmentsRoute(buildAuthorizedGetRequest("/api/dashboard/commitments?limit=5")),
+      dashboardJobsRoute(buildAuthorizedGetRequest("/api/dashboard/jobs?limit=5")),
+      dashboardActivityRoute(buildAuthorizedGetRequest("/api/dashboard/activity?limit=5")),
+      dashboardMemoriesRoute(buildAuthorizedGetRequest("/api/dashboard/memories?limit=5")),
+      dashboardArtifactsRoute(buildAuthorizedGetRequest("/api/dashboard/artifacts?limit=5"))
+    ]);
+
+    for (const response of responses) {
+      expect(response.status).toBe(200);
+      expectNoStoreHeaders(response);
+    }
+    expect(unboundedRead).not.toHaveBeenCalled();
+    expect(listJobsSpy).toHaveBeenCalledWith(expect.objectContaining({ limit: 1_000 }));
   });
 });

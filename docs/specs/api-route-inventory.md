@@ -54,6 +54,9 @@ New route handlers must update this file in the same change unless they are dele
 | `/api/dashboard/recommendations` | `GET` | Authenticated UI/internal | Session or access key | Preview | Dashboard | Load workflow recommendation summaries. |
 | `/api/dashboard/recommendations/feedback` | `POST` | Authenticated UI/internal | Session or access key | Preview | Dashboard | Record recommendation feedback from the dashboard. |
 | `/api/dashboard/summary` | `GET` | Authenticated UI/internal | Session or access key | Preview | Dashboard | Load the primary dashboard snapshot summary. |
+
+Dashboard collection routes accept only their documented `limit`, `cursor`, `q`, `sort`, and route-specific filter keys. Page sizes are capped, cursors are sort-compatible, and repository page assembly uses bounded paged reads rather than direct full-collection reads for goals, approvals, memories, activity, artifacts, and jobs.
+
 | `/api/docs/jobs/:id` | `GET` | Worker/job | Session or access key | Stable | Docs runtime | Poll document render job status. |
 | `/api/docs/render` | `POST` | Authenticated UI/internal | Session or access key | Stable | Docs runtime | Enqueue reproducible document rendering. |
 | `/api/github/issues/app/sync` | `POST` | Integration boundary | Bearer sync secret | Stable | GitHub issue intake | Run GitHub App pull sync for allowlisted open issues and queue governed issue-intake jobs. |
