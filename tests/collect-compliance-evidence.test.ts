@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -93,6 +94,66 @@ describe("compliance evidence collector", () => {
         sha256: expect.any(String)
       })
     );
+  });
+
+  it("hashes large evidence artifacts without buffering the entire file", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "agentic-compliance-"));
+    const largeArtifact = Buffer.alloc(3 * 1024 * 1024 + 17);
+    for (let index = 0; index < largeArtifact.length; index += 1) {
+      largeArtifact[index] = index % 251;
+    }
+
+    writeFixture(root, "apps/web/lib/auth-runtime-state.ts");
+    writeFixture(root, "docs/runbooks/security-incident-response.md");
+    writeFixture(root, "tests/runtime-readiness.test.ts");
+    const artifactPath = path.join(root, "artifacts/build/agentic-image.tar");
+    mkdirSync(path.dirname(artifactPath), { recursive: true });
+    writeFileSync(artifactPath, largeArtifact);
+
+    const bundle = buildComplianceEvidenceBundle(
+      {
+        version: 1,
+        reviewedAt: "2026-04-18T00:00:00.000Z",
+        owners: ["platform-security"],
+        controls: [
+          {
+            id: "SUPPLY-01",
+            family: "Supply chain",
+            title: "Deployable image evidence",
+            objective: "Retain deployable image evidence.",
+            owner: "platform-security",
+            trustBoundaries: ["ci to artifact store"],
+            productSurfaces: ["release"],
+            codePaths: ["apps/web/lib/auth-runtime-state.ts"],
+            runbooks: ["docs/runbooks/security-incident-response.md"],
+            automatedChecks: [
+              {
+                id: "CHECK-RUNTIME",
+                title: "Runtime test",
+                command: "npm test -- runtime-readiness.test.ts",
+                sourcePaths: ["tests/runtime-readiness.test.ts"]
+              }
+            ],
+            evidenceArtifacts: [
+              {
+                path: "artifacts/build/agentic-image.tar",
+                description: "Container image tar",
+                required: true
+              }
+            ],
+            risks: ["unverified image"],
+            metrics: ["image artifact freshness"]
+          }
+        ]
+      },
+      {
+        cwd: root,
+        now: new Date("2026-04-18T12:00:00.000Z"),
+        requireArtifacts: true
+      }
+    );
+
+    expect(bundle.controls[0]?.evidenceArtifacts[0]?.sha256).toBe(createHash("sha256").update(largeArtifact).digest("hex"));
   });
 
   it("allows local generation without built artifacts when artifact enforcement is disabled", () => {
