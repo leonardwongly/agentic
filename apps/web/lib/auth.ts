@@ -84,6 +84,10 @@ function readCookieValue(cookieHeader: string | null | undefined, cookieName: st
 
 let _devKeyWarningEmitted = false;
 
+function isExplicitLocalDevKeyEnabled(): boolean {
+  return process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY?.trim().toLowerCase() === "true";
+}
+
 function resolveAccessKey(options?: {
   emitDevelopmentWarning?: boolean;
 }): { key: string | null; source: "env" | "development-fallback" | "missing" } {
@@ -93,11 +97,11 @@ function resolveAccessKey(options?: {
     return { key: configured, source: "env" };
   }
 
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && isExplicitLocalDevKeyEnabled()) {
     if (options?.emitDevelopmentWarning !== false && !_devKeyWarningEmitted) {
       console.warn(
         "[agentic] SECURITY WARNING: AGENTIC_ACCESS_KEY is not set. " +
-          "Using the well-known development fallback key. " +
+          "Using the explicitly enabled well-known development fallback key. " +
           "Do not expose this instance to external networks."
       );
       _devKeyWarningEmitted = true;

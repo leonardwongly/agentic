@@ -84,7 +84,8 @@ New route handlers must update this file in the same change unless they are dele
 | `/api/operations/recovery` | `POST` | Admin/governance | Session or access key | Preview | Operations tower | Run a bounded recovery or remediation action. |
 | `/api/operator-products` | `GET, POST` | Authenticated UI/internal | Session or access key | Preview | Operator products | List or select an operator product pack. |
 | `/api/provenance/graph` | `GET` | Authenticated UI/internal | Session or access key | Preview | Provenance | Load the provenance graph. |
-| `/api/ready` | `GET` | Public operational | None | Stable | Operations | Return readiness across auth, storage, queue, and connectors. |
+| `/api/ready` | `GET` | Public operational | None | Stable | Operations | Return a public-safe readiness summary and detailed-report pointer. |
+| `/api/ready/details` | `GET` | Authenticated UI/internal | Session or access key | Stable | Operations | Return detailed readiness across auth, storage, queue, and connectors. |
 | `/api/session` | `POST, DELETE` | Public operational | Access key for POST; session for DELETE | Stable | Auth | Create or clear the dashboard session. |
 | `/api/share/view` | `POST` | Public signed | Signed share token | Stable | Goal sharing | Read a public shared-goal projection. |
 | `/api/slack/notify` | `POST` | Integration boundary | Session or access key | Preview | Slack | Send an approval-safe Slack notification. |

@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import {
   ApiRouteError,
   authenticatedJson,
@@ -7,6 +8,7 @@ import {
   handleApiError,
   handleOperationalApiError,
   operationalJson,
+  parseJsonBody,
   withApiTelemetry
 } from "../apps/web/lib/api-response";
 import {
@@ -71,6 +73,22 @@ describe("api security headers", () => {
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(response.headers.get("content-disposition")).toBe("attachment; filename=\"export.json\"");
     expectNoStoreHeaders(response);
+  });
+
+  it("rejects oversized JSON request bodies before parsing", async () => {
+    const body = JSON.stringify({ value: "abcdef" });
+    const request = new Request("http://localhost/api/test", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body
+    });
+
+    await expect(parseJsonBody(request, z.object({ value: z.string() }), { maxBytes: body.length - 1 })).rejects.toMatchObject({
+      status: 413,
+      message: "Request body is too large."
+    });
   });
 
   it("finalizes raw telemetry responses with baseline security headers", async () => {

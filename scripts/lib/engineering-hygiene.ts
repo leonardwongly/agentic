@@ -429,19 +429,25 @@ export function evaluateFirstRunReadiness(options: {
         }
   );
 
-  checks.push(
-    options.env.AGENTIC_ACCESS_KEY?.trim()
-      ? {
-          id: "access-key",
-          status: "pass",
-          message: "AGENTIC_ACCESS_KEY is set for dashboard/API authentication."
-        }
-      : {
-          id: "access-key",
-          status: "warn",
-          message: "AGENTIC_ACCESS_KEY is not set; local development falls back to a development key only outside production."
-        }
-  );
+  if (options.env.AGENTIC_ACCESS_KEY?.trim()) {
+    checks.push({
+      id: "access-key",
+      status: "pass",
+      message: "AGENTIC_ACCESS_KEY is set for dashboard/API authentication."
+    });
+  } else if (options.env.AGENTIC_ENABLE_LOCAL_DEV_KEY?.trim().toLowerCase() === "true") {
+    checks.push({
+      id: "access-key",
+      status: "warn",
+      message: "AGENTIC_ENABLE_LOCAL_DEV_KEY enables the disposable local fallback key; set AGENTIC_ACCESS_KEY before sharing the runtime."
+    });
+  } else {
+    checks.push({
+      id: "access-key",
+      status: "warn",
+      message: "AGENTIC_ACCESS_KEY is not set; set it or explicitly opt in to AGENTIC_ENABLE_LOCAL_DEV_KEY for disposable local-only use."
+    });
+  }
 
   if (options.env.DATABASE_URL?.trim()) {
     checks.push({

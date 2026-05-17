@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createActionLog } from "@agentic/observability";
 import type { ActorContext, GoalBundle } from "@agentic/contracts";
 import { getServerSigningSecret } from "./auth";
+import { buildPublicUrl } from "./public-origin";
 import {
   GOAL_SHARE_DEFAULT_EXPIRY_DAYS,
   getGoalShareExpiryFromDays
@@ -150,7 +151,7 @@ export function verifyGoalShareToken(token: string, now = Date.now()): GoalShare
 }
 
 export function buildGoalShareUrl(requestUrl: string, token: string): string {
-  return new URL(`/share/${encodeURIComponent(token)}`, requestUrl).toString();
+  return buildPublicUrl(requestUrl, `/share/${encodeURIComponent(token)}`).toString();
 }
 
 export function fingerprintGoalShareToken(token: string): string {

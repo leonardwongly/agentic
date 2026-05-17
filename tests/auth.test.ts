@@ -44,6 +44,7 @@ describe("auth helpers", () => {
   const originalSharedAuthState = process.env.AGENTIC_SHARED_AUTH_STATE;
   const originalTrustProxyHeaders = process.env.AGENTIC_TRUST_PROXY_HEADERS;
   const originalAllowProcessLocalAuthState = process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
+  const originalEnableLocalDevKey = process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
   const databaseUrl = process.env.DATABASE_URL;
   const postgresIt = databaseUrl ? it : it.skip;
 
@@ -59,6 +60,11 @@ describe("auth helpers", () => {
     process.env.AGENTIC_SHARED_AUTH_STATE = originalSharedAuthState;
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = originalAllowProcessLocalAuthState;
+    if (originalEnableLocalDevKey === undefined) {
+      delete process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
+    } else {
+      process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY = originalEnableLocalDevKey;
+    }
     resetAuthRuntimeStateWarningsForTesting();
     resetSessionUnlockStateStoreForTesting();
     resetAuthSessionStateStoreForTesting();
@@ -208,9 +214,23 @@ describe("auth helpers", () => {
     expect(verifyAccessKey("agentic-local-dev-key")).toBe(false);
   });
 
-  it("can inspect auth mode without emitting the development fallback warning", () => {
+  it("requires explicit opt-in before using the local development fallback key", () => {
+    delete process.env.AGENTIC_ACCESS_KEY;
+    delete process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
+    process.env.NODE_ENV = "development";
+
+    expect(getAuthMode({ emitDevelopmentWarning: false })).toMatchObject({
+      configured: false,
+      usesDevelopmentFallback: false,
+      requiresConfiguredKey: true
+    });
+    expect(verifyAccessKey("agentic-local-dev-key")).toBe(false);
+  });
+
+  it("can inspect auth mode without emitting the explicitly enabled development fallback warning", () => {
     const warningSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     delete process.env.AGENTIC_ACCESS_KEY;
+    process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY = "true";
     process.env.NODE_ENV = "development";
 
     const authMode = getAuthMode({ emitDevelopmentWarning: false });

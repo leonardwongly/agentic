@@ -153,7 +153,7 @@ npm install
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
 ```
 
-If you do not set `AGENTIC_ACCESS_KEY`, local development falls back to `agentic-local-dev-key`. That fallback is for local use only; do not rely on it in shared or production environments.
+For a disposable local-only run, you can explicitly enable the fallback key with `AGENTIC_ENABLE_LOCAL_DEV_KEY=true` and use `agentic-local-dev-key`. Do not enable that fallback in shared or production environments.
 
 3. Start the web app:
 
@@ -284,6 +284,7 @@ The canonical API route inventory lives in [`docs/specs/api-route-inventory.md`]
 export NODE_ENV=production
 export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_PUBLIC_BASE_URL=https://agentic.example.com
 ```
 
 Production also expects:
@@ -338,6 +339,8 @@ export GOOGLE_CLIENT_SECRET=replace-with-your-client-secret
 ```
 
 When either value is missing, Google-managed integrations remain visible as manual/setup-required adapters. The dashboard stays in context and reports that OAuth is not configured instead of sending the browser to the raw connect endpoint response.
+
+In production, OAuth redirects and share links are built from `AGENTIC_PUBLIC_BASE_URL` rather than request host headers. Set it to the externally reachable origin for the deployment.
 
 The repo also still supports a direct refresh-token path for legacy/local use:
 
