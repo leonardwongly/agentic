@@ -222,6 +222,15 @@ describe("runDatabaseMigrations", () => {
     });
   });
 
+  it("ships agent memory scope as a forward-only migration with rollback notes", async () => {
+    const migrations = await listMigrationFiles();
+    const migration = migrations.find((candidate) => candidate.name === "0010_agent_memory_scope.sql");
+
+    expect(migration?.sql).toContain("add column if not exists agent_id text");
+    expect(migration?.sql).toContain("add column if not exists agent_scope text not null default 'global'");
+    expect(migration?.sql).toContain("memory_records_user_agent_created_at_id_idx");
+  });
+
   it("fails migration discipline checks for malformed names, new duplicate prefixes, and missing rollback notes", () => {
     const report = analyzeMigrationDiscipline({
       rollbackNotes: "- `0001_init.sql`: restore from backup.\n",
