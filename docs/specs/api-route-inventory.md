@@ -2,6 +2,8 @@
 
 This inventory is the canonical map for `apps/web/app/api/**/route.ts`. Every route handler must either appear here or be removed. Stable public routes can be documented in user-facing guides, while authenticated UI/internal and preview routes are implementation contracts for the Agentic dashboard and worker loop.
 
+Feature capability contracts in `apps/web/lib/feature-capabilities.ts` are validated against the same route exports. A capability may only advertise HTTP methods that the corresponding `route.ts` actually exports, and newly exported methods on tracked capability routes must be reflected in the registry before the capability smoke report can pass.
+
 ## Classification Policy
 
 | Classification | Meaning |
