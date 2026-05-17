@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { createSystemActorContext, nowIso, SYSTEM_USER_ID, type ProviderCredential } from "@agentic/contracts";
-import { createProviderCredentialSecretStore } from "@agentic/integrations";
+import { createProviderCredentialSecretStore, decryptProviderCredentialSecret } from "@agentic/integrations";
 import { createRepository, type AgenticRepository } from "@agentic/repository";
 import { buildOAuthStateToken, parseAuthorizedOAuthStateToken } from "../apps/web/lib/auth";
 import { GET as googleConnectRoute } from "../apps/web/app/api/integrations/google/connect/route";
@@ -33,6 +33,22 @@ const {
   fetchGoogleAccountProfileMock: vi.fn(),
   isGoogleOAuthConfiguredMock: vi.fn(() => true)
 }));
+
+function decryptGoogleRefreshToken(params: {
+  credentialId: string;
+  userId: string;
+  secret: Parameters<ReturnType<typeof createProviderCredentialSecretStore>["decrypt"]>[0];
+}): string {
+  return decryptProviderCredentialSecret({
+    store: createProviderCredentialSecretStore(),
+    envelope: params.secret,
+    context: {
+      credentialId: params.credentialId,
+      userId: params.userId,
+      kind: "oauth_refresh_token"
+    }
+  });
+}
 
 vi.mock("@agentic/integrations", async () => {
   const actual = await vi.importActual<typeof import("@agentic/integrations")>("@agentic/integrations");
@@ -193,7 +209,13 @@ describe("google provider routes", () => {
       status: "connected"
     });
     expect(secretRecord).not.toBeNull();
-    expect(createProviderCredentialSecretStore().decrypt(secretRecord!.secret)).toBe("google-refresh-token");
+    expect(
+      decryptGoogleRefreshToken({
+        credentialId: credential!.id,
+        userId: SYSTEM_USER_ID,
+        secret: secretRecord!.secret
+      })
+    ).toBe("google-refresh-token");
     expect(gmail).toMatchObject({
       status: "ready",
       metadata: expect.objectContaining({
@@ -260,7 +282,13 @@ describe("google provider routes", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("http://localhost/?integration=google&status=connected");
-    expect(createProviderCredentialSecretStore().decrypt(secretRecord!.secret)).toBe("persisted-refresh-token");
+    expect(
+      decryptGoogleRefreshToken({
+        credentialId: existingCredential.id,
+        userId: SYSTEM_USER_ID,
+        secret: secretRecord!.secret
+      })
+    ).toBe("persisted-refresh-token");
     expect(updatedCredential?.lastRotatedAt).toBe("2026-04-15T00:00:00.000Z");
     expect(updatedCredential?.scopes).toEqual(["https://www.googleapis.com/auth/gmail.modify"]);
   });
@@ -435,8 +463,13 @@ describe("google provider routes", () => {
           tier: string;
           managedProvider: {
             credentialStatus: string;
+            lifecycleState: string;
+            repairState: string;
             hasRefreshToken: boolean;
             missingScopes: string[];
+            recoveryActions: Array<{ id: string; operation: string }>;
+            sloGates: Array<{ id: string; status: string }>;
+            reconciliation: { cursorPresent: boolean; replayAvailable: boolean };
           } | null;
         };
       }>;
@@ -451,8 +484,15 @@ describe("google provider routes", () => {
         tier: "approval-grade",
         managedProvider: {
           credentialStatus: "connected",
+          lifecycleState: "healthy",
+          repairState: "none",
           hasRefreshToken: true,
-          missingScopes: []
+          missingScopes: [],
+          recoveryActions: [],
+          reconciliation: {
+            cursorPresent: false,
+            replayAvailable: false
+          }
         }
       }
     });
@@ -461,8 +501,26 @@ describe("google provider routes", () => {
         tier: "experimental",
         managedProvider: {
           credentialStatus: "connected",
+          lifecycleState: "scope_mismatch",
+          repairState: "scope_repair_required",
           hasRefreshToken: true,
-          missingScopes: ["https://www.googleapis.com/auth/calendar"]
+          missingScopes: ["https://www.googleapis.com/auth/calendar"],
+          recoveryActions: expect.arrayContaining([
+            expect.objectContaining({
+              id: "request_scope_upgrade",
+              operation: "open_google_connect"
+            })
+          ]),
+          sloGates: expect.arrayContaining([
+            expect.objectContaining({
+              id: "scope_coverage",
+              status: "fail"
+            })
+          ]),
+          reconciliation: {
+            cursorPresent: false,
+            replayAvailable: false
+          }
         }
       }
     });

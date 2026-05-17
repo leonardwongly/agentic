@@ -3,6 +3,7 @@ import {
   assessManagedGoogleCredential,
   createCalendarAdapter,
   createGmailAdapter,
+  decryptProviderCredentialSecret,
   createProviderCredentialSecretStore,
   googleWorkspaceRequiredScopes,
   type GmailAdapter,
@@ -85,7 +86,15 @@ export async function resolveGoogleWorkspaceAdapters(params: {
     }
 
     try {
-      const refreshToken = createProviderCredentialSecretStore().decrypt(secretRecord!.secret);
+      const refreshToken = decryptProviderCredentialSecret({
+        store: createProviderCredentialSecretStore(),
+        envelope: secretRecord!.secret,
+        context: {
+          credentialId: credential.id,
+          userId: params.userId,
+          kind: "oauth_refresh_token"
+        }
+      });
 
       return {
         credential,
