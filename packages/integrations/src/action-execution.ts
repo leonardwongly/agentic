@@ -10,6 +10,11 @@ import {
   type Task
 } from "@agentic/contracts";
 import { normalizeConnectorThrownError } from "./connector-errors";
+import {
+  integrationReadinessMeetsTier,
+  type IntegrationReadinessProfile,
+  type IntegrationReadinessTier
+} from "./readiness";
 
 export type ActionExecutionAdapters = {
   gmail?: {
@@ -26,6 +31,10 @@ export type ActionExecutionAdapters = {
     createLocalNote: (params: { title: string; content: string }) => Promise<{ slug: string }>;
   };
 };
+
+export type ActionExecutionConnectorReadiness = Partial<
+  Record<"gmail" | "calendar" | "notes", IntegrationReadinessProfile>
+>;
 
 export type ActionExecutionSideEffectLedger = {
   reserve: (params: {
@@ -380,6 +389,44 @@ function buildMissingAdapterOutcome(params: {
   });
 }
 
+function buildReadinessBlockedOutcome(params: {
+  plan: ActionExecutionPlan;
+  adapter: keyof ActionExecutionConnectorReadiness;
+  readiness?: IntegrationReadinessProfile;
+  requiredTier: IntegrationReadinessTier;
+}): ActionExecutionOutcome {
+  const actualTier = params.readiness?.tier ?? "missing";
+  const reason = params.readiness?.reason ?? "No connector readiness profile was provided for this side-effect boundary.";
+
+  return ActionExecutionOutcomeSchema.parse({
+    status: "skipped",
+    detail: `Execution skipped: ${params.adapter} connector readiness is ${actualTier}, but ${params.requiredTier} is required before provider mutation. ${reason}`,
+    preview: params.plan.preview,
+    retryable: false,
+    providerRef: null,
+    idempotencyKey: params.plan.idempotencyKey,
+    sideEffectTarget: params.plan.sideEffectTarget,
+    recovery: {
+      strategy: "manual_review",
+      note: "Repair connector readiness before retrying this side effect.",
+      compensationHints: params.readiness?.managedProvider?.recoveryActions.map((action) => action.label) ?? []
+    }
+  });
+}
+
+function requireConnectorReadiness(params: {
+  plan: ActionExecutionPlan;
+  adapter: keyof ActionExecutionConnectorReadiness;
+  readiness?: IntegrationReadinessProfile;
+  requiredTier: IntegrationReadinessTier;
+}): ActionExecutionOutcome | null {
+  if (params.readiness && integrationReadinessMeetsTier(params.readiness.tier, params.requiredTier)) {
+    return null;
+  }
+
+  return buildReadinessBlockedOutcome(params);
+}
+
 function buildConnectorFailureOutcome(params: {
   plan: ActionExecutionPlan;
   provider: string;
@@ -514,6 +561,7 @@ export async function executeTypedAction(params: {
   task: Task;
   actionIntent: ActionIntent;
   adapters: ActionExecutionAdapters;
+  connectorReadiness?: ActionExecutionConnectorReadiness;
   sideEffectLedger?: ActionExecutionSideEffectLedger;
 }): Promise<{ plan: ActionExecutionPlan; outcome: ActionExecutionOutcome }> {
   const plan = planActionExecution({
@@ -523,6 +571,17 @@ export async function executeTypedAction(params: {
 
   switch (params.actionIntent.type) {
     case "send_message": {
+      const readinessBlockedOutcome = requireConnectorReadiness({
+        plan,
+        adapter: "gmail",
+        readiness: params.connectorReadiness?.gmail,
+        requiredTier: "approval-grade"
+      });
+
+      if (readinessBlockedOutcome) {
+        return { plan, outcome: readinessBlockedOutcome };
+      }
+
       if (!params.adapters.gmail) {
         return {
           plan,
@@ -673,6 +732,17 @@ export async function executeTypedAction(params: {
     }
 
     case "schedule_event": {
+      const readinessBlockedOutcome = requireConnectorReadiness({
+        plan,
+        adapter: "calendar",
+        readiness: params.connectorReadiness?.calendar,
+        requiredTier: "approval-grade"
+      });
+
+      if (readinessBlockedOutcome) {
+        return { plan, outcome: readinessBlockedOutcome };
+      }
+
       if (!params.adapters.calendar) {
         return {
           plan,

@@ -5,6 +5,7 @@ The provider side-effect ledger records externally visible Gmail and Calendar mu
 ## Contract
 
 - Reserve a ledger row before calling a provider mutation.
+- Prove approval-grade connector readiness before reserving the ledger row or calling the provider adapter.
 - Reuse the same idempotency key and side-effect target for every retry of the same typed action.
 - Suppress adapter execution when the ledger already completed with a provider reference.
 - Resume Gmail send retries from a recorded draft reference instead of creating another draft.

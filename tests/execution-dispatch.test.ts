@@ -10,6 +10,7 @@ import {
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { executeApprovedTask, reconcileExecutionResults } from "@agentic/orchestrator";
+import type { ActionExecutionConnectorReadiness } from "@agentic/integrations";
 import { vi } from "vitest";
 
 function buildBundle(params: {
@@ -109,6 +110,35 @@ function buildGovernance(overrides: Partial<WorkspaceGovernance> = {}): Workspac
   };
 }
 
+const approvalGradeConnectors: ActionExecutionConnectorReadiness = {
+  gmail: {
+    tier: "approval-grade",
+    label: "Approval-grade",
+    reason: "Test Gmail readiness.",
+    supportedModes: ["draft", "approval"],
+    modeSupport: {
+      draft: true,
+      approval: true,
+      autonomous: false
+    },
+    issues: [],
+    managedProvider: null
+  },
+  calendar: {
+    tier: "approval-grade",
+    label: "Approval-grade",
+    reason: "Test Calendar readiness.",
+    supportedModes: ["draft", "approval"],
+    modeSupport: {
+      draft: true,
+      approval: true,
+      autonomous: false
+    },
+    issues: [],
+    managedProvider: null
+  }
+};
+
 describe("execution dispatch", () => {
   it("uses typed send_message intents instead of placeholder recipients", async () => {
     const bundle = buildBundle({
@@ -132,7 +162,8 @@ describe("execution dispatch", () => {
           sendDraft: vi.fn(),
           listRecentEmails: vi.fn()
         }
-      }
+      },
+      connectorReadiness: approvalGradeConnectors
     });
 
     expect(result.success).toBe(true);
@@ -210,7 +241,8 @@ describe("execution dispatch", () => {
           updateEvent: vi.fn(),
           listUpcomingEvents: vi.fn()
         }
-      }
+      },
+      connectorReadiness: approvalGradeConnectors
     });
 
     expect(result.success).toBe(true);
@@ -225,6 +257,69 @@ describe("execution dispatch", () => {
       idempotencyKey: result.idempotencyKey
     });
     expect(log.kind).toBe("execution.completed");
+  });
+
+  it("blocks provider execution when connector readiness is below approval-grade", async () => {
+    const bundle = buildBundle({
+      assignedAgent: "communications",
+      taskCapabilities: ["read", "send"],
+      actionIntent: ActionIntentSchema.parse({
+        type: "send_message",
+        to: "client@example.com",
+        subject: "Follow-up",
+        body: "Here is the approved response."
+      })
+    });
+    const createDraft = vi.fn().mockResolvedValue({ id: "draft-should-not-exist" });
+
+    const { result, log } = await executeApprovedTask({
+      task: bundle.tasks[0],
+      bundle,
+      adapters: {
+        gmail: {
+          createDraft,
+          sendDraft: vi.fn(),
+          listRecentEmails: vi.fn()
+        }
+      },
+      connectorReadiness: {
+        gmail: {
+          tier: "experimental",
+          label: "Experimental",
+          reason: "Refresh token is missing.",
+          supportedModes: [],
+          modeSupport: {
+            draft: false,
+            approval: false,
+            autonomous: false
+          },
+          issues: [],
+          managedProvider: null
+        }
+      }
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.kind).toBe("execution.skipped");
+    expect(result.outcome).toBe("skipped");
+    expect(result.detail).toContain("gmail connector readiness is experimental");
+    expect(result.recoveryStrategy).toBe("manual_review");
+    expect(createDraft).not.toHaveBeenCalled();
+    expect(log.kind).toBe("execution.skipped");
+
+    const reconciled = reconcileExecutionResults({
+      bundle: GoalBundleSchema.parse({
+        ...bundle,
+        tasks: bundle.tasks.map((task) => ({
+          ...task,
+          state: "queued" as const
+        }))
+      }),
+      results: [result],
+      logs: [log]
+    });
+    expect(reconciled.tasks[0]?.state).toBe("blocked");
+    expect(reconciled.workflow.checkpoint).toBe("execution-recovery");
   });
 
   it("records partial-success metadata when draft creation succeeds but delivery fails", async () => {
@@ -251,7 +346,8 @@ describe("execution dispatch", () => {
           sendDraft: vi.fn().mockRejectedValue(timeoutError),
           listRecentEmails: vi.fn()
         }
-      }
+      },
+      connectorReadiness: approvalGradeConnectors
     });
 
     expect(result.success).toBe(false);
@@ -334,6 +430,7 @@ describe("execution dispatch", () => {
           listRecentEmails: vi.fn()
         }
       },
+      connectorReadiness: approvalGradeConnectors,
       governance: buildGovernance()
     });
 
@@ -367,6 +464,7 @@ describe("execution dispatch", () => {
           listRecentEmails: vi.fn()
         }
       },
+      connectorReadiness: approvalGradeConnectors,
       governance: buildGovernance()
     });
 

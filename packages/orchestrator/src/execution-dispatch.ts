@@ -18,6 +18,7 @@ import {
   CapabilityAllowlistViolationError,
   executeTypedAction,
   type ActionExecutionAdapters,
+  type ActionExecutionConnectorReadiness,
   type ActionExecutionSideEffectLedger
 } from "@agentic/integrations";
 import { createActionLog } from "@agentic/observability";
@@ -200,10 +201,11 @@ export async function executeApprovedTask(params: {
   task: Task;
   bundle: GoalBundle;
   adapters: ActionExecutionAdapters;
+  connectorReadiness?: ActionExecutionConnectorReadiness;
   governance?: WorkspaceGovernance | null;
   sideEffectLedger?: ActionExecutionSideEffectLedger;
 }): Promise<{ result: ExecutionResult; log: ActionLog }> {
-  const { task, bundle, adapters, governance, sideEffectLedger } = params;
+  const { task, bundle, adapters, connectorReadiness, governance, sideEffectLedger } = params;
   const actionIntent = resolveActionIntent(task, bundle);
   const approvedApproval = findApprovedApproval(task, bundle);
   const governanceApprovalReason = getGovernanceApprovalReason({
@@ -253,6 +255,7 @@ export async function executeApprovedTask(params: {
       task,
       actionIntent,
       adapters,
+      connectorReadiness,
       sideEffectLedger
     });
     const kind =
@@ -296,10 +299,11 @@ export async function executeApprovedTasks(params: {
   bundle: GoalBundle;
   approvedTaskIds: string[];
   adapters: ActionExecutionAdapters;
+  connectorReadiness?: ActionExecutionConnectorReadiness;
   governance?: WorkspaceGovernance | null;
   sideEffectLedger?: ActionExecutionSideEffectLedger;
 }): Promise<{ results: ExecutionResult[]; logs: ActionLog[] }> {
-  const { bundle, approvedTaskIds, adapters, governance, sideEffectLedger } = params;
+  const { bundle, approvedTaskIds, adapters, connectorReadiness, governance, sideEffectLedger } = params;
   const results: ExecutionResult[] = [];
   const logs: ActionLog[] = [];
 
@@ -310,7 +314,14 @@ export async function executeApprovedTasks(params: {
       continue;
     }
 
-    const { result, log } = await executeApprovedTask({ task, bundle, adapters, governance, sideEffectLedger });
+    const { result, log } = await executeApprovedTask({
+      task,
+      bundle,
+      adapters,
+      connectorReadiness,
+      governance,
+      sideEffectLedger
+    });
     results.push(result);
     logs.push(log);
   }
