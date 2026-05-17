@@ -2,6 +2,7 @@
 
 import type { CommitmentInboxBucket } from "@agentic/contracts";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
+import { buildOperatorPriorityModel, type OperatorPrioritySeverity } from "../lib/operator-priority-model";
 import { RiskBadge, SlideOutPanel, StatusBadge } from "./ui";
 
 export type DashboardDetailSelection = {
@@ -78,6 +79,10 @@ function buildApprovalRiskMetrics(data: DashboardData) {
     pendingApprovals,
     metrics: ["R4", "R3", "R2", "R1"].map((riskClass) => `${riskClass}: ${riskCounts[riskClass] ?? 0}`)
   };
+}
+
+function priorityStatus(severity: OperatorPrioritySeverity): "healthy" | "attention" | "critical" {
+  return severity === "critical" ? "critical" : "attention";
 }
 
 function buildCockpitLanes(data: DashboardData): CockpitLane[] {
@@ -241,6 +246,7 @@ export function DashboardCockpitLanes({ data, openView, openDiagnosticTarget, op
   const lanes = buildCockpitLanes(data);
   const diagnostic = highestSeverityDiagnostic(data);
   const freshness = buildFreshnessLabel(data.diagnostics.generatedAt);
+  const priorityModel = buildOperatorPriorityModel(data);
 
   return (
     <article className="card control-plane-card" id="section-operate">
@@ -251,6 +257,49 @@ export function DashboardCockpitLanes({ data, openView, openDiagnosticTarget, op
         </div>
         <StatusBadge status={freshness.status}>{freshness.label}</StatusBadge>
       </div>
+
+      <section className="diagnostic-item attention" aria-label="Operator priority queue">
+        <div className="diagnostic-item-header">
+          <strong>Operator priority queue</strong>
+          <span className="pill diagnostic-pill attention">
+            {priorityModel.priorities.length}/{priorityModel.limits.maxPriorities}
+          </span>
+        </div>
+        {priorityModel.priorities.length > 0 ? (
+          <div className="control-plane-detail-grid compact" data-testid="operator-priority-model">
+            {priorityModel.priorities.slice(0, 3).map((priority) => (
+              <button
+                key={priority.id}
+                type="button"
+                className="control-plane-detail-card"
+                onClick={() => openView(priority.targetSection, priority.targetItemId)}
+                aria-label={`Priority ${priority.rank}: ${priority.title}`}
+              >
+                <div className="control-plane-section-header">
+                  <div>
+                    <strong>{priority.rank}. {priority.title}</strong>
+                    <p>{priority.summary}</p>
+                  </div>
+                  <StatusBadge status={priorityStatus(priority.severity)}>{priority.severity}</StatusBadge>
+                </div>
+                <div className="control-plane-stats">
+                  <span className="control-plane-stat">{priority.countLabel}</span>
+                  {priority.evidence.slice(0, 2).map((item) => (
+                    <span key={`${priority.id}-${item}`} className="control-plane-stat">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                {priority.recoveryActions[0] ? (
+                  <span className="command-center-priority-action">{priority.recoveryActions[0].label}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-state">No blocking operator priorities are open. Continue from the operating lanes below.</p>
+        )}
+      </section>
 
       {diagnostic ? (
         <div className={`diagnostic-item ${diagnostic.severity}`}>

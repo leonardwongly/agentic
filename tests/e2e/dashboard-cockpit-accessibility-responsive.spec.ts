@@ -69,6 +69,7 @@ for (const viewport of viewports) {
     await unlockDashboard(page);
 
     await expect(page.getByRole("heading", { name: "Command center" })).toBeVisible();
+    await expect(page.getByLabel("Operator priority queue")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Traceability" })).toBeVisible();
     await expect(page.locator("[data-ui-status-pill]").first()).toContainText(/\S/u);
     if ((await page.locator("[data-ui-risk-pill]").count()) > 0) {
@@ -109,6 +110,7 @@ test("cockpit keyboard journey covers command palette and detail drawer", async 
   await viewApprovalsCommand.focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/section=approvals/u);
+  await expect(page.getByTestId("operator-priority-model")).toBeVisible();
 
   await page.getByRole("button", { name: "Open details" }).first().click();
   const drawer = page.locator(".slideout-panel[role='dialog']").first();

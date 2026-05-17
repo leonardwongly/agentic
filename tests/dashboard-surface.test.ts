@@ -25,6 +25,7 @@ describe("dashboard surface helpers", () => {
 
   it("defines explicit OS surfaces for command, operations, agents, governance, memory, provenance, and observability", () => {
     expect(DASHBOARD_OS_SURFACES.map((surface) => surface.id)).toEqual([
+      "cockpit",
       "command",
       "operations",
       "agents",
@@ -47,6 +48,7 @@ describe("dashboard surface helpers", () => {
   });
 
   it("maps advanced sections to their owning OS surfaces", () => {
+    expect(getDashboardOsSurface("cockpit")?.sections).toEqual(expect.arrayContaining(["operate", "now", "approvals"]));
     expect(getDashboardOsSurface("governance")?.sections).toEqual(expect.arrayContaining(["governance", "autopilot"]));
     expect(getDashboardOsSurfaceForSection("templates").map((surface) => surface.id)).toEqual(["operations"]);
     expect(getDashboardOsSurfaceForSection("integrations").map((surface) => surface.id)).toEqual(["agents"]);
