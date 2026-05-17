@@ -11,6 +11,7 @@ import {
   withSpan,
   withTelemetryContext
 } from "@agentic/observability";
+import { CollectionPageQueryError } from "@agentic/repository";
 import { formatValidationError, isContentTypeError } from "./api-errors";
 import { isAuthError } from "./auth";
 import { AuthRuntimeStateConfigurationError } from "./auth-runtime-state";
@@ -170,6 +171,10 @@ export function handleApiError(error: unknown, fallbackMessage: string) {
 
   if (error instanceof ApiRouteError) {
     return authenticatedError(error.status, error.message);
+  }
+
+  if (error instanceof CollectionPageQueryError) {
+    return authenticatedError(400, error.message);
   }
 
   if (isContentTypeError(error)) {

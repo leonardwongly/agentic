@@ -1,10 +1,9 @@
-import { jobKindValues, jobStatusValues } from "@agentic/contracts";
+import { jobKindValues, jobStatusValues, type JobKind, type JobStatus } from "@agentic/contracts";
+import { listDashboardJobsPage } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 import { buildDashboardCollectionPage, parseDashboardCollectionQuery } from "../../../../lib/dashboard-collection";
 import { getSeededRepository } from "../../../../lib/server";
-
-const DASHBOARD_JOB_SOURCE_LIMIT = 500;
 
 export async function GET(request: Request) {
   return withApiTelemetry(request, "api.dashboard.jobs", async () => {
@@ -16,27 +15,18 @@ export async function GET(request: Request) {
         allowedKindValues: jobKindValues
       });
       const repository = await getSeededRepository();
-      const jobs = await repository.listJobs({
+      const page = await listDashboardJobsPage(repository, {
         userId: principal.userId,
-        limit: DASHBOARD_JOB_SOURCE_LIMIT
-      });
-      const filteredJobs = jobs.filter((job) => {
-        if (query.status && job.status !== query.status) {
-          return false;
-        }
-
-        return !query.kind || job.kind === query.kind;
+        limit: query.limit,
+        cursor: query.cursor,
+        sort: query.sort,
+        q: query.q,
+        statuses: query.status ? [query.status as JobStatus] : undefined,
+        kinds: query.kind ? [query.kind as JobKind] : undefined
       });
 
       return authenticatedJson({
-        page: buildDashboardCollectionPage(filteredJobs, query, {
-          getId: (job) => job.id,
-          getCreatedAt: (job) => job.createdAt,
-          getUpdatedAt: (job) => job.updatedAt,
-          getTitle: (job) => job.id,
-          getSearchText: (job) =>
-            [job.id, job.kind, job.status, job.lastError ?? "", JSON.stringify(job.payload)].join(" ")
-        })
+        page: buildDashboardCollectionPage(page)
       });
     } catch (error) {
       return handleApiError(error, "Failed to load dashboard jobs.");

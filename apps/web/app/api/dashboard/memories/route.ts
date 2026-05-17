@@ -1,4 +1,5 @@
 import { memoryTypeValues } from "@agentic/contracts";
+import { listDashboardMemoryPage } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 import { buildDashboardCollectionPage, parseDashboardCollectionQuery } from "../../../../lib/dashboard-collection";
@@ -13,17 +14,17 @@ export async function GET(request: Request) {
         allowedKindValues: memoryTypeValues
       });
       const repository = await getSeededRepository();
-      const memories = await repository.listMemory(principal.userId);
-      const filteredMemories = memories.filter((memory) => !query.kind || memory.memoryType === query.kind);
+      const page = await listDashboardMemoryPage(repository, {
+        userId: principal.userId,
+        limit: query.limit,
+        cursor: query.cursor,
+        sort: query.sort,
+        q: query.q,
+        kind: query.kind
+      });
 
       return authenticatedJson({
-        page: buildDashboardCollectionPage(filteredMemories, query, {
-          getId: (memory) => memory.id,
-          getCreatedAt: (memory) => memory.createdAt,
-          getUpdatedAt: (memory) => memory.updatedAt,
-          getTitle: (memory) => memory.category,
-          getSearchText: (memory) => [memory.id, memory.category, memory.content, memory.source].join(" ")
-        })
+        page: buildDashboardCollectionPage(page)
       });
     } catch (error) {
       return handleApiError(error, "Failed to load dashboard memories.");
