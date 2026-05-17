@@ -129,6 +129,11 @@ function buildPriorityList(data: DashboardData): CommandCenterPriority[] {
     const primaryAction = operatorPriority.recoveryActions[0];
     const severity: CommandCenterPriority["severity"] =
       operatorPriority.severity === "critical" ? "critical" : "attention";
+    const actionLabel = primaryAction
+      ? primaryAction.sideEffecting
+        ? `Inspect ${operatorPriority.kind === "async_recovery" ? "operations" : "recovery"}`
+        : primaryAction.label
+      : "Open priority";
 
     return {
       id: operatorPriority.id,
@@ -139,7 +144,7 @@ function buildPriorityList(data: DashboardData): CommandCenterPriority[] {
       countLabel: `${severityCountLabel(severity)} · ${operatorPriority.countLabel}`,
       action: {
         id: primaryAction?.id ?? `open-${operatorPriority.id}`,
-        label: primaryAction?.label ?? "Open priority",
+        label: actionLabel,
         targetSection: primaryAction?.targetSection ?? operatorPriority.targetSection,
         targetItemId: primaryAction?.targetItemId ?? operatorPriority.targetItemId
       }

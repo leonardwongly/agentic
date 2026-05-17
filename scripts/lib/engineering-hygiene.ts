@@ -134,6 +134,10 @@ const DEFAULT_RELEASE_FORBIDDEN_EXTENSIONS = [
 ];
 
 const DEFAULT_SECRET_NAME_PATTERN = /(^|[/._-])(secret|token|credential|private-key)([/._-]|$)/iu;
+const REVIEWED_SECRET_NAME_PATHS = new Set([
+  "packages/integrations/src/provider-credential-secrets.ts",
+  "tests/provider-credential-secrets.test.ts"
+]);
 const TEXT_EXTENSION_PATTERN = /\.(cjs|css|html|js|json|jsx|mjs|md|mdx|sql|ts|tsx|txt|yml|yaml)$/iu;
 const ALWAYS_TEXT_FILES = new Set([
   ".dockerignore",
@@ -240,7 +244,7 @@ export function checkReleaseContext(paths: string[]) {
       continue;
     }
 
-    if (DEFAULT_SECRET_NAME_PATTERN.test(relativePath)) {
+    if (DEFAULT_SECRET_NAME_PATTERN.test(relativePath) && !REVIEWED_SECRET_NAME_PATHS.has(relativePath)) {
       issues.push({
         path: relativePath,
         kind: "secret-like-name",

@@ -444,7 +444,7 @@ function buildAgentResult(task: Task, result: AgentContent, agentDefinition?: Ag
 // List of built-in agent names for reference
 export const BUILT_IN_AGENT_NAMES: AgentName[] = [
   "communications",
-  "calendar", 
+  "calendar",
   "workflow",
   "research",
   "knowledge",

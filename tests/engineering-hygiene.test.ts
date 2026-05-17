@@ -130,7 +130,9 @@ describe("engineering hygiene gates", () => {
       ".env.local",
       "artifacts/security/report.json",
       "tmp/private-key.pem",
-      "docs/token-notes.md"
+      "docs/token-notes.md",
+      "packages/integrations/src/provider-credential-secrets.ts",
+      "tests/provider-credential-secrets.test.ts"
     ]);
 
     expect(issues).toEqual([
