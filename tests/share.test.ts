@@ -4,6 +4,7 @@ import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord } from "@agentic/memory";
 import {
   buildSharedGoalView,
+  buildGoalShareUrl,
   createGoalShareCreatedLog,
   createGoalShareExpiredLog,
   createGoalShareFailedAccessLog,
@@ -36,13 +37,23 @@ async function buildBundle() {
 
 describe("goal share helpers", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
+  const originalPublicBaseUrl = process.env.AGENTIC_PUBLIC_BASE_URL;
+  const originalNodeEnv = process.env.NODE_ENV;
 
   beforeEach(() => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
+    delete process.env.AGENTIC_PUBLIC_BASE_URL;
+    process.env.NODE_ENV = "test";
   });
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
+    if (originalPublicBaseUrl === undefined) {
+      delete process.env.AGENTIC_PUBLIC_BASE_URL;
+    } else {
+      process.env.AGENTIC_PUBLIC_BASE_URL = originalPublicBaseUrl;
+    }
+    process.env.NODE_ENV = originalNodeEnv;
   });
 
   it("creates and verifies signed goal share tokens", () => {
@@ -83,6 +94,15 @@ describe("goal share helpers", () => {
     expect(verifyGoalShareToken("a.b.c")).toBeNull();
     expect(verifyGoalShareToken(`${"x".repeat(5000)}.${"y".repeat(50)}`)).toBeNull();
     expect(verifyGoalShareToken("bm90LWpzb24.signature")).toBeNull();
+  });
+
+  it("builds share links from the configured public base URL in production", () => {
+    process.env.NODE_ENV = "production";
+    process.env.AGENTIC_PUBLIC_BASE_URL = "https://agentic.example.com";
+
+    expect(buildGoalShareUrl("http://internal-service.local/api/goals/goal-1/share", "token/with spaces")).toBe(
+      "https://agentic.example.com/share/token%2Fwith%20spaces"
+    );
   });
 
   it("builds a public goal projection without leaking internal-only bundle data", async () => {

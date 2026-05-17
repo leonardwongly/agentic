@@ -414,7 +414,8 @@
       ],
       "codePaths": [
         "config/security/incident-severity.json",
-        ".github/ISSUE_TEMPLATE/security-vulnerability-report.yml"
+        ".github/ISSUE_TEMPLATE/config.yml",
+        "SECURITY.md"
       ],
       "runbooks": [
         "docs/runbooks/security-incident-response.md",

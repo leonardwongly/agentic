@@ -59,7 +59,9 @@ export function AuthGate({ authMode }: AuthGateProps) {
             <p className="status-chip error">Set `AGENTIC_ACCESS_KEY` in the environment before using the app.</p>
           ) : null}
           {authMode.usesDevelopmentFallback ? (
-            <p className="status-chip">Local development fallback is enabled. Set `AGENTIC_ACCESS_KEY` to replace it.</p>
+            <p className="status-chip">
+              Explicit local development fallback is enabled. Set `AGENTIC_ACCESS_KEY` to replace it.
+            </p>
           ) : null}
         </div>
         <div className="auth-form">

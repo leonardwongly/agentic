@@ -8,6 +8,7 @@ import {
 import { parseAuthorizedOAuthStateToken, requireApiSession } from "../../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { ApiRouteError, authenticatedRedirect } from "../../../../../lib/api-response";
+import { buildPublicUrl } from "../../../../../lib/public-origin";
 import { getSeededRepository } from "../../../../../lib/server";
 
 function buildGoogleCredentialId(workspaceId: string | null, accountId: string): string {
@@ -15,13 +16,11 @@ function buildGoogleCredentialId(workspaceId: string | null, accountId: string):
 }
 
 function buildGoogleCallbackUrl(request: Request): string {
-  const url = new URL(request.url);
-  url.search = "";
-  return url.toString();
+  return buildPublicUrl(request.url, "/api/integrations/google/callback").toString();
 }
 
 function buildDashboardRedirect(request: Request, status: "connected" | "error", reason?: string): URL {
-  const redirectUrl = new URL("/", request.url);
+  const redirectUrl = buildPublicUrl(request.url, "/");
   redirectUrl.searchParams.set("integration", "google");
   redirectUrl.searchParams.set("status", status);
 

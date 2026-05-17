@@ -10,11 +10,15 @@ vi.mock("../apps/web/lib/runtime-readiness", () => ({
 }));
 
 import { GET as healthRoute } from "../apps/web/app/api/health/route";
+import { GET as readyDetailsRoute } from "../apps/web/app/api/ready/details/route";
 import { GET as readyRoute } from "../apps/web/app/api/ready/route";
 
 describe("operational routes", () => {
+  const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
+
   afterEach(() => {
     getWebReadinessReportMock.mockReset();
+    process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
   });
 
   it("returns liveness without authentication", async () => {
@@ -52,20 +56,19 @@ describe("operational routes", () => {
     const payload = (await response.json()) as {
       ok: boolean;
       status: string;
-      checks: Array<{ name: string; status: string }>;
+      generatedAt: string;
+      details: string;
+      checks?: Array<{ name: string; status: string }>;
     };
 
     expect(response.status).toBe(200);
     expect(payload).toMatchObject({
       ok: true,
-      status: "ready"
+      status: "ready",
+      generatedAt: "2026-04-17T00:00:00.000Z",
+      details: "/api/ready/details"
     });
-    expect(payload.checks).toContainEqual(
-      expect.objectContaining({
-        name: "connector_health",
-        status: "pass"
-      })
-    );
+    expect(payload.checks).toBeUndefined();
     expectOperationalNoStoreHeaders(response);
   });
 
@@ -89,20 +92,58 @@ describe("operational routes", () => {
     const payload = (await response.json()) as {
       ok: boolean;
       status: string;
-      checks: Array<{ name: string; status: string }>;
+      generatedAt: string;
+      details: string;
+      checks?: Array<{ name: string; status: string }>;
     };
 
     expect(response.status).toBe(503);
     expect(payload).toMatchObject({
       ok: false,
-      status: "not_ready"
+      status: "not_ready",
+      generatedAt: "2026-04-17T00:00:00.000Z",
+      details: "/api/ready/details"
     });
-    expect(payload.checks).toContainEqual(
-      expect.objectContaining({
-        name: "database",
-        status: "fail"
+    expect(payload.checks).toBeUndefined();
+    expectOperationalNoStoreHeaders(response);
+  });
+
+  it("returns the detailed readiness report only for authenticated requests", async () => {
+    process.env.AGENTIC_ACCESS_KEY = "test-access-key";
+    getWebReadinessReportMock.mockResolvedValue({
+      ok: true,
+      status: "ready",
+      runtime: "production",
+      storageBackend: "postgres",
+      generatedAt: "2026-04-17T00:00:00.000Z",
+      checks: [
+        {
+          name: "connector_health",
+          status: "pass",
+          message: "Connector health checks passed."
+        }
+      ]
+    });
+
+    const unauthenticated = await readyDetailsRoute(new Request("http://localhost/api/ready/details"));
+    const authenticated = await readyDetailsRoute(
+      new Request("http://localhost/api/ready/details", {
+        headers: {
+          "x-agentic-access-key": "test-access-key"
+        }
       })
     );
-    expectOperationalNoStoreHeaders(response);
+    const payload = (await authenticated.json()) as {
+      checks: Array<{ name: string; status: string }>;
+    };
+
+    expect(unauthenticated.status).toBe(401);
+    expect(authenticated.status).toBe(200);
+    expect(payload.checks).toContainEqual(
+      expect.objectContaining({
+        name: "connector_health",
+        status: "pass"
+      })
+    );
   });
 });

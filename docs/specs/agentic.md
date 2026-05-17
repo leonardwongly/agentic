@@ -101,7 +101,8 @@ Stable public and core automation endpoints are:
 | Endpoint | Method | Responsibility |
 | --- | --- | --- |
 | `/api/health` | `GET` | Return unauthenticated liveness state for orchestration and probes |
-| `/api/ready` | `GET` | Return unauthenticated readiness state for access key, storage, auth runtime state, request identity, async execution, and connector health |
+| `/api/ready` | `GET` | Return unauthenticated public-safe readiness summary and the detailed readiness endpoint path |
+| `/api/ready/details` | `GET` | Return authenticated detailed readiness state for access key, storage, auth runtime state, request identity, async execution, and connector health |
 | `/api/session` | `POST`, `DELETE` | Create or clear an authenticated dashboard session from the access key |
 | `/api/goals` | `GET`, `POST` | Load the goals dashboard and enqueue goal creation |
 | `/api/goals/jobs/:id` | `GET` | Poll queued goal status and final result summary |
