@@ -128,6 +128,10 @@ export function buildLocalCiPlan(options: LocalCiPlanOptions = {}): LocalCiPlan 
     steps.push(npmRun("test"));
     steps.push(npmRun("build"));
   } else {
+    if (!options.withPostgres && !options.databaseUrl) {
+      throw new Error("Full local CI requires --with-postgres or DATABASE_URL.");
+    }
+
     env.DATABASE_URL = options.databaseUrl ?? DEFAULT_DATABASE_URL;
 
     if (options.withPostgres) {

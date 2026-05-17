@@ -49,7 +49,7 @@ describe("local CI runner", () => {
   });
 
   it("can skip install and browser E2E for faster full-mode diagnosis", () => {
-    const plan = buildLocalCiPlan({ mode: "full", skipInstall: true, noE2e: true });
+    const plan = buildLocalCiPlan({ mode: "full", skipInstall: true, noE2e: true, withPostgres: true });
     const ids = plan.steps.map(step => step.id);
 
     expect(ids).not.toContain("npm-ci");
@@ -84,5 +84,9 @@ describe("local CI runner", () => {
     const plan = buildLocalCiPlan({ mode: "full", databaseUrl: "postgres://custom.example/agentic" });
 
     expect(plan.env.DATABASE_URL).toBe("postgres://custom.example/agentic");
+  });
+
+  it("requires an explicit database source for full local CI", () => {
+    expect(() => buildLocalCiPlan({ mode: "full" })).toThrow(/--with-postgres or DATABASE_URL/u);
   });
 });

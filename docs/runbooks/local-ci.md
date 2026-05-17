@@ -54,13 +54,13 @@ For faster diagnosis that still covers the server-side CI gates, skip browser E2
 npm run ci:local -- --full --with-postgres --no-e2e
 ```
 
-If a compatible local Postgres instance is already running, set `DATABASE_URL` and omit `--with-postgres`:
+Full mode requires an explicit database source. If a compatible local Postgres instance is already running, set `DATABASE_URL` and omit `--with-postgres`:
 
 ```bash
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/agentic npm run ci:local -- --full
 ```
 
-Fast mode intentionally does not set `DATABASE_URL`, so `npm test` stays on the same in-memory/default path used by the fast PR gate. Full mode sets `DATABASE_URL` because the GitHub workflow validates migrations and Postgres-backed repository behavior.
+Fast mode intentionally does not set `DATABASE_URL`, so `npm test` stays on the same in-memory/default path used by the fast PR gate. Full mode sets `DATABASE_URL` only from `--with-postgres` or the caller's environment because the GitHub workflow validates migrations and Postgres-backed repository behavior.
 
 ## GitHub-only gaps
 
