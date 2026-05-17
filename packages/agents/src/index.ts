@@ -629,6 +629,27 @@ function describeAgentRunnerFailure(error: unknown): { code: string; retryable: 
   };
 }
 
+function validateRunnerOutput(runner: AgentRunner, output: AgentRunnerOutput): AgentRunnerOutput {
+  const parsedOutput = AgentRunnerOutputSchema.parse(output);
+  const { result } = parsedOutput;
+
+  if (!runner.contract.agentNames.includes(result.agent)) {
+    throw new AgentRunnerExecutionError(
+      "unsafe_output",
+      `Agent runner returned output for unsupported agent "${result.agent}".`
+    );
+  }
+
+  if (!runner.contract.outputModes.includes(result.executionMode)) {
+    throw new AgentRunnerExecutionError(
+      "unsafe_output",
+      `Agent runner returned execution mode "${result.executionMode}" outside its declared contract.`
+    );
+  }
+
+  return parsedOutput;
+}
+
 function buildRunnerFailureFallbackResult(params: {
   task: Task;
   scenario: string;
@@ -683,7 +704,7 @@ export function runAgent(task: Task, scenario: string, options?: RunAgentOptions
   validateRunnerPermissions(input);
 
   try {
-    return runner.run(input).result;
+    return validateRunnerOutput(runner, runner.run(input)).result;
   } catch (error) {
     return buildRunnerFailureFallbackResult({
       task,
