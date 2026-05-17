@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  AgentDefinitionSchema,
   AutopilotEventFabricEnvelopeSchema,
   DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   GoalBundleSchema,
@@ -620,6 +621,51 @@ describe("worker runtime", () => {
     expect(persistedBundle?.goal.status).not.toBe("completed");
     expect(memories).toHaveLength(memoryCountBefore);
     expect(episodes).toHaveLength(episodeCountBefore);
+  });
+
+  it("rejects stale queued goal jobs that reference missing or non-active agents", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const timestamp = "2026-04-22T00:00:00.000Z";
+
+    await repository.saveAgent(
+      AgentDefinitionSchema.parse({
+        id: "agent-paused-worker",
+        userId: SYSTEM_USER_ID,
+        name: "paused-worker",
+        displayName: "Paused Worker Agent",
+        description: "Paused agent.",
+        systemPrompt: "Prepare scoped plans only after activation.",
+        artifactType: "summary",
+        allowedCapabilities: ["read", "search"],
+        status: "paused",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      })
+    );
+
+    for (const [agentId, message] of [
+      ["agent-missing-worker", /agent override is unavailable/i],
+      ["agent-paused-worker", /agent override is not active/i]
+    ] as const) {
+      const queued = await enqueueGoalCreateJob({
+        repository,
+        userId: SYSTEM_USER_ID,
+        request: "Prepare a weekly operating plan with approval-safe follow-ups.",
+        workspaceId: null,
+        agentId,
+        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        idempotencyKey: `worker-runtime-invalid-agent-${agentId}`
+      });
+
+      await expect(
+        executeGoalCreateJob({
+          repository,
+          selfImprovementRepository,
+          job: queued
+        })
+      ).rejects.toThrow(message);
+      await expect(repository.getGoalBundleForUser(queued.payload.goalId, SYSTEM_USER_ID)).resolves.toBeNull();
+    }
   });
 
   it("processes GitHub issue intake jobs into bounded governed goal work", async () => {

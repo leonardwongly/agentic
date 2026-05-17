@@ -184,6 +184,8 @@ The system uses bounded specialists for different work shapes:
 
 Each agent must emit schema-validated JSON and stay inside an allowlisted capability envelope.
 
+Custom agent overrides are executable only while the selected agent definition is visible to the authenticated user and has `active` lifecycle status. Unknown, foreign, paused, archived, or draft agent IDs reject before goal enqueue when submitted through the API, and stale queued jobs fail in the worker before producing a normal goal bundle.
+
 ### Sub-Agent Coordination
 
 Complex delegation requests use the orchestrator as the parent coordinator. The orchestrator creates a schema-validated sub-agent operating plan artifact, then expands the plan into normal workflow tasks so every spawned role still passes through policy evaluation, capability allowlists, dependency tracking, artifact generation, approval handling, and append-only action logs.

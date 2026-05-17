@@ -197,6 +197,28 @@ describe("runAgent", () => {
     }
   });
 
+  it("rejects non-active custom agent definitions before scaffold execution", () => {
+    const agentDefinition = AgentDefinitionSchema.parse({
+      id: "agent-custom-draft",
+      userId: "user-1",
+      name: "draft-deal-desk",
+      displayName: "Draft Deal Desk",
+      description: "Draft agent that must not execute.",
+      systemPrompt: "Produce concise deal desk execution plans with clear checkpoints and risks.",
+      artifactType: "draft",
+      allowedCapabilities: ["read", "search"],
+      status: "draft",
+      createdAt: nowIso(),
+      updatedAt: nowIso()
+    });
+
+    expect(() =>
+      runAgent(buildTask("workflow"), "Draft a delivery plan.", {
+        agentDefinition
+      })
+    ).toThrow(AgentRunnerExecutionError);
+  });
+
   it("flags unsupported built-ins for manual review instead of claiming specialist execution", () => {
     const result = runAgent(buildTask("travel"), "Prepare next week's itinerary.");
 
