@@ -90,7 +90,15 @@ node --version
 npm install
 ```
 
-3. Choose a persistence mode:
+3. Run the local first-run readiness check:
+
+```bash
+npm run setup:check
+```
+
+This check is read-only. It validates the supported Node range and required repo files, then warns when dependencies, `AGENTIC_ACCESS_KEY`, or Postgres parity configuration are missing.
+
+4. Choose a persistence mode:
 
 - file-backed development: leave `DATABASE_URL` unset
 - Postgres parity: set `DATABASE_URL`, run migrations, and use `npm run db:status`
@@ -100,13 +108,13 @@ npm install
 | File-backed development | `AGENTIC_ACCESS_KEY`; optional `AGENTIC_RUNTIME_STORE_PATH` | `npm run dev`, `npm run worker:start`, `npm test`, `/api/ready` | Fast local path. Database commands that require `DATABASE_URL` are expected to fail. |
 | Postgres parity | `DATABASE_URL`, `AGENTIC_ACCESS_KEY` | File-backed commands plus `npm run db:migrate` and `npm run db:status -- --require-ready` | Use this for shared-state validation and production-like readiness. |
 
-4. Set a dashboard/API access key before sharing the environment:
+5. Set a dashboard/API access key before sharing the environment:
 
 ```bash
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
 ```
 
-5. Start the web app and, for queued work, the worker in separate terminals:
+6. Start the web app and, for queued work, the worker in separate terminals:
 
 ```bash
 npm run dev
@@ -116,14 +124,18 @@ npm run dev
 npm run worker:start
 ```
 
-6. Validate the setup:
+7. Validate the setup:
 
 ```bash
+npm run lint
+npm run typecheck
+npm run format:check
+npm run release:check-context
 npm test
 npm run test:security:regression
 ```
 
-7. Unlock the dashboard and use the in-app first-run checklist. It follows the same order as this section: access key, web runtime, storage readiness, worker/queue readiness, first request, approval path, local notes, optional integrations, and repeatable workflows.
+8. Unlock the dashboard and use the in-app first-run checklist. It follows the same order as this section: access key, web runtime, storage readiness, worker/queue readiness, first request, approval path, local notes, optional integrations, and repeatable workflows.
 
 ### Path 1: Minimal local run
 
@@ -462,6 +474,11 @@ These commands are the current repo-level entry points:
 | --- | --- |
 | `npm run dev` | Start the Next.js web app in development mode. |
 | `npm run worker:start` | Start the worker package against the configured repository backend. |
+| `npm run setup:check` | Check fresh-checkout readiness for Node, required files, dependencies, access key, and database mode. |
+| `npm run lint` | Validate repo-owned hygiene contracts, CI gate wiring, and W10 issue evidence references. |
+| `npm run typecheck` | Run TypeScript validation for production app and package surfaces with `tsconfig.typecheck.json`. |
+| `npm run format:check` | Check changed text files for LF endings, final newline, and trailing whitespace. |
+| `npm run release:check-context` | Reject local artifacts, environment files, logs, packaged outputs, and secret-like filenames from release context. |
 | `npm run build` | Build the web app and run the worker TypeScript check. |
 | `npm test` | Run the full Vitest suite. |
 | `npm run test:security:regression` | Run the categorized security regression suite. |
@@ -476,6 +493,7 @@ These commands are the current repo-level entry points:
 | `npm run docs:build` | Render and validate the generated `build/agentic.docx` artifact. |
 | `npm run security:audit-runtime` | Enforce runtime dependency vulnerability policy. |
 | `npm run security:sbom` | Generate the software bill of materials. |
+| `npm run hygiene:repo` | Report stale branches, stale PRs, and dirty worktrees without mutating GitHub or local worktrees. |
 
 Dependency Review in GitHub Actions requires repository support for GitHub's dependency graph / Advanced Security. The runtime dependency gate remains `npm run security:audit-runtime`, which is the repo-owned check to run locally and in CI.
 
@@ -560,6 +578,7 @@ Agentic supports a checked-in parallel worktree model for roadmap slices that ne
 - `npm run worktree:status`: inspect branch, head, and dirty-state across planned worktrees
 - `npm run worktree:cleanup -- --print-only`: preview which completed stream worktrees and merged branches are safe to remove
 - `npm run worktree:cleanup`: remove clean worktrees and delete fully merged stream branches
+- `npm run hygiene:repo -- --max-age-days 21`: report stale branches, stale PRs, and dirty worktrees before cleanup decisions
 
 CI enforces the ownership model as part of `npm run test:architecture:fitness`: shared protected files are spine-only, and stream-protected files must be changed from their owning stream branch or from the integrated base branch.
 
