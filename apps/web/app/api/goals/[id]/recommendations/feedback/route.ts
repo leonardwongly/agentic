@@ -1,7 +1,18 @@
 import { z } from "zod";
 import { createActionLog, recordCounter, recordHistogram } from "@agentic/observability";
+import {
+  evaluateLearningPrivacyPreflight,
+  redactLearningCaptureJson,
+  redactLearningCaptureText,
+  type LearningPrivacyMetadata
+} from "@agentic/policy";
 import { resolveDashboardCockpitRollout } from "@agentic/repository";
-import { EpisodeRecordSchema, SelfImprovementConflictError } from "@agentic/self-improvement-memory";
+import {
+  assertEpisodeLearningPrivacyPreflight,
+  type EpisodeRecord,
+  EpisodeRecordSchema,
+  SelfImprovementConflictError
+} from "@agentic/self-improvement-memory";
 import { createActorContextFromPrincipal } from "../../../../../../lib/actor-context";
 import { requireApiSession } from "../../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../../../lib/api-response";
@@ -133,6 +144,74 @@ function feedbackRatingFromDecision(decision: z.infer<typeof RecommendationDecis
   }
 }
 
+function redactionField(original: string | null | undefined, redacted: string | null | undefined, field: string) {
+  return original && redacted && original !== redacted ? [field] : [];
+}
+
+function applyLearningPrivacyToFeedbackEpisode(
+  episode: EpisodeRecord,
+  metadata: LearningPrivacyMetadata,
+  reviewAt: string
+): EpisodeRecord {
+  const redactedRationale = episode.recommendation?.rationale
+    ? redactLearningCaptureText(episode.recommendation.rationale)
+    : null;
+  const redactedNotes = episode.outcomeLink?.notes ? redactLearningCaptureText(episode.outcomeLink.notes) : null;
+  const redactedComments = episode.userFeedback?.comments ? redactLearningCaptureText(episode.userFeedback.comments) : undefined;
+  const redactionFields = [
+    ...redactionField(episode.recommendation?.rationale, redactedRationale, "recommendation.rationale"),
+    ...redactionField(episode.outcomeLink?.notes, redactedNotes, "outcomeLink.notes"),
+    ...redactionField(episode.userFeedback?.comments, redactedComments, "userFeedback.comments")
+  ];
+
+  return EpisodeRecordSchema.parse({
+    ...episode,
+    task: redactLearningCaptureText(episode.task),
+    situation: redactLearningCaptureText(episode.situation),
+    rootCause: episode.rootCause ? redactLearningCaptureText(episode.rootCause) : null,
+    solution: redactLearningCaptureText(episode.solution),
+    lesson: redactLearningCaptureText(episode.lesson),
+    recommendation: episode.recommendation
+      ? {
+          ...episode.recommendation,
+          rationale: redactedRationale
+        }
+      : null,
+    outcomeLink: episode.outcomeLink
+      ? {
+          ...episode.outcomeLink,
+          notes: redactedNotes
+        }
+      : null,
+    userFeedback: episode.userFeedback
+      ? {
+          ...episode.userFeedback,
+          comments: redactedComments
+        }
+      : null,
+    privacy: {
+      ...episode.privacy,
+      retention: {
+        policy: `learning-feedback-${metadata.retentionDays}d`,
+        reviewAt,
+        expiresAt: metadata.expiresAt
+      },
+      redaction: {
+        applied: redactionFields.length > 0,
+        fields: redactionFields,
+        rules: redactionFields.length > 0 ? ["learning-capture-boundary"] : [],
+        reason: redactionFields.length > 0 ? "Boundary redaction applied before learning capture." : null
+      }
+    },
+    metadata: {
+      ...(redactLearningCaptureJson(episode.metadata) as Record<string, unknown>),
+      userId: metadata.userId,
+      workspaceId: metadata.workspaceId,
+      learningPrivacy: metadata
+    }
+  });
+}
+
 export async function POST(request: Request, context: RouteContext) {
   try {
     const principal = await requireApiSession(request);
@@ -147,6 +226,9 @@ export async function POST(request: Request, context: RouteContext) {
       throw new ApiRouteError(404, `Goal ${goalId} was not found.`);
     }
 
+    const governance = bundle.goal.workspaceId
+      ? await repository.getWorkspaceGovernance(bundle.goal.workspaceId, principal.userId)
+      : null;
     const decisionSummary = describeDecision(decision);
     const metricAttributes = {
       decision,
@@ -201,8 +283,25 @@ export async function POST(request: Request, context: RouteContext) {
       actionLogs: [...bundle.actionLogs, actionLog]
     });
 
+    const preflight = evaluateLearningPrivacyPreflight({
+      bundle,
+      userId: principal.userId,
+      actorContext,
+      governance,
+      source: "recommendation_feedback",
+      now: actionLog.createdAt
+    });
+
+    if (!preflight.allowed) {
+      return authenticatedJson({
+        goalId: bundle.goal.id,
+        message: `Recorded ${decisionSummary} recommendation feedback for "${bundle.goal.title}".`,
+        dashboard: await repository.getDashboardData(principal.userId)
+      });
+    }
+
     const selfImprovementRepository = await getSeededSelfImprovementRepository();
-    const feedbackEpisode = EpisodeRecordSchema.parse({
+    const feedbackEpisodeBase = EpisodeRecordSchema.parse({
       id: `feedback-${actionLog.id}`,
       timestamp: actionLog.createdAt,
       skill: recommendation.workflow.agent,
@@ -277,6 +376,15 @@ export async function POST(request: Request, context: RouteContext) {
         source: "recommendation_feedback_route",
         feedbackActionLogId: actionLog.id
       }
+    });
+    const feedbackEpisode = applyLearningPrivacyToFeedbackEpisode(
+      feedbackEpisodeBase,
+      preflight.metadata,
+      preflight.memoryRetention.reviewAt
+    );
+    assertEpisodeLearningPrivacyPreflight(feedbackEpisode, {
+      userId: principal.userId,
+      workspaceId: bundle.goal.workspaceId ?? null
     });
 
     try {

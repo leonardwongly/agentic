@@ -206,7 +206,7 @@ export const LearningEpisodePrivacySchema = z
     datasetId: z.literal("learning-capture-records"),
     userId: boundedString(120),
     workspaceId: z.string().trim().min(1).max(120).nullable().default(null),
-    captureSource: z.enum(["goal_bundle", "execution_outcome"]),
+    captureSource: z.enum(["goal_bundle", "execution_outcome", "recommendation_feedback"]),
     captureAllowed: z.literal(true),
     optOutApplied: z.literal(false),
     consentBasis: z.enum(["system", "derived", "explicit"]),
