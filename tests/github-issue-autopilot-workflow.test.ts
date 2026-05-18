@@ -66,7 +66,11 @@ describe("GitHub issue autopilot workflow", () => {
     expect(workflow).not.toContain("actions/checkout");
     expect(workflow).toContain("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL: ${{ vars.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL }}");
     expect(workflow).toContain("AGENTIC_GITHUB_APP_SYNC_SECRET: ${{ secrets.AGENTIC_GITHUB_APP_SYNC_SECRET }}");
+    expect(workflow).toContain("core.setSecret(secret)");
+    expect(workflow).toContain("const requestId = `github-app-issue-sync-${context.runId}-${context.runAttempt}`;");
     expect(workflow).toContain('authorization: `Bearer ${secret}`');
+    expect(workflow).toContain('"x-request-id": requestId');
+    expect(workflow).toContain('"x-trace-id": requestId');
     expect(workflow).toContain('const allowTemporaryUrl = String(context.payload.inputs?.allow_temporary_url ?? "false") === "true";');
     expect(workflow).toContain('parsedUrl.protocol !== "https:"');
     expect(workflow).toContain("parsedUrl.username || parsedUrl.password");
@@ -84,6 +88,7 @@ describe("GitHub issue autopilot workflow", () => {
     expect(workflow).toContain("!allowTemporaryUrl");
     expect(workflow).toContain("secret.length < 32");
     expect(workflow).not.toContain("AGENTIC_GITHUB_APP_PRIVATE_KEY");
+    expect(workflow).not.toContain("AGENTIC_GITHUB_APP_INSTALLATION_ID");
     expect(workflow).not.toContain("console.log(secret");
     expect(workflow).not.toContain("console.error(secret");
   });
