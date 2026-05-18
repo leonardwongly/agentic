@@ -456,6 +456,13 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
               {renderConnectorIssueAction(item)}
               {item.remediation ? <span className="pill">{item.remediation.note}</span> : null}
             </div>
+            {item.operatorSteps && item.operatorSteps.length > 0 ? (
+              <ol className="connector-recovery-steps" aria-label={`${item.label} recovery steps`}>
+                {item.operatorSteps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            ) : null}
           </div>
         ))}
       </div>

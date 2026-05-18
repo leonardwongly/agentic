@@ -3985,6 +3985,11 @@ describe("repository", () => {
       linkedIntegrationIds: ["gmail", "google-calendar"],
       linkedIntegrationNames: ["Gmail Adapter", "Google Calendar Adapter"],
       meetingReadinessTarget: false,
+      operatorSteps: [
+        "Run connector revalidation from the recovery lane.",
+        "Confirm encrypted credential storage remains present and secret material is not exposed.",
+        "If revalidation fails again, reconnect the provider account before widening automation."
+      ],
       target: {
         section: "integrations",
         label: "Open google integrations"

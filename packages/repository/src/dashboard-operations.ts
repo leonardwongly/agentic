@@ -80,6 +80,7 @@ export type DashboardConnectorHealthIssue = {
   linkedIntegrationIds: string[];
   linkedIntegrationNames: string[];
   meetingReadinessTarget: boolean | null;
+  operatorSteps?: string[];
   remediation: DashboardConnectorRemediation | null;
 };
 
@@ -832,6 +833,11 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        operatorSteps: [
+          "Open the affected integration setup flow.",
+          "Complete provider re-authentication with the account owner.",
+          "Verify the connector returns to approval-grade readiness before resuming automation."
+        ],
         remediation: {
           kind: "open_target",
           label: "Reconnect",
@@ -850,6 +856,11 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        operatorSteps: [
+          "Mark the connector as reconnect-required from the recovery lane.",
+          "Ask the workspace owner to complete provider re-authorization.",
+          "Keep provider-backed automation gated until the reconnect-required state clears."
+        ],
         remediation: {
           kind: "mark_connector_reconnect_required",
           label: "Require reconnect",
@@ -868,6 +879,11 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        operatorSteps: [
+          "Mark the expired credential as reconnect-required.",
+          "Reconnect or rotate the provider credential with fresh expiry evidence.",
+          "Confirm downstream integrations meet their expected readiness tier."
+        ],
         remediation: {
           kind: "mark_connector_reconnect_required",
           label: "Require reconnect",
@@ -886,6 +902,11 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        operatorSteps: [
+          "Run connector revalidation from the recovery lane.",
+          "Confirm encrypted credential storage remains present and secret material is not exposed.",
+          "If revalidation fails again, reconnect the provider account before widening automation."
+        ],
         remediation: {
           kind: "revalidate_connector_credential",
           label: "Revalidate",
@@ -904,6 +925,11 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        operatorSteps: [
+          "Run connector revalidation to refresh readiness evidence.",
+          "Review linked integration targets before allowing provider-backed actions.",
+          "Leave autonomy held if validation freshness cannot be restored."
+        ],
         remediation: {
           kind: "revalidate_connector_credential",
           label: "Revalidate",
