@@ -369,6 +369,9 @@ function createDashboardFixture(): DashboardData {
             severity: "attention",
             provider: "google",
             status: "reconnect_required",
+            lifecycleState: "degraded",
+            repairState: "reconnect_required",
+            missingScopes: [],
             updatedAt: "2024-01-01T00:00:00.000Z",
             target: {
               section: "operations",

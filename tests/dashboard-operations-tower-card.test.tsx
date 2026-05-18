@@ -116,6 +116,9 @@ describe("DashboardOperationsTowerCard", () => {
             severity: "attention",
             provider: "google",
             status: "refresh_failed",
+            lifecycleState: "degraded",
+            repairState: "refresh_repair_required",
+            missingScopes: [],
             updatedAt: "2026-04-21T00:00:00.000Z",
             target: {
               section: "integrations",
