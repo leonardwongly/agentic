@@ -206,6 +206,41 @@ describe("captureExecutionOutcomeSignals", () => {
     expect(captured.episodes[1].privacy.retention.expiresAt).toBe("2024-12-31T00:02:00.000Z");
   });
 
+  it("links execution episodes to task-scoped approval evidence records", () => {
+    const captured = captureExecutionOutcomeSignals(
+      buildBundle(),
+      "user-1",
+      [
+        {
+          taskId: "task-1",
+          success: true,
+          action: "send_message",
+          detail: "Draft created (id: draft-1) for vip@example.com.",
+          timestamp: "2024-01-01T00:01:00.000Z",
+          kind: "execution.completed"
+        },
+        {
+          taskId: "task-2",
+          success: false,
+          action: "create_note",
+          detail: "Execution failed: disk quota exceeded while writing note content.",
+          timestamp: "2024-01-01T00:02:00.000Z",
+          kind: "execution.failed"
+        }
+      ],
+      createHumanActorContext("user-1", "session-1"),
+      {
+        evidenceRecordIdsByTaskId: {
+          "task-1": ["evidence-task-1", "evidence-task-1", " "],
+          "task-2": ["evidence-task-2"]
+        }
+      }
+    );
+
+    expect(captured.episodes[0].provenance.evidenceRecordIds).toEqual(["evidence-task-1"]);
+    expect(captured.episodes[1].provenance.evidenceRecordIds).toEqual(["evidence-task-2"]);
+  });
+
   it("truncates oversized execution detail in failure memories and episodes", () => {
     const oversizedDetail = `Execution failed: ${"x".repeat(400)}`;
     const captured = captureExecutionOutcomeSignals(buildBundle(), "user-1", [
@@ -286,6 +321,22 @@ describe("captureMemoriesFromBundle", () => {
       executionKind: "completed",
       outcomeScore: 1
     });
+  });
+
+  it("links goal-bundle episodes to task-scoped approval evidence records", () => {
+    const captured = captureMemoriesFromBundle(
+      buildBundle(),
+      "user-1",
+      createHumanActorContext("user-1", "session-1"),
+      {
+        evidenceRecordIdsByTaskId: {
+          "task-1": ["evidence-task-1"]
+        }
+      }
+    );
+
+    expect(captured.episodes[0].provenance.evidenceRecordIds).toEqual(["evidence-task-1"]);
+    expect(captured.episodes[1].provenance.evidenceRecordIds).toEqual([]);
   });
 
   it("uses deterministic ids so repeated capture stays idempotent across retries", () => {
