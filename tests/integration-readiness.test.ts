@@ -1,4 +1,5 @@
 import {
+  assessManagedGoogleCredential,
   buildDefaultIntegrationAccounts,
   describeIntegrationReadiness,
   integrationReadinessMeetsTier,
@@ -335,6 +336,7 @@ describe("describeIntegrationReadiness", () => {
         credential: buildGoogleCredential({
           metadata: {
             reconciliationCursor: "provider-cursor-secret",
+            reconciliationCursorUpdatedAt: "2026-05-01T00:00:00.000Z",
             lastReplayJobId: "job-replay-1"
           },
           scopes: ["https://www.googleapis.com/auth/gmail.modify"]
@@ -346,11 +348,71 @@ describe("describeIntegrationReadiness", () => {
     expect(readiness.managedProvider?.reconciliation).toEqual(
       expect.objectContaining({
         cursorPresent: true,
+        cursorUpdatedAt: "2026-05-01T00:00:00.000Z",
         lastReplayJobId: "job-replay-1",
-        replayAvailable: true
+        replayAvailable: true,
+        replayJobKind: "connector_reconciliation_replay"
       })
     );
     expect(readiness.managedProvider?.reconciliation.cursorRef).not.toBe("provider-cursor-secret");
     expect(readiness.managedProvider?.reconciliation.idempotencyKey).toContain("connector-replay:google:workspace-1:acct-1:");
+    expect(readiness.managedProvider?.recoveryActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "replay_reconciliation",
+          operation: "enqueue_connector_reconciliation_replay"
+        })
+      ])
+    );
+  });
+
+  it("marks stale reconciliation cursors replayable without exposing raw cursor state", () => {
+    const gmail = {
+      ...buildDefaultIntegrationAccounts("user-1").find((integration) => integration.id === "gmail")!,
+      status: "ready" as const,
+      metadata: {
+        provider: "google",
+        managed: true,
+        providerCredentialId: "google:workspace-1:acct-1"
+      }
+    };
+
+    const assessment = assessManagedGoogleCredential({
+      account: gmail,
+      credential: buildGoogleCredential({
+        metadata: {
+          reconciliationCursor: "stale-provider-cursor-secret",
+          reconciliationCursorUpdatedAt: "2026-05-01T00:00:00.000Z",
+          lastReplayJobId: "job-replay-previous"
+        },
+        scopes: ["https://www.googleapis.com/auth/gmail.modify"],
+        lastValidatedAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      }),
+      hasRefreshTokenSecret: true,
+      now: Date.parse("2026-05-03T12:00:00.000Z")
+    });
+
+    expect(assessment?.reconciliation).toMatchObject({
+      cursorPresent: true,
+      cursorUpdatedAt: "2026-05-01T00:00:00.000Z",
+      cursorAgeSeconds: 216000,
+      cursorStale: true,
+      lastReplayJobId: "job-replay-previous",
+      replayAvailable: true,
+      replayJobKind: "connector_reconciliation_replay"
+    });
+    expect(assessment?.reconciliation.cursorRef).not.toBe("stale-provider-cursor-secret");
+    expect(assessment?.recoveryActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "replay_reconciliation",
+          operation: "enqueue_connector_reconciliation_replay",
+          operatorSteps: expect.arrayContaining([
+            "Resume from the redacted cursor reference instead of a full provider rescan."
+          ])
+        })
+      ])
+    );
   });
 });

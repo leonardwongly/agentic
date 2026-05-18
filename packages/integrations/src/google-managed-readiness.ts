@@ -54,14 +54,20 @@ export const googleCredentialRepairStateValues = [
 export type GoogleCredentialRepairState = (typeof googleCredentialRepairStateValues)[number];
 
 export type GoogleCredentialRecoveryAction = {
-  id: "connect_google" | "reconnect_google" | "request_scope_upgrade" | "revalidate_credential";
+  id:
+    | "connect_google"
+    | "reconnect_google"
+    | "request_scope_upgrade"
+    | "revalidate_credential"
+    | "replay_reconciliation";
   label: string;
   description: string;
   operatorSteps: string[];
   operation:
     | "open_google_connect"
     | "mark_connector_reconnect_required"
-    | "revalidate_connector_credential";
+    | "revalidate_connector_credential"
+    | "enqueue_connector_reconciliation_replay";
 };
 
 export type GoogleCredentialSloGate = {
@@ -75,8 +81,12 @@ export type GoogleCredentialSloGate = {
 export type GoogleCredentialReconciliationState = {
   cursorPresent: boolean;
   cursorRef: string | null;
+  cursorUpdatedAt: string | null;
+  cursorAgeSeconds: number | null;
+  cursorStale: boolean;
   lastReplayJobId: string | null;
   replayAvailable: boolean;
+  replayJobKind: "connector_reconciliation_replay" | null;
   idempotencyKey: string | null;
 };
 
@@ -96,6 +106,7 @@ export type GoogleCredentialAssessment = {
 };
 
 const DEFAULT_GOOGLE_VALIDATION_FRESH_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_GOOGLE_RECONCILIATION_CURSOR_STALE_MS = 24 * 60 * 60 * 1000;
 
 function extractProviderCredentialId(account: Pick<IntegrationAccount, "metadata">): string | null {
   const raw = account.metadata.providerCredentialId;
@@ -129,20 +140,34 @@ function buildCursorRef(cursor: string | null): string | null {
 function buildReconciliationState(params: {
   providerCredentialId: string | null;
   credential?: Pick<ProviderCredential, "id" | "metadata"> | null;
+  now: number;
 }): GoogleCredentialReconciliationState {
   const cursor = params.credential
     ? boundedMetadataString(params.credential.metadata, "reconciliationCursor", 500)
     : null;
+  const cursorUpdatedAt = params.credential
+    ? boundedMetadataString(params.credential.metadata, "reconciliationCursorUpdatedAt", 80)
+    : null;
+  const cursorUpdatedAtMs = parseTimestampMs(cursorUpdatedAt);
+  const cursorAgeSeconds = cursorUpdatedAtMs !== null ? Math.max(0, Math.floor((params.now - cursorUpdatedAtMs) / 1000)) : null;
   const lastReplayJobId = params.credential
     ? boundedMetadataString(params.credential.metadata, "lastReplayJobId", 200)
     : null;
   const credentialId = params.credential?.id ?? params.providerCredentialId;
+  const replayAvailable = Boolean(credentialId && cursor);
 
   return {
     cursorPresent: Boolean(cursor),
     cursorRef: buildCursorRef(cursor),
+    cursorUpdatedAt: cursorUpdatedAtMs !== null ? new Date(cursorUpdatedAtMs).toISOString() : null,
+    cursorAgeSeconds,
+    cursorStale:
+      Boolean(cursor) &&
+      cursorUpdatedAtMs !== null &&
+      params.now - cursorUpdatedAtMs >= DEFAULT_GOOGLE_RECONCILIATION_CURSOR_STALE_MS,
     lastReplayJobId,
-    replayAvailable: Boolean(credentialId && cursor),
+    replayAvailable,
+    replayJobKind: replayAvailable ? "connector_reconciliation_replay" : null,
     idempotencyKey: credentialId && cursor ? `connector-replay:${credentialId}:${buildCursorRef(cursor)}` : null
   };
 }
@@ -152,82 +177,96 @@ function buildRecoveryActions(params: {
   lifecycleState: GoogleCredentialLifecycleState;
   repairState: GoogleCredentialRepairState;
   missingScopes: string[];
+  reconciliation: GoogleCredentialReconciliationState;
 }): GoogleCredentialRecoveryAction[] {
+  const actions: GoogleCredentialRecoveryAction[] = [];
+
   switch (params.repairState) {
     case "setup_required":
-      return [
-        {
-          id: "connect_google",
-          label: "Connect Google",
-          description: `Start managed Google OAuth setup for ${params.accountName}.`,
-          operatorSteps: [
-            "Open the Google integration setup flow.",
-            "Complete OAuth consent with the expected workspace account.",
-            "Verify the connector returns to approval-grade readiness."
-          ],
-          operation: "open_google_connect"
-        }
-      ];
+      actions.push({
+        id: "connect_google",
+        label: "Connect Google",
+        description: `Start managed Google OAuth setup for ${params.accountName}.`,
+        operatorSteps: [
+          "Open the Google integration setup flow.",
+          "Complete OAuth consent with the expected workspace account.",
+          "Verify the connector returns to approval-grade readiness."
+        ],
+        operation: "open_google_connect"
+      });
+      break;
     case "reconnect_required":
-      return [
-        {
-          id: "reconnect_google",
-          label: "Reconnect Google",
-          description: `Reconnect ${params.accountName} before provider actions resume.`,
-          operatorSteps: [
-            "Open the Google integration setup flow.",
-            "Re-authorize the account that owns this connector.",
-            "Confirm revoked, expired, or reconnect-required state is cleared."
-          ],
-          operation: "mark_connector_reconnect_required"
-        }
-      ];
+      actions.push({
+        id: "reconnect_google",
+        label: "Reconnect Google",
+        description: `Reconnect ${params.accountName} before provider actions resume.`,
+        operatorSteps: [
+          "Open the Google integration setup flow.",
+          "Re-authorize the account that owns this connector.",
+          "Confirm revoked, expired, or reconnect-required state is cleared."
+        ],
+        operation: "mark_connector_reconnect_required"
+      });
+      break;
     case "scope_repair_required":
-      return [
-        {
-          id: "request_scope_upgrade",
-          label: "Request scope upgrade",
-          description: `Reconnect Google with missing scopes: ${params.missingScopes.join(", ")}.`,
-          operatorSteps: [
-            "Open the Google integration setup flow.",
-            "Approve the missing scopes listed in readiness.",
-            "Rerun connector verification before allowing governed execution."
-          ],
-          operation: "open_google_connect"
-        }
-      ];
+      actions.push({
+        id: "request_scope_upgrade",
+        label: "Request scope upgrade",
+        description: `Reconnect Google with missing scopes: ${params.missingScopes.join(", ")}.`,
+        operatorSteps: [
+          "Open the Google integration setup flow.",
+          "Approve the missing scopes listed in readiness.",
+          "Rerun connector verification before allowing governed execution."
+        ],
+        operation: "open_google_connect"
+      });
+      break;
     case "refresh_repair_required":
-      return [
-        {
-          id: "reconnect_google",
-          label: "Refresh credential",
-          description: `Repair the refresh-token path for ${params.accountName}.`,
-          operatorSteps: [
-            "Reconnect the Google account to issue a new refresh token.",
-            "Verify encrypted secret storage is present.",
-            "Revalidate the connector after storage succeeds."
-          ],
-          operation: "open_google_connect"
-        }
-      ];
+      actions.push({
+        id: "reconnect_google",
+        label: "Refresh credential",
+        description: `Repair the refresh-token path for ${params.accountName}.`,
+        operatorSteps: [
+          "Reconnect the Google account to issue a new refresh token.",
+          "Verify encrypted secret storage is present.",
+          "Revalidate the connector after storage succeeds."
+        ],
+        operation: "open_google_connect"
+      });
+      break;
     case "validation_required":
-      return [
-        {
-          id: "revalidate_credential",
-          label: "Revalidate credential",
-          description: `Refresh validation evidence for ${params.accountName}.`,
-          operatorSteps: [
-            "Run connector revalidation from the recovery lane.",
-            "Confirm provider access still works for the required scopes.",
-            "Leave autonomy gated if validation still fails."
-          ],
-          operation: "revalidate_connector_credential"
-        }
-      ];
+      actions.push({
+        id: "revalidate_credential",
+        label: "Revalidate credential",
+        description: `Refresh validation evidence for ${params.accountName}.`,
+        operatorSteps: [
+          "Run connector revalidation from the recovery lane.",
+          "Confirm provider access still works for the required scopes.",
+          "Leave autonomy gated if validation still fails."
+        ],
+        operation: "revalidate_connector_credential"
+      });
+      break;
     case "none":
     default:
-      return [];
+      break;
   }
+
+  if (params.reconciliation.replayAvailable) {
+    actions.push({
+      id: "replay_reconciliation",
+      label: "Replay reconciliation",
+      description: `Replay bounded Google reconciliation for ${params.accountName} from the redacted cursor reference.`,
+      operatorSteps: [
+        "Enqueue a connector reconciliation replay with the displayed idempotency key.",
+        "Resume from the redacted cursor reference instead of a full provider rescan.",
+        "Confirm the replay job id is recorded before retrying webhook or sync recovery."
+      ],
+      operation: "enqueue_connector_reconciliation_replay"
+    });
+  }
+
+  return actions;
 }
 
 function buildSloGates(params: {
@@ -459,6 +498,11 @@ export function assessManagedGoogleCredential(params: {
     hasRefreshToken,
     validationStale
   });
+  const reconciliation = buildReconciliationState({
+    providerCredentialId: credential?.id ?? extractProviderCredentialId(params.account),
+    credential,
+    now
+  });
 
   return {
     provider: "google",
@@ -473,7 +517,8 @@ export function assessManagedGoogleCredential(params: {
       accountName: params.account.name,
       lifecycleState,
       repairState,
-      missingScopes
+      missingScopes,
+      reconciliation
     }),
     sloGates: buildSloGates({
       credential,
@@ -482,10 +527,7 @@ export function assessManagedGoogleCredential(params: {
       missingScopes,
       now
     }),
-    reconciliation: buildReconciliationState({
-      providerCredentialId: credential?.id ?? extractProviderCredentialId(params.account),
-      credential
-    }),
+    reconciliation,
     ready: issues.every((issue) => !issue.blocking)
   };
 }
