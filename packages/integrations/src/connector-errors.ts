@@ -81,6 +81,44 @@ export function createHttpConnectorError(params: {
   });
 }
 
+export function getConnectorHttpStatusCode(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const candidate = error as {
+    code?: unknown;
+    status?: unknown;
+    response?: {
+      status?: unknown;
+      headers?: {
+        get?: (name: string) => string | null;
+        [key: string]: unknown;
+      };
+    };
+  };
+  const status = candidate.response?.status ?? candidate.status ?? candidate.code;
+
+  return typeof status === "number" && Number.isInteger(status) ? status : undefined;
+}
+
+export function createConnectorTimeoutSignal(params: {
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
+
+  if (!params.signal) {
+    return timeoutSignal;
+  }
+
+  if (params.signal.aborted) {
+    return params.signal;
+  }
+
+  return AbortSignal.any([params.signal, timeoutSignal]);
+}
+
 export function normalizeConnectorThrownError(params: {
   provider: string;
   operation: string;
@@ -101,6 +139,33 @@ export function normalizeConnectorThrownError(params: {
     return new ConnectorFailureError(params.provider, params.operation, "timeout", true, {
       cause: params.error,
       message: `${params.provider} ${params.operation} timed out.`
+    });
+  }
+
+  const statusCode = getConnectorHttpStatusCode(params.error);
+
+  if (statusCode !== undefined) {
+    return createHttpConnectorError({
+      provider: params.provider,
+      operation: params.operation,
+      statusCode,
+      retryAfterSeconds:
+        typeof params.error === "object" &&
+        params.error !== null &&
+        "response" in params.error &&
+        typeof params.error.response === "object" &&
+        params.error.response !== null &&
+        "headers" in params.error.response &&
+        typeof params.error.response.headers === "object" &&
+        params.error.response.headers !== null &&
+        "get" in params.error.response.headers &&
+        typeof params.error.response.headers.get === "function"
+          ? parseRetryAfterSeconds(params.error.response.headers.get("retry-after"))
+          : undefined,
+      message:
+        params.error instanceof Error && params.error.message
+          ? params.error.message
+          : undefined
     });
   }
 

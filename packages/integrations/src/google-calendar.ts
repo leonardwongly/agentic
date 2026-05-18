@@ -2,6 +2,13 @@ import { google } from "googleapis";
 import { z } from "zod";
 import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
 import { createGoogleOAuthClient } from "./google-oauth";
+import {
+  createConnectorTimeoutSignal,
+  normalizeConnectorThrownError
+} from "./connector-errors";
+
+const GOOGLE_CALENDAR_MUTATION_TIMEOUT_MS = 10_000;
+const GOOGLE_CALENDAR_IDEMPOTENCY_PROPERTY = "agenticIdempotencyKey";
 
 const CalendarEventSchema = z.object({
   id: z.string(),
@@ -49,6 +56,26 @@ function formatDateTime(dt: any): string {
   return dt.dateTime ?? dt.date ?? "";
 }
 
+function buildCalendarMutationSignal(signal?: AbortSignal) {
+  return createConnectorTimeoutSignal({
+    timeoutMs: GOOGLE_CALENDAR_MUTATION_TIMEOUT_MS,
+    signal
+  });
+}
+
+function parseCreatedCalendarEvent(
+  event: { id?: string | null; summary?: string | null; start?: unknown; end?: unknown; htmlLink?: string | null },
+  fallback: { summary: string; start: string; end: string }
+): CreatedEvent {
+  return CreatedEventSchema.parse({
+    id: event.id!,
+    summary: event.summary ?? fallback.summary,
+    start: formatDateTime(event.start) || fallback.start,
+    end: formatDateTime(event.end) || fallback.end,
+    htmlLink: event.htmlLink ?? ""
+  });
+}
+
 export function isCalendarReady(): boolean {
   return getOAuth2Client() !== null;
 }
@@ -65,6 +92,7 @@ export type GoogleCalendarAdapter = {
     attendees?: string[];
     calendarId?: string;
     idempotencyKey?: string;
+    signal?: AbortSignal;
   }) => Promise<CreatedEvent>;
   updateEvent: (params: {
     eventId: string;
@@ -120,10 +148,15 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
                 operation,
                 outcome: "error"
               });
-              logError("integration.google_calendar.call_failed", error, {
+              const normalizedError = normalizeConnectorThrownError({
+                provider: "google_calendar",
+                operation,
+                error
+              });
+              logError("integration.google_calendar.call_failed", normalizedError, {
                 operation
               });
-              throw error;
+              throw normalizedError;
             }
           }
         )
@@ -210,7 +243,7 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
         }
       );
     },
-    async createEvent(paramsCreate: { summary: string; start: string; end: string; description?: string; location?: string; attendees?: string[]; calendarId?: string; idempotencyKey?: string }) {
+    async createEvent(paramsCreate: { summary: string; start: string; end: string; description?: string; location?: string; attendees?: string[]; calendarId?: string; idempotencyKey?: string; signal?: AbortSignal }) {
       return instrumentCalendarCall(
         "events.create",
         {
@@ -222,6 +255,29 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
         async () => {
           const calendar = getClient();
           const isAllDay = paramsCreate.start.length === 10;
+          const requestOptions = {
+            signal: buildCalendarMutationSignal(paramsCreate.signal)
+          };
+
+          if (paramsCreate.idempotencyKey) {
+            const existing = await calendar.events.list({
+              calendarId: paramsCreate.calendarId ?? "primary",
+              maxResults: 1,
+              privateExtendedProperty: [
+                `${GOOGLE_CALENDAR_IDEMPOTENCY_PROPERTY}=${paramsCreate.idempotencyKey}`
+              ],
+              singleEvents: false
+            }, requestOptions);
+            const existingEvent = existing.data.items?.[0];
+
+            if (existingEvent?.id) {
+              return parseCreatedCalendarEvent(existingEvent, {
+                summary: paramsCreate.summary,
+                start: paramsCreate.start,
+                end: paramsCreate.end
+              });
+            }
+          }
 
           const response = await calendar.events.insert({
             calendarId: paramsCreate.calendarId ?? "primary",
@@ -231,16 +287,21 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
               location: paramsCreate.location,
               start: isAllDay ? { date: paramsCreate.start } : { dateTime: paramsCreate.start },
               end: isAllDay ? { date: paramsCreate.end } : { dateTime: paramsCreate.end },
-              attendees: paramsCreate.attendees?.map((email) => ({ email }))
+              attendees: paramsCreate.attendees?.map((email) => ({ email })),
+              extendedProperties: paramsCreate.idempotencyKey
+                ? {
+                    private: {
+                      [GOOGLE_CALENDAR_IDEMPOTENCY_PROPERTY]: paramsCreate.idempotencyKey
+                    }
+                  }
+                : undefined
             }
-          });
+          }, requestOptions);
 
-          return CreatedEventSchema.parse({
-            id: response.data.id!,
-            summary: response.data.summary ?? paramsCreate.summary,
-            start: formatDateTime(response.data.start),
-            end: formatDateTime(response.data.end),
-            htmlLink: response.data.htmlLink ?? ""
+          return parseCreatedCalendarEvent(response.data, {
+            summary: paramsCreate.summary,
+            start: paramsCreate.start,
+            end: paramsCreate.end
           });
         }
       );
@@ -317,6 +378,8 @@ export async function createEvent(params: {
   location?: string;
   attendees?: string[];
   calendarId?: string;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
 }): Promise<CreatedEvent> {
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
 
