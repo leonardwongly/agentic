@@ -1,5 +1,11 @@
 import { AgentDefinitionSchema, AgentRunnerContractSchema, SubAgentPlanSchema, TaskSchema, nowIso } from "@agentic/contracts";
-import { AgentRunnerExecutionError, runAgent, validateAgentRunnerRegistration, type AgentRunner } from "@agentic/agents";
+import {
+  AgentRunnerExecutionError,
+  listAgentSideEffectCapabilities,
+  runAgent,
+  validateAgentRunnerRegistration,
+  type AgentRunner
+} from "@agentic/agents";
 
 function buildTask(
   assignedAgent: "calendar" | "communications" | "orchestrator" | "travel" | "workflow",
@@ -23,6 +29,11 @@ function buildTask(
 }
 
 describe("runAgent", () => {
+  it("classifies side-effect capabilities for custom-agent quarantine checks", () => {
+    expect(listAgentSideEffectCapabilities(["read", "search", "send", "schedule"])).toEqual(["send", "schedule"]);
+    expect(listAgentSideEffectCapabilities(["read", "search", "monitor"])).toEqual([]);
+  });
+
   it("marks selected production wedges as governed specialists in the result and artifact metadata", () => {
     const result = runAgent(buildTask("communications"), "Triage the current inbox.");
 

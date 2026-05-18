@@ -548,7 +548,7 @@ function compareRiskClass(left: Task["riskClass"], right: Task["riskClass"]): nu
   return (order.get(left) ?? Number.POSITIVE_INFINITY) - (order.get(right) ?? Number.POSITIVE_INFINITY);
 }
 
-function sideEffectCapabilitiesFor(capabilities: Capability[]): Capability[] {
+export function listAgentSideEffectCapabilities(capabilities: Capability[]): Capability[] {
   return capabilities.filter((capability) => SIDE_EFFECT_CAPABILITIES.has(capability));
 }
 
@@ -559,7 +559,7 @@ function permissionsForTask(task: Task, agentDefinition?: AgentDefinition | null
     allowedCapabilities,
     blockedCapabilities: agentDefinition?.blockedCapabilities ?? [],
     maxRiskClass: agentDefinition?.maxRiskClass ?? task.riskClass,
-    sideEffectCapabilities: sideEffectCapabilitiesFor(allowedCapabilities)
+    sideEffectCapabilities: listAgentSideEffectCapabilities(allowedCapabilities)
   };
 }
 

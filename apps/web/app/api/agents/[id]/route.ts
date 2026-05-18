@@ -8,6 +8,7 @@ import {
   RiskClassSchema,
   nowIso
 } from "@agentic/contracts";
+import { listAgentSideEffectCapabilities } from "@agentic/agents";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
@@ -38,7 +39,8 @@ const UpdateAgentSchema = z
     allowedCapabilities: z.array(CapabilitySchema).optional(),
     blockedCapabilities: z.array(CapabilitySchema).optional(),
     maxRiskClass: RiskClassSchema.optional(),
-    status: AgentStatusSchema.optional()
+    status: AgentStatusSchema.optional(),
+    sideEffectReviewConfirmed: z.boolean().optional()
   })
   .strict();
 
@@ -76,6 +78,27 @@ export async function PUT(request: Request, { params }: RouteParams) {
       return authenticatedJson({ error: "Cannot modify a built-in agent" }, { status: 403 });
     }
 
+    const allowedCapabilities = body.allowedCapabilities ?? existing.allowedCapabilities;
+    const sideEffectCapabilities = listAgentSideEffectCapabilities(allowedCapabilities);
+    const capabilitiesChanged =
+      body.allowedCapabilities !== undefined || body.blockedCapabilities !== undefined || body.maxRiskClass !== undefined;
+    const activatingSideEffectAgent =
+      sideEffectCapabilities.length > 0 && existing.status !== "active" && body.status === "active";
+
+    if (activatingSideEffectAgent && body.sideEffectReviewConfirmed !== true) {
+      return authenticatedJson(
+        {
+          error: "Side-effect agent activation requires explicit owner review confirmation."
+        },
+        { status: 409 }
+      );
+    }
+
+    const status =
+      sideEffectCapabilities.length > 0 && capabilitiesChanged && body.sideEffectReviewConfirmed !== true
+        ? "draft"
+        : body.status ?? existing.status;
+
     const updated = AgentDefinitionSchema.parse({
       ...existing,
       displayName: body.displayName ?? existing.displayName,
@@ -88,10 +111,10 @@ export async function PUT(request: Request, { params }: RouteParams) {
       behaviorConfig: body.behaviorConfig
         ? { ...existing.behaviorConfig, ...body.behaviorConfig }
         : existing.behaviorConfig,
-      allowedCapabilities: body.allowedCapabilities ?? existing.allowedCapabilities,
+      allowedCapabilities,
       blockedCapabilities: body.blockedCapabilities ?? existing.blockedCapabilities,
       maxRiskClass: body.maxRiskClass ?? existing.maxRiskClass,
-      status: body.status ?? existing.status,
+      status,
       actorContext,
       version: existing.version + 1,
       updatedAt: nowIso()

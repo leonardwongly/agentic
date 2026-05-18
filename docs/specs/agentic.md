@@ -184,7 +184,7 @@ The system uses bounded specialists for different work shapes:
 
 Each agent must emit schema-validated JSON and stay inside an allowlisted capability envelope.
 
-Custom agent overrides are executable only while the selected agent definition is visible to the authenticated user and has `active` lifecycle status. Unknown, foreign, paused, archived, or draft agent IDs reject before goal enqueue when submitted through the API, and stale queued jobs fail in the worker before producing a normal goal bundle.
+Custom agent overrides are executable only while the selected agent definition is visible to the authenticated user and has `active` lifecycle status. Unknown, foreign, paused, archived, or draft agent IDs reject before goal enqueue when submitted through the API, and stale queued jobs fail in the worker before producing a normal goal bundle. Imported agents always land in `draft`, and custom agents that request side-effect capabilities such as `send`, `schedule`, `create`, `update`, `approve`, or `delete` are quarantined in `draft` until the owner explicitly confirms side-effect review during activation.
 
 ### Sub-Agent Coordination
 
