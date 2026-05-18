@@ -24,6 +24,8 @@ export type LearningCapturePrivacyOptions = {
 
 export type LearningCaptureProvenanceOptions = {
   evidenceRecordIdsByTaskId?: Record<string, readonly string[] | undefined>;
+  approvalIdsByTaskId?: Record<string, string | undefined>;
+  taskIds?: readonly string[];
 };
 
 export type LearningCaptureOptions = LearningCapturePrivacyOptions & LearningCaptureProvenanceOptions;
@@ -261,11 +263,18 @@ function extractOutcomeMemory(bundle: GoalBundle, userId: string, actorContext: 
   });
 }
 
-function extractPreferenceSignals(bundle: GoalBundle, userId: string, actorContext: ActorContext | null): MemoryRecord[] {
+function extractPreferenceSignals(
+  bundle: GoalBundle,
+  userId: string,
+  actorContext: ActorContext | null,
+  approvalIds?: readonly string[]
+): MemoryRecord[] {
   const memories: MemoryRecord[] = [];
+  const approvalIdFilter = approvalIds ? new Set(approvalIds) : null;
 
   for (const approval of bundle.approvals) {
     if (approval.decision === "pending") continue;
+    if (approvalIdFilter && !approvalIdFilter.has(approval.id)) continue;
 
     const task = bundle.tasks.find((t) => t.id === approval.taskId);
     if (!task) continue;
@@ -309,9 +318,13 @@ function buildEpisodes(
   memoryIds: string[],
   options?: LearningCaptureProvenanceOptions
 ): EpisodeRecord[] {
-  return bundle.tasks.map((task) => {
+  const taskIdFilter = options?.taskIds ? new Set(options.taskIds) : null;
+  const tasks = taskIdFilter ? bundle.tasks.filter((task) => taskIdFilter.has(task.id)) : bundle.tasks;
+
+  return tasks.map((task) => {
     const artifacts = bundle.artifacts.filter((a) => a.taskId === task.id);
-    const approval = bundle.approvals.find((a) => a.taskId === task.id);
+    const targetApprovalId = options?.approvalIdsByTaskId?.[task.id];
+    const approval = bundle.approvals.find((a) => (targetApprovalId ? a.id === targetApprovalId : a.taskId === task.id));
     const outcome = taskOutcome(task);
     const action = inferTaskAction(task, approval?.actionIntent?.type ?? null);
     const approvalDecision = approval?.decision === "approved" || approval?.decision === "rejected" ? approval.decision : null;
@@ -667,6 +680,45 @@ export function captureMemoriesFromBundle(
     actorContext,
     source: "goal_bundle",
     captured: { memories, episodes },
+    options
+  });
+}
+
+export function captureApprovalOutcomeSignals(
+  bundle: GoalBundle,
+  userId: string,
+  approvalId: string,
+  actorContext: ActorContext | null = null,
+  options?: LearningCaptureOptions
+): CapturedMemories {
+  const approval = bundle.approvals.find((candidate) => candidate.id === approvalId);
+  if (!approval || approval.decision === "pending") {
+    return { memories: [], episodes: [] };
+  }
+
+  const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
+  if (!task) {
+    return { memories: [], episodes: [] };
+  }
+
+  const memories = extractPreferenceSignals(bundle, userId, actorContext, [approvalId]);
+
+  return applyLearningPrivacyControls({
+    bundle,
+    userId,
+    actorContext,
+    source: "approval_outcome",
+    captured: {
+      memories,
+      episodes: buildEpisodes(bundle, memories.map((memory) => memory.id), {
+        ...options,
+        approvalIdsByTaskId: {
+          ...options?.approvalIdsByTaskId,
+          [task.id]: approval.id
+        },
+        taskIds: [task.id]
+      })
+    },
     options
   });
 }

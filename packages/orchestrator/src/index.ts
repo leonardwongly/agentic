@@ -53,7 +53,7 @@ import {
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
-export { captureExecutionOutcomeSignals, captureMemoriesFromBundle, type CapturedMemories } from "./memory-capture";
+export { captureApprovalOutcomeSignals, captureExecutionOutcomeSignals, captureMemoriesFromBundle, type CapturedMemories } from "./memory-capture";
 export { executeApprovedTask, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "./execution-dispatch";
 export { generateBriefing, generateMorningBriefing } from "./morning-briefing";
 export { refineGoal } from "./goal-refinement";

@@ -4,10 +4,10 @@ The learning memory flywheel turns completed goals, approval decisions, executio
 
 ## Capture Contract
 
-- Goal and execution capture writes normal `MemoryRecord` entries plus self-improvement `EpisodeRecord` files.
+- Goal, approval-outcome, and execution capture writes normal `MemoryRecord` entries plus self-improvement `EpisodeRecord` files.
 - Every new episode carries `provenance.ownerUserId`, `provenance.workspaceId`, recommendation keys, linked memory IDs, action-log IDs, and retention/redaction metadata.
 - Recommendation feedback writes a goal action log and a separate feedback episode so accepted, edited, rejected, and ignored recommendations affect future replay scoring.
-- Episode IDs are deterministic for goal/execution capture and action-log scoped for feedback capture, which keeps retries idempotent while preserving distinct operator feedback events.
+- Episode IDs are deterministic for goal, approval-outcome, and execution capture, and action-log scoped for feedback capture. This keeps retries idempotent while preserving distinct operator feedback events.
 
 ## Privacy And Retention
 
