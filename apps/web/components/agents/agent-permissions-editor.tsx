@@ -3,23 +3,16 @@
 import { useState } from "react";
 import type {
   AgentDefinition,
-  AgentIntegrationPermission,
-  AgentMemoryPermission,
   Capability,
-  IntegrationPermission,
   RiskClass
 } from "@agentic/contracts";
 
 type AgentPermissionsEditorProps = {
   agent: AgentDefinition;
-  availableIntegrations: { id: string; name: string }[];
-  memoryCategories: string[];
   onSave: (permissions: {
     allowedCapabilities: Capability[];
     blockedCapabilities: Capability[];
     maxRiskClass: RiskClass;
-    integrationPermissions: AgentIntegrationPermission[];
-    memoryPermissions: AgentMemoryPermission[];
   }) => Promise<void>;
   onCancel: () => void;
   isPending?: boolean;
@@ -60,12 +53,8 @@ const riskDescriptions: Record<RiskClass, string> = {
   R4: "Admin-only with audit trail"
 };
 
-const permissionLevels: IntegrationPermission[] = ["none", "read", "write", "full"];
-
 export function AgentPermissionsEditor({
   agent,
-  availableIntegrations,
-  memoryCategories,
   onSave,
   onCancel,
   isPending
@@ -73,12 +62,6 @@ export function AgentPermissionsEditor({
   const [allowedCaps, setAllowedCaps] = useState<Capability[]>(agent.allowedCapabilities);
   const [blockedCaps, setBlockedCaps] = useState<Capability[]>(agent.blockedCapabilities);
   const [maxRisk, setMaxRisk] = useState<RiskClass>(agent.maxRiskClass);
-  const [integrationPerms, setIntegrationPerms] = useState<AgentIntegrationPermission[]>(
-    agent.integrationPermissions
-  );
-  const [memoryPerms, setMemoryPerms] = useState<AgentMemoryPermission[]>(
-    agent.memoryPermissions
-  );
   const [error, setError] = useState<string | null>(null);
 
   const toggleCapability = (cap: Capability, list: "allowed" | "blocked") => {
@@ -99,55 +82,17 @@ export function AgentPermissionsEditor({
     }
   };
 
-  const updateIntegrationPermission = (integrationId: string, permission: IntegrationPermission) => {
-    setIntegrationPerms((prev) => {
-      const existing = prev.find((p) => p.integrationId === integrationId);
-      if (permission === "none") {
-        return prev.filter((p) => p.integrationId !== integrationId);
-      }
-      if (existing) {
-        return prev.map((p) =>
-          p.integrationId === integrationId ? { ...p, permission } : p
-        );
-      }
-      return [...prev, { integrationId, permission, allowedScopes: [] }];
-    });
-  };
-
-  const updateMemoryPermission = (category: string, field: "canRead" | "canWrite", value: boolean) => {
-    setMemoryPerms((prev) => {
-      const existing = prev.find((p) => p.category === category);
-      if (existing) {
-        return prev.map((p) =>
-          p.category === category ? { ...p, [field]: value } : p
-        );
-      }
-      return [...prev, { category, canRead: field === "canRead" ? value : true, canWrite: field === "canWrite" ? value : false }];
-    });
-  };
-
   const handleSave = async () => {
     try {
       setError(null);
       await onSave({
         allowedCapabilities: allowedCaps,
         blockedCapabilities: blockedCaps,
-        maxRiskClass: maxRisk,
-        integrationPermissions: integrationPerms,
-        memoryPermissions: memoryPerms
+        maxRiskClass: maxRisk
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save permissions");
     }
-  };
-
-  const getIntegrationPermission = (integrationId: string): IntegrationPermission => {
-    return integrationPerms.find((p) => p.integrationId === integrationId)?.permission ?? "none";
-  };
-
-  const getMemoryPermission = (category: string): { canRead: boolean; canWrite: boolean } => {
-    const perm = memoryPerms.find((p) => p.category === category);
-    return perm ?? { canRead: true, canWrite: false };
   };
 
   return (
@@ -220,69 +165,6 @@ export function AgentPermissionsEditor({
           </div>
         </section>
 
-        <section className="editor-section">
-          <h3>Integration Access</h3>
-          <p className="section-description">
-            Control this agent's access to each integration.
-          </p>
-
-          <div className="integrations-list">
-            {availableIntegrations.map((integration) => (
-              <div key={integration.id} className="integration-row">
-                <span className="integration-name">{integration.name}</span>
-                <select
-                  value={getIntegrationPermission(integration.id)}
-                  onChange={(e) => updateIntegrationPermission(integration.id, e.target.value as IntegrationPermission)}
-                >
-                  <option value="none">None</option>
-                  <option value="read">Read Only</option>
-                  <option value="write">Read & Write</option>
-                  <option value="full">Full Access</option>
-                </select>
-              </div>
-            ))}
-            {availableIntegrations.length === 0 && (
-              <p className="empty-message">No integrations configured</p>
-            )}
-          </div>
-        </section>
-
-        <section className="editor-section">
-          <h3>Memory Access</h3>
-          <p className="section-description">
-            Control this agent's access to memory categories.
-          </p>
-
-          <div className="memory-list">
-            {memoryCategories.map((category) => {
-              const perm = getMemoryPermission(category);
-              return (
-                <div key={category} className="memory-row">
-                  <span className="memory-name">{category}</span>
-                  <label className="memory-toggle">
-                    <input
-                      type="checkbox"
-                      checked={perm.canRead}
-                      onChange={(e) => updateMemoryPermission(category, "canRead", e.target.checked)}
-                    />
-                    Read
-                  </label>
-                  <label className="memory-toggle">
-                    <input
-                      type="checkbox"
-                      checked={perm.canWrite}
-                      onChange={(e) => updateMemoryPermission(category, "canWrite", e.target.checked)}
-                    />
-                    Write
-                  </label>
-                </div>
-              );
-            })}
-            {memoryCategories.length === 0 && (
-              <p className="empty-message">No memory categories defined</p>
-            )}
-          </div>
-        </section>
       </div>
 
       <div className="editor-footer">
@@ -471,57 +353,6 @@ export function AgentPermissionsEditor({
         .risk-desc {
           font-size: 12px;
           color: var(--color-text-muted, #888);
-        }
-
-        .integrations-list,
-        .memory-list {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-
-        .integration-row,
-        .memory-row {
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          padding: 12px 16px;
-          background: var(--color-surface, #1e1e1e);
-          border: 1px solid var(--color-border, #333);
-          border-radius: 8px;
-        }
-
-        .integration-name,
-        .memory-name {
-          flex: 1;
-          font-size: 14px;
-          color: var(--color-text, #fff);
-        }
-
-        .integration-row select {
-          padding: 6px 10px;
-          background: var(--color-surface-secondary, #2a2a2a);
-          border: 1px solid var(--color-border, #333);
-          border-radius: 6px;
-          color: var(--color-text, #fff);
-          font-size: 12px;
-        }
-
-        .memory-toggle {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 12px;
-          color: var(--color-text-secondary, #aaa);
-          cursor: pointer;
-        }
-
-        .empty-message {
-          font-size: 13px;
-          color: var(--color-text-muted, #888);
-          font-style: italic;
-          padding: 16px;
-          text-align: center;
         }
 
         .editor-footer {

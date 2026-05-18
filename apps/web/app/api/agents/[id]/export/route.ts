@@ -40,8 +40,6 @@ export async function GET(request: Request, { params }: RouteParams) {
         allowedCapabilities: agent.allowedCapabilities,
         blockedCapabilities: agent.blockedCapabilities,
         maxRiskClass: agent.maxRiskClass,
-        integrationPermissions: agent.integrationPermissions,
-        memoryPermissions: agent.memoryPermissions,
         parentAgentId: agent.parentAgentId,
         version: agent.version,
         status: agent.status

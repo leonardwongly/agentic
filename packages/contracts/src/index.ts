@@ -3687,6 +3687,8 @@ export const AgentExportSchema = z.object({
   agent: AgentDefinitionSchema.omit({
     userId: true,
     isBuiltIn: true,
+    integrationPermissions: true,
+    memoryPermissions: true,
     createdAt: true,
     updatedAt: true,
     actorContext: true
