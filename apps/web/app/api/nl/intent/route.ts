@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { BriefingTypeSchema, RiskClassSchema, type ActorContext } from "@agentic/contracts";
-import { enqueueApprovalFollowUpJob, enqueueBriefingCreateJob, enqueueGoalCreateJob } from "@agentic/worker-runtime";
+import { enqueueBriefingCreateJob, enqueueGoalCreateJob } from "@agentic/worker-runtime";
+import { respondToApprovalBatch } from "../../../../lib/approval-batches";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
@@ -218,47 +219,38 @@ async function approveAllR2(userId: string, actor: ActorContext): Promise<Intent
     };
   }
 
-  let approvedCount = 0;
-  let queuedCount = 0;
-  let failedCount = 0;
-
-  for (const approval of pendingApprovals) {
-    try {
-      const updatedBundle = await repository.respondToApproval({
-        approvalId: approval.id,
+  try {
+    const response = await respondToApprovalBatch({
+      repository,
+      userId,
+      actorContext: actor,
+      request: {
+        approvalIds: pendingApprovals.map((approval) => approval.id),
         decision: "approved",
-        actor,
-        scope: "once"
-      });
-      await enqueueApprovalFollowUpJob({
-        repository,
-        userId,
-        approvalId: approval.id,
-        goalId: updatedBundle.goal.id,
-        taskId: approval.taskId,
-        decision: "approved",
-        workspaceId: updatedBundle.goal.workspaceId,
-        actorContext: actor,
-        actionIntent: approval.actionIntent
-      });
+        scope: "once",
+        rationale: "Approved through the bounded NL command: approve all R2."
+      }
+    });
+    const approvedCount = response.resultCounts.succeeded;
+    const queuedCount = response.results.filter((result) => result.status === "succeeded").length;
+    const failedCount = response.resultCounts.failed;
+    const skippedCount = response.resultCounts.skipped;
+    const status = failedCount > 0 || skippedCount > 0 ? 207 : 202;
 
-      approvedCount += 1;
-      queuedCount += 1;
-    } catch (error) {
-      failedCount += 1;
-      console.error(`[nl-intent] Failed to approve ${approval.id}:`, error);
-    }
+    return {
+      status,
+      body: {
+        message:
+          failedCount === 0 && skippedCount === 0
+            ? `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"} and queued ${queuedCount} follow-up job${queuedCount === 1 ? "" : "s"}.`
+            : `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"}, queued ${queuedCount} follow-up job${queuedCount === 1 ? "" : "s"}, skipped ${skippedCount}, and failed ${failedCount}.`,
+        batch: response,
+        dashboard: await repository.getDashboardData(userId)
+      }
+    };
+  } catch (error) {
+    throw new ApiRouteError(409, error instanceof Error ? error.message : "Approval batch could not be processed.");
   }
-
-  return {
-    body: {
-      message:
-        failedCount === 0
-          ? `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"} and queued ${queuedCount} follow-up job${queuedCount === 1 ? "" : "s"}.`
-          : `Approved ${approvedCount} R2 approval${approvedCount === 1 ? "" : "s"}, queued ${queuedCount} follow-up job${queuedCount === 1 ? "" : "s"}, and failed ${failedCount}.`,
-      dashboard: await repository.getDashboardData(userId)
-    }
-  };
 }
 
 async function createGoalFromIntent(

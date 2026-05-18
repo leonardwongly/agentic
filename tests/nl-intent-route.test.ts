@@ -191,12 +191,29 @@ describe("nl intent route", () => {
     );
     const payload = (await response.json()) as {
       message: string;
+      batch: {
+        preview: {
+          actionableCount: number;
+          blocked: boolean;
+          riskCounts: { R2: number };
+        };
+        resultCounts: { succeeded: number; failed: number; skipped: number };
+        batchId: string;
+      };
       dashboard: { approvals: Array<{ id: string; decision: string; riskClass: string }> };
     };
     const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+    const reloaded = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(202);
     expect(payload.message).toBe("Approved 1 R2 approval and queued 1 follow-up job.");
+    expect(payload.batch.batchId).toMatch(/^approval-batch-/);
+    expect(payload.batch.preview).toMatchObject({
+      actionableCount: 1,
+      blocked: false,
+      riskCounts: expect.objectContaining({ R2: 1 })
+    });
+    expect(payload.batch.resultCounts).toEqual({ succeeded: 1, failed: 0, skipped: 0 });
     expect(payload.dashboard.approvals).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -219,6 +236,19 @@ describe("nl intent route", () => {
         })
       })
     ]);
+    expect(reloaded?.actionLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "approval.batch_response",
+          details: expect.objectContaining({
+            batchId: payload.batch.batchId,
+            approvalId: bundle.approvals[0]!.id,
+            decision: "approved",
+            result: "succeeded"
+          })
+        })
+      ])
+    );
     expectNoStoreHeaders(response);
   }, 15_000);
 
