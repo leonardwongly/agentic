@@ -103,6 +103,12 @@ Operator-facing recovery state is exposed in four places:
 - Dashboard remediation mapping:
   - [`packages/repository/src/dashboard-operations.ts`](https://github.com/leonardwongly/agentic/blob/main/packages/repository/src/dashboard-operations.ts)
   - Derives replay actions from `job.journal.recovery` instead of ad hoc UI heuristics
+- Operations recovery lane:
+  - [`apps/web/app/api/operations/recovery/route.ts`](https://github.com/leonardwongly/agentic/blob/main/apps/web/app/api/operations/recovery/route.ts)
+  - Accepts strict, discriminated recovery actions for `retry_dead_letter_job`, `release_expired_lease`, and `cancel_job`
+  - Delegates dead-letter replay to `/api/jobs/[id]/replay` after resolving the authenticated job and workspace permission boundary
+  - Releases only running jobs with an expired worker lease, never active leases
+  - Cancels only queued or retrying jobs, and writes an audit journal entry rather than deleting the job
 
 ## Failure Handling Rules
 
@@ -114,6 +120,8 @@ The execution journal is designed around a few invariants:
 - dead-letter visibility is sanitized before being returned to operators
 - replay preserves ancestry through `replayedFromJobId`
 - side-effect targets distinguish governed task execution from connector receipt or notification delivery
+- stale lease recovery is fail-closed: an operator can release only a running job whose persisted `leaseExpiresAt` is at or before the server evaluation time
+- queue cancellation is reversible only by replaying or re-enqueueing a new job from trusted context; the cancelled job remains dead-lettered with operator audit metadata
 
 When these invariants are violated, the correct fix is to harden the worker or contract boundary, not to patch the operator UI.
 
@@ -134,6 +142,13 @@ The current regression coverage for this recovery contract lives in:
   - dead-letter replay for approval notification jobs
   - dead-letter replay for autopilot jobs
   - cross-user denial for polling and replay
+- [`tests/operations-recovery-route.test.ts`](https://github.com/leonardwongly/agentic/blob/main/tests/operations-recovery-route.test.ts)
+  - expired worker lease release through the operations recovery lane
+  - active lease release denial
+  - dead-letter approval follow-up replay delegation through the operations recovery lane
+  - queued-job cancellation with audit journal metadata
+  - malformed recovery-action rejection before mutation
+  - cross-user and workspace-owner permission denial
 - [`tests/worker-runtime.test.ts`](https://github.com/leonardwongly/agentic/blob/main/tests/worker-runtime.test.ts)
   - notification job execution
   - worker-owned side-effect failure dead-letter handling
@@ -142,8 +157,12 @@ The current regression coverage for this recovery contract lives in:
 The focused validation command for this slice is:
 
 ```bash
-npx vitest run tests/execution.test.ts tests/approval-job-route.test.ts tests/repository.test.ts tests/worker-runtime.test.ts
-npm run build -w @agentic/web
+npm exec -- vitest run tests/worker-runtime.test.ts tests/execution.test.ts tests/approval-job-route.test.ts tests/operations-recovery-route.test.ts tests/repository.test.ts
+npm run test:architecture:fitness
+npm run test:performance:fitness
+npm run typecheck
+npm run lint
+npm run format:check
 ```
 
 ## When To Escalate To Manual Review
