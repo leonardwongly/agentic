@@ -342,8 +342,8 @@
     {
       "id": "SUPPLY-01",
       "family": "Supply Chain",
-      "title": "Dependency review, runtime vulnerability gating, SBOM, and provenance are mandatory",
-      "objective": "Ensure deployable artifacts are traceable and known-vulnerable runtime dependencies fail closed.",
+      "title": "Static analysis, dependency review, runtime vulnerability gating, SBOM, and provenance are mandatory",
+      "objective": "Ensure source changes and deployable artifacts are statically scanned, traceable, and known-vulnerable runtime dependencies fail closed.",
       "owner": "platform-security",
       "trustBoundaries": [
         "Source changes to CI",
@@ -355,6 +355,7 @@
       ],
       "codePaths": [
         ".github/workflows/ci.yml",
+        ".github/workflows/codeql.yml",
         "scripts/runtime-vulnerability-gate.ts",
         "scripts/generate-sbom.ts",
         "docs/security/supply-chain-controls.md",
@@ -365,6 +366,15 @@
         "docs/runbooks/vulnerability-management.md"
       ],
       "automatedChecks": [
+        {
+          "id": "CHECK-CODEQL-STATIC-ANALYSIS",
+          "title": "CodeQL static analysis stays configured for JavaScript and TypeScript",
+          "command": "npm run ci:validate-provenance",
+          "sourcePaths": [
+            ".github/workflows/codeql.yml",
+            "tests/security-closeout-artifacts.test.ts"
+          ]
+        },
         {
           "id": "CHECK-SUPPLY-CHAIN",
           "title": "Supply-chain automation stays enforced in CI",
