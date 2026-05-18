@@ -1581,6 +1581,59 @@ describe("worker runtime", () => {
     ]);
   });
 
+  it("ignores persisted scheduled autopilot events that are not due", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const futureDueAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    const claimed = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "template_due",
+      sourceId: "template-future-worker-runtime",
+      idempotencyKey: "worker-runtime-template-future-due",
+      mode: "draft_goal",
+      summary: "Template due before its scheduled window.",
+      details: {
+        dueAt: futureDueAt
+      },
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
+    });
+
+    if (claimed.outcome !== "claimed") {
+      throw new Error(`Expected claimed autopilot event, received ${claimed.outcome}.`);
+    }
+
+    const job = await enqueueAutopilotProcessJob({
+      repository,
+      autopilotEvent: claimed.event
+    });
+
+    await executeAutopilotProcessJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const [persistedEvent] = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+
+    expect(persistedEvent).toMatchObject({
+      id: claimed.event.id,
+      status: "ignored",
+      processedAt: expect.any(String),
+      details: {
+        jobId: job.id,
+        jobStatus: "skipped",
+        dueTimeValidation: {
+          outcome: "ignored",
+          reason: "future_due_time",
+          dueAt: futureDueAt
+        }
+      },
+      error: null
+    });
+    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+  });
+
   it("keeps briefing persistence, memory capture, and self-improvement episodes idempotent across retries", async () => {
     const { repository, selfImprovementRepository } = await createTestRuntime();
     const job = createJobRecord({

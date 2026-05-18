@@ -108,10 +108,12 @@ import {
 import { persistCapturedSignals } from "./memory-capture-signals";
 import { createPublicShareViewedLog } from "./public-share-log";
 import { resolveGoogleWorkspaceAdapters } from "./google-workspace-adapters";
+import { delay } from "./runtime-delay";
 import {
   createWorkerRuntimeImmuneSystem,
   type WorkerRuntimeImmuneSystemControls
 } from "./runtime-immune-system";
+import { getScheduledAutopilotDueTime } from "./scheduled-autopilot-due-time";
 import {
   createWorkerRuntimeHealthReporter,
   type WorkerRuntimeHealthSink
@@ -869,6 +871,29 @@ export async function executeAutopilotProcessJob(params: {
     throw new AutopilotExecutionError(`Autopilot event ${autopilotPayload.autopilotEventId} was not found.`);
   }
 
+  const scheduledDueTime = getScheduledAutopilotDueTime(event);
+
+  if (!scheduledDueTime.due) {
+    const processedAt = nowIso();
+    await repository.saveAutopilotEvent({
+      ...event,
+      status: "ignored",
+      processedAt,
+      details: {
+        ...event.details,
+        jobId: job.id,
+        jobStatus: "skipped",
+        dueTimeValidation: {
+          outcome: "ignored",
+          reason: scheduledDueTime.reason,
+          dueAt: scheduledDueTime.dueAt
+        }
+      },
+      error: null
+    });
+    return;
+  }
+
   try {
     let bundle: GoalBundle;
 
@@ -1438,37 +1463,6 @@ export function createWorkerJobHandlers(params: {
       }))
   };
 }
-
-
-function shouldClaimJob(jobKind: JobKind, filters: readonly JobKind[] | undefined): boolean {
-  return !filters || filters.length === 0 || filters.includes(jobKind);
-}
-
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) {
-    return Promise.resolve();
-  }
-
-  if (signal?.aborted) {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    }, ms);
-
-    function abort() {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    }
-
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-}
-
 export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<WorkerRuntimeResult> {
   return withTelemetryContext(
     {
@@ -1534,7 +1528,7 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
           });
 
           if (result.claimedJob) {
-            if (!shouldClaimJob(result.claimedJob.kind, options.claim?.kinds)) {
+            if (options.claim?.kinds?.length && !options.claim.kinds.includes(result.claimedJob.kind)) {
               throw new Error(`Worker claimed unexpected job kind "${result.claimedJob.kind}".`);
             }
 
