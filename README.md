@@ -308,8 +308,8 @@ Use that only for explicitly accepted single-instance deployments.
 ### Useful Local Overrides
 
 ```bash
-export AGENTIC_RUNTIME_STORE_PATH=/tmp/agentic-runtime-store.json
-export AGENTIC_NOTES_PATH=/tmp/agentic-notes
+export AGENTIC_RUNTIME_STORE_PATH=.agentic/runtime-store.json
+export AGENTIC_NOTES_PATH=.agentic/notes
 ```
 
 - `AGENTIC_RUNTIME_STORE_PATH` overrides the default file-backed runtime store path
