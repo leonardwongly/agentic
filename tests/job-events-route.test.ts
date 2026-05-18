@@ -5,7 +5,12 @@ import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GET as jobEventsRoute } from "../apps/web/app/api/jobs/[id]/events/route";
-import { buildAuthorizedGetRequest, createRouteTestRepository, expectBaseSecurityHeaders } from "./route-test-helpers";
+import {
+  buildAuthorizedGetRequest,
+  createRouteTestRepository,
+  expectAuthenticatedStreamHeaders,
+  expectNoStoreHeaders
+} from "./route-test-helpers";
 
 describe("job event stream route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
@@ -33,6 +38,7 @@ describe("job event stream route", () => {
     const payload = (await response.json()) as { error: string };
 
     expect(response.status).toBe(401);
+    expectNoStoreHeaders(response);
     expect(payload.error).toBe("Unauthorized. Create a session before calling the Agentic API.");
   });
 
@@ -67,8 +73,7 @@ describe("job event stream route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/event-stream");
-    expect(response.headers.get("cache-control")).toBe("no-cache, no-transform");
-    expectBaseSecurityHeaders(response);
+    expectAuthenticatedStreamHeaders(response);
     expect(text).toContain("event: job.snapshot");
     expect(text).toContain(`"id":"${completedJob.id}"`);
     expect(text).toContain('"status":"completed"');

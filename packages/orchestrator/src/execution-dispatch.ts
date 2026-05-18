@@ -204,8 +204,9 @@ export async function executeApprovedTask(params: {
   connectorReadiness?: ActionExecutionConnectorReadiness;
   governance?: WorkspaceGovernance | null;
   sideEffectLedger?: ActionExecutionSideEffectLedger;
+  signal?: AbortSignal;
 }): Promise<{ result: ExecutionResult; log: ActionLog }> {
-  const { task, bundle, adapters, connectorReadiness, governance, sideEffectLedger } = params;
+  const { task, bundle, adapters, connectorReadiness, governance, sideEffectLedger, signal } = params;
   const actionIntent = resolveActionIntent(task, bundle);
   const approvedApproval = findApprovedApproval(task, bundle);
   const governanceApprovalReason = getGovernanceApprovalReason({
@@ -256,7 +257,8 @@ export async function executeApprovedTask(params: {
       actionIntent,
       adapters,
       connectorReadiness,
-      sideEffectLedger
+      sideEffectLedger,
+      signal
     });
     const kind =
       outcome.status === "completed"
@@ -302,8 +304,9 @@ export async function executeApprovedTasks(params: {
   connectorReadiness?: ActionExecutionConnectorReadiness;
   governance?: WorkspaceGovernance | null;
   sideEffectLedger?: ActionExecutionSideEffectLedger;
+  signal?: AbortSignal;
 }): Promise<{ results: ExecutionResult[]; logs: ActionLog[] }> {
-  const { bundle, approvedTaskIds, adapters, connectorReadiness, governance, sideEffectLedger } = params;
+  const { bundle, approvedTaskIds, adapters, connectorReadiness, governance, sideEffectLedger, signal } = params;
   const results: ExecutionResult[] = [];
   const logs: ActionLog[] = [];
 
@@ -320,7 +323,8 @@ export async function executeApprovedTasks(params: {
       adapters,
       connectorReadiness,
       governance,
-      sideEffectLedger
+      sideEffectLedger,
+      signal
     });
     results.push(result);
     logs.push(log);

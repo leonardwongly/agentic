@@ -42,7 +42,7 @@ export AGENTIC_DASHBOARD_COCKPIT=legacy
 
 ## Stable Ingress Contract
 
-External staging and production-like rollout evidence must come from a stable HTTPS origin. Temporary tunnel domains, localhost/private addresses, URL credentials, URL paths, URL query strings, and URL fragments are not accepted as the deployment smoke target.
+External staging and production-like rollout evidence must come from a stable HTTPS origin. Temporary tunnel domains, localhost or private-network addresses, URL credentials, URL paths, URL query strings, and URL fragments are not accepted as the deployment smoke target.
 
 ## First Container Target Candidate
 

@@ -13,7 +13,7 @@ import {
   withApiTelemetry
 } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
-import { parseIdempotencyKey } from "../../../lib/request-idempotency";
+import { parseOrDeriveIdempotencyKey } from "../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../lib/server";
 
 const GoalRequestSchema = z
@@ -100,7 +100,15 @@ export async function POST(request: Request) {
         workspaceId,
         agentId,
         actorContext,
-        idempotencyKey: parseIdempotencyKey(request)
+        idempotencyKey: parseOrDeriveIdempotencyKey(request, {
+          namespace: "goal-create",
+          userId: principal.userId,
+          payload: {
+            request: body.request,
+            workspaceId,
+            agentId
+          }
+        })
       });
       return authenticatedJson(
         {

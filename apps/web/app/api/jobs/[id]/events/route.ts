@@ -1,5 +1,5 @@
 import { requireApiSession } from "../../../../../lib/auth";
-import { ApiRouteError, handleApiError, withApiTelemetry } from "../../../../../lib/api-response";
+import { ApiRouteError, authenticatedStreamResponse, handleApiError, withApiTelemetry } from "../../../../../lib/api-response";
 import {
   buildJobEventSnapshot,
   encodeServerSentEvent,
@@ -163,10 +163,9 @@ export async function GET(request: Request, context: RouteContext) {
         }
       });
 
-      return new Response(stream, {
+      return authenticatedStreamResponse(stream, {
         headers: {
           "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "X-Accel-Buffering": "no"
         }

@@ -6,6 +6,8 @@ Agentic now treats compliance evidence as a generated build artifact, not a manu
 
 Each control maps:
 
+- linked GitHub issue numbers and labels
+- API route coverage, when the control governs route code
 - trust boundaries
 - product surfaces
 - enforcing code paths
@@ -13,7 +15,7 @@ Each control maps:
 - automated checks
 - expected evidence artifacts
 
-The collector script verifies that all referenced files exist, hashes generated artifacts, and emits a machine-readable and human-readable evidence bundle into `artifacts/compliance`.
+The collector script verifies that all referenced files exist, checks that declared API route coverage matches the route files in each control, hashes generated artifacts, and emits a machine-readable and human-readable evidence bundle into `artifacts/compliance`.
 
 ## Local usage
 
@@ -48,6 +50,7 @@ These outputs are intended to answer three questions quickly:
 1. Which product controls are supposed to exist?
 2. Which code, tests, and runbooks implement them?
 3. Which evidence artifacts prove those controls operated in this build?
+4. Which issue labels and route files keep each control tied back to the remediation tracker?
 
 ## Review cadence
 

@@ -118,6 +118,12 @@ async function defaultEvaluateWatcher(watcher: Watcher) {
   };
 }
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("Watcher scheduler aborted.");
+  }
+}
+
 export async function runWatcherSchedulerOnce(params: {
   repository: AgenticRepository;
   runnerId: string;
@@ -126,6 +132,7 @@ export async function runWatcherSchedulerOnce(params: {
   leaseMs?: number;
   mode?: AutopilotMode;
   evaluator?: WatcherSignalEvaluator;
+  signal?: AbortSignal;
 }): Promise<WatcherSchedulerResult> {
   const evaluatedAt = params.now ?? nowIso();
   const leaseMs = params.leaseMs ?? 60_000;
@@ -134,6 +141,8 @@ export async function runWatcherSchedulerOnce(params: {
   const decisions: WatcherSchedulerDecision[] = [];
 
   for (const watcher of watchers) {
+    throwIfAborted(params.signal);
+
     if (watcher.status !== "active") {
       decisions.push(buildSuppressedDecision(watcher.id, `Watcher ${watcher.id} is ${watcher.status}.`));
       continue;
@@ -222,7 +231,9 @@ export async function runWatcherSchedulerOnce(params: {
 
     try {
       try {
+        throwIfAborted(params.signal);
         evaluation = await evaluator(currentLeasedWatcher);
+        throwIfAborted(params.signal);
       } catch (error) {
         const releaseError = await tryReleaseLease();
         decisions.push({
@@ -367,4 +378,100 @@ export async function runWatcherSchedulerOnce(params: {
     runnerId: params.runnerId,
     decisions
   };
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+
+  if (signal?.aborted) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+
+    function abort() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }
+
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function createAbortSignalWithTimeout(parent: AbortSignal | undefined, timeoutMs: number): {
+  signal: AbortSignal;
+  cancel: () => void;
+} {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new Error(`Watcher scheduler run timed out after ${timeoutMs}ms.`));
+  }, timeoutMs);
+  const abortFromParent = () => {
+    controller.abort(parent?.reason instanceof Error ? parent.reason : new Error("Watcher scheduler aborted."));
+  };
+
+  parent?.addEventListener("abort", abortFromParent, { once: true });
+
+  return {
+    signal: controller.signal,
+    cancel: () => {
+      clearTimeout(timeout);
+      parent?.removeEventListener("abort", abortFromParent);
+    }
+  };
+}
+
+export async function runWatcherSchedulerLoop(params: {
+  repository: AgenticRepository;
+  runnerId: string;
+  userId?: string;
+  enabled?: boolean;
+  intervalMs?: number;
+  timeoutMs?: number;
+  leaseMs?: number;
+  mode?: AutopilotMode;
+  evaluator?: WatcherSignalEvaluator;
+  signal?: AbortSignal;
+  onRunStart?: (startedAt: string) => void | Promise<void>;
+  onRunComplete?: (result: WatcherSchedulerResult) => void | Promise<void>;
+  onRunError?: (error: unknown) => void | Promise<void>;
+}): Promise<void> {
+  if (params.enabled === false) {
+    return;
+  }
+
+  const intervalMs = Math.max(1_000, params.intervalMs ?? 60_000);
+  const timeoutMs = Math.max(1_000, params.timeoutMs ?? Math.min(intervalMs, 30_000));
+
+  while (!params.signal?.aborted) {
+    const startedAt = nowIso();
+    const timeout = createAbortSignalWithTimeout(params.signal, timeoutMs);
+
+    try {
+      await params.onRunStart?.(startedAt);
+      const result = await runWatcherSchedulerOnce({
+        repository: params.repository,
+        runnerId: params.runnerId,
+        userId: params.userId,
+        leaseMs: params.leaseMs,
+        mode: params.mode,
+        evaluator: params.evaluator,
+        signal: timeout.signal
+      });
+      await params.onRunComplete?.(result);
+    } catch (error) {
+      await params.onRunError?.(error);
+    } finally {
+      timeout.cancel();
+    }
+
+    await delay(intervalMs, params.signal);
+  }
 }

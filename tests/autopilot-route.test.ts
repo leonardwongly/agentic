@@ -153,6 +153,14 @@ describe("autopilot events route", () => {
     return events.find((event) => event.id === eventId) ?? null;
   }
 
+  function pastDueAt(minutesAgo = 5) {
+    return new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  }
+
+  function futureDueAt(minutesFromNow = 5) {
+    return new Date(Date.now() + minutesFromNow * 60_000).toISOString();
+  }
+
   it("simulates watcher-triggered events without persisting execution state", async () => {
     const { repository, bundle } = await createGoalForUser("Track priority inbox changes.");
     const watcher = WatcherSchema.parse({
@@ -1277,7 +1285,7 @@ describe("autopilot events route", () => {
           cron: "0 9 * * *",
           timezone: "UTC",
           lastRunAt: null,
-          nextRunAt: null
+          nextRunAt: pastDueAt()
         },
         createdAt: nowIso(),
         updatedAt: nowIso()
@@ -1373,7 +1381,7 @@ describe("autopilot events route", () => {
           cron: "0 9 * * *",
           timezone: "UTC",
           lastRunAt: null,
-          nextRunAt: null
+          nextRunAt: pastDueAt()
         },
         createdAt: nowIso(),
         updatedAt: nowIso()
@@ -1421,6 +1429,86 @@ describe("autopilot events route", () => {
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
   });
 
+  it("rejects scheduled template events that are missing a due time", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveTemplate(
+      GoalTemplateSchema.parse({
+        id: "template-missing-due-time",
+        userId: SYSTEM_USER_ID,
+        name: "Missing due time template",
+        description: "Should not run without an explicit due window.",
+        request: "Generate a plan only when the schedule is due.",
+        parameters: {},
+        schedule: {
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastRunAt: null,
+          nextRunAt: null
+        },
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await autopilotEventsRoute(
+      buildRequest({
+        kind: "template_due",
+        sourceId: "template-missing-due-time",
+        mode: "draft_goal"
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.error).toContain("requires an ISO dueAt timestamp");
+    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
+  });
+
+  it("rejects scheduled template events before their due time", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveTemplate(
+      GoalTemplateSchema.parse({
+        id: "template-future-due-time",
+        userId: SYSTEM_USER_ID,
+        name: "Future due time template",
+        description: "Should wait until the scheduled window.",
+        request: "Generate a plan only when the schedule is due.",
+        parameters: {},
+        schedule: {
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastRunAt: null,
+          nextRunAt: futureDueAt()
+        },
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await autopilotEventsRoute(
+      buildRequest({
+        kind: "template_due",
+        sourceId: "template-future-due-time",
+        mode: "draft_goal"
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.error).toContain("is not due yet");
+    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
+  });
+
   it("executes scheduled briefings and records the resulting goal", async () => {
     const repository = createRouteTestRepository();
 
@@ -1431,7 +1519,10 @@ describe("autopilot events route", () => {
       buildRequest({
         kind: "briefing_due",
         sourceId: "startup",
-        mode: "draft_goal"
+        mode: "draft_goal",
+        details: {
+          dueAt: pastDueAt()
+        }
       })
     );
     const payload = (await response.json()) as {
@@ -1461,6 +1552,51 @@ describe("autopilot events route", () => {
     expect(events[0]?.resultGoalId).toBeTruthy();
     expect(dashboard.briefingHistory.some((entry) => entry.goalId === events[0]?.resultGoalId)).toBe(true);
     await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
+  });
+
+  it("rejects scheduled briefings without a due time", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await autopilotEventsRoute(
+      buildRequest({
+        kind: "briefing_due",
+        sourceId: "startup",
+        mode: "draft_goal"
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.error).toContain("requires an ISO dueAt timestamp");
+    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
+  });
+
+  it("rejects scheduled briefings before their due time", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await autopilotEventsRoute(
+      buildRequest({
+        kind: "briefing_due",
+        sourceId: "startup",
+        mode: "draft_goal",
+        details: {
+          dueAt: futureDueAt()
+        }
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.error).toContain("is not due yet");
+    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
   });
 
   it("executes approval-sla-breached events and records the resulting goal", async () => {

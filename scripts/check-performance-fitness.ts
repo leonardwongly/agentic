@@ -11,6 +11,12 @@ function assertContains(content: string, needle: string, message: string) {
   }
 }
 
+function assertContainsAny(content: string, needles: string[], message: string) {
+  if (!needles.some((needle) => content.includes(needle))) {
+    throw new Error(message);
+  }
+}
+
 function assertFileExists(relativePath: string, message: string) {
   if (!existsSync(path.resolve(process.cwd(), relativePath))) {
     throw new Error(message);
@@ -50,9 +56,9 @@ function main() {
   const validationMatrix = readRepoFile(validationMatrixPath);
   const deploymentRunbook = readRepoFile(deploymentRunbookPath);
 
-  assertContains(
+  assertContainsAny(
     goalsRoute,
-    "idempotencyKey: parseIdempotencyKey(request)",
+    ["idempotencyKey: parseIdempotencyKey(request)", "namespace: \"goal-create\""],
     `${goalsRoutePath} must parse and pass idempotency keys for goal creation.`
   );
   assertContains(
@@ -60,9 +66,9 @@ function main() {
     "statusUrl: `/api/goals/jobs/${job.id}`",
     `${goalsRoutePath} must return a goal status route for queued work.`
   );
-  assertContains(
+  assertContainsAny(
     goalRefineRoute,
-    "idempotencyKey: parseIdempotencyKey(request)",
+    ["idempotencyKey: parseIdempotencyKey(request)", "namespace: \"goal-refine\""],
     `${goalRefineRoutePath} must parse and pass idempotency keys for goal refinement.`
   );
   assertContains(
@@ -71,9 +77,9 @@ function main() {
     `${goalRefineRoutePath} must return a goal status route for queued refinements.`
   );
 
-  assertContains(
+  assertContainsAny(
     briefingRoute,
-    "idempotencyKey: parseIdempotencyKey(request)",
+    ["idempotencyKey: parseIdempotencyKey(request)", "namespace: \"briefing-create\""],
     `${briefingRoutePath} must parse and pass idempotency keys for briefing creation.`
   );
   assertContains(
@@ -82,9 +88,9 @@ function main() {
     `${briefingRoutePath} must return a briefing status route for queued work.`
   );
 
-  assertContains(
+  assertContainsAny(
     templateRunRoute,
-    "idempotencyKey: parseIdempotencyKey(request)",
+    ["idempotencyKey: parseIdempotencyKey(request)", "namespace: \"template-run\""],
     `${templateRunRoutePath} must parse and pass idempotency keys for template execution.`
   );
   assertContains(
@@ -92,9 +98,9 @@ function main() {
     "statusUrl: `/api/templates/jobs/${job.id}`",
     `${templateRunRoutePath} must return a template status route for queued work.`
   );
-  assertContains(
+  assertContainsAny(
     docsRenderRoute,
-    "idempotencyKey: parseIdempotencyKey(request)",
+    ["idempotencyKey: parseIdempotencyKey(request)", "namespace: \"docs-render\""],
     `${docsRenderRoutePath} must parse and pass idempotency keys for docs rendering.`
   );
   assertContains(

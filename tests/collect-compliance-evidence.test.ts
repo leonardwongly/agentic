@@ -19,6 +19,12 @@ function writeFixture(root: string, relativePath: string, contents = "fixture") 
   writeFileSync(resolvedPath, contents, "utf8");
 }
 
+const testTraceability = {
+  issueNumbers: [728],
+  issueLabels: ["aos-trust-spine", "priority-medium"],
+  routePaths: []
+};
+
 describe("compliance evidence collector", () => {
   it("builds a bundle with hashed references and required artifact accounting", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "agentic-compliance-"));
@@ -40,6 +46,7 @@ describe("compliance evidence collector", () => {
             title: "Auth control",
             objective: "Protect auth runtime",
             owner: "platform-security",
+            traceability: testTraceability,
             trustBoundaries: ["browser to web"],
             productSurfaces: ["dashboard"],
             codePaths: ["apps/web/lib/auth-runtime-state.ts"],
@@ -122,6 +129,7 @@ describe("compliance evidence collector", () => {
             title: "Deployable image evidence",
             objective: "Retain deployable image evidence.",
             owner: "platform-security",
+            traceability: testTraceability,
             trustBoundaries: ["ci to artifact store"],
             productSurfaces: ["release"],
             codePaths: ["apps/web/lib/auth-runtime-state.ts"],
@@ -175,6 +183,7 @@ describe("compliance evidence collector", () => {
             title: "Request identity control",
             objective: "Protect request identity",
             owner: "platform-security",
+            traceability: testTraceability,
             trustBoundaries: ["proxy to app"],
             productSurfaces: ["public share"],
             codePaths: ["apps/web/lib/request-client-identity.ts"],
@@ -232,6 +241,7 @@ describe("compliance evidence collector", () => {
               title: "Async control",
               objective: "Queue heavy work",
               owner: "platform",
+              traceability: testTraceability,
               trustBoundaries: ["web to worker"],
               productSurfaces: ["goals"],
               codePaths: ["apps/web/lib/runtime-readiness.ts"],
@@ -284,6 +294,7 @@ describe("compliance evidence collector", () => {
             title: "Compliance outputs are self-generated",
             objective: "Allow strict validation to bootstrap generated evidence",
             owner: "platform-security",
+            traceability: testTraceability,
             trustBoundaries: ["ci to artifact store"],
             productSurfaces: ["compliance evidence"],
             codePaths: [".github/ISSUE_TEMPLATE/config.yml", "SECURITY.md"],
@@ -343,6 +354,7 @@ describe("compliance evidence collector", () => {
             title: "Pipeline registry stays aligned",
             objective: "Catch stale paths before evidence collection.",
             owner: "platform",
+            traceability: testTraceability,
             trustBoundaries: ["source to ci"],
             productSurfaces: ["build pipeline"],
             codePaths: ["apps/web/lib/runtime-readiness.ts", ".github/workflows/missing.yml"],
@@ -391,6 +403,61 @@ describe("compliance evidence collector", () => {
     ]);
   });
 
+  it("requires compliance traceability to cover every declared API route", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "agentic-compliance-"));
+    const registryPath = path.join(root, "config/compliance/controls.json");
+
+    writeFixture(
+      root,
+      "config/compliance/controls.json",
+      JSON.stringify(
+        {
+          version: 1,
+          reviewedAt: "2026-04-18T00:00:00.000Z",
+          owners: ["platform-security"],
+          controls: [
+            {
+              id: "ROUTE-01",
+              family: "Route Security",
+              title: "Governed route coverage",
+              objective: "Keep route coverage explicit.",
+              owner: "platform-security",
+              traceability: {
+                issueNumbers: [728],
+                issueLabels: ["aos-trust-spine"],
+                routePaths: []
+              },
+              trustBoundaries: ["browser to api"],
+              productSurfaces: ["governed route"],
+              codePaths: ["apps/web/app/api/example/route.ts"],
+              runbooks: ["docs/runbooks/security-incident-response.md"],
+              automatedChecks: [
+                {
+                  id: "CHECK-ROUTE",
+                  title: "Route test",
+                  command: "npm test -- route.test.ts",
+                  sourcePaths: ["tests/route.test.ts"]
+                }
+              ],
+              evidenceArtifacts: [
+                {
+                  path: "artifacts/compliance/control-matrix.json",
+                  description: "Generated matrix"
+                }
+              ],
+              risks: ["stale route evidence"],
+              metrics: ["route coverage drift"]
+            }
+          ]
+        },
+        null,
+        2
+      )
+    );
+
+    expect(() => loadComplianceControlRegistry(registryPath)).toThrow(/must match API route code paths/iu);
+  });
+
   it("renders a human-readable markdown report", () => {
     const bundle: ComplianceEvidenceBundle = {
       generatedAt: "2026-04-18T12:00:00.000Z",
@@ -412,6 +479,11 @@ describe("compliance evidence collector", () => {
           title: "Dependency gate",
           objective: "Fail closed on vulnerable runtime packages",
           owner: "platform-security",
+          traceability: {
+            issueNumbers: [728],
+            issueLabels: ["aos-trust-spine", "priority-medium"],
+            routePaths: []
+          },
           trustBoundaries: ["source to CI"],
           productSurfaces: ["build pipeline"],
           codePaths: [
@@ -468,6 +540,8 @@ describe("compliance evidence collector", () => {
 
     expect(markdown).toContain("# Compliance Control Matrix");
     expect(markdown).toContain("## SUPPLY-01 Dependency gate");
+    expect(markdown).toContain("Issues: #728");
+    expect(markdown).toContain("Labels: aos-trust-spine, priority-medium");
     expect(markdown).toContain("Command: npm run security:audit-runtime");
     expect(markdown).toContain("SHA-256: 456");
   });
@@ -493,6 +567,11 @@ describe("compliance evidence collector", () => {
           title: "Incident response runbook",
           objective: "Keep the incident workflow documented.",
           owner: "platform-security",
+          traceability: {
+            issueNumbers: [728],
+            issueLabels: ["aos-trust-spine", "priority-medium"],
+            routePaths: []
+          },
           trustBoundaries: ["operator to incident queue"],
           productSurfaces: ["runbooks"],
           codePaths: [],
@@ -510,6 +589,11 @@ describe("compliance evidence collector", () => {
           title: "Runtime audit evidence",
           objective: "Retain vulnerability-gate evidence.",
           owner: "platform-security",
+          traceability: {
+            issueNumbers: [728],
+            issueLabels: ["aos-trust-spine", "priority-medium"],
+            routePaths: []
+          },
           trustBoundaries: ["ci to artifact store"],
           productSurfaces: ["build pipeline"],
           codePaths: [],

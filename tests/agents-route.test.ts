@@ -11,6 +11,7 @@ import {
 import { createRepository } from "@agentic/repository";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as cloneAgentRoute } from "../apps/web/app/api/agents/[id]/clone/route";
+import { GET as exportAgentRoute } from "../apps/web/app/api/agents/[id]/export/route";
 import { GET as getAgentRoute, PUT as updateAgentRoute } from "../apps/web/app/api/agents/[id]/route";
 import { POST as importAgentRoute } from "../apps/web/app/api/agents/import/route";
 import { POST as createAgentRoute } from "../apps/web/app/api/agents/route";
@@ -168,6 +169,50 @@ describe("agents routes", () => {
     expect(persisted?.displayName).toBe("Session Updated Agent");
   });
 
+  it("rejects non-operational integration and memory permission updates", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveAgent(buildCustomAgent(SYSTEM_USER_ID, "agent-permission-update", "permission-update"));
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await updateAgentRoute(
+      new Request("http://localhost/api/agents/agent-permission-update", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          integrationPermissions: [
+            {
+              integrationId: "gmail",
+              permission: "full",
+              allowedScopes: ["mail.send"]
+            }
+          ],
+          memoryPermissions: [
+            {
+              category: "operator-notes",
+              canRead: true,
+              canWrite: true
+            }
+          ]
+        })
+      }),
+      { params: Promise.resolve({ id: "agent-permission-update" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+    const persisted = await repository.getAgent("agent-permission-update", SYSTEM_USER_ID);
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/unrecognized key/i);
+    expect(persisted?.integrationPermissions).toEqual([]);
+    expect(persisted?.memoryPermissions).toEqual([]);
+  });
+
   it("stamps the human actor when a session principal clones a built-in agent", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
@@ -244,8 +289,20 @@ describe("agents routes", () => {
             allowedCapabilities: ["read", "search"],
             blockedCapabilities: [],
             maxRiskClass: "R2",
-            integrationPermissions: [],
-            memoryPermissions: [],
+            integrationPermissions: [
+              {
+                integrationId: "gmail",
+                permission: "full",
+                allowedScopes: ["mail.send"]
+              }
+            ],
+            memoryPermissions: [
+              {
+                category: "operator-notes",
+                canRead: true,
+                canWrite: true
+              }
+            ],
             parentAgentId: null,
             version: 3,
             status: "active"
@@ -266,6 +323,8 @@ describe("agents routes", () => {
     expect(payload.agent.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
     expect(payload.agent.parentAgentId).toBe("marketplace-agent-1");
     expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(persisted?.integrationPermissions).toEqual([]);
+    expect(persisted?.memoryPermissions).toEqual([]);
   });
 
   it("returns 404 when the system principal requests another user's custom agent", async () => {
@@ -286,5 +345,52 @@ describe("agents routes", () => {
     expect(response.status).toBe(404);
     expectNoStoreHeaders(response);
     expect(payload.error).toBe("Agent not found");
+  });
+
+  it("hides non-operational integration and memory permissions from exports", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const agent = AgentDefinitionSchema.parse({
+      ...buildCustomAgent(SYSTEM_USER_ID, "agent-export-permissions", "export-permissions"),
+      integrationPermissions: [
+        {
+          integrationId: "gmail",
+          permission: "full",
+          allowedScopes: ["mail.send"]
+        }
+      ],
+      memoryPermissions: [
+        {
+          category: "operator-notes",
+          canRead: true,
+          canWrite: true
+        }
+      ]
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveAgent(agent);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await exportAgentRoute(
+      buildAuthorizedGetRequest("http://localhost/api/agents/agent-export-permissions/export"),
+      { params: Promise.resolve({ id: "agent-export-permissions" }) }
+    );
+    const payload = (await response.json()) as {
+      agent: {
+        allowedCapabilities?: unknown[];
+        maxRiskClass?: string;
+        integrationPermissions?: unknown[];
+        memoryPermissions?: unknown[];
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expectNoStoreHeaders(response);
+    expect(payload.agent.allowedCapabilities).toEqual(["read", "search"]);
+    expect(payload.agent.maxRiskClass).toBe("R2");
+    expect(payload.agent.integrationPermissions).toBeUndefined();
+    expect(payload.agent.memoryPermissions).toBeUndefined();
   });
 });

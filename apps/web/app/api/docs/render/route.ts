@@ -3,7 +3,7 @@ import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, authenticatedRateLimitError, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
-import { parseIdempotencyKey } from "../../../../lib/request-idempotency";
+import { parseOrDeriveIdempotencyKey } from "../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../lib/server";
 
 export async function POST(request: Request) {
@@ -26,7 +26,13 @@ export async function POST(request: Request) {
         repository,
         userId: principal.userId,
         actorContext,
-        idempotencyKey: parseIdempotencyKey(request)
+        idempotencyKey: parseOrDeriveIdempotencyKey(request, {
+          namespace: "docs-render",
+          userId: principal.userId,
+          payload: {
+            format: "docx"
+          }
+        })
       });
 
       return authenticatedJson(

@@ -61,6 +61,8 @@ const TriggerAutopilotEventSchema = z
   })
   .strict();
 
+const ScheduledAutopilotDueAtSchema = z.string().datetime();
+
 type CompatibilityAutopilotEventKind = Extract<
   AutopilotEventKind,
   | "watcher_triggered"
@@ -539,6 +541,25 @@ async function resolveBriefingSource(repository: AgenticRepository, sourceId: st
   return { repository, type, preferences };
 }
 
+function requireDueScheduledAutopilotEvent(params: {
+  kind: Extract<CompatibilityAutopilotEventKind, "template_due" | "briefing_due">;
+  sourceId: string;
+  dueAt: unknown;
+  now?: Date;
+}): string {
+  const parsed = ScheduledAutopilotDueAtSchema.safeParse(params.dueAt);
+
+  if (!parsed.success) {
+    throw new ApiRouteError(409, `${params.kind} event for ${params.sourceId} requires an ISO dueAt timestamp.`);
+  }
+
+  if (Date.parse(parsed.data) > (params.now ?? new Date()).getTime()) {
+    throw new ApiRouteError(409, `${params.kind} event for ${params.sourceId} is not due yet.`);
+  }
+
+  return parsed.data;
+}
+
 async function resolveGoalSource(repository: AgenticRepository, sourceId: string, userId: string) {
   const directGoal = await repository.getGoalBundleForUser(sourceId, userId);
 
@@ -752,11 +773,17 @@ async function resolveAutopilotSource(params: {
     }
     case "template_due": {
       const { template } = await resolveTemplateSource(repository, sourceId, userId);
+      const dueAt = requireDueScheduledAutopilotEvent({
+        kind,
+        sourceId,
+        dueAt: template.schedule.nextRunAt
+      });
       return {
         summary: `Template due: ${template.name}`,
         details: {
           ...(details ?? {}),
-          templateId: template.id
+          templateId: template.id,
+          dueAt
         },
         operatorRoute: {
           section: "operations",
@@ -767,11 +794,17 @@ async function resolveAutopilotSource(params: {
     }
     case "briefing_due": {
       const { type } = await resolveBriefingSource(repository, sourceId, userId);
+      const dueAt = requireDueScheduledAutopilotEvent({
+        kind,
+        sourceId,
+        dueAt: details?.dueAt
+      });
       return {
         summary: `Briefing due: ${type}`,
         details: {
           ...(details ?? {}),
-          briefingType: type
+          briefingType: type,
+          dueAt
         },
         operatorRoute: {
           section: "operations",

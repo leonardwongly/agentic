@@ -1,5 +1,6 @@
 import { createRepository, type AgenticRepository } from "@agentic/repository";
 import type { ProviderCredential } from "@agentic/contracts";
+import { readFileWorkerRuntimeHealthSnapshot, type WorkerRuntimeHealthSnapshot } from "@agentic/worker-runtime";
 import { getAuthMode } from "./auth";
 import { getAuthRuntimeStateStatus, type AuthRuntimeStateStatus } from "./auth-runtime-state";
 import { getRequestIdentityRuntimeStatus, type RequestIdentityRuntimeStatus } from "./request-client-identity";
@@ -13,6 +14,7 @@ export type ReadinessCheck = {
     | "auth_runtime_state"
     | "request_identity"
     | "async_execution"
+    | "worker_heartbeat"
     | "connector_health";
   status: "pass" | "warn" | "fail";
   message: string;
@@ -31,6 +33,7 @@ export type WebReadinessReport = {
 type AuthModeSnapshot = ReturnType<typeof getAuthMode>;
 type AsyncExecutionCheckSnapshot = Omit<ReadinessCheck, "name">;
 type ConnectorHealthCheckSnapshot = Omit<ReadinessCheck, "name">;
+type WorkerHeartbeatCheckSnapshot = Omit<ReadinessCheck, "name">;
 
 type ReadinessEvaluationParams = {
   generatedAt?: string;
@@ -41,11 +44,13 @@ type ReadinessEvaluationParams = {
   requestIdentity: RequestIdentityRuntimeStatus;
   databaseStatus: DatabaseSchemaStatus | null;
   asyncExecution: AsyncExecutionCheckSnapshot;
+  workerHeartbeat?: WorkerHeartbeatCheckSnapshot;
   connectorHealth: ConnectorHealthCheckSnapshot;
 };
 
 const DEFAULT_MAX_PENDING_JOB_AGE_MS = 15 * 60 * 1000;
 const DEFAULT_PROVIDER_VALIDATION_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_WORKER_HEARTBEAT_STALE_MS = 2 * 60 * 1000;
 let readinessRepository: AgenticRepository | null = null;
 
 function getReadinessRepository(): AgenticRepository {
@@ -261,6 +266,19 @@ function buildAsyncExecutionCheck(params: ReadinessEvaluationParams): ReadinessC
   };
 }
 
+function buildWorkerHeartbeatCheck(params: ReadinessEvaluationParams): ReadinessCheck {
+  return {
+    name: "worker_heartbeat",
+    ...(params.workerHeartbeat ?? {
+      status: "pass",
+      message: "Worker heartbeat is not configured; readiness is using durable queue state only.",
+      details: {
+        configured: false
+      }
+    })
+  };
+}
+
 function buildConnectorHealthCheck(params: ReadinessEvaluationParams): ReadinessCheck {
   return {
     name: "connector_health",
@@ -297,6 +315,10 @@ function getConnectorHealthFailureStatus(runtime: WebReadinessReport["runtime"])
 
 function getConnectorHealthWarningStatus(runtime: WebReadinessReport["runtime"]): ReadinessCheck["status"] {
   return runtime === "production" ? "warn" : "pass";
+}
+
+function getWorkerHeartbeatFailureStatus(runtime: WebReadinessReport["runtime"]): ReadinessCheck["status"] {
+  return runtime === "production" ? "fail" : "warn";
 }
 
 function formatCountLabel(count: number, singular: string, plural: string): string {
@@ -523,6 +545,103 @@ async function getAsyncExecutionCheckSnapshot(nodeEnv: string | undefined): Prom
   }
 }
 
+function getWorkerHeartbeatStaleMs(): number {
+  const configured = Number.parseInt(process.env.AGENTIC_READY_WORKER_HEARTBEAT_STALE_MS ?? "", 10);
+
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+
+  return DEFAULT_WORKER_HEARTBEAT_STALE_MS;
+}
+
+function buildWorkerHeartbeatDetails(params: {
+  heartbeat: WorkerRuntimeHealthSnapshot;
+  ageMs: number;
+  staleAfterMs: number;
+}) {
+  return {
+    configured: true,
+    runnerId: params.heartbeat.runnerId,
+    status: params.heartbeat.status,
+    pid: params.heartbeat.pid,
+    ageSeconds: Number.isFinite(params.ageMs) ? Math.floor(params.ageMs / 1000) : null,
+    staleAfterSeconds: Math.floor(params.staleAfterMs / 1000),
+    processedCount: params.heartbeat.processedCount,
+    schedulerEnabled: params.heartbeat.scheduler.enabled,
+    schedulerLastDecisionCount: params.heartbeat.scheduler.lastDecisionCount
+  };
+}
+
+async function getWorkerHeartbeatCheckSnapshot(nodeEnv: string | undefined): Promise<WorkerHeartbeatCheckSnapshot> {
+  const runtime = normalizeRuntime(nodeEnv);
+  const healthPath = process.env.AGENTIC_WORKER_HEALTH_PATH?.trim();
+
+  if (!healthPath) {
+    return {
+      status: "pass",
+      message: "Worker heartbeat is not configured; readiness is using durable queue state only.",
+      details: {
+        configured: false
+      }
+    };
+  }
+
+  try {
+    const heartbeat = await readFileWorkerRuntimeHealthSnapshot(healthPath);
+
+    if (!heartbeat) {
+      return {
+        status: getWorkerHeartbeatFailureStatus(runtime),
+        message: "Worker heartbeat could not be loaded.",
+        details: {
+          configured: true
+        }
+      };
+    }
+
+    const updatedAt = Date.parse(heartbeat.updatedAt);
+    const staleAfterMs = getWorkerHeartbeatStaleMs();
+    const ageMs = Number.isFinite(updatedAt) ? Math.max(0, Date.now() - updatedAt) : Number.POSITIVE_INFINITY;
+    const details = buildWorkerHeartbeatDetails({
+      heartbeat,
+      ageMs,
+      staleAfterMs
+    });
+
+    if (heartbeat.status === "error") {
+      return {
+        status: getWorkerHeartbeatFailureStatus(runtime),
+        message: "Worker heartbeat reports an error state.",
+        details
+      };
+    }
+
+    if (!Number.isFinite(ageMs) || ageMs > staleAfterMs) {
+      return {
+        status: getWorkerHeartbeatFailureStatus(runtime),
+        message: "Worker heartbeat is stale.",
+        details
+      };
+    }
+
+    return {
+      status: "pass",
+      message: "Worker heartbeat is fresh.",
+      details
+    };
+  } catch (error) {
+    return {
+      status: getWorkerHeartbeatFailureStatus(runtime),
+      message: "Worker heartbeat readiness checks could not be completed.",
+      details: {
+        configured: true,
+        error: error instanceof Error ? error.message : "Unknown readiness failure"
+      }
+    };
+  }
+}
+
 export function buildWebReadinessReport(params: ReadinessEvaluationParams): WebReadinessReport {
   const runtime = normalizeRuntime(params.nodeEnv);
   const checks = [
@@ -531,6 +650,7 @@ export function buildWebReadinessReport(params: ReadinessEvaluationParams): WebR
     buildAuthRuntimeStateCheck(params),
     buildRequestIdentityCheck(params),
     buildAsyncExecutionCheck(params),
+    buildWorkerHeartbeatCheck(params),
     buildConnectorHealthCheck(params)
   ];
   const ok = checks.every((check) => check.status !== "fail");
@@ -561,6 +681,7 @@ export async function getWebReadinessReport(): Promise<WebReadinessReport> {
         })
       : null,
     asyncExecution: await getAsyncExecutionCheckSnapshot(nodeEnv),
+    workerHeartbeat: await getWorkerHeartbeatCheckSnapshot(nodeEnv),
     connectorHealth: await getConnectorHealthCheckSnapshot(nodeEnv)
   });
 }

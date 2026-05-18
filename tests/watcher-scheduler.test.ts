@@ -4,7 +4,7 @@ import path from "node:path";
 import { SYSTEM_USER_ID, WatcherSchema, createSystemActorContext, nowIso } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
-import { runWatcherSchedulerOnce } from "@agentic/worker-runtime";
+import { runWatcherSchedulerLoop, runWatcherSchedulerOnce } from "@agentic/worker-runtime";
 import { vi } from "vitest";
 
 async function createSchedulerFixture() {
@@ -48,6 +48,10 @@ function buildWatcher(goalId: string, overrides: Partial<ReturnType<typeof Watch
 }
 
 describe("watcher scheduler", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("records dry-run evaluations without claiming autopilot events", async () => {
     const { repository, bundle } = await createSchedulerFixture();
     const watcher = await repository.saveWatcher(buildWatcher(bundle.goal.id));
@@ -141,6 +145,46 @@ describe("watcher scheduler", () => {
     });
 
     expect(claimSpy.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("runs the scheduler loop without overlapping evaluations", async () => {
+    const { repository, bundle } = await createSchedulerFixture();
+    await repository.saveWatcher(buildWatcher(bundle.goal.id));
+    const controller = new AbortController();
+    let activeEvaluations = 0;
+    let maxActiveEvaluations = 0;
+    let runStarts = 0;
+
+    const loop = runWatcherSchedulerLoop({
+      repository,
+      runnerId: "scheduler-loop-1",
+      userId: SYSTEM_USER_ID,
+      intervalMs: 1,
+      timeoutMs: 1_000,
+      signal: controller.signal,
+      onRunStart: () => {
+        runStarts += 1;
+      },
+      onRunComplete: () => {
+        controller.abort();
+      },
+      evaluator: async () => {
+        activeEvaluations += 1;
+        maxActiveEvaluations = Math.max(maxActiveEvaluations, activeEvaluations);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        activeEvaluations -= 1;
+
+        return {
+          wouldTrigger: false,
+          reason: "Loop evaluation completed."
+        };
+      }
+    });
+
+    await loop;
+
+    expect(runStarts).toBe(1);
+    expect(maxActiveEvaluations).toBe(1);
   });
 
   it("contains lease renewal failures and reports a watcher decision", async () => {

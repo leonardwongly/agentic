@@ -31,14 +31,16 @@ FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NPM_CONFIG_CACHE=/home/node/.npm
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/package-lock.json ./package-lock.json
-COPY --from=build /app/apps ./apps
-COPY --from=build /app/packages ./packages
-COPY --from=build /app/scripts ./scripts
+COPY --chown=node:node --from=deps /app/node_modules ./node_modules
+COPY --chown=node:node --from=build /app/package.json ./package.json
+COPY --chown=node:node --from=build /app/package-lock.json ./package-lock.json
+COPY --chown=node:node --from=build /app/apps ./apps
+COPY --chown=node:node --from=build /app/packages ./packages
+COPY --chown=node:node --from=build /app/scripts ./scripts
+USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD node -e "const req=require('node:http').request({host:'127.0.0.1',port:Number(process.env.PORT||3000),path:'/api/health',timeout:4000},res=>process.exit(res.statusCode===200?0:1));req.on('error',()=>process.exit(1));req.on('timeout',()=>{req.destroy();process.exit(1);});req.end();"
 CMD ["npm", "run", "start:web:prod", "--", "--hostname", "0.0.0.0", "--port", "3000"]

@@ -5,13 +5,17 @@ import {
   ApiRouteError,
   authenticatedJson,
   authenticatedResponse,
+  authenticatedStreamResponse,
   handleApiError,
   handleOperationalApiError,
   operationalJson,
   parseJsonBody,
   withApiTelemetry
 } from "../apps/web/lib/api-response";
+import { GET as agentActivityRoute } from "../apps/web/app/api/agents/activity/route";
 import {
+  buildAuthorizedGetRequest,
+  expectAuthenticatedStreamHeaders,
   expectBaseSecurityHeaders,
   expectNoStoreHeaders,
   expectOperationalNoStoreHeaders
@@ -75,6 +79,22 @@ describe("api security headers", () => {
     expectNoStoreHeaders(response);
   });
 
+  it("applies authenticated no-store headers to SSE stream responses", () => {
+    const response = authenticatedStreamResponse("event: ready\n\n", {
+      headers: {
+        "Content-Type": "text/event-stream",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no"
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    expect(response.headers.get("connection")).toBe("keep-alive");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+    expectAuthenticatedStreamHeaders(response);
+  });
+
   it("rejects oversized JSON request bodies before parsing", async () => {
     const body = JSON.stringify({ value: "abcdef" });
     const request = new Request("http://localhost/api/test", {
@@ -115,10 +135,7 @@ describe("api security headers", () => {
     const routeFiles = await listRouteFiles(path.join(process.cwd(), "apps/web/app/api"));
     const directJsonRoutes: string[] = [];
     const directResponseRoutes: string[] = [];
-    const documentedRawResponseAllowlist = new Set([
-      path.join(process.cwd(), "apps/web/app/api/agents/activity/route.ts"),
-      path.join(process.cwd(), "apps/web/app/api/jobs/[id]/events/route.ts")
-    ]);
+    const documentedRawResponseAllowlist = new Set<string>();
 
     for (const routeFile of routeFiles) {
       const source = await readFile(routeFile, "utf8");
@@ -134,5 +151,23 @@ describe("api security headers", () => {
 
     expect(directJsonRoutes).toEqual([]);
     expect(directResponseRoutes).toEqual([]);
+  });
+
+  it("applies authenticated stream headers to the agent activity SSE route", async () => {
+    const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
+    process.env.AGENTIC_ACCESS_KEY = "test-access-key";
+
+    let response: Response | undefined;
+    try {
+      response = await agentActivityRoute(buildAuthorizedGetRequest("http://localhost/api/agents/activity"));
+    } finally {
+      process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
+    }
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    expectAuthenticatedStreamHeaders(response);
+
+    await response.body?.cancel();
   });
 });

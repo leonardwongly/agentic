@@ -83,7 +83,9 @@ import {
   executePrivacyOperationJob,
   executePublicShareViewJob,
   executeTemplateRunJob,
+  createFileWorkerRuntimeHealthSink,
   persistCapturedMemories,
+  readFileWorkerRuntimeHealthSnapshot,
   runWorkerRuntime,
   summarizeWorkerQueueHealth
 } from "@agentic/worker-runtime";
@@ -223,6 +225,48 @@ describe("worker runtime", () => {
         goal_refine: 1
       }
     });
+  });
+
+  it("emits a bounded worker health signal while processing jobs", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-worker-health-"));
+    const healthPath = path.join(tempDir, "worker-health.json");
+    const job = await enqueueDocsRenderJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-health-1"
+    });
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-health-test",
+      maxJobs: 1,
+      pollIntervalMs: 50,
+      health: {
+        sink: createFileWorkerRuntimeHealthSink(healthPath),
+        intervalMs: 250,
+        schedulerEnabled: true
+      }
+    });
+    const heartbeat = await readFileWorkerRuntimeHealthSnapshot(healthPath);
+
+    expect(result).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(job.kind).toBe("docs_render");
+    expect(heartbeat).toMatchObject({
+      version: 1,
+      runnerId: "worker-runtime-health-test",
+      status: "stopped",
+      processedCount: 1,
+      scheduler: {
+        enabled: true
+      }
+    });
+    expect(JSON.stringify(heartbeat)).not.toContain("AGENTIC_ACCESS_KEY");
   });
 
   async function createPrivacyOperation(params: {
@@ -1535,6 +1579,59 @@ describe("worker runtime", () => {
         pollIntervalMs: 50
       })
     ]);
+  });
+
+  it("ignores persisted scheduled autopilot events that are not due", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const futureDueAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    const claimed = await repository.claimAutopilotEvent({
+      userId: SYSTEM_USER_ID,
+      kind: "template_due",
+      sourceId: "template-future-worker-runtime",
+      idempotencyKey: "worker-runtime-template-future-due",
+      mode: "draft_goal",
+      summary: "Template due before its scheduled window.",
+      details: {
+        dueAt: futureDueAt
+      },
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      debounceMinutes: 15,
+      reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
+    });
+
+    if (claimed.outcome !== "claimed") {
+      throw new Error(`Expected claimed autopilot event, received ${claimed.outcome}.`);
+    }
+
+    const job = await enqueueAutopilotProcessJob({
+      repository,
+      autopilotEvent: claimed.event
+    });
+
+    await executeAutopilotProcessJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const [persistedEvent] = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+
+    expect(persistedEvent).toMatchObject({
+      id: claimed.event.id,
+      status: "ignored",
+      processedAt: expect.any(String),
+      details: {
+        jobId: job.id,
+        jobStatus: "skipped",
+        dueTimeValidation: {
+          outcome: "ignored",
+          reason: "future_due_time",
+          dueAt: futureDueAt
+        }
+      },
+      error: null
+    });
+    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(0);
   });
 
   it("keeps briefing persistence, memory capture, and self-improvement episodes idempotent across retries", async () => {
