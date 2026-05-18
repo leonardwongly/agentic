@@ -10,6 +10,7 @@ import {
   type AutopilotEvent,
   type AutopilotProcessJobPayload,
   type BriefingType,
+  type EvidenceRecord,
   type GoalBundle,
   type GoalTemplate,
   type JobKind,
@@ -205,12 +206,12 @@ async function finalizeApprovalEvidenceRecord(params: {
   userId: string;
   approvalId: string;
   memoryIds: string[];
-}) {
+}): Promise<EvidenceRecord | null> {
   const { repository, bundle, userId, approvalId, memoryIds } = params;
   const approval = bundle.approvals.find((candidate) => candidate.id === approvalId);
 
   if (!approval || approval.decision === "pending") {
-    return;
+    return null;
   }
 
   const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
@@ -220,7 +221,7 @@ async function finalizeApprovalEvidenceRecord(params: {
       .at(0) ?? null;
 
   if (!evidenceRecord) {
-    return;
+    return null;
   }
 
   const relatedActionLogIds = bundle.actionLogs
@@ -232,7 +233,7 @@ async function finalizeApprovalEvidenceRecord(params: {
     .filter((artifact) => artifact.taskId === approval.taskId)
     .map((artifact) => artifact.id);
 
-  await repository.saveEvidenceRecord({
+  return repository.saveEvidenceRecord({
     ...evidenceRecord,
     resultingTaskState: task?.state ?? evidenceRecord.resultingTaskState,
     resultingGoalStatus: bundle.goal.status,
@@ -1039,6 +1040,19 @@ export async function executeApprovalFollowUpJob(params: {
     });
     await repository.saveGoalBundle(updatedBundle);
 
+    const evidenceRecord = await finalizeApprovalEvidenceRecord({
+      repository,
+      bundle: updatedBundle,
+      userId: job.userId,
+      approvalId: approval.id,
+      memoryIds: []
+    });
+    const evidenceRecordIdsByTaskId = evidenceRecord
+      ? {
+          [approval.taskId]: [evidenceRecord.id]
+        }
+      : undefined;
+
     const capturedMemoryIds = await persistCapturedSignals({
       repository,
       selfImprovementRepository: params.selfImprovementRepository,
@@ -1048,7 +1062,8 @@ export async function executeApprovalFollowUpJob(params: {
         results,
         job.actorContext ?? createSystemActorContext(job.userId),
         {
-          governance: workspaceGovernance
+          governance: workspaceGovernance,
+          evidenceRecordIdsByTaskId
         }
       ),
       userId: job.userId,
@@ -1067,6 +1082,19 @@ export async function executeApprovalFollowUpJob(params: {
   }
 
   if (updatedBundle.goal.status === "completed") {
+    const evidenceRecord = await finalizeApprovalEvidenceRecord({
+      repository,
+      bundle: updatedBundle,
+      userId: job.userId,
+      approvalId: approval.id,
+      memoryIds: []
+    });
+    const evidenceRecordIdsByTaskId = evidenceRecord
+      ? {
+          [approval.taskId]: [evidenceRecord.id]
+        }
+      : undefined;
+
     const capturedMemoryIds = await persistCapturedSignals({
       repository,
       selfImprovementRepository: params.selfImprovementRepository,
@@ -1075,7 +1103,8 @@ export async function executeApprovalFollowUpJob(params: {
         job.userId,
         job.actorContext ?? createSystemActorContext(job.userId),
         {
-          governance: workspaceGovernance
+          governance: workspaceGovernance,
+          evidenceRecordIdsByTaskId
         }
       ),
       userId: job.userId,

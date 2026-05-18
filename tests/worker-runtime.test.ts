@@ -5,12 +5,14 @@ import {
   AgentDefinitionSchema,
   AutopilotEventFabricEnvelopeSchema,
   DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+  EvidenceRecordSchema,
   GoalBundleSchema,
   SYSTEM_USER_ID,
   WorkspaceGovernanceSchema,
   WatcherSchema,
   createSystemActorContext,
-  enterpriseWorkspaceGovernanceDefaults
+  enterpriseWorkspaceGovernanceDefaults,
+  type GoalBundle
 } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import * as orchestrator from "@agentic/orchestrator";
@@ -401,6 +403,38 @@ describe("worker runtime", () => {
       ],
       watchers: [],
       actionLogs: []
+    });
+  }
+
+  function buildApprovalEvidenceFixture(bundle: GoalBundle) {
+    const approval = bundle.approvals[0]!;
+    const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId)!;
+
+    return EvidenceRecordSchema.parse({
+      id: `evidence-${approval.id}`,
+      userId: bundle.goal.userId,
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      approvalId: approval.id,
+      sourceKind: "approval_response",
+      sourceId: approval.id,
+      sourceSummary: `${approval.decision === "approved" ? "Approved" : "Rejected"} "${approval.title}".`,
+      riskClass: approval.riskClass,
+      requestedAction: approval.requestedAction,
+      requestRationale: approval.rationale,
+      requiresApproval: true,
+      decision: approval.decision === "pending" ? "approved" : approval.decision,
+      decisionScope: approval.decisionScope ?? "once",
+      decisionRationale: approval.decisionRationale,
+      respondedAt: approval.respondedAt ?? approval.createdAt,
+      resultingTaskState: task.state,
+      resultingGoalStatus: bundle.goal.status,
+      actionLogIds: [],
+      artifactIds: [],
+      memoryIds: [],
+      actorContext: createSystemActorContext(bundle.goal.userId),
+      createdAt: approval.respondedAt ?? approval.createdAt,
+      updatedAt: approval.respondedAt ?? approval.createdAt
     });
   }
 
@@ -1002,6 +1036,7 @@ describe("worker runtime", () => {
     const bundle = buildApprovalFollowUpBundle("goal-approval-follow-up-runtime", "workflow-approval-follow-up-runtime");
 
     await repository.saveGoalBundle(bundle);
+    const evidenceRecord = await repository.saveEvidenceRecord(buildApprovalEvidenceFixture(bundle));
 
     const job = await enqueueApprovalFollowUpJob({
       repository,
@@ -1024,6 +1059,9 @@ describe("worker runtime", () => {
     const bundleAfterFirstAttempt = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
     const memoriesAfterFirstAttempt = await repository.listMemory(SYSTEM_USER_ID);
     const episodesAfterFirstAttempt = await selfImprovementRepository.listEpisodes();
+    const approvalEpisodesAfterFirstAttempt = episodesAfterFirstAttempt.filter(
+      (episode) => episode.metadata?.goalId === bundle.goal.id && episode.metadata?.taskId === "task-approval-follow-up"
+    );
 
     await executeApprovalFollowUpJob({
       repository,
@@ -1041,6 +1079,10 @@ describe("worker runtime", () => {
       content: "Summarize the approved operating updates and next actions."
     });
     expect(bundleAfterFirstAttempt?.goal.status).toBe("completed");
+    expect(approvalEpisodesAfterFirstAttempt).not.toHaveLength(0);
+    expect(approvalEpisodesAfterFirstAttempt.every((episode) =>
+      episode.provenance.evidenceRecordIds.includes(evidenceRecord.id)
+    )).toBe(true);
     expect(bundleAfterSecondAttempt?.goal.status).toBe("completed");
     expect(
       bundleAfterSecondAttempt?.tasks.find((task) => task.id === "task-approval-follow-up")?.state

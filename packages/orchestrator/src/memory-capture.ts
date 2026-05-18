@@ -22,6 +22,12 @@ export type LearningCapturePrivacyOptions = {
   now?: string;
 };
 
+export type LearningCaptureProvenanceOptions = {
+  evidenceRecordIdsByTaskId?: Record<string, readonly string[] | undefined>;
+};
+
+export type LearningCaptureOptions = LearningCapturePrivacyOptions & LearningCaptureProvenanceOptions;
+
 const LEARNING_REVIEW_DAYS = 90;
 const LEARNING_RETENTION_DAYS = 365;
 
@@ -126,6 +132,16 @@ function inferTaskAction(task: Task, explicitAction: string | null = null): stri
 function buildRecommendationKey(task: Task, action: string, kind: "task_plan" | "execution_path"): string {
   const capabilities = normalizeCapabilities(task).join(",");
   return `${kind}:${task.assignedAgent}:${action}:${task.riskClass}:${capabilities}`;
+}
+
+function evidenceRecordIdsForTask(taskId: string, options?: LearningCaptureProvenanceOptions): string[] {
+  return [
+    ...new Set(
+      (options?.evidenceRecordIdsByTaskId?.[taskId] ?? [])
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+    )
+  ].slice(0, 50);
 }
 
 function buildRecommendationConfidence(task: Task, successOverride?: boolean): number {
@@ -288,7 +304,11 @@ function extractPreferenceSignals(bundle: GoalBundle, userId: string, actorConte
   return memories;
 }
 
-function buildEpisodes(bundle: GoalBundle, memoryIds: string[]): EpisodeRecord[] {
+function buildEpisodes(
+  bundle: GoalBundle,
+  memoryIds: string[],
+  options?: LearningCaptureProvenanceOptions
+): EpisodeRecord[] {
   return bundle.tasks.map((task) => {
     const artifacts = bundle.artifacts.filter((a) => a.taskId === task.id);
     const approval = bundle.approvals.find((a) => a.taskId === task.id);
@@ -374,7 +394,7 @@ function buildEpisodes(bundle: GoalBundle, memoryIds: string[]): EpisodeRecord[]
         source: approval ? "approval" : "goal",
         memoryIds,
         actionLogIds: bundle.actionLogs.filter((actionLog) => actionLog.taskId === task.id || actionLog.goalId === bundle.goal.id).map((actionLog) => actionLog.id),
-        evidenceRecordIds: [],
+        evidenceRecordIds: evidenceRecordIdsForTask(task.id, options),
         recommendationKeys: [recommendationKey]
       },
       privacy: buildEpisodePrivacy({
@@ -467,7 +487,12 @@ function extractExecutionFailureMemories(
   });
 }
 
-function buildExecutionEpisodes(bundle: GoalBundle, results: ExecutionResult[], memoryIds: string[]): EpisodeRecord[] {
+function buildExecutionEpisodes(
+  bundle: GoalBundle,
+  results: ExecutionResult[],
+  memoryIds: string[],
+  options?: LearningCaptureProvenanceOptions
+): EpisodeRecord[] {
   return results.map((result) => {
     const task = bundle.tasks.find((candidate) => candidate.id === result.taskId);
     const taskTitle = task?.title ?? result.taskId;
@@ -535,7 +560,7 @@ function buildExecutionEpisodes(bundle: GoalBundle, results: ExecutionResult[], 
         source: "execution",
         memoryIds,
         actionLogIds: bundle.actionLogs.filter((actionLog) => actionLog.taskId === result.taskId || actionLog.goalId === bundle.goal.id).map((actionLog) => actionLog.id),
-        evidenceRecordIds: [],
+        evidenceRecordIds: evidenceRecordIdsForTask(result.taskId, options),
         recommendationKeys: recommendationKey ? [recommendationKey] : []
       },
       privacy: buildEpisodePrivacy({
@@ -622,7 +647,7 @@ export function captureMemoriesFromBundle(
   bundle: GoalBundle,
   userId: string,
   actorContext: ActorContext | null = null,
-  options?: LearningCapturePrivacyOptions
+  options?: LearningCaptureOptions
 ): CapturedMemories {
   const memories: MemoryRecord[] = [];
 
@@ -634,7 +659,7 @@ export function captureMemoriesFromBundle(
 
   memories.push(...extractPreferenceSignals(bundle, userId, actorContext));
 
-  const episodes = buildEpisodes(bundle, memories.map((memory) => memory.id));
+  const episodes = buildEpisodes(bundle, memories.map((memory) => memory.id), options);
 
   return applyLearningPrivacyControls({
     bundle,
@@ -651,7 +676,7 @@ export function captureExecutionOutcomeSignals(
   userId: string,
   results: ExecutionResult[],
   actorContext: ActorContext | null = null,
-  options?: LearningCapturePrivacyOptions
+  options?: LearningCaptureOptions
 ): CapturedMemories {
   if (results.length === 0) {
     return { memories: [], episodes: [] };
@@ -671,7 +696,7 @@ export function captureExecutionOutcomeSignals(
     source: "execution_outcome",
     captured: {
       memories,
-      episodes: buildExecutionEpisodes(bundle, results, memories.map((memory) => memory.id))
+      episodes: buildExecutionEpisodes(bundle, results, memories.map((memory) => memory.id), options)
     },
     options,
     executionResultTaskIds: results.map((result) => result.taskId)
