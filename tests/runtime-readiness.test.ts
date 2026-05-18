@@ -41,6 +41,22 @@ function buildAsyncExecutionCheck(overrides?: Partial<Omit<ReadinessCheck, "name
   };
 }
 
+function buildWorkerHeartbeatCheck(overrides?: Partial<Omit<ReadinessCheck, "name">>): Omit<ReadinessCheck, "name"> {
+  return {
+    status: "pass",
+    message: "Worker heartbeat is fresh.",
+    details: {
+      configured: true,
+      status: "running",
+      ageSeconds: 5,
+      staleAfterSeconds: 120,
+      processedCount: 3,
+      schedulerEnabled: true
+    },
+    ...overrides
+  };
+}
+
 function buildConnectorHealthCheck(overrides?: Partial<Omit<ReadinessCheck, "name">>): Omit<ReadinessCheck, "name"> {
   return {
     status: "pass",
@@ -182,7 +198,7 @@ describe("runtime readiness", () => {
       }),
       expect.objectContaining({
         name: "worker_heartbeat",
-        status: "pass"
+        status: "fail"
       }),
       expect.objectContaining({
         name: "connector_health",
@@ -237,7 +253,7 @@ describe("runtime readiness", () => {
       }),
       expect.objectContaining({
         name: "worker_heartbeat",
-        status: "pass"
+        status: "warn"
       }),
       expect.objectContaining({
         name: "connector_health",
@@ -272,6 +288,7 @@ describe("runtime readiness", () => {
         warnings: []
       }),
       asyncExecution: buildAsyncExecutionCheck(),
+      workerHeartbeat: buildWorkerHeartbeatCheck(),
       connectorHealth: buildConnectorHealthCheck(),
       databaseStatus: buildDatabaseStatus(),
       generatedAt: "2026-04-17T00:00:00.000Z"
@@ -442,6 +459,50 @@ describe("runtime readiness", () => {
         details: expect.objectContaining({
           deadLetterJobs: 1
         })
+      })
+    );
+  });
+
+  it("fails readiness in production when worker heartbeat is not configured", () => {
+    const report = buildWebReadinessReport({
+      nodeEnv: "production",
+      databaseConfigured: true,
+      authMode: {
+        requiresConfiguredKey: false,
+        usesDevelopmentFallback: false,
+        configured: true
+      },
+      authRuntimeState: buildAuthRuntimeState({
+        production: true,
+        requiresSharedState: true,
+        sessionStateScope: "shared",
+        unlockStateScope: "shared",
+        sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        trustedClientIpHeader: "x-forwarded-for",
+        identitySource: "trusted-ip",
+        warnings: []
+      }),
+      asyncExecution: buildAsyncExecutionCheck(),
+      connectorHealth: buildConnectorHealthCheck(),
+      databaseStatus: buildDatabaseStatus(),
+      generatedAt: "2026-04-17T00:00:00.000Z"
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "worker_heartbeat",
+        status: "fail",
+        message: expect.stringContaining("AGENTIC_WORKER_HEALTH_PATH"),
+        details: {
+          configured: false
+        }
       })
     );
   });
@@ -618,6 +679,7 @@ describe("runtime readiness", () => {
         warnings: []
       }),
       asyncExecution: buildAsyncExecutionCheck(),
+      workerHeartbeat: buildWorkerHeartbeatCheck(),
       connectorHealth: buildConnectorHealthCheck({
         status: "warn",
         message: "Connector health is degraded: 1 credential refresh failed recently, 1 credential validation is stale.",
