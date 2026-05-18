@@ -199,6 +199,14 @@ function buildApprovalNotificationJobIdempotencyKey(params: {
   return params.replayedFromJobId ? `${baseKey}:replay:${params.replayedFromJobId}` : baseKey;
 }
 
+function buildPublicDurableJobIdempotencyKey(namespace: string, value: unknown): string {
+  return `${namespace}:${createHash("sha256").update(stableSerialize(value)).digest("hex").slice(0, 32)}`;
+}
+
+function resolveIdempotencyKey(candidate: string | null | undefined, fallback: () => string): string {
+  return candidate?.trim() || fallback();
+}
+
 function logEnqueuedJob(job: JobRecord, context: Record<string, unknown>) {
   logInfo("worker.job.enqueued", {
     jobId: job.id,
@@ -239,7 +247,14 @@ export async function enqueueGoalCreateJob(params: {
         kind: "goal_create",
         payload,
         actorContext: params.actorContext,
-        idempotencyKey: params.idempotencyKey ?? null,
+        idempotencyKey: resolveIdempotencyKey(params.idempotencyKey, () =>
+          buildPublicDurableJobIdempotencyKey("goal-create", {
+            userId: params.userId,
+            request: params.request,
+            workspaceId: params.workspaceId,
+            agentId: params.agentId
+          })
+        ),
         maxAttempts: 3
       })) as JobRecord & { payload: GoalCreateJobPayload };
 
@@ -290,7 +305,15 @@ export async function enqueueGoalRefineJob(params: {
         kind: "goal_refine",
         payload,
         actorContext: params.actorContext,
-        idempotencyKey: params.idempotencyKey ?? null,
+        idempotencyKey: resolveIdempotencyKey(params.idempotencyKey, () =>
+          buildPublicDurableJobIdempotencyKey("goal-refine", {
+            userId: params.userId,
+            goalId: params.goalId,
+            workflowId: params.workflowId,
+            refinement: params.refinement,
+            sourceRecommendation: params.sourceRecommendation ?? null
+          })
+        ),
         maxAttempts: 3
       })) as JobRecord & { payload: GoalRefineJobPayload };
 
@@ -391,7 +414,13 @@ export async function enqueueTemplateRunJob(params: {
         kind: "template_run",
         payload,
         actorContext: params.actorContext,
-        idempotencyKey: params.idempotencyKey ?? null,
+        idempotencyKey: resolveIdempotencyKey(params.idempotencyKey, () =>
+          buildPublicDurableJobIdempotencyKey("template-run", {
+            userId: params.userId,
+            templateId: params.templateId,
+            workspaceId: params.workspaceId
+          })
+        ),
         maxAttempts: 3
       })) as JobRecord & { payload: TemplateRunJobPayload };
 

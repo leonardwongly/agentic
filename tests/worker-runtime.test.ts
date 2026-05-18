@@ -1581,6 +1581,100 @@ describe("worker runtime", () => {
     ]);
   });
 
+  it("derives retry-safe idempotency for public goal and template job ingress", async () => {
+    const { repository } = await createTestRuntime();
+    const actorContext = createSystemActorContext(SYSTEM_USER_ID);
+    const bundle = await orchestrator.processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Prepare a public durable ingress regression bundle.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+
+    await repository.saveGoalBundle(bundle);
+
+    const template = await repository.saveTemplate({
+      id: "template-derived-public-ingress",
+      userId: SYSTEM_USER_ID,
+      name: "Derived public ingress",
+      description: "Validate keyless template-run dedupe.",
+      request: "Prepare a retry-safe template run.",
+      parameters: {},
+      schedule: {
+        enabled: false,
+        cron: "0 9 * * *",
+        timezone: "UTC",
+        lastRunAt: null,
+        nextRunAt: null
+      },
+      actorContext,
+      createdAt: "2026-04-16T00:00:00.000Z",
+      updatedAt: "2026-04-16T00:00:00.000Z"
+    });
+
+    const firstCreate = await enqueueGoalCreateJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      request: "Prepare the same keyless public goal twice.",
+      workspaceId: null,
+      agentId: null,
+      actorContext
+    });
+    const secondCreate = await enqueueGoalCreateJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      request: "Prepare the same keyless public goal twice.",
+      workspaceId: null,
+      agentId: null,
+      actorContext
+    });
+    const firstRefine = await enqueueGoalRefineJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      goalId: bundle.goal.id,
+      workflowId: bundle.workflow.id,
+      refinement: "Add deterministic public-ingress idempotency evidence.",
+      workspaceId: bundle.goal.workspaceId,
+      actorContext
+    });
+    const secondRefine = await enqueueGoalRefineJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      goalId: bundle.goal.id,
+      workflowId: bundle.workflow.id,
+      refinement: "Add deterministic public-ingress idempotency evidence.",
+      workspaceId: bundle.goal.workspaceId,
+      actorContext
+    });
+    const firstTemplateRun = await enqueueTemplateRunJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      templateId: template.id,
+      goalId: "goal-template-derived-public-ingress-first",
+      workflowId: "workflow-template-derived-public-ingress-first",
+      workspaceId: null,
+      actorContext
+    });
+    const secondTemplateRun = await enqueueTemplateRunJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      templateId: template.id,
+      goalId: "goal-template-derived-public-ingress-second",
+      workflowId: "workflow-template-derived-public-ingress-second",
+      workspaceId: null,
+      actorContext
+    });
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+
+    expect(secondCreate.id).toBe(firstCreate.id);
+    expect(firstCreate.idempotencyKey).toMatch(/^goal-create:/);
+    expect(secondRefine.id).toBe(firstRefine.id);
+    expect(firstRefine.idempotencyKey).toMatch(/^goal-refine:/);
+    expect(secondTemplateRun.id).toBe(firstTemplateRun.id);
+    expect(firstTemplateRun.idempotencyKey).toMatch(/^template-run:/);
+    expect(jobs.filter((job) => ["goal_create", "goal_refine", "template_run"].includes(job.kind))).toHaveLength(3);
+  });
+
   it("ignores persisted scheduled autopilot events that are not due", async () => {
     const { repository, selfImprovementRepository } = await createTestRuntime();
     const futureDueAt = new Date(Date.now() + 10 * 60_000).toISOString();

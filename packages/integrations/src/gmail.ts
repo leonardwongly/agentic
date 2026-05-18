@@ -4,6 +4,7 @@ import { z } from "zod";
 import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
 import { createGoogleOAuthClient } from "./google-oauth";
 import {
+  createInvalidConnectorRequestError,
   createConnectorTimeoutSignal,
   getConnectorHttpStatusCode,
   normalizeConnectorThrownError
@@ -105,6 +106,20 @@ function buildGmailMutationSignal(signal?: AbortSignal) {
     timeoutMs: GMAIL_MUTATION_TIMEOUT_MS,
     signal
   });
+}
+
+function requireGmailIdempotencyKey(operation: string, idempotencyKey: string | undefined): string {
+  const normalized = idempotencyKey?.trim();
+
+  if (!normalized) {
+    throw createInvalidConnectorRequestError({
+      provider: "gmail",
+      operation,
+      message: `Gmail ${operation} requires an idempotency key before provider mutation.`
+    });
+  }
+
+  return normalized;
 }
 
 function sanitizeMailHeader(value: string): string {
@@ -286,12 +301,11 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
         },
         async () => {
           const gmail = getClient();
+          const idempotencyKey = requireGmailIdempotencyKey("drafts.create", paramsDraft.idempotencyKey);
           const requestOptions = {
             signal: buildGmailMutationSignal(paramsDraft.signal)
           };
-          const existingDraftId = paramsDraft.idempotencyKey
-            ? await findDraftByIdempotencyKey(gmail, paramsDraft.idempotencyKey, requestOptions)
-            : null;
+          const existingDraftId = await findDraftByIdempotencyKey(gmail, idempotencyKey, requestOptions);
 
           if (existingDraftId) {
             return DraftResultSchema.parse({
@@ -303,12 +317,10 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
             });
           }
 
-          const idempotencyHeaders = paramsDraft.idempotencyKey
-            ? [
-                `Message-ID: ${buildIdempotencyMessageId(paramsDraft.idempotencyKey)}`,
-                `${GMAIL_IDEMPOTENCY_HEADER}: ${sanitizeMailHeader(paramsDraft.idempotencyKey)}`
-              ]
-            : [];
+          const idempotencyHeaders = [
+            `Message-ID: ${buildIdempotencyMessageId(idempotencyKey)}`,
+            `${GMAIL_IDEMPOTENCY_HEADER}: ${sanitizeMailHeader(idempotencyKey)}`
+          ];
           const rawMessage = [
             ...idempotencyHeaders,
             `To: ${sanitizeMailHeader(paramsDraft.to)}`,
@@ -346,6 +358,7 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
         { hasIdempotencyKey: Boolean(options?.idempotencyKey) },
         async () => {
           const gmail = getClient();
+          const idempotencyKey = requireGmailIdempotencyKey("drafts.send", options?.idempotencyKey);
           const requestOptions = {
             signal: buildGmailMutationSignal(options?.signal)
           };
@@ -358,10 +371,10 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
 
             return { messageId: response.data.id! };
           } catch (error) {
-            if (options?.idempotencyKey && getConnectorHttpStatusCode(error) === 404) {
+            if (getConnectorHttpStatusCode(error) === 404) {
               const existingMessageId = await findSentMessageByIdempotencyKey(
                 gmail,
-                options.idempotencyKey,
+                idempotencyKey,
                 requestOptions
               );
 

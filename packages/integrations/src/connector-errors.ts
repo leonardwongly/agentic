@@ -1,4 +1,5 @@
 export const connectorFailureCodeValues = [
+  "invalid_request",
   "not_configured",
   "timeout",
   "rate_limited",
@@ -56,6 +57,16 @@ export function createNotConfiguredConnectorError(params: {
 }): ConnectorFailureError {
   return new ConnectorFailureError(params.provider, params.operation, "not_configured", false, {
     message: `${params.provider} is not configured. Set ${params.envVar}.`
+  });
+}
+
+export function createInvalidConnectorRequestError(params: {
+  provider: string;
+  operation: string;
+  message: string;
+}): ConnectorFailureError {
+  return new ConnectorFailureError(params.provider, params.operation, "invalid_request", false, {
+    message: params.message
   });
 }
 

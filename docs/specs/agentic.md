@@ -140,6 +140,7 @@ Preview, dashboard-slice, integration callback, webhook, and worker event-stream
 The system intentionally moves long-running or failure-prone work out of request handlers.
 
 - goal creation is queued and processed by the worker runtime
+- public goal-create, goal-refine, and template-run ingress must carry a caller-provided `x-idempotency-key` or receive a server-derived durable job key before enqueue
 - autopilot events are deduplicated, claimed, and retried through durable jobs
 - privacy retention, workspace export, and workspace deletion are worker-backed operations
 - retries use bounded policies and dead-letter state rather than unbounded in-request loops
@@ -156,7 +157,7 @@ Risk classes remain intentionally simple:
 | `R3` | External commitment such as sending or scheduling | Require approval |
 | `R4` | Irreversible or highly sensitive action | Block by default |
 
-Low-confidence tasks downgrade to draft behavior instead of acting autonomously. Connector readiness additionally constrains whether a provider can draft, require approval, or participate in higher-trust autonomous execution. Gmail and Calendar side effects require approval-grade readiness at execution time; missing or lower readiness skips before ledger reservation or provider mutation.
+Low-confidence tasks downgrade to draft behavior instead of acting autonomously. Connector readiness additionally constrains whether a provider can draft, require approval, or participate in higher-trust autonomous execution. Gmail and Calendar side effects require approval-grade readiness at execution time; missing or lower readiness skips before ledger reservation or provider mutation. Google provider mutations also fail closed at the adapter boundary unless execution supplies a stable idempotency key; adapter calls carry bounded abort signals so worker cancellation, timeouts, and retry-safe duplicate reconciliation share the same contract.
 
 ## Memory Model
 

@@ -47,6 +47,7 @@ Required outcome fields:
 - `sideEffectTarget` must identify the external or local resource that the adapter will mutate.
 - `manual_review` intents must not fabricate an idempotency key.
 - New adapters must avoid keys derived from timestamps, random UUIDs, or mutable ambient state.
+- Provider mutation adapters must fail closed before any outbound mutation when the execution path cannot supply a stable idempotency key.
 
 ## Dry-Run Rules
 
@@ -57,6 +58,7 @@ Required outcome fields:
 ## Retry And Recovery Rules
 
 - Connector timeouts, rate limits, and equivalent transport failures should normalize to `retryable: true` with `recovery.strategy = "retry"`.
+- Provider mutation calls must carry an abort-aware timeout signal and must treat caller cancellation as a bounded connector failure instead of allowing unbounded remote work.
 - Missing adapters or explicit `manual_review` intents should normalize to `status = "skipped"`.
 - Local or non-idempotent failures that need human inspection should normalize to `recovery.strategy = "manual_review"`.
 - Partial success must be explicit. If a provider-side precursor succeeds but the terminal side effect fails, return `status = "partial_success"` with:
