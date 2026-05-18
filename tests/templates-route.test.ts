@@ -230,6 +230,52 @@ describe("templates routes", () => {
     expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
   });
 
+  it("derives deterministic idempotency keys for duplicate template runs without a client key", async () => {
+    const createResponse = await createTemplateRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/templates", "POST", {
+        name: "Derived retry-safe template",
+        description: "Exercise derived template-run idempotency.",
+        request: "Review the inbox and produce a durable plan."
+      })
+    );
+    const createPayload = (await createResponse.json()) as {
+      template: { id: string };
+    };
+    const buildRunRequest = () =>
+      new Request(`http://localhost/api/templates/${createPayload.template.id}/run`, {
+        method: "POST",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      });
+
+    const firstResponse = await runTemplateRoute(buildRunRequest(), {
+      params: Promise.resolve({ id: createPayload.template.id })
+    });
+    const secondResponse = await runTemplateRoute(buildRunRequest(), {
+      params: Promise.resolve({ id: createPayload.template.id })
+    });
+    const firstPayload = (await firstResponse.json()) as {
+      job: { id: string; templateId: string; goalId: string };
+      statusUrl: string;
+    };
+    const secondPayload = (await secondResponse.json()) as {
+      job: { id: string; templateId: string; goalId: string };
+      statusUrl: string;
+    };
+    const repository = createRouteTestRepository();
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(202);
+    expect(secondPayload.job.id).toBe(firstPayload.job.id);
+    expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
+    expect(secondPayload.job.templateId).toBe(firstPayload.job.templateId);
+    expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.idempotencyKey).toMatch(/^template-run:/);
+  });
+
   it("rate limits template runs with a route-scoped abuse key", async () => {
     const createResponse = await createTemplateRoute(
       buildAuthorizedJsonRequest("http://localhost/api/templates", "POST", {

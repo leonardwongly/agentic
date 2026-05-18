@@ -11,7 +11,7 @@ import {
   handleApiError,
   parseJsonBody
 } from "../../../../../lib/api-response";
-import { parseIdempotencyKey } from "../../../../../lib/request-idempotency";
+import { parseOrDeriveIdempotencyKey } from "../../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../../lib/server";
 import {
   canOperateSharedWorkflow,
@@ -76,7 +76,16 @@ export async function POST(request: Request, context: RouteContext) {
       workspaceId: bundle.goal.workspaceId,
       actorContext,
       sourceRecommendation: body.sourceRecommendation ?? null,
-      idempotencyKey: parseIdempotencyKey(request)
+      idempotencyKey: parseOrDeriveIdempotencyKey(request, {
+        namespace: "goal-refine",
+        userId: principal.userId,
+        payload: {
+          goalId: bundle.goal.id,
+          workflowId: bundle.workflow.id,
+          message: body.message,
+          sourceRecommendation: body.sourceRecommendation ?? null
+        }
+      })
     });
 
     return authenticatedJson(

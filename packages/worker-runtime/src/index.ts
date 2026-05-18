@@ -26,6 +26,7 @@ import {
   processNextDurableJob,
   type ClaimNextJobParams,
   type JobConcurrencyLimits,
+  type JobHandlerContext,
   type JobHandlerMap,
   type JobRetryPolicy
 } from "@agentic/execution";
@@ -107,6 +108,14 @@ import {
 import { persistCapturedSignals } from "./memory-capture-signals";
 import { createPublicShareViewedLog } from "./public-share-log";
 import { resolveGoogleWorkspaceAdapters } from "./google-workspace-adapters";
+import {
+  createWorkerRuntimeImmuneSystem,
+  type WorkerRuntimeImmuneSystemControls
+} from "./runtime-immune-system";
+import {
+  createWorkerRuntimeHealthReporter,
+  type WorkerRuntimeHealthSink
+} from "./worker-health";
 
 export {
   enqueueApprovalFollowUpJob,
@@ -140,7 +149,21 @@ export {
 export type { GoalJobResultSummary } from "./job-executors-core";
 export { executeGitHubIssueIntakeJob, isGitHubIssueIntakeJob } from "./github-issue-intake-executor";
 export { executePrivacyOperationJob, executePublicShareViewJob } from "./privacy-share-executors";
-export { runWatcherSchedulerOnce, type WatcherSchedulerResult, type WatcherSchedulerDecision } from "./watcher-scheduler";
+export {
+  runWatcherSchedulerLoop,
+  runWatcherSchedulerOnce,
+  type WatcherSchedulerResult,
+  type WatcherSchedulerDecision
+} from "./watcher-scheduler";
+export {
+  createFileWorkerRuntimeHealthSink,
+  createWorkerRuntimeHealthSnapshot,
+  readFileWorkerRuntimeHealthSnapshot,
+  updateWorkerRuntimeHealthSnapshot,
+  type WorkerRuntimeHealthSink,
+  type WorkerRuntimeHealthSnapshot
+} from "./worker-health";
+export type { WorkerRuntimeImmuneSystemControls } from "./runtime-immune-system";
 
 export const workerJobKindValues = [
   "goal_create",
@@ -175,12 +198,11 @@ export type WorkerRuntimeOptions = {
   maxJobs?: number;
   claim?: ClaimNextJobParams;
   immuneSystem?: Partial<WorkerRuntimeImmuneSystemControls>;
-};
-
-export type WorkerRuntimeImmuneSystemControls = {
-  enabled: boolean;
-  maxConsecutiveFailures: number;
-  coolDownMs: number;
+  health?: {
+    sink: WorkerRuntimeHealthSink;
+    intervalMs?: number;
+    schedulerEnabled?: boolean;
+  };
 };
 
 export type WorkerQueueHealthSummary = {
@@ -946,6 +968,7 @@ export async function executeApprovalFollowUpJob(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job, repository } = params;
 
@@ -1032,7 +1055,8 @@ export async function executeApprovalFollowUpJob(params: {
             error,
             metadata
           })
-      }
+      },
+      signal: params.signal
     });
     updatedBundle = reconcileExecutionResults({
       bundle,
@@ -1188,6 +1212,7 @@ export async function executeApprovalFollowUpJob(params: {
 export async function executeApprovalNotificationJob(params: {
   repository: AgenticRepository;
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job, repository } = params;
 
@@ -1233,6 +1258,7 @@ export async function executeApprovalNotificationJob(params: {
         throw new Error("Slack integration is not configured.");
       }
 
+      params.signal?.throwIfAborted();
       await sendNotification({
         channel: process.env.SLACK_DEFAULT_CHANNEL ?? "#approvals",
         text: `${statusEmoji} ${statusLabel}: ${task.title}`
@@ -1243,6 +1269,7 @@ export async function executeApprovalNotificationJob(params: {
         throw new Error("Slack integration is not configured.");
       }
 
+      params.signal?.throwIfAborted();
       await updateMessage({
         channel: job.payload.slackChannelId,
         ts: job.payload.slackMessageTs,
@@ -1272,6 +1299,7 @@ export async function executeApprovalNotificationJob(params: {
         throw new Error("Telegram integration is not configured.");
       }
 
+      params.signal?.throwIfAborted();
       await updateTelegramMessage({
         chatId: job.payload.telegramChatId,
         messageId: job.payload.telegramMessageId,
@@ -1287,8 +1315,8 @@ export function createWorkerJobHandlers(params: {
   runnerId: string;
   retryPolicy?: Partial<JobRetryPolicy>;
 }): JobHandlerMap {
-  const wrapHandler = (jobKind: JobKind, execute: (job: JobRecord) => Promise<void>) => {
-    return (job: JobRecord) =>
+  const wrapHandler = (jobKind: JobKind, execute: (job: JobRecord, context?: JobHandlerContext) => Promise<void>) => {
+    return (job: JobRecord, context?: JobHandlerContext) =>
       withTelemetryContext(
         {
           jobId: job.id,
@@ -1314,7 +1342,7 @@ export function createWorkerJobHandlers(params: {
               });
 
               try {
-                await execute(job);
+                await execute(job, context);
                 recordCounter("worker.job.succeeded.total", 1, {
                   jobKind,
                   runnerId: params.runnerId
@@ -1385,16 +1413,18 @@ export function createWorkerJobHandlers(params: {
         selfImprovementRepository: params.selfImprovementRepository,
         job
       })),
-    approval_follow_up: wrapHandler("approval_follow_up", (job) =>
+    approval_follow_up: wrapHandler("approval_follow_up", (job, context) =>
       executeApprovalFollowUpJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
-        job
+        job,
+        signal: context?.signal
       })),
-    approval_notification: wrapHandler("approval_notification", (job) =>
+    approval_notification: wrapHandler("approval_notification", (job, context) =>
       executeApprovalNotificationJob({
         repository: params.repository,
-        job
+        job,
+        signal: context?.signal
       })),
     privacy_operation: wrapHandler("privacy_operation", (job) =>
       executePrivacyOperationJob({
@@ -1416,6 +1446,10 @@ function shouldClaimJob(jobKind: JobKind, filters: readonly JobKind[] | undefine
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) {
+    return Promise.resolve();
+  }
+
+  if (signal?.aborted) {
     return Promise.resolve();
   }
 
@@ -1457,107 +1491,110 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
       });
       const pollIntervalMs = Math.max(50, options.pollIntervalMs ?? 1_000);
       let processedCount = 0;
-      const immuneSystem: WorkerRuntimeImmuneSystemControls = {
-        enabled: true,
-        maxConsecutiveFailures: 6,
-        coolDownMs: 30_000,
-        ...(options.immuneSystem ?? {})
-      };
-      const breaker = new Map<JobKind, { consecutiveFailures: number; openUntilMs: number | null }>();
-
-      function currentAllowedKinds(): JobKind[] | null {
-        const requestedKinds = options.claim?.kinds ?? workerJobKindValues;
-
-        if (!immuneSystem.enabled) {
-          return requestedKinds.slice();
-        }
-
-        const nowMs = Date.now();
-        const allowed = requestedKinds.filter((kind) => {
-          const entry = breaker.get(kind);
-          return !entry?.openUntilMs || entry.openUntilMs <= nowMs;
-        });
-
-        return allowed.length > 0 ? allowed : null;
-      }
-
-      function recordJobOutcome(kind: JobKind, status: JobRecord["status"]) {
-        if (!immuneSystem.enabled) {
-          return;
-        }
-
-        const existing = breaker.get(kind) ?? { consecutiveFailures: 0, openUntilMs: null };
-
-        if (status === "completed") {
-          if (existing.consecutiveFailures > 0 || existing.openUntilMs) {
-            breaker.set(kind, { consecutiveFailures: 0, openUntilMs: null });
-          }
-          return;
-        }
-
-        const nextFailures = existing.consecutiveFailures + 1;
-
-        if (nextFailures >= immuneSystem.maxConsecutiveFailures) {
-          breaker.set(kind, { consecutiveFailures: 0, openUntilMs: Date.now() + immuneSystem.coolDownMs });
-          recordCounter("worker.immunity.circuit_breaker.opened.total", 1, {
+      const healthReporter = createWorkerRuntimeHealthReporter({
+        runnerId: options.runnerId,
+        health: options.health,
+        getProcessedCount: () => processedCount,
+        onWriteError: (error) => {
+          logWarn("worker.health_signal.write_failed", {
             runnerId: options.runnerId,
-            jobKind: kind
+            error: error instanceof Error ? error.message : "Unknown health signal failure"
           });
-          return;
         }
+      });
+      const immuneSystem = createWorkerRuntimeImmuneSystem({
+        runnerId: options.runnerId,
+        controls: options.immuneSystem
+      });
 
-        breaker.set(kind, { consecutiveFailures: nextFailures, openUntilMs: null });
-      }
-
-      while (!options.signal?.aborted) {
-        const allowedKinds = currentAllowedKinds();
-
-        if (allowedKinds === null) {
-          await delay(pollIntervalMs, options.signal);
-          continue;
-        }
-
-        const result = await processNextDurableJob({
-          queue,
-          handlers,
-          claim: {
-            ...(options.claim ?? {}),
-            kinds: allowedKinds
-          }
-        });
-
-        if (result.claimedJob) {
-          if (!shouldClaimJob(result.claimedJob.kind, options.claim?.kinds)) {
-            throw new Error(`Worker claimed unexpected job kind "${result.claimedJob.kind}".`);
-          }
-
-          if (result.finalJob) {
-            recordJobOutcome(result.claimedJob.kind, result.finalJob.status);
-          }
-
-          processedCount += 1;
-          recordCounter("worker.loop.processed.total", 1, {
-            runnerId: options.runnerId,
-            jobKind: result.claimedJob.kind
-          });
-
-          if (options.maxJobs && processedCount >= options.maxJobs) {
-            return {
-              processedCount,
-              stopReason: "max_jobs"
-            };
-          }
-
-          continue;
-        }
-
-        await delay(pollIntervalMs, options.signal);
-      }
-
-      return {
+      healthReporter.write({
+        status: "idle",
         processedCount,
-        stopReason: "aborted"
-      };
+        scheduler: {
+          enabled: Boolean(options.health?.schedulerEnabled)
+        }
+      });
+
+      try {
+        while (!options.signal?.aborted) {
+          const allowedKinds = immuneSystem.getAllowedKinds(options.claim?.kinds ?? workerJobKindValues);
+
+          if (allowedKinds === null) {
+            await delay(pollIntervalMs, options.signal);
+            continue;
+          }
+
+          const result = await processNextDurableJob({
+            queue,
+            handlers,
+            claim: {
+              ...(options.claim ?? {}),
+              kinds: allowedKinds
+            }
+          });
+
+          if (result.claimedJob) {
+            if (!shouldClaimJob(result.claimedJob.kind, options.claim?.kinds)) {
+              throw new Error(`Worker claimed unexpected job kind "${result.claimedJob.kind}".`);
+            }
+
+            if (result.finalJob) {
+              immuneSystem.recordJobOutcome(result.claimedJob.kind, result.finalJob.status);
+            }
+
+            processedCount += 1;
+            healthReporter.write({
+              status: "running",
+              processedCount,
+              lastProcessedAt: nowIso(),
+              lastErrorAt: result.finalJob?.status === "completed" ? healthReporter.getSnapshot()?.lastErrorAt ?? null : nowIso(),
+              lastErrorClass:
+                result.finalJob?.status === "completed" ? healthReporter.getSnapshot()?.lastErrorClass ?? null : "JobFailure"
+            });
+            recordCounter("worker.loop.processed.total", 1, {
+              runnerId: options.runnerId,
+              jobKind: result.claimedJob.kind
+            });
+
+            if (options.maxJobs && processedCount >= options.maxJobs) {
+              healthReporter.write({
+                status: "stopped",
+                processedCount
+              });
+              await healthReporter.flush();
+              return {
+                processedCount,
+                stopReason: "max_jobs"
+              };
+            }
+
+            continue;
+          }
+
+          await delay(pollIntervalMs, options.signal);
+        }
+
+        healthReporter.write({
+          status: "stopped",
+          processedCount
+        });
+        await healthReporter.flush();
+        return {
+          processedCount,
+          stopReason: "aborted"
+        };
+      } catch (error) {
+        healthReporter.write({
+          status: "error",
+          processedCount,
+          lastErrorAt: nowIso(),
+          lastErrorClass: error instanceof Error ? error.name : "UnknownError"
+        });
+        await healthReporter.flush();
+        throw error;
+      } finally {
+        healthReporter.close();
+      }
     }
   );
 }

@@ -13,7 +13,7 @@ import {
   parseJsonBody
 } from "../../../../lib/api-response";
 import { buildNlCapabilitySummary } from "../../../../lib/nl-capabilities";
-import { parseIdempotencyKey } from "../../../../lib/request-idempotency";
+import { parseOrDeriveIdempotencyKey } from "../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../lib/server";
 
 const NLSummaryTimeRangeSchema = z.enum(["today", "week", "since-last-login", "custom"]);
@@ -419,7 +419,13 @@ export async function POST(request: Request) {
       }
     }
 
-    const idempotencyKey = intent.type === "command" ? parseIdempotencyKey(request) : null;
+    const idempotencyKey = intent.type === "command"
+      ? parseOrDeriveIdempotencyKey(request, {
+          namespace: "nl-command",
+          userId: principal.userId,
+          payload: intent
+        })
+      : null;
     const result = await executeIntent(principal.userId, actor, intent, idempotencyKey);
 
     return authenticatedJson(result.body, result.status ? { status: result.status } : undefined);

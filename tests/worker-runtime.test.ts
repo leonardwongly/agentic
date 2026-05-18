@@ -83,7 +83,9 @@ import {
   executePrivacyOperationJob,
   executePublicShareViewJob,
   executeTemplateRunJob,
+  createFileWorkerRuntimeHealthSink,
   persistCapturedMemories,
+  readFileWorkerRuntimeHealthSnapshot,
   runWorkerRuntime,
   summarizeWorkerQueueHealth
 } from "@agentic/worker-runtime";
@@ -223,6 +225,48 @@ describe("worker runtime", () => {
         goal_refine: 1
       }
     });
+  });
+
+  it("emits a bounded worker health signal while processing jobs", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-worker-health-"));
+    const healthPath = path.join(tempDir, "worker-health.json");
+    const job = await enqueueDocsRenderJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-health-1"
+    });
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-health-test",
+      maxJobs: 1,
+      pollIntervalMs: 50,
+      health: {
+        sink: createFileWorkerRuntimeHealthSink(healthPath),
+        intervalMs: 250,
+        schedulerEnabled: true
+      }
+    });
+    const heartbeat = await readFileWorkerRuntimeHealthSnapshot(healthPath);
+
+    expect(result).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(job.kind).toBe("docs_render");
+    expect(heartbeat).toMatchObject({
+      version: 1,
+      runnerId: "worker-runtime-health-test",
+      status: "stopped",
+      processedCount: 1,
+      scheduler: {
+        enabled: true
+      }
+    });
+    expect(JSON.stringify(heartbeat)).not.toContain("AGENTIC_ACCESS_KEY");
   });
 
   async function createPrivacyOperation(params: {

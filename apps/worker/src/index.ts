@@ -3,7 +3,15 @@ import { prepareDefaultIntegrations } from "@agentic/integrations";
 import { logError, logInfo, withTelemetryContext } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
-import { runWorkerRuntime } from "@agentic/worker-runtime";
+import {
+  createFileWorkerRuntimeHealthSink,
+  createWorkerRuntimeHealthSnapshot,
+  runWatcherSchedulerLoop,
+  runWorkerRuntime,
+  updateWorkerRuntimeHealthSnapshot,
+  type WorkerRuntimeHealthSink,
+  type WorkerRuntimeHealthSnapshot
+} from "@agentic/worker-runtime";
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
   const value = process.env[name]?.trim();
@@ -53,6 +61,24 @@ function parseRatioEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+function parseBooleanEnv(name: string, fallback: boolean): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+
+  if (!value) {
+    return fallback;
+  }
+
+  if (["1", "true", "yes", "on"].includes(value)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "off"].includes(value)) {
+    return false;
+  }
+
+  throw new Error(`${name} must be a boolean-like value when configured.`);
+}
+
 async function ensureWorkerRepositoryReady(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
 
@@ -71,6 +97,11 @@ async function main() {
   const runnerId = process.env.AGENTIC_WORKER_RUNNER_ID?.trim() || `worker-${process.pid}`;
   const pollIntervalMs = parsePositiveIntEnv("AGENTIC_WORKER_POLL_INTERVAL_MS", 1_000);
   const leaseMs = parsePositiveIntEnv("AGENTIC_WORKER_LEASE_MS", 30_000);
+  const heartbeatIntervalMs = parsePositiveIntEnv("AGENTIC_WORKER_HEARTBEAT_INTERVAL_MS", 5_000);
+  const watcherSchedulerEnabled = !parseBooleanEnv("AGENTIC_WATCHER_SCHEDULER_DISABLED", false);
+  const watcherSchedulerIntervalMs = parsePositiveIntEnv("AGENTIC_WATCHER_SCHEDULER_INTERVAL_MS", 60_000);
+  const watcherSchedulerTimeoutMs = parsePositiveIntEnv("AGENTIC_WATCHER_SCHEDULER_TIMEOUT_MS", 30_000);
+  const watcherSchedulerLeaseMs = parsePositiveIntEnv("AGENTIC_WATCHER_SCHEDULER_LEASE_MS", 60_000);
   const maxRunningPerKind = parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_KIND");
   const maxRunningPerUser = parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_USER");
   const maxRunningPerConcurrencyKey = parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY");
@@ -83,6 +114,39 @@ async function main() {
           maxRunningPerConcurrencyKey
         };
   const retryJitterRatio = parseRatioEnv("AGENTIC_WORKER_RETRY_JITTER_RATIO", 0.1);
+  const healthPath = process.env.AGENTIC_WORKER_HEALTH_PATH?.trim();
+  const healthFileSink = healthPath ? createFileWorkerRuntimeHealthSink(healthPath) : null;
+  let healthSnapshot: WorkerRuntimeHealthSnapshot | null = healthFileSink
+    ? createWorkerRuntimeHealthSnapshot({
+        runnerId,
+        status: "starting"
+      })
+    : null;
+  const healthSink: WorkerRuntimeHealthSink | undefined = healthFileSink
+    ? {
+        async write(snapshot) {
+          healthSnapshot = updateWorkerRuntimeHealthSnapshot({
+            ...snapshot,
+            scheduler: healthSnapshot?.scheduler ?? snapshot.scheduler
+          }, {});
+          await healthFileSink.write(healthSnapshot);
+        }
+      }
+    : undefined;
+  const writeSchedulerHealth = async (updates: Partial<WorkerRuntimeHealthSnapshot["scheduler"]>) => {
+    if (!healthFileSink || !healthSnapshot) {
+      return;
+    }
+
+    healthSnapshot = updateWorkerRuntimeHealthSnapshot(healthSnapshot, {
+      scheduler: {
+        ...healthSnapshot.scheduler,
+        ...updates,
+        enabled: watcherSchedulerEnabled
+      }
+    });
+    await healthFileSink.write(healthSnapshot);
+  };
 
   const shutdown = (signal: string) => {
     if (controller.signal.aborted) {
@@ -115,20 +179,58 @@ async function main() {
         pollIntervalMs,
         leaseMs,
         retryJitterRatio,
-        concurrencyLimits
+        concurrencyLimits,
+        watcherSchedulerEnabled,
+        watcherSchedulerIntervalMs,
+        watcherSchedulerTimeoutMs,
+        healthConfigured: Boolean(healthSink)
       });
 
-      const result = await runWorkerRuntime({
-        repository,
-        selfImprovementRepository,
-        runnerId,
-        pollIntervalMs,
-        leaseMs,
-        concurrencyLimits,
-        retryJitterRatio,
-        requireIdempotencyForRetry: true,
-        signal: controller.signal
-      });
+      const [result] = await Promise.all([
+        runWorkerRuntime({
+          repository,
+          selfImprovementRepository,
+          runnerId,
+          pollIntervalMs,
+          leaseMs,
+          concurrencyLimits,
+          retryJitterRatio,
+          requireIdempotencyForRetry: true,
+          signal: controller.signal,
+          health: healthSink
+            ? {
+                sink: healthSink,
+                intervalMs: heartbeatIntervalMs,
+                schedulerEnabled: watcherSchedulerEnabled
+              }
+            : undefined
+        }),
+        runWatcherSchedulerLoop({
+          repository,
+          runnerId,
+          enabled: watcherSchedulerEnabled,
+          intervalMs: watcherSchedulerIntervalMs,
+          timeoutMs: watcherSchedulerTimeoutMs,
+          leaseMs: watcherSchedulerLeaseMs,
+          signal: controller.signal,
+          onRunStart: (startedAt) =>
+            writeSchedulerHealth({
+              lastRunAt: startedAt
+            }),
+          onRunComplete: (schedulerResult) =>
+            writeSchedulerHealth({
+              lastCompletedAt: schedulerResult.evaluatedAt,
+              lastDecisionCount: schedulerResult.decisions.length,
+              lastErrorAt: null,
+              lastErrorClass: null
+            }),
+          onRunError: (error) =>
+            writeSchedulerHealth({
+              lastErrorAt: new Date().toISOString(),
+              lastErrorClass: error instanceof Error ? error.name : "UnknownError"
+            })
+        })
+      ]);
 
       logInfo("worker.stopped", {
         runnerId,

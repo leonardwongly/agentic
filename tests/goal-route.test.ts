@@ -266,6 +266,41 @@ describe("goal route", () => {
     expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
   });
 
+  it("derives deterministic idempotency keys for duplicate goal submissions without a client key", async () => {
+    const buildRequest = () =>
+      new Request("http://localhost/api/goals", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          request: "Prepare a durable weekly planning workflow."
+        })
+      });
+
+    const firstResponse = await goalsCreateRoute(buildRequest());
+    const secondResponse = await goalsCreateRoute(buildRequest());
+    const firstPayload = (await firstResponse.json()) as {
+      job: { id: string; goalId: string; status: string };
+      statusUrl: string;
+    };
+    const secondPayload = (await secondResponse.json()) as {
+      job: { id: string; goalId: string; status: string };
+      statusUrl: string;
+    };
+    const repository = createRouteTestRepository();
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(202);
+    expect(secondPayload.job.id).toBe(firstPayload.job.id);
+    expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
+    expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.idempotencyKey).toMatch(/^goal-create:/);
+  });
+
   it("deduplicates retried goal refinements when the same idempotency key is reused", async () => {
     const repository = createRouteTestRepository();
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan a reviewer-safe follow-up workflow.");

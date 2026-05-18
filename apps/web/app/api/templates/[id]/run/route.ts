@@ -11,7 +11,7 @@ import {
   handleApiError,
   withApiTelemetry
 } from "../../../../../lib/api-response";
-import { parseIdempotencyKey } from "../../../../../lib/request-idempotency";
+import { parseOrDeriveIdempotencyKey } from "../../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../../lib/server";
 
 const TemplateIdSchema = z.string().trim().min(1).max(200);
@@ -51,7 +51,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         workflowId: crypto.randomUUID(),
         workspaceId,
         actorContext,
-        idempotencyKey: parseIdempotencyKey(request)
+        idempotencyKey: parseOrDeriveIdempotencyKey(request, {
+          namespace: "template-run",
+          userId: principal.userId,
+          payload: {
+            templateId,
+            workspaceId
+          }
+        })
       });
 
       return authenticatedJson(

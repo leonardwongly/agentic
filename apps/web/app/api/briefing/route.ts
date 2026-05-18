@@ -12,7 +12,7 @@ import {
   withApiTelemetry
 } from "../../../lib/api-response";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
-import { parseIdempotencyKey } from "../../../lib/request-idempotency";
+import { parseOrDeriveIdempotencyKey } from "../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../lib/server";
 
 const BriefingRequestSchema = z
@@ -84,7 +84,14 @@ export async function POST(request: Request) {
         briefingType: body.type,
         workspaceId,
         actorContext,
-        idempotencyKey: parseIdempotencyKey(request)
+        idempotencyKey: parseOrDeriveIdempotencyKey(request, {
+          namespace: "briefing-create",
+          userId: principal.userId,
+          payload: {
+            briefingType: body.type,
+            workspaceId
+          }
+        })
       });
 
       return authenticatedJson(

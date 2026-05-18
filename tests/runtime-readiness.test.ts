@@ -181,6 +181,10 @@ describe("runtime readiness", () => {
         status: "fail"
       }),
       expect.objectContaining({
+        name: "worker_heartbeat",
+        status: "pass"
+      }),
+      expect.objectContaining({
         name: "connector_health",
         status: "pass"
       })
@@ -229,6 +233,10 @@ describe("runtime readiness", () => {
       }),
       expect.objectContaining({
         name: "async_execution",
+        status: "pass"
+      }),
+      expect.objectContaining({
+        name: "worker_heartbeat",
         status: "pass"
       }),
       expect.objectContaining({
@@ -433,6 +441,62 @@ describe("runtime readiness", () => {
         status: "fail",
         details: expect.objectContaining({
           deadLetterJobs: 1
+        })
+      })
+    );
+  });
+
+  it("fails readiness in production when a configured worker heartbeat is stale", () => {
+    const report = buildWebReadinessReport({
+      nodeEnv: "production",
+      databaseConfigured: true,
+      authMode: {
+        requiresConfiguredKey: false,
+        usesDevelopmentFallback: false,
+        configured: true
+      },
+      authRuntimeState: buildAuthRuntimeState({
+        production: true,
+        requiresSharedState: true,
+        sessionStateScope: "shared",
+        unlockStateScope: "shared",
+        sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        trustedClientIpHeader: "x-forwarded-for",
+        identitySource: "trusted-ip",
+        warnings: []
+      }),
+      asyncExecution: buildAsyncExecutionCheck(),
+      workerHeartbeat: {
+        status: "fail",
+        message: "Worker heartbeat is stale.",
+        details: {
+          configured: true,
+          status: "running",
+          ageSeconds: 300,
+          staleAfterSeconds: 120,
+          processedCount: 2,
+          schedulerEnabled: true
+        }
+      },
+      connectorHealth: buildConnectorHealthCheck(),
+      databaseStatus: buildDatabaseStatus(),
+      generatedAt: "2026-04-17T00:00:00.000Z"
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "worker_heartbeat",
+        status: "fail",
+        details: expect.objectContaining({
+          configured: true,
+          schedulerEnabled: true
         })
       })
     );

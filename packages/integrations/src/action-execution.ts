@@ -18,17 +18,17 @@ import {
 
 export type ActionExecutionAdapters = {
   gmail?: {
-    createDraft: (params: { to: string; subject: string; body: string; threadId?: string; idempotencyKey?: string }) => Promise<{ id: string }>;
-    sendDraft: (draftId: string, options?: { idempotencyKey?: string }) => Promise<{ messageId: string }>;
+    createDraft: (params: { to: string; subject: string; body: string; threadId?: string; idempotencyKey?: string; signal?: AbortSignal }) => Promise<{ id: string }>;
+    sendDraft: (draftId: string, options?: { idempotencyKey?: string; signal?: AbortSignal }) => Promise<{ messageId: string }>;
     listRecentEmails: (maxResults?: number, query?: string) => Promise<Array<{ id: string; from: string; subject: string; snippet: string }>>;
   };
   calendar?: {
-    createEvent: (params: { summary: string; start: string; end: string; description?: string; attendees?: string[]; idempotencyKey?: string }) => Promise<{ id: string; htmlLink: string }>;
+    createEvent: (params: { summary: string; start: string; end: string; description?: string; attendees?: string[]; idempotencyKey?: string; signal?: AbortSignal }) => Promise<{ id: string; htmlLink: string }>;
     updateEvent: (params: { eventId: string; summary?: string; start?: string; end?: string }) => Promise<{ id: string }>;
     listUpcomingEvents: (params?: { maxResults?: number }) => Promise<Array<{ id: string; summary: string; start: string; end: string }>>;
   };
   notes?: {
-    createLocalNote: (params: { title: string; content: string }) => Promise<{ slug: string }>;
+    createLocalNote: (params: { title: string; content: string; signal?: AbortSignal }) => Promise<{ slug: string }>;
   };
 };
 
@@ -461,6 +461,12 @@ function buildConnectorFailureOutcome(params: {
   });
 }
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("Action execution aborted.");
+  }
+}
+
 function buildLocalFailureOutcome(params: {
   plan: ActionExecutionPlan;
   detailPrefix: string;
@@ -563,6 +569,7 @@ export async function executeTypedAction(params: {
   adapters: ActionExecutionAdapters;
   connectorReadiness?: ActionExecutionConnectorReadiness;
   sideEffectLedger?: ActionExecutionSideEffectLedger;
+  signal?: AbortSignal;
 }): Promise<{ plan: ActionExecutionPlan; outcome: ActionExecutionOutcome }> {
   const plan = planActionExecution({
     task: params.task,
@@ -609,6 +616,7 @@ export async function executeTypedAction(params: {
       let draftId: string | null = null;
 
       try {
+        throwIfAborted(params.signal);
         if (params.actionIntent.mode === "send" && ledgerRecord?.providerRef) {
           draftId = ledgerRecord.providerRef;
         } else {
@@ -617,7 +625,8 @@ export async function executeTypedAction(params: {
             subject: params.actionIntent.subject,
             body: params.actionIntent.body,
             ...(params.actionIntent.threadId ? { threadId: params.actionIntent.threadId } : {}),
-            idempotencyKey: plan.idempotencyKey ?? undefined
+            idempotencyKey: plan.idempotencyKey ?? undefined,
+            signal: params.signal
           });
           draftId = draft.id;
         }
@@ -656,8 +665,10 @@ export async function executeTypedAction(params: {
             detail: `Draft ${draftId} created; delivery pending.`
           });
 
+          throwIfAborted(params.signal);
           const sent = await params.adapters.gmail.sendDraft(draftId, {
-            idempotencyKey: plan.idempotencyKey ?? undefined
+            idempotencyKey: plan.idempotencyKey ?? undefined,
+            signal: params.signal
           });
           const detail = `Draft ${draftId} sent as message ${sent.messageId}.`;
           await updateProviderSideEffect({
@@ -768,13 +779,15 @@ export async function executeTypedAction(params: {
       }
 
       try {
+        throwIfAborted(params.signal);
         const event = await params.adapters.calendar.createEvent({
           summary: params.actionIntent.summary,
           start: params.actionIntent.start,
           end: params.actionIntent.end,
           ...(params.actionIntent.description ? { description: params.actionIntent.description } : {}),
           attendees: params.actionIntent.attendees,
-          idempotencyKey: plan.idempotencyKey ?? undefined
+          idempotencyKey: plan.idempotencyKey ?? undefined,
+          signal: params.signal
         });
         const detail = `Calendar event created (id: ${event.id}). Link: ${event.htmlLink}`;
         ledgerRecord = await updateProviderSideEffect({
@@ -834,9 +847,11 @@ export async function executeTypedAction(params: {
       }
 
       try {
+        throwIfAborted(params.signal);
         const note = await params.adapters.notes.createLocalNote({
           title: params.actionIntent.title,
-          content: params.actionIntent.content
+          content: params.actionIntent.content,
+          signal: params.signal
         });
 
         return {

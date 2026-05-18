@@ -234,6 +234,43 @@ describe("action execution contract", () => {
     expect(calls).toEqual([]);
   });
 
+  it("propagates abort signals before provider side effects", async () => {
+    const task = buildTask(["read", "draft", "send"]);
+    const actionIntent = ActionIntentSchema.parse({
+      type: "send_message",
+      to: "client@example.com",
+      subject: "Follow-up",
+      body: "Approved response body.",
+      mode: "draft"
+    });
+    const controller = new AbortController();
+    const createDraft = vi.fn().mockResolvedValue({ id: "draft-should-not-exist" });
+    const { ledger } = buildLedger();
+
+    controller.abort(new Error("operator cancelled execution"));
+
+    const { outcome } = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        gmail: {
+          createDraft,
+          sendDraft: vi.fn(),
+          listRecentEmails: vi.fn()
+        }
+      },
+      connectorReadiness: approvalGradeConnectors,
+      sideEffectLedger: ledger,
+      signal: controller.signal
+    });
+
+    expect(createDraft).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({
+      status: "failed"
+    });
+    expect(outcome.detail).toContain("operator cancelled execution");
+  });
+
   it("records provider side effects before Gmail mutation and suppresses duplicate drafts", async () => {
     const task = buildTask(["read", "draft", "send"]);
     const actionIntent = ActionIntentSchema.parse({
