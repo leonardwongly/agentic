@@ -7,7 +7,12 @@ import { processUserRequest } from "@agentic/orchestrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GET as dashboardEventsRoute } from "../apps/web/app/api/dashboard/events/route";
 import { buildDashboardEventBatch } from "../apps/web/lib/dashboard-events";
-import { buildAuthorizedGetRequest, createRouteTestRepository, expectBaseSecurityHeaders } from "./route-test-helpers";
+import {
+  buildAuthorizedGetRequest,
+  createRouteTestRepository,
+  expectAuthenticatedStreamHeaders,
+  expectNoStoreHeaders
+} from "./route-test-helpers";
 
 describe("dashboard events route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
@@ -33,6 +38,7 @@ describe("dashboard events route", () => {
     const payload = (await response.json()) as { error: string };
 
     expect(response.status).toBe(401);
+    expectNoStoreHeaders(response);
     expect(payload.error).toBe("Unauthorized. Create a session before calling the Agentic API.");
   });
 
@@ -95,7 +101,7 @@ describe("dashboard events route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/event-stream");
-    expectBaseSecurityHeaders(response);
+    expectAuthenticatedStreamHeaders(response);
     expect(text).toContain("event: dashboard.events");
     expect(text).toContain('"kind":"approval.created"');
     expect(text).toContain('"kind":"job.created"');

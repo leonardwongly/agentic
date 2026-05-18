@@ -1,5 +1,5 @@
 import { requireApiSession } from "../../../../lib/auth";
-import { ApiRouteError, authenticatedResponse, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
+import { ApiRouteError, authenticatedStreamResponse, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
 import {
   buildDashboardEventBatch,
@@ -155,16 +155,13 @@ export async function GET(request: Request) {
         }
       });
 
-      const response = authenticatedResponse(stream, {
+      return authenticatedStreamResponse(stream, {
         headers: {
           "Content-Type": "text/event-stream",
           Connection: "keep-alive",
           "X-Accel-Buffering": "no"
         }
       });
-
-      response.headers.set("Cache-Control", "private, no-store, max-age=0, must-revalidate, no-transform");
-      return response;
     } catch (error) {
       return handleApiError(error, "Failed to connect to dashboard event stream.");
     }

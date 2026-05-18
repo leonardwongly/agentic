@@ -22,6 +22,7 @@ import { applyBaseSecurityHeaders } from "./security-headers";
 import { SharedAuthStateStoreError } from "./shared-auth-state-db";
 
 export const AUTHENTICATED_API_CACHE_CONTROL = "private, no-store, max-age=0, must-revalidate";
+export const AUTHENTICATED_STREAM_CACHE_CONTROL = `${AUTHENTICATED_API_CACHE_CONTROL}, no-transform`;
 export const OPERATIONAL_API_CACHE_CONTROL = "no-store, max-age=0, must-revalidate";
 
 const JSON_CONTENT_TYPE_PREFIX = "application/json";
@@ -91,6 +92,18 @@ export function authenticatedResponse(body?: BodyInit | null, init?: ResponseIni
     ...init,
     headers: appendCorrelationHeaders(mergeApiHeaders(init, {
       "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
+      Pragma: "no-cache",
+      Expires: "0",
+      Vary: "Cookie, X-Agentic-Access-Key"
+    }))
+  });
+}
+
+export function authenticatedStreamResponse(body?: BodyInit | null, init?: ResponseInit) {
+  return new Response(body, {
+    ...init,
+    headers: appendCorrelationHeaders(mergeApiHeaders(init, {
+      "Cache-Control": AUTHENTICATED_STREAM_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0",
       Vary: "Cookie, X-Agentic-Access-Key"

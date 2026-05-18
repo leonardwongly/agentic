@@ -1,5 +1,5 @@
 import { requireApiSession } from "../../../../lib/auth";
-import { handleApiError, withApiTelemetry } from "../../../../lib/api-response";
+import { authenticatedStreamResponse, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,7 @@ export async function GET(request: Request) {
 
       const encoder = new TextEncoder();
       let closed = false;
+      let keepAlive: ReturnType<typeof setInterval> | null = null;
 
       const stream = new ReadableStream({
         start(controller) {
@@ -31,33 +32,42 @@ export async function GET(request: Request) {
           controller.enqueue(encoder.encode(`data: ${connectMsg}\n\n`));
 
           // Keep-alive ping every 30 seconds.
-          const keepAlive = setInterval(() => {
+          keepAlive = setInterval(() => {
             if (closed) {
-              clearInterval(keepAlive);
+              if (keepAlive) {
+                clearInterval(keepAlive);
+              }
               return;
             }
             try {
               controller.enqueue(encoder.encode(": keepalive\n\n"));
             } catch {
-              clearInterval(keepAlive);
+              if (keepAlive) {
+                clearInterval(keepAlive);
+              }
             }
           }, 30000);
 
           // Clean up on close.
           request.signal.addEventListener("abort", () => {
             closed = true;
-            clearInterval(keepAlive);
+            if (keepAlive) {
+              clearInterval(keepAlive);
+            }
             controller.close();
           });
+        },
+        cancel() {
+          closed = true;
+          if (keepAlive) {
+            clearInterval(keepAlive);
+          }
         }
       });
 
-      // AOS-07 security-header exception: SSE needs a live stream body and event-stream headers.
-      // withApiTelemetry applies the base API security headers before returning the response.
-      return new Response(stream, {
+      return authenticatedStreamResponse(stream, {
         headers: {
           "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "X-Accel-Buffering": "no"
         }
