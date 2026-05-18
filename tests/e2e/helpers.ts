@@ -20,7 +20,15 @@ export async function unlockDashboard(page: Page, accessKey = "playwright-e2e-ke
 }
 
 export async function enablePublicSharingForE2E(page: Page) {
+  const current = await page.request.get("/api/governance");
+  expect(current.status()).toBe(200);
+  const currentETag = current.headers().etag;
+  expect(currentETag).toBeTruthy();
+
   const response = await page.request.post("/api/governance", {
+    headers: {
+      "if-match": currentETag!
+    },
     data: {
       publicSharingEnabled: true
     }
