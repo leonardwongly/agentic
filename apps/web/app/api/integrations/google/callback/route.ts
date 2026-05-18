@@ -3,7 +3,8 @@ import {
   exchangeGoogleAuthorizationCode,
   fetchGoogleAccountProfile,
   createProviderCredentialSecretStore,
-  decryptProviderCredentialSecret
+  decryptProviderCredentialSecret,
+  rotateProviderCredentialSecretRecord
 } from "@agentic/integrations";
 import { parseAuthorizedOAuthStateToken, requireApiSession } from "../../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
@@ -68,16 +69,18 @@ export async function GET(request: Request) {
     const existingSecretRecord = existingCredential
       ? await repository.getProviderCredentialSecret(credentialId, "oauth_refresh_token", principal.userId)
       : null;
+    const secretStore = createProviderCredentialSecretStore();
     const refreshToken = exchanged.refreshToken ?? (
       existingSecretRecord
         ? decryptProviderCredentialSecret({
-            store: createProviderCredentialSecretStore(),
+            store: secretStore,
             envelope: existingSecretRecord.secret,
             context: {
               credentialId,
               userId: principal.userId,
               kind: "oauth_refresh_token"
-            }
+            },
+            allowLegacyContextFallback: true
           })
         : null
     );
@@ -117,18 +120,36 @@ export async function GET(request: Request) {
       updatedAt: timestamp
     });
 
-    await repository.saveProviderCredentialSecret({
+    const nextSecretRecord = {
       credentialId: credential.id,
       userId: principal.userId,
-      kind: "oauth_refresh_token",
-      secret: createProviderCredentialSecretStore().encrypt(refreshToken, {
+      kind: "oauth_refresh_token" as const,
+      secret: secretStore.encrypt(refreshToken, {
         credentialId: credential.id,
         userId: principal.userId,
         kind: "oauth_refresh_token"
       }),
       createdAt: existingSecretRecord?.createdAt ?? timestamp,
       updatedAt: timestamp
-    });
+    };
+
+    const rotation =
+      existingSecretRecord && !exchanged.refreshToken
+        ? rotateProviderCredentialSecretRecord({
+            store: secretStore,
+            record: existingSecretRecord,
+            context: {
+              credentialId: credential.id,
+              userId: principal.userId,
+              kind: "oauth_refresh_token"
+            },
+            mode: "commit",
+            rotatedAt: timestamp,
+            allowLegacyContextFallback: true
+          })
+        : null;
+
+    await repository.saveProviderCredentialSecret(rotation?.rotatedRecord ?? nextSecretRecord);
 
     return authenticatedRedirect(buildDashboardRedirect(request, "connected"), { status: 302 });
   } catch (error) {

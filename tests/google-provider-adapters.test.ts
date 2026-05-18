@@ -78,6 +78,14 @@ function buildGoogleCredential(overrides?: Partial<ProviderCredential>): Provide
   };
 }
 
+function encryptRefreshTokenForCredential(credential: ProviderCredential, refreshToken: string) {
+  return createProviderCredentialSecretStore().encrypt(refreshToken, {
+    credentialId: credential.id,
+    userId: credential.userId,
+    kind: "oauth_refresh_token"
+  });
+}
+
 async function buildRepository() {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-google-provider-adapters-"));
   return createRepository({
@@ -111,7 +119,7 @@ describe("resolveGoogleWorkspaceAdapters", () => {
       credentialId: degraded.id,
       userId: degraded.userId,
       kind: "oauth_refresh_token",
-      secret: createProviderCredentialSecretStore().encrypt("degraded-refresh-token"),
+      secret: encryptRefreshTokenForCredential(degraded, "degraded-refresh-token"),
       createdAt: degraded.createdAt,
       updatedAt: degraded.updatedAt
     });
@@ -119,7 +127,7 @@ describe("resolveGoogleWorkspaceAdapters", () => {
       credentialId: healthy.id,
       userId: healthy.userId,
       kind: "oauth_refresh_token",
-      secret: createProviderCredentialSecretStore().encrypt("healthy-refresh-token"),
+      secret: encryptRefreshTokenForCredential(healthy, "healthy-refresh-token"),
       createdAt: healthy.createdAt,
       updatedAt: healthy.updatedAt
     });
@@ -146,7 +154,7 @@ describe("resolveGoogleWorkspaceAdapters", () => {
       credentialId: degraded.id,
       userId: degraded.userId,
       kind: "oauth_refresh_token",
-      secret: createProviderCredentialSecretStore().encrypt("degraded-refresh-token"),
+      secret: encryptRefreshTokenForCredential(degraded, "degraded-refresh-token"),
       createdAt: degraded.createdAt,
       updatedAt: degraded.updatedAt
     });

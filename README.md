@@ -355,6 +355,21 @@ export AGENTIC_PROVIDER_SECRET_KEY=replace-with-a-strong-secret
 export AGENTIC_PROVIDER_SECRET_KEY_VERSION=2026-04-18
 ```
 
+Provider credential envelopes are bound to the credential id, user id, and secret kind through AES-GCM authenticated
+additional data. To rotate the wrapping key without breaking older credentials, keep the new key in
+`AGENTIC_PROVIDER_SECRET_KEY`, advance `AGENTIC_PROVIDER_SECRET_KEY_VERSION`, and expose previous versions through a
+JSON keyring:
+
+```bash
+export AGENTIC_PROVIDER_SECRET_KEY=replace-with-new-strong-secret
+export AGENTIC_PROVIDER_SECRET_KEY_VERSION=2026-05-18
+export AGENTIC_PROVIDER_SECRET_KEYRING='{"2026-04-18":"replace-with-previous-strong-secret"}'
+```
+
+Call `rotateProviderCredentialSecretRecord` with `mode: "dry-run"` before saving the returned `rotatedRecord` from
+`mode: "commit"`. Legacy unbound envelopes are readable only when a migration path explicitly opts into legacy context
+fallback, and newly persisted provider secrets are written with context binding.
+
 ### Slack
 
 ```bash
