@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import {
   EncryptedSecretEnvelopeSchema,
-  type EncryptedSecretEnvelope
+  ProviderCredentialSecretRecordSchema,
+  type EncryptedSecretEnvelope,
+  type ProviderCredentialSecretRecord
 } from "@agentic/contracts";
 
 const PROVIDER_SECRET_ALGORITHM = "aes-256-gcm";
@@ -9,6 +11,8 @@ const PROVIDER_SECRET_KDF = "scrypt";
 const PROVIDER_SECRET_IV_BYTES = 12;
 const PROVIDER_SECRET_DERIVED_KEY_BYTES = 32;
 const PROVIDER_SECRET_KDF_SALT = "agentic-provider-credentials-v1";
+const PROVIDER_SECRET_CONTEXT_BINDING_VERSION = "provider-credential-v1";
+const PROVIDER_SECRET_KEYRING_ENV = "AGENTIC_PROVIDER_SECRET_KEYRING";
 
 export class ProviderCredentialSecretError extends Error {
   constructor(message: string) {
@@ -18,6 +22,7 @@ export class ProviderCredentialSecretError extends Error {
 }
 
 export type ProviderCredentialSecretStore = {
+  currentKeyVersion: string;
   encrypt(secret: string, context?: ProviderCredentialSecretContext): EncryptedSecretEnvelope;
   decrypt(envelope: EncryptedSecretEnvelope, context?: ProviderCredentialSecretContext): string;
 };
@@ -26,6 +31,30 @@ export type ProviderCredentialSecretContext = {
   credentialId: string;
   userId: string;
   kind: string;
+};
+
+type ProviderCredentialSecretStoreOptions = {
+  masterKey?: string;
+  keyVersion?: string;
+  keyring?: Record<string, string>;
+};
+
+type ProviderCredentialSecretDecryptResult = {
+  secret: string;
+  legacyContextFallbackUsed: boolean;
+};
+
+export type ProviderCredentialSecretRotationMode = "dry-run" | "commit";
+
+export type ProviderCredentialSecretRotationResult = {
+  mode: ProviderCredentialSecretRotationMode;
+  action: "noop" | "rotate";
+  reason: "already-current" | "key-version" | "legacy-context" | "context-binding";
+  previousKeyVersion: string;
+  nextKeyVersion: string;
+  legacyContextFallbackUsed: boolean;
+  record: ProviderCredentialSecretRecord;
+  rotatedRecord: ProviderCredentialSecretRecord | null;
 };
 
 function buildSecretAdditionalData(context: ProviderCredentialSecretContext | undefined): Buffer | null {
@@ -51,12 +80,108 @@ function buildSecretAdditionalData(context: ProviderCredentialSecretContext | un
   );
 }
 
-export function createProviderCredentialSecretStore(options?: {
-  masterKey?: string;
-  keyVersion?: string;
-}): ProviderCredentialSecretStore {
+function buildContextBinding(context: ProviderCredentialSecretContext | undefined) {
+  const additionalData = buildSecretAdditionalData(context);
+
+  if (!additionalData) {
+    return undefined;
+  }
+
+  return {
+    version: PROVIDER_SECRET_CONTEXT_BINDING_VERSION,
+    digest: crypto.createHash("sha256").update(additionalData).digest("base64url")
+  };
+}
+
+function parseConfiguredKeyring(): Record<string, string> {
+  const raw = process.env[PROVIDER_SECRET_KEYRING_ENV]?.trim();
+
+  if (!raw) {
+    return {};
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ProviderCredentialSecretError(`${PROVIDER_SECRET_KEYRING_ENV} must be a JSON object of key versions to secrets.`);
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ProviderCredentialSecretError(`${PROVIDER_SECRET_KEYRING_ENV} must be a JSON object of key versions to secrets.`);
+  }
+
+  const keyring: Record<string, string> = {};
+
+  for (const [version, secret] of Object.entries(parsed)) {
+    if (version.trim().length === 0 || typeof secret !== "string" || secret.trim().length === 0) {
+      throw new ProviderCredentialSecretError(`${PROVIDER_SECRET_KEYRING_ENV} contains an invalid key version or secret.`);
+    }
+
+    keyring[version.trim()] = secret;
+  }
+
+  return keyring;
+}
+
+function deriveProviderSecretKeys(params: { currentKeyVersion: string; currentMasterKey: string; keyring?: Record<string, string> }) {
+  const configured = {
+    ...parseConfiguredKeyring(),
+    ...(params.keyring ?? {}),
+    [params.currentKeyVersion]: params.currentMasterKey
+  };
+  const derivedKeys = new Map<string, Buffer>();
+
+  for (const [version, secret] of Object.entries(configured)) {
+    const normalizedVersion = version.trim();
+    const normalizedSecret = secret.trim();
+
+    if (!normalizedVersion || !normalizedSecret) {
+      throw new ProviderCredentialSecretError("Provider credential encryption keyring contains an empty key version or secret.");
+    }
+
+    derivedKeys.set(
+      normalizedVersion,
+      crypto.scryptSync(normalizedSecret, PROVIDER_SECRET_KDF_SALT, PROVIDER_SECRET_DERIVED_KEY_BYTES)
+    );
+  }
+
+  return derivedKeys;
+}
+
+function decryptWithResult(params: {
+  store: ProviderCredentialSecretStore;
+  envelope: EncryptedSecretEnvelope;
+  context: ProviderCredentialSecretContext;
+  allowLegacyContextFallback?: boolean;
+}): ProviderCredentialSecretDecryptResult {
+  try {
+    return {
+      secret: params.store.decrypt(params.envelope, params.context),
+      legacyContextFallbackUsed: false
+    };
+  } catch (error) {
+    if (!params.allowLegacyContextFallback) {
+      throw error;
+    }
+
+    try {
+      return {
+        secret: params.store.decrypt(params.envelope),
+        legacyContextFallbackUsed: true
+      };
+    } catch {
+      throw error;
+    }
+  }
+}
+
+export function createProviderCredentialSecretStore(
+  options?: ProviderCredentialSecretStoreOptions
+): ProviderCredentialSecretStore {
   const masterKey = options?.masterKey ?? process.env.AGENTIC_PROVIDER_SECRET_KEY ?? "";
-  const keyVersion = options?.keyVersion ?? process.env.AGENTIC_PROVIDER_SECRET_KEY_VERSION ?? "v1";
+  const keyVersion = (options?.keyVersion ?? process.env.AGENTIC_PROVIDER_SECRET_KEY_VERSION ?? "v1").trim();
 
   if (masterKey.trim().length === 0) {
     throw new ProviderCredentialSecretError(
@@ -64,13 +189,20 @@ export function createProviderCredentialSecretStore(options?: {
     );
   }
 
-  const derivedKey = crypto.scryptSync(
-    masterKey,
-    PROVIDER_SECRET_KDF_SALT,
-    PROVIDER_SECRET_DERIVED_KEY_BYTES
-  );
+  if (keyVersion.length === 0) {
+    throw new ProviderCredentialSecretError("Provider credential encryption key version is not configured.");
+  }
+
+  const derivedKeys = deriveProviderSecretKeys({
+    currentKeyVersion: keyVersion,
+    currentMasterKey: masterKey,
+    keyring: options?.keyring
+  });
+  const currentDerivedKey = derivedKeys.get(keyVersion)!;
 
   return {
+    currentKeyVersion: keyVersion,
+
     encrypt(secret: string, context?: ProviderCredentialSecretContext): EncryptedSecretEnvelope {
       if (secret.length === 0) {
         throw new ProviderCredentialSecretError("Provider secret cannot be empty.");
@@ -81,7 +213,7 @@ export function createProviderCredentialSecretStore(options?: {
       }
 
       const iv = crypto.randomBytes(PROVIDER_SECRET_IV_BYTES);
-      const cipher = crypto.createCipheriv(PROVIDER_SECRET_ALGORITHM, derivedKey, iv);
+      const cipher = crypto.createCipheriv(PROVIDER_SECRET_ALGORITHM, currentDerivedKey, iv);
       const additionalData = buildSecretAdditionalData(context);
 
       if (additionalData) {
@@ -97,12 +229,20 @@ export function createProviderCredentialSecretStore(options?: {
         kdf: PROVIDER_SECRET_KDF,
         ciphertext: ciphertext.toString("base64"),
         iv: iv.toString("base64"),
-        authTag: authTag.toString("base64")
+        authTag: authTag.toString("base64"),
+        contextBinding: buildContextBinding(context)
       });
     },
 
     decrypt(envelope: EncryptedSecretEnvelope, context?: ProviderCredentialSecretContext): string {
       const validated = EncryptedSecretEnvelopeSchema.parse(envelope);
+      const derivedKey = derivedKeys.get(validated.keyVersion);
+
+      if (!derivedKey) {
+        throw new ProviderCredentialSecretError(
+          `Provider credential encryption key version ${validated.keyVersion} is not configured.`
+        );
+      }
 
       try {
         const decipher = crypto.createDecipheriv(
@@ -139,14 +279,60 @@ export function decryptProviderCredentialSecret(params: {
   store: ProviderCredentialSecretStore;
   envelope: EncryptedSecretEnvelope;
   context: ProviderCredentialSecretContext;
+  allowLegacyContextFallback?: boolean;
 }): string {
-  try {
-    return params.store.decrypt(params.envelope, params.context);
-  } catch (error) {
-    try {
-      return params.store.decrypt(params.envelope);
-    } catch {
-      throw error;
-    }
+  return decryptWithResult(params).secret;
+}
+
+export function rotateProviderCredentialSecretRecord(params: {
+  store: ProviderCredentialSecretStore;
+  record: ProviderCredentialSecretRecord;
+  context: ProviderCredentialSecretContext;
+  mode: ProviderCredentialSecretRotationMode;
+  rotatedAt: string;
+  allowLegacyContextFallback?: boolean;
+}): ProviderCredentialSecretRotationResult {
+  const record = ProviderCredentialSecretRecordSchema.parse(params.record);
+  const decryptResult = decryptWithResult({
+    store: params.store,
+    envelope: record.secret,
+    context: params.context,
+    allowLegacyContextFallback: params.allowLegacyContextFallback
+  });
+  const previousKeyVersion = record.secret.keyVersion;
+  const nextKeyVersion = params.store.currentKeyVersion;
+  const keyVersionChanged = previousKeyVersion !== nextKeyVersion;
+  const legacyContextFallbackUsed = decryptResult.legacyContextFallbackUsed;
+  const contextBindingMissing = !record.secret.contextBinding;
+  const shouldRotate = keyVersionChanged || legacyContextFallbackUsed || contextBindingMissing;
+
+  if (!shouldRotate) {
+    return {
+      mode: params.mode,
+      action: "noop",
+      reason: "already-current",
+      previousKeyVersion,
+      nextKeyVersion,
+      legacyContextFallbackUsed,
+      record,
+      rotatedRecord: null
+    };
   }
+
+  const rotatedRecord = ProviderCredentialSecretRecordSchema.parse({
+    ...record,
+    secret: params.store.encrypt(decryptResult.secret, params.context),
+    updatedAt: params.rotatedAt
+  });
+
+  return {
+    mode: params.mode,
+    action: "rotate",
+    reason: legacyContextFallbackUsed ? "legacy-context" : keyVersionChanged ? "key-version" : "context-binding",
+    previousKeyVersion,
+    nextKeyVersion,
+    legacyContextFallbackUsed,
+    record: params.mode === "commit" ? rotatedRecord : record,
+    rotatedRecord
+  };
 }

@@ -209,7 +209,8 @@ The default complex-delegation lane uses recon/scoping, core implementation, tes
 Provider connectivity is tenant-scoped rather than process-global.
 
 - provider credentials are stored per tenant
-- refresh tokens and similar secrets are stored through an encrypted secret abstraction
+- refresh tokens and similar secrets are stored through an encrypted secret abstraction with versioned wrapping keys
+  and credential/user/kind authenticated context binding
 - Gmail and Google Calendar resolve credentials through that tenant-scoped repository path
 - connector readiness remains the outer contract for which actions are safe to advertise or execute
 

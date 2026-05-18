@@ -3067,7 +3067,13 @@ export const EncryptedSecretEnvelopeSchema = z.object({
   kdf: z.literal("scrypt"),
   ciphertext: z.string().min(1),
   iv: z.string().min(1),
-  authTag: z.string().min(1)
+  authTag: z.string().min(1),
+  contextBinding: z
+    .object({
+      version: z.literal("provider-credential-v1"),
+      digest: z.string().min(1)
+    })
+    .optional()
 });
 
 export const ProviderCredentialSchema = z.object({

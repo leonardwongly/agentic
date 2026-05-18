@@ -50,6 +50,18 @@ function decryptGoogleRefreshToken(params: {
   });
 }
 
+function encryptGoogleRefreshToken(params: {
+  credentialId: string;
+  userId: string;
+  refreshToken: string;
+}) {
+  return createProviderCredentialSecretStore().encrypt(params.refreshToken, {
+    credentialId: params.credentialId,
+    userId: params.userId,
+    kind: "oauth_refresh_token"
+  });
+}
+
 vi.mock("@agentic/integrations", async () => {
   const actual = await vi.importActual<typeof import("@agentic/integrations")>("@agentic/integrations");
   return {
@@ -321,6 +333,10 @@ describe("google provider routes", () => {
         secret: secretRecord!.secret
       })
     ).toBe("persisted-refresh-token");
+    expect(secretRecord?.secret.contextBinding).toEqual({
+      version: "provider-credential-v1",
+      digest: expect.any(String)
+    });
     expect(updatedCredential?.lastRotatedAt).toBe("2026-04-15T00:00:00.000Z");
     expect(updatedCredential?.scopes).toEqual(["https://www.googleapis.com/auth/gmail.modify"]);
   });
@@ -463,7 +479,11 @@ describe("google provider routes", () => {
       credentialId: credential.id,
       userId: SYSTEM_USER_ID,
       kind: "oauth_refresh_token",
-      secret: createProviderCredentialSecretStore().encrypt("persisted-refresh-token"),
+      secret: encryptGoogleRefreshToken({
+        credentialId: credential.id,
+        userId: SYSTEM_USER_ID,
+        refreshToken: "persisted-refresh-token"
+      }),
       createdAt: credential.createdAt,
       updatedAt: credential.updatedAt
     });

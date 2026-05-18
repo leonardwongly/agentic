@@ -85,7 +85,7 @@ Document note:
 | Approvals respond | path param, JSON body | updated bundle | authenticated API caller | persists approval decision | route tests | no approval history endpoint yet |
 | Memory list/create | JSON body | memory list/record | authenticated API caller | persists memory record | route validation + header tests | no edit/delete flow |
 | Integrations list/update | JSON body | integration list/record | authenticated API caller | updates integration state | route scoping + validation tests | non-Google providers still rely on future provider-specific credential work |
-| Google OAuth connect/callback | signed OAuth state, query params, provider redirect | authenticated redirect, dashboard integration state | authenticated browser plus Google OAuth boundary | persists tenant-scoped credential metadata and encrypted refresh-token secret | route + repository coverage | provider availability and token rotation still depend on Google uptime and operator configuration |
+| Google OAuth connect/callback | signed OAuth state, query params, provider redirect | authenticated redirect, dashboard integration state | authenticated browser plus Google OAuth boundary | persists tenant-scoped credential metadata and encrypted refresh-token secret with versioned key and context binding | route + repository coverage | provider availability still depends on Google uptime and operator configuration |
 | Local notes list/create/read/update | query, path param, JSON body | note documents | authenticated API caller to local filesystem | creates or updates markdown files | unit + route + e2e | concurrent edits remain last-write-win |
 | Docs render | authenticated POST | docs build result | authenticated API caller to child process boundary | runs render/validate scripts | route tests | request-path build still expensive |
 | Goal create/read/share/status | JSON body, path params | `202` job acknowledgement, job status, goal bundle, share URL | authenticated browser/API caller, plus signed public-token boundary for share pages | saves goal bundles, durable jobs, and share logs | unit + route + e2e + worker coverage | share-page view tracking is now best-effort and still relies on repository write consistency under concurrent public traffic |
@@ -116,6 +116,7 @@ Document note:
   - database connectivity and migration health
   - shared auth runtime state when production is configured to fail closed
 - Replaced process-global provider secret assumptions with tenant-scoped provider credentials and encrypted refresh-token storage, including signed OAuth state for Google connect/callback.
+- Provider credential secret envelopes now support explicit key-version keyrings, authenticated credential/user/kind context binding, and dry-run/commit rotation helpers. Legacy unbound secret fallback is opt-in for migration paths rather than silent runtime behavior.
 - Moved goal creation, autopilot processing, and privacy lifecycle work onto durable jobs with idempotency keys, atomic claim semantics, retries, dead-letter handling, and sanitized client-visible failure states.
 - Added privacy operation ownership checks so only the active workspace owner can queue retention, export, or deletion flows.
 - Added structured logs, metrics, and spans with request/job correlation IDs plus secret redaction before telemetry is retained or exported.
