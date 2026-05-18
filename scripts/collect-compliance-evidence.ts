@@ -15,12 +15,19 @@ interface ComplianceEvidenceArtifact {
   required?: boolean;
 }
 
+interface ComplianceTraceability {
+  issueNumbers: number[];
+  issueLabels: string[];
+  routePaths: string[];
+}
+
 interface ComplianceControl {
   id: string;
   family: string;
   title: string;
   objective: string;
   owner: string;
+  traceability: ComplianceTraceability;
   trustBoundaries: string[];
   productSurfaces: string[];
   codePaths: string[];
@@ -58,6 +65,11 @@ export interface ComplianceControlEvidence {
   title: string;
   objective: string;
   owner: string;
+  traceability: {
+    issueNumbers: number[];
+    issueLabels: string[];
+    routePaths: ComplianceReferenceStatus[];
+  };
   trustBoundaries: string[];
   productSurfaces: string[];
   codePaths: ComplianceReferenceStatus[];
@@ -92,7 +104,7 @@ export interface ComplianceEvidenceBundle {
 
 export interface ComplianceRegistryReferenceIssue {
   controlId: string;
-  kind: "codePath" | "runbook" | "automatedCheckSource";
+  kind: "codePath" | "runbook" | "automatedCheckSource" | "routePath";
   path: string;
   checkId?: string;
 }
@@ -188,6 +200,48 @@ function inspectReference(cwd: string, relativePath: string): ComplianceReferenc
   };
 }
 
+function isApiRoutePath(relativePath: string): boolean {
+  return relativePath.startsWith("apps/web/app/api/") && relativePath.endsWith("/route.ts");
+}
+
+function assertComplianceTraceability(control: ComplianceControl) {
+  const traceability = control.traceability;
+  if (!traceability) {
+    throw new Error(`Control ${control.id} must define traceability.`);
+  }
+
+  if (
+    !Array.isArray(traceability.issueNumbers) ||
+    traceability.issueNumbers.length === 0 ||
+    traceability.issueNumbers.some((issueNumber) => !Number.isInteger(issueNumber) || issueNumber <= 0)
+  ) {
+    throw new Error(`Control ${control.id} must trace at least one positive integer issue number.`);
+  }
+
+  if (
+    !Array.isArray(traceability.issueLabels) ||
+    traceability.issueLabels.length === 0 ||
+    traceability.issueLabels.some((label) => label.trim().length === 0)
+  ) {
+    throw new Error(`Control ${control.id} must trace at least one issue label.`);
+  }
+
+  if (!Array.isArray(traceability.routePaths)) {
+    throw new Error(`Control ${control.id} traceability.routePaths must be an array.`);
+  }
+
+  const codeRoutePaths = control.codePaths.filter(isApiRoutePath).sort();
+  const tracedRoutePaths = [...traceability.routePaths].sort();
+
+  if (tracedRoutePaths.some((routePath) => !isApiRoutePath(routePath))) {
+    throw new Error(`Control ${control.id} traceability.routePaths must contain app/api route files only.`);
+  }
+
+  if (codeRoutePaths.join("\n") !== tracedRoutePaths.join("\n")) {
+    throw new Error(`Control ${control.id} traceability.routePaths must match API route code paths.`);
+  }
+}
+
 export function loadComplianceControlRegistry(filePath: string): ComplianceControlRegistry {
   const resolvedPath = path.resolve(process.cwd(), filePath);
   const raw = JSON.parse(readFileSync(resolvedPath, "utf8")) as ComplianceControlRegistry;
@@ -225,6 +279,8 @@ export function loadComplianceControlRegistry(filePath: string): ComplianceContr
     ) {
       throw new Error(`Control ${control.id} must define trust boundaries, product surfaces, code paths, runbooks, checks, and evidence artifacts.`);
     }
+
+    assertComplianceTraceability(control);
   }
 
   return raw;
@@ -256,6 +312,16 @@ export function findMissingComplianceRegistryReferences(
           controlId: control.id,
           kind: "runbook",
           path: runbook
+        });
+      }
+    }
+
+    for (const routePath of control.traceability.routePaths) {
+      if (!inspectReference(cwd, routePath).exists) {
+        issues.push({
+          controlId: control.id,
+          kind: "routePath",
+          path: routePath
         });
       }
     }
@@ -300,6 +366,7 @@ export function buildComplianceEvidenceBundle(
   const controls = registry.controls.map<ComplianceControlEvidence>((control) => {
     const codePaths = control.codePaths.map((entry) => inspectReference(cwd, entry));
     const runbooks = control.runbooks.map((entry) => inspectReference(cwd, entry));
+    const traceabilityRoutePaths = control.traceability.routePaths.map((entry) => inspectReference(cwd, entry));
     const automatedChecks = control.automatedChecks.map((check) => ({
       ...check,
       sourcePaths: check.sourcePaths.map((entry) => inspectReference(cwd, entry))
@@ -318,7 +385,12 @@ export function buildComplianceEvidenceBundle(
       };
     });
 
-    for (const status of [...codePaths, ...runbooks, ...automatedChecks.flatMap((check) => check.sourcePaths)]) {
+    for (const status of [
+      ...codePaths,
+      ...runbooks,
+      ...traceabilityRoutePaths,
+      ...automatedChecks.flatMap((check) => check.sourcePaths)
+    ]) {
       if (!status.exists) {
         missingReferences += 1;
       }
@@ -347,6 +419,11 @@ export function buildComplianceEvidenceBundle(
       title: control.title,
       objective: control.objective,
       owner: control.owner,
+      traceability: {
+        issueNumbers: control.traceability.issueNumbers,
+        issueLabels: control.traceability.issueLabels,
+        routePaths: traceabilityRoutePaths
+      },
       trustBoundaries: control.trustBoundaries,
       productSurfaces: control.productSurfaces,
       codePaths,
@@ -415,6 +492,17 @@ export function renderComplianceEvidenceMarkdown(bundle: ComplianceEvidenceBundl
       "",
       control.objective,
       ""
+    );
+    lines.push("### Issue traceability", "");
+    lines.push(`- Issues: ${control.traceability.issueNumbers.map((issueNumber) => `#${issueNumber}`).join(", ")}`);
+    lines.push(`- Labels: ${control.traceability.issueLabels.join(", ")}`);
+    lines.push(
+      "- Route coverage:",
+      ...(
+        control.traceability.routePaths.length > 0
+          ? control.traceability.routePaths.map((entry) => `  - ${entry.path} (${entry.kind})`)
+          : ["  - none"]
+      )
     );
     lines.push("### Trust boundaries", "", ...control.trustBoundaries.map((entry) => `- ${entry}`));
     lines.push("", "### Product surfaces", "", ...control.productSurfaces.map((entry) => `- ${entry}`));
@@ -514,6 +602,9 @@ function writeOutputFiles(outputDir: string, bundle: ComplianceEvidenceBundle) {
           id: control.id,
           title: control.title,
           owner: control.owner,
+          issueNumbers: control.traceability.issueNumbers,
+          issueLabels: control.traceability.issueLabels,
+          routePaths: control.traceability.routePaths.map((entry) => entry.path),
           status: control.status,
           missingRequiredArtifactPaths: control.missingRequiredArtifactPaths
         })),

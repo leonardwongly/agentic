@@ -12,6 +12,18 @@
       "title": "Shared authentication runtime state is enforced",
       "objective": "Reject unsafe single-process authentication assumptions in multi-instance environments.",
       "owner": "platform-security",
+      "traceability": {
+        "issueNumbers": [
+          700,
+          728
+        ],
+        "issueLabels": [
+          "aos-trust-spine",
+          "priority-medium",
+          "plan:2026-05-16"
+        ],
+        "routePaths": []
+      },
       "trustBoundaries": [
         "Browser to web runtime",
         "Web runtime to session store"
@@ -66,6 +78,20 @@
       "title": "Request identity extraction defaults to trusted proxy posture",
       "objective": "Prevent spoofed client identity on public or high-cost surfaces.",
       "owner": "platform-security",
+      "traceability": {
+        "issueNumbers": [
+          700,
+          728
+        ],
+        "issueLabels": [
+          "aos-trust-spine",
+          "priority-medium",
+          "plan:2026-05-16"
+        ],
+        "routePaths": [
+          "apps/web/app/api/share/view/route.ts"
+        ]
+      },
       "trustBoundaries": [
         "External client to web runtime",
         "Proxy headers to application logic"
@@ -117,6 +143,24 @@
       "title": "Heavy request-path work is queued into durable async execution",
       "objective": "Keep user-facing latency stable by moving non-interactive work behind explicit job contracts.",
       "owner": "platform",
+      "traceability": {
+        "issueNumbers": [
+          700,
+          728
+        ],
+        "issueLabels": [
+          "aos-trust-spine",
+          "priority-medium",
+          "plan:2026-05-16"
+        ],
+        "routePaths": [
+          "apps/web/app/api/goals/route.ts",
+          "apps/web/app/api/briefing/route.ts",
+          "apps/web/app/api/templates/[id]/run/route.ts",
+          "apps/web/app/api/docs/render/route.ts",
+          "apps/web/app/api/share/view/route.ts"
+        ]
+      },
       "trustBoundaries": [
         "Web runtime to worker runtime",
         "Queue to durable storage"
@@ -188,6 +232,21 @@
       "title": "Workspace authorization, audit export integrity, and privacy lifecycle are enforced",
       "objective": "Ensure sensitive workspace data is visible, exportable, and deletable only within authorized scope.",
       "owner": "platform-security",
+      "traceability": {
+        "issueNumbers": [
+          700,
+          728
+        ],
+        "issueLabels": [
+          "aos-trust-spine",
+          "priority-medium",
+          "plan:2026-05-16"
+        ],
+        "routePaths": [
+          "apps/web/app/api/governance/audit/route.ts",
+          "apps/web/app/api/governance/privacy/route.ts"
+        ]
+      },
       "trustBoundaries": [
         "Workspace member to workspace data",
         "Audit export to operator evidence"
@@ -240,6 +299,20 @@
       "title": "Privacy inventory, minimization, masking, and tokenization policy stay explicit and reviewable",
       "objective": "Keep personal-data handling rules versioned, operator-visible, and test-backed so privacy lifecycle decisions do not drift silently.",
       "owner": "platform-security",
+      "traceability": {
+        "issueNumbers": [
+          700,
+          728
+        ],
+        "issueLabels": [
+          "aos-trust-spine",
+          "priority-medium",
+          "plan:2026-05-16"
+        ],
+        "routePaths": [
+          "apps/web/app/api/governance/privacy/route.ts"
+        ]
+      },
       "trustBoundaries": [
         "Policy registry to operator dashboard",
         "Privacy design intent to enforcement and evidence surfaces"
@@ -292,6 +365,18 @@
       "title": "Deployments are gated by readiness, smoke tests, and rollout telemetry",
       "objective": "Prevent unsafe releases from being treated as healthy without post-deploy proof.",
       "owner": "platform",
+      "traceability": {
+        "issueNumbers": [
+          700,
+          728
+        ],
+        "issueLabels": [
+          "aos-trust-spine",
+          "priority-medium",
+          "plan:2026-05-16"
+        ],
+        "routePaths": []
+      },
       "trustBoundaries": [
         "CI to deploy provider",
         "Released runtime to operator health checks"
@@ -345,6 +430,18 @@
       "title": "Static analysis, dependency review, runtime vulnerability gating, SBOM, and provenance are mandatory",
       "objective": "Ensure source changes and deployable artifacts are statically scanned, traceable, and known-vulnerable runtime dependencies fail closed.",
       "owner": "platform-security",
+      "traceability": {
+        "issueNumbers": [
+          700,
+          728
+        ],
+        "issueLabels": [
+          "aos-trust-spine",
+          "priority-medium",
+          "plan:2026-05-16"
+        ],
+        "routePaths": []
+      },
       "trustBoundaries": [
         "Source changes to CI",
         "CI outputs to deployable artifacts"
@@ -414,6 +511,18 @@
       "title": "Security incident response and vulnerability management follow a codified operating model",
       "objective": "Give operators explicit severity, escalation, containment, and disclosure steps for production security events.",
       "owner": "platform-security",
+      "traceability": {
+        "issueNumbers": [
+          700,
+          728
+        ],
+        "issueLabels": [
+          "aos-trust-spine",
+          "priority-medium",
+          "plan:2026-05-16"
+        ],
+        "routePaths": []
+      },
       "trustBoundaries": [
         "On-call operator to production systems",
         "Security reporter to intake workflow"
