@@ -201,7 +201,15 @@ npm run db:status -- --require-ready
 
 `db:status` also verifies the shared auth runtime tables and indexes required by session rate limiting, session revocation, and unlock throttling. A `required_schema_missing` status means the database has migration metadata but is missing one or more required auth runtime objects; treat it as a release blocker and run the additive migrations before process startup.
 
-5. Run the automated test suite before rollout.
+5. Validate the full production bootstrap contract.
+
+```bash
+npm run production:bootstrap:check
+```
+
+This check combines production runtime mode, Postgres configuration, schema readiness, shared-auth enforcement, access-key presence, trusted proxy header configuration, and worker heartbeat configuration into one redacted evidence report. Use `npm run production:bootstrap:check -- --static-only` only as a local preflight when the real provider database is unavailable; it does not replace target database proof. See [Postgres Shared Auth Bootstrap](./postgres-shared-auth-bootstrap.md) for the operator runbook.
+
+6. Run the automated test suite before rollout.
 
 ```bash
 npm test
@@ -211,7 +219,7 @@ npm run test:smoke:observability-export
 
 The E2E suite should be treated as the pre-rollout check that exercises worker-backed goal flows from the user surface. The deployment smoke suite validates the deployed web boundary and rollout-gate telemetry after release.
 
-6. Validate the stable ingress contract before invoking a provider deploy.
+7. Validate the stable ingress contract before invoking a provider deploy.
 
 ```bash
 npm run deploy:ingress:check
