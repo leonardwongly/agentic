@@ -194,9 +194,12 @@ export function CommandPalette({
       setSelectedIndex((prev) => Math.max(prev - 1, 0));
     } else if (e.key === "Enter" && filteredCommands[selectedIndex]) {
       e.preventDefault();
-      if (!isPending) runCommand(filteredCommands[selectedIndex]);
+      const command = filteredCommands[selectedIndex]!;
+      if (!isCommandDisabled(command)) runCommand(command);
     }
   };
+
+  const isCommandDisabled = (command: Command): boolean => isPending && command.category === "quick-goal";
 
   // Scroll selected item into view
   useEffect(() => {
@@ -264,9 +267,9 @@ export function CommandPalette({
                     key={cmd.id}
                     className={`palette-item ${idx === selectedIndex ? "palette-item-selected" : ""}`}
                     data-selected={idx === selectedIndex}
-                    onClick={() => { if (!isPending) runCommand(cmd); }}
+                    onClick={() => { if (!isCommandDisabled(cmd)) runCommand(cmd); }}
                     onMouseEnter={() => setSelectedIndex(idx)}
-                    disabled={isPending}
+                    disabled={isCommandDisabled(cmd)}
                     type="button"
                   >
                     <div>
