@@ -210,6 +210,48 @@ function recordDashboardHealthMetrics(params: {
     connectorStatus: connectorHealth.status,
     connectorState: "issue"
   });
+  recordConnectorSloGate({
+    gate: "credential_connected_ratio",
+    value: connectorHealth.totalCount > 0 ? connectorHealth.connectedCount / connectorHealth.totalCount : 1,
+    status: connectorHealth.totalCount === 0 || connectorHealth.connectedCount === connectorHealth.totalCount ? "pass" : "warn",
+    threshold: "1.0",
+    connectorStatus: connectorHealth.status
+  });
+  recordConnectorSloGate({
+    gate: "refresh_failure_count",
+    value: connectorHealth.refreshFailedCount,
+    status: connectorHealth.refreshFailedCount > 0 ? "warn" : "pass",
+    threshold: "0",
+    connectorStatus: connectorHealth.status
+  });
+  recordConnectorSloGate({
+    gate: "reconnect_required_count",
+    value: connectorHealth.reconnectRequiredCount,
+    status: connectorHealth.reconnectRequiredCount > 0 ? "fail" : "pass",
+    threshold: "0",
+    connectorStatus: connectorHealth.status
+  });
+  recordConnectorSloGate({
+    gate: "revoked_count",
+    value: connectorHealth.revokedCount,
+    status: connectorHealth.revokedCount > 0 ? "fail" : "pass",
+    threshold: "0",
+    connectorStatus: connectorHealth.status
+  });
+  recordConnectorSloGate({
+    gate: "expired_count",
+    value: connectorHealth.expiredCount,
+    status: connectorHealth.expiredCount > 0 ? "fail" : "pass",
+    threshold: "0",
+    connectorStatus: connectorHealth.status
+  });
+  recordConnectorSloGate({
+    gate: "validation_stale_count",
+    value: connectorHealth.validationStaleCount,
+    status: connectorHealth.validationStaleCount > 0 ? "warn" : "pass",
+    threshold: "0",
+    connectorStatus: connectorHealth.status
+  });
   recordCounter("dashboard.health.operations_status.total", 1, {
     asyncStatus: asyncExecution.status,
     connectorStatus: connectorHealth.status,
@@ -222,8 +264,30 @@ function recordDashboardHealthMetrics(params: {
     queuedJobs: asyncExecution.queuedJobs,
     retryingJobs: asyncExecution.retryingJobs,
     deadLetterJobs: asyncExecution.deadLetterJobs,
+    connectorTotal: connectorHealth.totalCount,
+    connectorConnected: connectorHealth.connectedCount,
     connectorIssues: connectorHealth.issueCount,
+    connectorReconnectRequired: connectorHealth.reconnectRequiredCount,
+    connectorRefreshFailed: connectorHealth.refreshFailedCount,
+    connectorRevoked: connectorHealth.revokedCount,
+    connectorExpired: connectorHealth.expiredCount,
+    connectorValidationStale: connectorHealth.validationStaleCount,
     oldestPendingJobAgeSeconds: asyncExecution.oldestPendingJobAgeSeconds
+  });
+}
+
+function recordConnectorSloGate(params: {
+  gate: string;
+  value: number;
+  status: "pass" | "warn" | "fail";
+  threshold: string;
+  connectorStatus: string;
+}) {
+  recordHistogram("dashboard.health.connector_slo_gate", params.value, {
+    gate: params.gate,
+    status: params.status,
+    threshold: params.threshold,
+    connectorStatus: params.connectorStatus
   });
 }
 

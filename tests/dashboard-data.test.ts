@@ -449,6 +449,34 @@ describe("assembleDashboardData instrumentation", () => {
           attributes: expect.objectContaining({ connectorState: "issue", connectorStatus: "attention" })
         }),
         expect.objectContaining({
+          name: "dashboard.health.connector_slo_gate",
+          value: 0.5,
+          attributes: expect.objectContaining({
+            gate: "credential_connected_ratio",
+            status: "warn",
+            threshold: "1.0",
+            connectorStatus: "attention"
+          })
+        }),
+        expect.objectContaining({
+          name: "dashboard.health.connector_slo_gate",
+          value: 1,
+          attributes: expect.objectContaining({
+            gate: "reconnect_required_count",
+            status: "fail",
+            threshold: "0"
+          })
+        }),
+        expect.objectContaining({
+          name: "dashboard.health.connector_slo_gate",
+          value: 1,
+          attributes: expect.objectContaining({
+            gate: "validation_stale_count",
+            status: "warn",
+            threshold: "0"
+          })
+        }),
+        expect.objectContaining({
           name: "dashboard.health.operations_status.total",
           attributes: expect.objectContaining({
             asyncStatus: "critical",
@@ -464,7 +492,9 @@ describe("assembleDashboardData instrumentation", () => {
           message: "dashboard.health.metrics_recorded",
           attributes: expect.objectContaining({
             queuedJobs: 3,
-            connectorIssues: 1
+            connectorIssues: 1,
+            connectorReconnectRequired: 1,
+            connectorValidationStale: 1
           })
         })
       ])
