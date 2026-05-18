@@ -63,6 +63,15 @@ mutations and applies route-scoped abuse limits. It does not make governance
 updates or share creation response-replay idempotent; those routes still rely on
 their existing domain behavior.
 
+The W05 recovery API hardening applies the wrapper to:
+
+- `POST /api/operations/recovery`
+
+This route uses the `operations-recovery` abuse namespace and keeps domain
+authorization in `apps/web/lib/operations-recovery.ts`. Job recovery remains
+user and workspace-owner scoped, connector recovery redacts stored secrets, and
+manual connector remediation records bounded `metadata.recoveryAudit` entries.
+
 ## Follow-up Candidates
 
 Prioritize these surfaces next:
