@@ -419,6 +419,9 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
           <div className="advanced-operations-summary">
             <span className="pill">Visible {operations.connectorHealth.totalCount}</span>
             <span className="pill">Connected {operations.connectorHealth.connectedCount}</span>
+            <span className="pill">Healthy {operations.connectorHealth.healthyCount ?? 0}</span>
+            <span className="pill">Missing {operations.connectorHealth.missingCount ?? 0}</span>
+            <span className="pill">Scope mismatch {operations.connectorHealth.scopeMismatchCount ?? 0}</span>
             <span className="pill">Reconnect {operations.connectorHealth.reconnectRequiredCount}</span>
             <span className="pill">Refresh failed {operations.connectorHealth.refreshFailedCount}</span>
             <span className="pill">Validation stale {operations.connectorHealth.validationStaleCount}</span>
@@ -439,12 +442,15 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
               <div className="goal-item-actions">
                 <span className="pill">{item.severity}</span>
                 <span className="pill">{item.status.replaceAll("_", " ")}</span>
+                <span className="pill">{item.lifecycleState.replaceAll("_", " ")}</span>
               </div>
             </div>
             <div className="advanced-operations-expanded">
               <span className="pill">
                 Updated <RelativeTime date={item.updatedAt} />
               </span>
+              <span className="pill">Repair {item.repairState.replaceAll("_", " ")}</span>
+              {item.missingScopes.length > 0 ? <span className="pill">Missing scopes {item.missingScopes.length}</span> : null}
               {item.expectedReadinessLabel ? <span className="pill">Target {item.expectedReadinessLabel}</span> : null}
               {item.meetingReadinessTarget === false ? <span className="pill">Below target</span> : null}
               {describeExpectedModes(item.expectedSupportedModes) ? (
