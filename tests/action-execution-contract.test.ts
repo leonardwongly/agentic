@@ -502,6 +502,61 @@ describe("action execution contract", () => {
     expect(outcome.detail).toContain("Calendar event creation failed");
   });
 
+  it("records Calendar side effects before mutation and suppresses duplicate events", async () => {
+    const task = TaskSchema.parse({
+      ...buildTask(["read", "schedule"]),
+      assignedAgent: "calendar"
+    });
+    const actionIntent = ActionIntentSchema.parse({
+      type: "schedule_event",
+      summary: "Customer handoff",
+      start: "2026-04-20T09:00:00.000Z",
+      end: "2026-04-20T09:30:00.000Z",
+      attendees: ["owner@example.com"]
+    });
+    const createEvent = vi.fn().mockResolvedValue({
+      id: "event-ledger-1",
+      htmlLink: "https://calendar.example.com/event-ledger-1"
+    });
+    const { ledger, calls } = buildLedger();
+
+    const first = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        calendar: {
+          createEvent,
+          updateEvent: vi.fn(),
+          listUpcomingEvents: vi.fn()
+        }
+      },
+      connectorReadiness: approvalGradeConnectors,
+      sideEffectLedger: ledger
+    });
+    const second = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        calendar: {
+          createEvent,
+          updateEvent: vi.fn(),
+          listUpcomingEvents: vi.fn()
+        }
+      },
+      connectorReadiness: approvalGradeConnectors,
+      sideEffectLedger: ledger
+    });
+
+    expect(createEvent).toHaveBeenCalledTimes(1);
+    expect(calls.slice(0, 2)).toEqual(["reserve", "update:completed"]);
+    expect(first.outcome.providerRef).toBe("event-ledger-1");
+    expect(second.outcome).toMatchObject({
+      status: "completed",
+      providerRef: "event-ledger-1",
+      retryable: false
+    });
+  });
+
   it("skips Calendar mutation when connector readiness is below approval-grade", async () => {
     const task = TaskSchema.parse({
       ...buildTask(["read", "schedule"]),
