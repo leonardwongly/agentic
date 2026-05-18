@@ -3,7 +3,9 @@ import { validateStableIngressConfig } from "./lib/stable-ingress-config";
 function printHumanSummary(report: ReturnType<typeof validateStableIngressConfig>) {
   const heading = report.ok ? "Stable ingress readiness passed." : "Stable ingress readiness failed.";
 
-  console.log(`${heading} target=${report.targetName} baseUrl=${report.baseUrl ?? "unconfigured"}`);
+  console.log(
+    `${heading} target=${report.targetName} provider=${report.provider ?? "unconfigured"} environment=${report.environment ?? "unconfigured"} rollout=${report.rolloutMode ?? "unconfigured"} baseUrl=${report.baseUrl ?? "unconfigured"}`
+  );
 
   for (const check of report.checks) {
     console.log(`- [${check.status}] ${check.name}: ${check.message}`);

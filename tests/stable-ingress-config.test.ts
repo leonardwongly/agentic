@@ -3,9 +3,14 @@ import { validateStableIngressConfig } from "../scripts/lib/stable-ingress-confi
 
 const BASE_ENV = {
   NODE_ENV: "production",
+  AGENTIC_INGRESS_PROVIDER: "render",
+  AGENTIC_INGRESS_ENVIRONMENT: "production-like",
+  AGENTIC_INGRESS_ROLLOUT_MODE: "manual-only",
+  AGENTIC_INGRESS_ROLLBACK_AUTHORITY: "platform-operator",
   AGENTIC_SMOKE_BASE_URL: "https://staging.agentic.example.com",
   AGENTIC_SMOKE_ACCESS_KEY: "smoke-key",
   AGENTIC_TRUST_PROXY_HEADERS: "true",
+  AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED: "true",
   AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for",
   AGENTIC_STAGING_DEPLOY_BIN: "node",
   AGENTIC_STAGING_DEPLOY_ARGS_JSON: JSON.stringify(["scripts/provider-deploy.mjs"])
@@ -16,6 +21,9 @@ describe("stable ingress config", () => {
     const report = validateStableIngressConfig(BASE_ENV);
 
     expect(report.ok).toBe(true);
+    expect(report.provider).toBe("render");
+    expect(report.environment).toBe("production-like");
+    expect(report.rolloutMode).toBe("manual-only");
     expect(report.baseUrl).toBe("https://staging.agentic.example.com");
     expect(report.endpoints).toEqual({
       health: "https://staging.agentic.example.com/api/health",
@@ -25,9 +33,13 @@ describe("stable ingress config", () => {
     expect(report.checks.map((check) => [check.name, check.status])).toEqual([
       ["base_url", "pass"],
       ["host_stability", "pass"],
+      ["deployment_target", "pass"],
       ["runtime", "pass"],
       ["proxy_trust", "pass"],
+      ["proxy_header_overwrite", "pass"],
       ["client_ip_header", "pass"],
+      ["rollout_mode", "pass"],
+      ["rollback_authority", "pass"],
       ["provider_deploy", "pass"],
       ["smoke_session", "pass"]
     ]);
@@ -136,9 +148,14 @@ describe("stable ingress config", () => {
   it("fails closed when provider deploy configuration is missing", () => {
     const report = validateStableIngressConfig({
       NODE_ENV: "production",
+      AGENTIC_INGRESS_PROVIDER: "render",
+      AGENTIC_INGRESS_ENVIRONMENT: "production-like",
+      AGENTIC_INGRESS_ROLLOUT_MODE: "manual-only",
+      AGENTIC_INGRESS_ROLLBACK_AUTHORITY: "platform-operator",
       AGENTIC_SMOKE_BASE_URL: "https://staging.agentic.example.com",
       AGENTIC_SMOKE_ACCESS_KEY: "smoke-key",
       AGENTIC_TRUST_PROXY_HEADERS: "true",
+      AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED: "true",
       AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for"
     });
 
@@ -179,6 +196,47 @@ describe("stable ingress config", () => {
         name: "client_ip_header",
         status: "fail",
         message: "Trusted client-IP header must be one of the supported canonical headers."
+      })
+    );
+  });
+
+  it("requires target identity, proxy overwrite evidence, rollout mode, and rollback authority", () => {
+    const report = validateStableIngressConfig({
+      ...BASE_ENV,
+      AGENTIC_INGRESS_PROVIDER: "",
+      AGENTIC_INGRESS_ENVIRONMENT: "sandbox",
+      AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED: "false",
+      AGENTIC_INGRESS_ROLLOUT_MODE: "automatic",
+      AGENTIC_INGRESS_ROLLBACK_AUTHORITY: ""
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "deployment_target",
+        status: "fail",
+        message: "Set AGENTIC_INGRESS_PROVIDER and AGENTIC_INGRESS_ENVIRONMENT for the approved target."
+      })
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "proxy_header_overwrite",
+        status: "fail",
+        message: "Set AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED=true only after the provider overwrites the configured client-IP header."
+      })
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "rollout_mode",
+        status: "fail",
+        message: "AGENTIC_INGRESS_ROLLOUT_MODE must be manual-only, scheduled-disabled, or scheduled-enabled."
+      })
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "rollback_authority",
+        status: "fail",
+        message: "Set AGENTIC_INGRESS_ROLLBACK_AUTHORITY to the operator or team allowed to roll back."
       })
     );
   });

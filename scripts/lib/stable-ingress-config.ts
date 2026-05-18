@@ -14,14 +14,20 @@ const TEMPORARY_INGRESS_DOMAINS = [
 ];
 
 const TRUSTED_CLIENT_IP_HEADERS = new Set(["cf-connecting-ip", "x-forwarded-for", "x-real-ip"]);
+const STABLE_INGRESS_ENVIRONMENTS = new Set(["staging", "production-like", "production"]);
+const ROLLOUT_MODES = new Set(["manual-only", "scheduled-disabled", "scheduled-enabled"]);
 
 export type StableIngressCheck = {
   name:
     | "base_url"
     | "host_stability"
+    | "deployment_target"
     | "runtime"
     | "proxy_trust"
+    | "proxy_header_overwrite"
     | "client_ip_header"
+    | "rollout_mode"
+    | "rollback_authority"
     | "provider_deploy"
     | "smoke_session";
   status: "pass" | "warn" | "fail";
@@ -32,6 +38,9 @@ export type StableIngressCheck = {
 export type StableIngressReport = {
   ok: boolean;
   targetName: string;
+  provider: string | null;
+  environment: string | null;
+  rolloutMode: string | null;
   baseUrl: string | null;
   host: string | null;
   providerDeployConfigured: boolean;
@@ -221,6 +230,26 @@ function buildRuntimeCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
   return pass("runtime", "Production runtime mode is selected.");
 }
 
+function buildDeploymentTargetCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
+  const provider = trim(env.AGENTIC_INGRESS_PROVIDER).toLowerCase();
+  const environment = trim(env.AGENTIC_INGRESS_ENVIRONMENT).toLowerCase();
+
+  if (!provider || !environment) {
+    return fail("deployment_target", "Set AGENTIC_INGRESS_PROVIDER and AGENTIC_INGRESS_ENVIRONMENT for the approved target.");
+  }
+
+  if (!STABLE_INGRESS_ENVIRONMENTS.has(environment)) {
+    return fail("deployment_target", "AGENTIC_INGRESS_ENVIRONMENT must be staging, production-like, or production.", {
+      environment
+    });
+  }
+
+  return pass("deployment_target", "Approved provider and target environment are explicit.", {
+    provider,
+    environment
+  });
+}
+
 function buildProxyTrustCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
   if (!isTrue(env.AGENTIC_TRUST_PROXY_HEADERS)) {
     return fail(
@@ -230,6 +259,17 @@ function buildProxyTrustCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
   }
 
   return pass("proxy_trust", "Trusted proxy headers are explicitly enabled for this ingress.");
+}
+
+function buildProxyHeaderOverwriteCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
+  if (!isTrue(env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED)) {
+    return fail(
+      "proxy_header_overwrite",
+      "Set AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED=true only after the provider overwrites the configured client-IP header."
+    );
+  }
+
+  return pass("proxy_header_overwrite", "Ingress proxy header overwrite behavior is explicitly confirmed.");
 }
 
 function buildTrustedClientIpHeaderCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
@@ -251,6 +291,32 @@ function buildTrustedClientIpHeaderCheck(env: NodeJS.ProcessEnv): StableIngressC
   return pass("client_ip_header", "Trusted client-IP header contract is explicit.", {
     header: configured
   });
+}
+
+function buildRolloutModeCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
+  const rolloutMode = trim(env.AGENTIC_INGRESS_ROLLOUT_MODE).toLowerCase();
+
+  if (!rolloutMode) {
+    return fail("rollout_mode", "Set AGENTIC_INGRESS_ROLLOUT_MODE before validating stable ingress.");
+  }
+
+  if (!ROLLOUT_MODES.has(rolloutMode)) {
+    return fail("rollout_mode", "AGENTIC_INGRESS_ROLLOUT_MODE must be manual-only, scheduled-disabled, or scheduled-enabled.", {
+      rolloutMode
+    });
+  }
+
+  return pass("rollout_mode", "Ingress rollout mode is explicit.", {
+    rolloutMode
+  });
+}
+
+function buildRollbackAuthorityCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
+  if (!trim(env.AGENTIC_INGRESS_ROLLBACK_AUTHORITY)) {
+    return fail("rollback_authority", "Set AGENTIC_INGRESS_ROLLBACK_AUTHORITY to the operator or team allowed to roll back.");
+  }
+
+  return pass("rollback_authority", "Ingress rollback authority is explicit.");
 }
 
 function buildProviderDeployCheck(env: NodeJS.ProcessEnv): {
@@ -288,15 +354,22 @@ function buildSmokeSessionCheck(env: NodeJS.ProcessEnv): StableIngressCheck {
 
 export function validateStableIngressConfig(env: NodeJS.ProcessEnv = process.env): StableIngressReport {
   const targetName = trim(env.AGENTIC_INGRESS_TARGET_NAME) || "staging";
+  const provider = trim(env.AGENTIC_INGRESS_PROVIDER).toLowerCase() || null;
+  const environment = trim(env.AGENTIC_INGRESS_ENVIRONMENT).toLowerCase() || null;
+  const rolloutMode = trim(env.AGENTIC_INGRESS_ROLLOUT_MODE).toLowerCase() || null;
   const { url, checks: baseUrlChecks } = parseStableBaseUrl(env);
   const providerDeploy = buildProviderDeployCheck(env);
   const origin = url?.origin ?? null;
   const allChecks: StableIngressCheck[] = [
     ...baseUrlChecks,
     buildHostStabilityCheck(url),
+    buildDeploymentTargetCheck(env),
     buildRuntimeCheck(env),
     buildProxyTrustCheck(env),
+    buildProxyHeaderOverwriteCheck(env),
     buildTrustedClientIpHeaderCheck(env),
+    buildRolloutModeCheck(env),
+    buildRollbackAuthorityCheck(env),
     providerDeploy.check,
     buildSmokeSessionCheck(env)
   ];
@@ -304,6 +377,9 @@ export function validateStableIngressConfig(env: NodeJS.ProcessEnv = process.env
   return {
     ok: allChecks.every((check) => check.status !== "fail"),
     targetName,
+    provider,
+    environment,
+    rolloutMode,
     baseUrl: origin,
     host: url ? normalizeHostname(url.hostname) : null,
     providerDeployConfigured: providerDeploy.configured,
