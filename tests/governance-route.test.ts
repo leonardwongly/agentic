@@ -8,6 +8,18 @@ import * as authModule from "../apps/web/lib/auth";
 import { GET as governanceGetRoute, POST as governancePostRoute } from "../apps/web/app/api/governance/route";
 import { buildAuthorizedGetRequest, buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-helpers";
 
+function buildGovernanceUpdateRequest(body: unknown, ifMatch?: string): Request {
+  return new Request("http://localhost/api/governance", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-agentic-access-key": "test-access-key",
+      ...(ifMatch ? { "if-match": `"${ifMatch}"` } : {})
+    },
+    body: JSON.stringify(body)
+  });
+}
+
 describe("governance route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
@@ -80,6 +92,7 @@ describe("governance route", () => {
     };
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("etag")).toBe('"2026-04-18T00:00:00.000Z"');
     expect(payload.governance).toMatchObject({
       requireAuditExports: true,
       maxAutoRunRiskClass: "R2"
@@ -128,29 +141,34 @@ describe("governance route", () => {
 
     await repository.seedDefaults();
     const dashboard = await repository.getDashboardData();
+    const currentGovernance = dashboard.workspaceGovernance!;
 
     const response = await governancePostRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/governance", {
-        approvalMode: "risk_based",
-        requireAuditExports: true,
-        publicSharingEnabled: false,
-        providerAccessRequiresApproval: true,
-        escalationRequiresApproval: true,
-        externalSendRequiresApproval: true,
-        calendarWriteRequiresApproval: true,
-        maxAutoRunRiskClass: "R2",
-        shadowReplayPolicy: {
-          enabled: false,
-          promotionMode: "shadow_only",
-          rollbackOutcome: "downgrade_to_draft",
-          minimumMatchedEpisodes: 5
+      buildGovernanceUpdateRequest(
+        {
+          approvalMode: "risk_based",
+          requireAuditExports: true,
+          publicSharingEnabled: false,
+          providerAccessRequiresApproval: true,
+          escalationRequiresApproval: true,
+          externalSendRequiresApproval: true,
+          calendarWriteRequiresApproval: true,
+          maxAutoRunRiskClass: "R2",
+          shadowReplayPolicy: {
+            enabled: false,
+            promotionMode: "shadow_only",
+            rollbackOutcome: "downgrade_to_draft",
+            minimumMatchedEpisodes: 5
+          },
+          retentionDays: 90
         },
-        retentionDays: 90
-      })
+        currentGovernance.updatedAt
+      )
     );
     const payload = (await response.json()) as {
       governance: {
         workspaceId: string;
+        updatedAt: string;
         requireAuditExports: boolean;
         publicSharingEnabled: boolean;
         providerAccessRequiresApproval: boolean;
@@ -192,6 +210,7 @@ describe("governance route", () => {
     const persisted = await repository.getWorkspaceGovernance(dashboard.activeWorkspace!.id, SYSTEM_USER_ID);
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("etag")).toBe(`"${payload.governance.updatedAt}"`);
     expect(payload.governance).toMatchObject({
       workspaceId: dashboard.activeWorkspace!.id,
       requireAuditExports: true,
@@ -247,6 +266,51 @@ describe("governance route", () => {
         minimumPrecision: 0.8
       }
     });
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects governance updates without a concrete If-Match precondition", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults();
+
+    const response = await governancePostRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/governance", {
+        requireAuditExports: true
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(428);
+    expect(payload.error).toContain("If-Match");
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects stale governance writes when the If-Match token is outdated", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults();
+    const dashboard = await repository.getDashboardData();
+    const currentGovernance = dashboard.workspaceGovernance!;
+
+    const response = await governancePostRoute(
+      buildGovernanceUpdateRequest(
+        {
+          requireAuditExports: true
+        },
+        "2026-01-01T00:00:00.000Z"
+      )
+    );
+    const payload = (await response.json()) as { error?: string };
+    const persisted = await repository.getWorkspaceGovernance(dashboard.activeWorkspace!.id, SYSTEM_USER_ID);
+
+    expect(response.status).toBe(412);
+    expect(payload.error).toContain("record changed");
+    expect(persisted?.updatedAt).toBe(currentGovernance.updatedAt);
     expectNoStoreHeaders(response);
   });
 

@@ -42,12 +42,13 @@ function buildAutopilotSettings() {
   };
 }
 
-function buildAuthorizedJsonRequest(url: string, body: unknown): Request {
+function buildAuthorizedJsonRequest(url: string, body: unknown, headers?: Record<string, string>): Request {
   return new Request(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+      [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+      ...headers
     },
     body: JSON.stringify(body)
   });
@@ -1590,10 +1591,13 @@ describe("route user scoping", () => {
     );
 
     const getResponse = await governanceRouteGet(buildAuthorizedGetRequest("http://localhost/api/governance"));
+    const currentGovernance = buildDashboardData().workspaceGovernance!;
     const postResponse = await governanceRoutePost(
       buildAuthorizedJsonRequest("http://localhost/api/governance", {
         approvalMode: "always_review",
         retentionDays: 90
+      }, {
+        "if-match": `"${currentGovernance.updatedAt}"`
       })
     );
     const auditResponse = await governanceAuditRouteGet(buildAuthorizedGetRequest("http://localhost/api/governance/audit"));
