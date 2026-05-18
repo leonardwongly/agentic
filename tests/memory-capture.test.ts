@@ -4,7 +4,7 @@ import {
   createHumanActorContext,
   enterpriseWorkspaceGovernanceDefaults
 } from "@agentic/contracts";
-import { captureExecutionOutcomeSignals, captureMemoriesFromBundle } from "@agentic/orchestrator";
+import { captureApprovalOutcomeSignals, captureExecutionOutcomeSignals, captureMemoriesFromBundle } from "@agentic/orchestrator";
 
 function buildGovernance(overrides: Partial<ReturnType<typeof WorkspaceGovernanceSchema.parse>> = {}) {
   return WorkspaceGovernanceSchema.parse({
@@ -130,6 +130,56 @@ function buildBundle() {
     ],
     watchers: [],
     actionLogs: []
+  });
+}
+
+function buildRejectedApprovalBundle() {
+  const bundle = buildBundle();
+
+  return GoalBundleSchema.parse({
+    ...bundle,
+    goal: {
+      ...bundle.goal,
+      status: "waiting",
+      updatedAt: "2024-01-01T00:05:00.000Z"
+    },
+    workflow: {
+      ...bundle.workflow,
+      status: "waiting",
+      checkpoint: "awaiting-user-replan",
+      updatedAt: "2024-01-01T00:05:00.000Z"
+    },
+    tasks: bundle.tasks.map((task) =>
+      task.id === "task-1"
+        ? {
+            ...task,
+            state: "blocked",
+            updatedAt: "2024-01-01T00:05:00.000Z"
+          }
+        : task
+    ),
+    approvals: bundle.approvals.map((approval) =>
+      approval.id === "approval-1"
+        ? {
+            ...approval,
+            decision: "rejected",
+            decisionScope: "once",
+            decisionRationale: "Do not send external mail with stale pricing.",
+            history: [
+              ...approval.history,
+              {
+                decision: "rejected",
+                scope: "once",
+                rationale: "Do not send external mail with stale pricing.",
+                actor: "user-1",
+                actorContext: createHumanActorContext("user-1", "session-1"),
+                createdAt: "2024-01-01T00:05:00.000Z"
+              }
+            ],
+            respondedAt: "2024-01-01T00:05:00.000Z"
+          }
+        : approval
+    )
   });
 }
 
@@ -395,6 +445,106 @@ describe("captureMemoriesFromBundle", () => {
 
     expect(captured.memories).toEqual([]);
     expect(captured.episodes).toEqual([]);
+  });
+});
+
+describe("captureApprovalOutcomeSignals", () => {
+  it("captures a scoped rejected-approval episode without requiring goal completion", () => {
+    const captured = captureApprovalOutcomeSignals(
+      buildRejectedApprovalBundle(),
+      "user-1",
+      "approval-1",
+      createHumanActorContext("user-1", "session-1"),
+      {
+        evidenceRecordIdsByTaskId: {
+          "task-1": ["evidence-approval-1"]
+        }
+      }
+    );
+
+    expect(captured.memories).toHaveLength(1);
+    expect(captured.memories[0].content).toContain('User rejected "Draft sender-aware replies"');
+    expect(captured.episodes).toHaveLength(1);
+    expect(captured.episodes[0]).toMatchObject({
+      outcome: "failure",
+      provenance: {
+        source: "approval",
+        evidenceRecordIds: ["evidence-approval-1"]
+      },
+      outcomeLink: {
+        taskId: "task-1",
+        taskState: "blocked",
+        approvalDecision: "rejected",
+        executionKind: "failed",
+        userCorrection: true
+      }
+    });
+    expect(captured.episodes[0].metadata?.learningPrivacy).toMatchObject({
+      captureSource: "approval_outcome",
+      captureAllowed: true,
+      userId: "user-1",
+      workspaceId: "workspace-1"
+    });
+  });
+
+  it("links episodes to the requested approval when a task has multiple approval outcomes", () => {
+    const rejectedBundle = buildRejectedApprovalBundle();
+    const historicalApproval = {
+      ...rejectedBundle.approvals[0],
+      id: "approval-historical-approved",
+      decision: "approved" as const,
+      decisionRationale: "Earlier approved attempt.",
+      history: [
+        {
+          decision: "approved" as const,
+          scope: "once" as const,
+          rationale: "Earlier approved attempt.",
+          actor: "user-1",
+          createdAt: "2024-01-01T00:01:00.000Z"
+        }
+      ],
+      respondedAt: "2024-01-01T00:01:00.000Z"
+    };
+    const bundle = GoalBundleSchema.parse({
+      ...rejectedBundle,
+      approvals: [historicalApproval, ...rejectedBundle.approvals]
+    });
+
+    const captured = captureApprovalOutcomeSignals(
+      bundle,
+      "user-1",
+      "approval-1",
+      createHumanActorContext("user-1", "session-1")
+    );
+
+    expect(captured.memories).toHaveLength(1);
+    expect(captured.memories[0].content).toContain("User rejected");
+    expect(captured.episodes).toHaveLength(1);
+    expect(captured.episodes[0].outcomeLink).toMatchObject({
+      approvalDecision: "rejected",
+      userCorrection: true
+    });
+    expect(captured.episodes[0].lesson).toContain("was rejected by user");
+  });
+
+  it("returns no records for pending or missing approval outcomes", () => {
+    const pendingBundle = GoalBundleSchema.parse({
+      ...buildBundle(),
+      approvals: buildBundle().approvals.map((approval) => ({
+        ...approval,
+        decision: "pending",
+        decisionScope: null,
+        decisionRationale: null,
+        respondedAt: null
+      }))
+    });
+
+    expect(
+      captureApprovalOutcomeSignals(pendingBundle, "user-1", "approval-1", createHumanActorContext("user-1", "session-1"))
+    ).toEqual({ memories: [], episodes: [] });
+    expect(
+      captureApprovalOutcomeSignals(buildRejectedApprovalBundle(), "user-1", "missing", createHumanActorContext("user-1", "session-1"))
+    ).toEqual({ memories: [], episodes: [] });
   });
 });
 

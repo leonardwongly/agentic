@@ -60,7 +60,7 @@ export type PrivacyTokenizationStrategy = z.infer<typeof TokenizationStrategySch
 
 export const LEARNING_CAPTURE_DATASET_ID = "learning-capture-records" as const;
 
-export type LearningCaptureSource = "goal_bundle" | "execution_outcome" | "recommendation_feedback";
+export type LearningCaptureSource = "goal_bundle" | "execution_outcome" | "approval_outcome" | "recommendation_feedback";
 
 export type LearningPrivacyMetadata = {
   datasetId: typeof LEARNING_CAPTURE_DATASET_ID;

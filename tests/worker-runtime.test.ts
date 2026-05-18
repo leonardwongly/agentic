@@ -1098,6 +1098,83 @@ describe("worker runtime", () => {
     );
   });
 
+  it("captures rejected approval outcomes even when the goal remains incomplete", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const baseBundle = buildApprovalFollowUpBundle(
+      "goal-approval-rejected-runtime",
+      "workflow-approval-rejected-runtime",
+      "rejected"
+    );
+    const bundle = GoalBundleSchema.parse({
+      ...baseBundle,
+      goal: {
+        ...baseBundle.goal,
+        status: "waiting"
+      },
+      workflow: {
+        ...baseBundle.workflow,
+        status: "waiting",
+        checkpoint: "awaiting-user-replan"
+      },
+      tasks: baseBundle.tasks.map((task) => ({
+        ...task,
+        state: "blocked"
+      }))
+    });
+
+    await repository.saveGoalBundle(bundle);
+    const evidenceRecord = await repository.saveEvidenceRecord(buildApprovalEvidenceFixture(bundle));
+
+    const job = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: "approval-follow-up-runtime",
+      goalId: bundle.goal.id,
+      taskId: "task-approval-follow-up",
+      decision: "rejected",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      idempotencyKey: "worker-runtime-approval-follow-up-rejected"
+    });
+
+    await executeApprovalFollowUpJob({
+      repository,
+      selfImprovementRepository,
+      job
+    });
+
+    const memories = await repository.listMemory(SYSTEM_USER_ID);
+    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: SYSTEM_USER_ID });
+    const reloadedEvidence = await repository.listEvidenceRecords({
+      userId: SYSTEM_USER_ID,
+      approvalId: "approval-follow-up-runtime"
+    });
+
+    expect(createLocalNoteMock).not.toHaveBeenCalled();
+    expect(memories.some((memory) => memory.content.includes('User rejected "Create the approved local note"'))).toBe(true);
+    expect(episodes).toEqual([
+      expect.objectContaining({
+        outcome: "failure",
+        provenance: expect.objectContaining({
+          source: "approval",
+          evidenceRecordIds: [evidenceRecord.id]
+        }),
+        outcomeLink: expect.objectContaining({
+          approvalDecision: "rejected",
+          executionKind: "failed",
+          taskState: "blocked",
+          userCorrection: true
+        }),
+        metadata: expect.objectContaining({
+          learningPrivacy: expect.objectContaining({
+            captureSource: "approval_outcome"
+          })
+        })
+      })
+    ]);
+    expect(reloadedEvidence[0]?.memoryIds.length).toBeGreaterThan(0);
+  });
+
   it("keys approval follow-up jobs by approval id and stable action id", async () => {
     const { repository } = await createTestRuntime();
     const bundle = buildApprovalFollowUpBundle("goal-approval-action-id-runtime", "workflow-approval-action-id-runtime");

@@ -44,6 +44,7 @@ import {
   withTelemetryContext
 } from "@agentic/integrations";
 import {
+  captureApprovalOutcomeSignals,
   captureExecutionOutcomeSignals,
   captureMemoriesFromBundle,
   computeNextRun,
@@ -1123,13 +1124,49 @@ export async function executeApprovalFollowUpJob(params: {
       });
     }
   } else if (!shouldExecuteApprovedTask) {
-    await finalizeApprovalEvidenceRecord({
+    const evidenceRecord = await finalizeApprovalEvidenceRecord({
       repository,
       bundle: updatedBundle,
       userId: job.userId,
       approvalId: approval.id,
       memoryIds: []
     });
+    const evidenceRecordIdsByTaskId = evidenceRecord
+      ? {
+          [approval.taskId]: [evidenceRecord.id]
+        }
+      : undefined;
+
+    if (job.payload.decision === "rejected") {
+      const capturedMemoryIds = await persistCapturedSignals({
+        repository,
+        selfImprovementRepository: params.selfImprovementRepository,
+        captured: captureApprovalOutcomeSignals(
+          updatedBundle,
+          job.userId,
+          approval.id,
+          job.actorContext ?? createSystemActorContext(job.userId),
+          {
+            governance: workspaceGovernance,
+            evidenceRecordIdsByTaskId
+          }
+        ),
+        userId: job.userId,
+        jobId: job.id,
+        label: "approval-outcome-capture",
+        workspaceId: updatedBundle.goal.workspaceId ?? null
+      });
+
+      if (capturedMemoryIds.length > 0) {
+        await finalizeApprovalEvidenceRecord({
+          repository,
+          bundle: updatedBundle,
+          userId: job.userId,
+          approvalId: approval.id,
+          memoryIds: capturedMemoryIds
+        });
+      }
+    }
   }
 
   if (isSlackReady()) {
