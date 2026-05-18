@@ -140,6 +140,7 @@ Preview, dashboard-slice, integration callback, webhook, and worker event-stream
 The system intentionally moves long-running or failure-prone work out of request handlers.
 
 - goal creation is queued and processed by the worker runtime
+- public goal-create, goal-refine, and template-run ingress must carry a caller-provided `x-idempotency-key` or receive a server-derived durable job key before enqueue
 - autopilot events are deduplicated, claimed, and retried through durable jobs
 - privacy retention, workspace export, and workspace deletion are worker-backed operations
 - retries use bounded policies and dead-letter state rather than unbounded in-request loops
