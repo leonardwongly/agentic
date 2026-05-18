@@ -28,6 +28,7 @@ export type FeatureCapabilityResolvedDefinition = FeatureCapabilityDefinition & 
 export type FeatureCapabilityRuntimeContext = {
   activeWorkspaceName: string | null;
   watcherCount: number;
+  emittingWatcherCount?: number;
   autopilotMode: string;
   operations:
     | {
@@ -378,10 +379,19 @@ function resolveAutomationRuntimeCapability(
   }
 
   if (feature.id === "watchers") {
-    const watcherSummary =
-      context.watcherCount > 0
-        ? `${formatCount(context.watcherCount, "active watcher")} are already feeding the durable automation path.`
-        : "No active watchers are configured yet, but the durable automation path is available.";
+    const emittingWatcherCount = context.emittingWatcherCount ?? context.watcherCount;
+    if (emittingWatcherCount <= 0) {
+      return {
+        ...feature,
+        readiness: "preview",
+        runtimeReason:
+          context.watcherCount > 0
+            ? `${formatCount(context.watcherCount, "active watcher")} are configured, but all are still dry-run or notification-suppressed, so watcher automation remains manual preview until event emission is enabled.`
+            : "No active watchers are configured yet. Watcher automation remains manual preview until a watcher is active and event emission is enabled."
+      };
+    }
+
+    const watcherSummary = `${formatCount(emittingWatcherCount, "event-emitting watcher")} are feeding the durable automation path.`;
 
     return {
       ...feature,

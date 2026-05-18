@@ -578,6 +578,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       resolveFeatureCapabilities({
         activeWorkspaceName: data.activeWorkspace?.name ?? null,
         watcherCount: data.watchers.filter((watcher) => watcher.status === "active").length,
+        emittingWatcherCount: data.watchers.filter(
+          (watcher) =>
+            watcher.status === "active" &&
+            watcher.schedule.enabled &&
+            !watcher.schedule.dryRun &&
+            watcher.escalationPolicy.notify
+        ).length,
         autopilotMode: data.autopilotSettings.mode,
         operations: data.operations
           ? {

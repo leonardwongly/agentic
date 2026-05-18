@@ -133,6 +133,7 @@ Preview, dashboard-slice, integration callback, webhook, and worker event-stream
 8. Generate draft artifacts and capture structured evidence.
 9. Request approval when a task crosses an external-action threshold.
 10. Register watchers for ongoing coordination.
+    Watchers default to dry-run scheduling; the dashboard must keep them in manual preview until at least one active watcher is configured to emit durable events and the worker scheduler health signals are inside the control envelope.
 11. Persist the full bundle, action history, and resulting job state.
 
 ## Durable Execution Model
