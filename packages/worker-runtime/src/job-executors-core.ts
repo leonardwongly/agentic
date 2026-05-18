@@ -189,6 +189,7 @@ export async function executeGoalCreateJob(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job, repository } = params;
 
@@ -218,7 +219,9 @@ export async function executeGoalCreateJob(params: {
     resolvePolicyReplayValidation
   });
 
+  params.signal?.throwIfAborted();
   await repository.saveGoalBundle(bundle);
+  params.signal?.throwIfAborted();
   await persistCapturedMemories({
     repository,
     selfImprovementRepository: params.selfImprovementRepository,
@@ -234,6 +237,7 @@ export async function executeGoalRefineJob(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job, repository } = params;
 
@@ -269,6 +273,7 @@ export async function executeGoalRefineJob(params: {
     resolvePolicyReplayValidation
   });
 
+  params.signal?.throwIfAborted();
   await repository.saveGoalBundle(updatedBundle);
 }
 
@@ -276,6 +281,7 @@ export async function executeBriefingCreateJob(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job, repository } = params;
 
@@ -311,7 +317,9 @@ export async function executeBriefingCreateJob(params: {
     resolvePolicyReplayValidation
   });
 
+  params.signal?.throwIfAborted();
   await repository.saveGoalBundle(bundle);
+  params.signal?.throwIfAborted();
   await persistCapturedMemories({
     repository,
     selfImprovementRepository: params.selfImprovementRepository,
@@ -334,6 +342,7 @@ export async function runTemplateExecution(params: {
   workspaceId: string | null;
   workspaceGovernance: WorkspaceGovernance | null;
   jobId: string;
+  signal?: AbortSignal;
 }) {
   const [memories, integrations, episodes] = await Promise.all([
     params.repository.listMemory(params.userId),
@@ -354,7 +363,9 @@ export async function runTemplateExecution(params: {
     resolvePolicyReplayValidation
   });
 
+  params.signal?.throwIfAborted();
   await params.repository.saveGoalBundle(bundle);
+  params.signal?.throwIfAborted();
   await params.repository.saveTemplate(
     GoalTemplateSchema.parse({
       ...params.template,
@@ -370,6 +381,7 @@ export async function runTemplateExecution(params: {
       updatedAt: nowIso()
     })
   );
+  params.signal?.throwIfAborted();
   await persistCapturedMemories({
     repository: params.repository,
     selfImprovementRepository: params.selfImprovementRepository,
@@ -386,6 +398,7 @@ export async function executeTemplateRunJob(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job, repository } = params;
 
@@ -411,12 +424,14 @@ export async function executeTemplateRunJob(params: {
     workspaceId: job.payload.workspaceId,
     workspaceGovernance:
       job.payload.workspaceId ? await repository.getWorkspaceGovernance(job.payload.workspaceId, job.userId) : null,
-    jobId: job.id
+    jobId: job.id,
+    signal: params.signal
   });
 }
 
 export async function executeDocsRenderJob(params: {
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job } = params;
 
@@ -424,6 +439,7 @@ export async function executeDocsRenderJob(params: {
     throw new Error(`Expected a docs_render payload for job ${job.id}.`);
   }
 
+  params.signal?.throwIfAborted();
   await runDocsBuild();
 }
 

@@ -271,6 +271,49 @@ describe("action execution contract", () => {
     expect(outcome.detail).toContain("operator cancelled execution");
   });
 
+  it("passes cancellation signals into Gmail draft and send mutations", async () => {
+    const task = buildTask(["read", "draft", "send"]);
+    const actionIntent = ActionIntentSchema.parse({
+      type: "send_message",
+      to: "client@example.com",
+      subject: "Follow-up",
+      body: "Approved response body.",
+      mode: "send"
+    });
+    const controller = new AbortController();
+    const createDraft = vi.fn(async (params: { signal?: AbortSignal }) => {
+      expect(params.signal).toBe(controller.signal);
+      return { id: "draft-signal" };
+    });
+    const sendDraft = vi.fn(async (_draftId: string, options?: { signal?: AbortSignal }) => {
+      expect(options?.signal).toBe(controller.signal);
+      return { messageId: "message-signal" };
+    });
+
+    const { outcome } = await executeTypedAction({
+      task,
+      actionIntent,
+      adapters: {
+        gmail: {
+          createDraft,
+          sendDraft,
+          listRecentEmails: vi.fn()
+        }
+      },
+      connectorReadiness: approvalGradeConnectors,
+      signal: controller.signal
+    });
+
+    expect(createDraft).toHaveBeenCalledTimes(1);
+    expect(sendDraft).toHaveBeenCalledWith("draft-signal", expect.objectContaining({
+      signal: controller.signal
+    }));
+    expect(outcome).toMatchObject({
+      status: "completed",
+      providerRef: "message-signal"
+    });
+  });
+
   it("records provider side effects before Gmail mutation and suppresses duplicate drafts", async () => {
     const task = buildTask(["read", "draft", "send"]);
     const actionIntent = ActionIntentSchema.parse({

@@ -14,7 +14,7 @@ import {
   enterpriseWorkspaceGovernanceDefaults,
   type GoalBundle
 } from "@agentic/contracts";
-import { createJobRecord } from "@agentic/execution";
+import { createDurableJobQueue, createJobRecord, processNextDurableJob } from "@agentic/execution";
 import * as orchestrator from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { EpisodeRecordSchema, createSelfImprovementRepository } from "@agentic/self-improvement-memory";
@@ -1709,6 +1709,85 @@ describe("worker runtime", () => {
       status: "completed",
       attemptCount: 1
     });
+  });
+
+  it("waits for timed handlers to settle before retrying durable jobs", async () => {
+    const { repository } = await createTestRuntime();
+    const runnerId = "worker-runtime-timeout-settlement-test";
+    const job = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "docs_render",
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      maxAttempts: 2,
+      timeoutMs: 100,
+      idempotencyKey: "worker-runtime-timeout-settlement",
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      }
+    });
+    const queue = createDurableJobQueue(repository, {
+      runnerId,
+      retryPolicy: {
+        baseDelayMs: 0,
+        factor: 1,
+        maxDelayMs: 0
+      }
+    });
+    let releaseHandler!: () => void;
+    let resolveStarted!: () => void;
+    let sawAbort = false;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+
+    await repository.enqueueJob(job);
+    const processing = processNextDurableJob({
+      queue,
+      handlers: {
+        docs_render: async (_job, context) => {
+          context?.signal.addEventListener(
+            "abort",
+            () => {
+              sawAbort = true;
+            },
+            { once: true }
+          );
+          resolveStarted();
+          await release;
+        }
+      }
+    });
+
+    await started;
+    await new Promise((resolve) => setTimeout(resolve, 130));
+
+    const runningJob = await repository.getJob(job.id, SYSTEM_USER_ID);
+    expect(sawAbort).toBe(true);
+    expect(runningJob).toMatchObject({
+      id: job.id,
+      status: "running",
+      attemptCount: 1
+    });
+
+    releaseHandler();
+    const result = await processing;
+    const persistedJob = await repository.getJob(job.id, SYSTEM_USER_ID);
+
+    expect(result.finalJob).toMatchObject({
+      id: job.id,
+      status: "retrying",
+      attemptCount: 1
+    });
+    expect(persistedJob).toMatchObject({
+      id: job.id,
+      status: "retrying",
+      attemptCount: 1
+    });
+    expect(persistedJob?.lastError).toContain("timed out");
   });
 
   it("opens a circuit breaker for repeatedly failing job kinds to stop thrashing", async () => {

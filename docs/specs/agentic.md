@@ -286,6 +286,7 @@ The production contract is explicit:
 - Bound large list views with predictable ordering.
 - Keep document rendering deterministic and suitable for CI.
 - Keep request handlers short by moving long-running work onto the durable worker runtime.
+- Timed durable jobs must propagate cancellation into side-effect handlers and must not transition to retry or dead-letter until the aborted handler has settled.
 - Bound queue retries, telemetry retention, and in-memory buffers to avoid unbounded resource growth.
 
 ## Testing Requirements
@@ -296,6 +297,7 @@ The baseline test suite must cover:
 - memory ranking behavior
 - orchestration happy path and approval transitions
 - durable goal creation, job polling, and dead-letter handling
+- durable timeout settlement and side-effect cancellation propagation
 - autopilot enqueue, retry, deduplication, and recovery state
 - privacy retention, export, and deletion operations
 - provider credential isolation and secret handling

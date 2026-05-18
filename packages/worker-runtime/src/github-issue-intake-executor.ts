@@ -76,6 +76,7 @@ export async function executeGitHubIssueIntakeJob(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job } = params;
 
@@ -115,6 +116,7 @@ export async function executeGitHubIssueIntakeJob(params: {
   await executeGoalCreateJob({
     repository: params.repository,
     selfImprovementRepository: params.selfImprovementRepository,
+    signal: params.signal,
     job: {
       ...job,
       kind: "goal_create",
