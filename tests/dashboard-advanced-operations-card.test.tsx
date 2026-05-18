@@ -5,6 +5,7 @@ import { resolveFeatureCapabilities, summarizeFeatureCapabilities } from "../app
 const resolvedOperationalFeatures = resolveFeatureCapabilities({
   activeWorkspaceName: "Operations",
   watcherCount: 3,
+  emittingWatcherCount: 3,
   autopilotMode: "notify_only",
   operations: {
     asyncExecutionStatus: "healthy",
@@ -27,7 +28,7 @@ describe("DashboardAdvancedOperationsCard", () => {
         watcherCount={3}
         autopilotMode="notify_only"
         watchersReadiness="operational"
-        watchersReason="3 active watchers are already feeding the durable automation path. Watchers now run with queue recovery, connector diagnostics, and operator remediation paths."
+        watchersReason="3 event-emitting watchers are feeding the durable automation path. Watchers now run with queue recovery, connector diagnostics, and operator remediation paths."
         autopilotReadiness="operational"
         autopilotReason="Autopilot control is operational in notify only mode with durable execution, replay, and operator recovery tooling."
         coreOperationalCount={featureSummary.core.operationalOrBetter}

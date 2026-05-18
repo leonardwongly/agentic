@@ -91,6 +91,7 @@ describe("feature capability registry", () => {
     const resolved = resolveFeatureCapabilities({
       activeWorkspaceName: "Operations",
       watcherCount: 3,
+      emittingWatcherCount: 3,
       autopilotMode: "notify_only",
       operations: {
         asyncExecutionStatus: "healthy",
@@ -119,6 +120,29 @@ describe("feature capability registry", () => {
             feature.id === "autopilot-control")
       ).length
     );
+  });
+
+  it("keeps watchers in manual preview when active watchers are dry-run only", () => {
+    const resolved = resolveFeatureCapabilities({
+      activeWorkspaceName: "Operations",
+      watcherCount: 2,
+      emittingWatcherCount: 0,
+      autopilotMode: "notify_only",
+      operations: {
+        asyncExecutionStatus: "healthy",
+        asyncIssueCount: 0,
+        connectorHealthStatus: "healthy",
+        connectorIssueCount: 0,
+        autonomyPostureStatus: "healthy",
+        hasOverridePaths: true
+      }
+    });
+    const watcherCapability = resolved.find((feature) => feature.id === "watchers");
+    const autopilotCapability = resolved.find((feature) => feature.id === "autopilot-control");
+
+    expect(watcherCapability?.readiness).toBe("preview");
+    expect(watcherCapability?.runtimeReason).toContain("all are still dry-run or notification-suppressed");
+    expect(autopilotCapability?.readiness).toBe("operational");
   });
 
   it("keeps runtime-promoted automation surfaces fail-closed when telemetry or recovery paths are missing", () => {
