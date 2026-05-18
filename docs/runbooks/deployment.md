@@ -274,6 +274,7 @@ curl -fsS https://agentic.example.com/api/ready
 ```bash
 npm run test:smoke:deployment
 npm run test:smoke:deployment-async
+npm run test:smoke:github-app-sync
 npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
 
@@ -294,6 +295,7 @@ Successful smoke validation confirms:
 - readiness passes on `/api/ready`, including async execution backlog health and a fresh worker heartbeat
 - authenticated session bootstrap works when `AGENTIC_SMOKE_ACCESS_KEY` is provided
 - a deployed goal request can be enqueued and completed through the live worker path
+- GitHub App issue sync can enqueue `github_issue_intake` jobs and the deployed worker can drain the returned job status URLs to completion
 - telemetry export sanitizes secret-bearing payloads before retention or backend delivery
 - rollout-gate metrics stay inside the thresholds defined in `config/observability/alerts.json`
 - retry churn does not exceed the bounded sanity expectations for transient failures
@@ -311,6 +313,7 @@ curl -fsS https://agentic.example.com/api/health
 curl -fsS https://agentic.example.com/api/ready
 npm run test:smoke:deployment
 npm run test:smoke:deployment-async
+npm run test:smoke:github-app-sync
 npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
 
