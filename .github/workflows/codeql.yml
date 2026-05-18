@@ -23,6 +23,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze JavaScript and TypeScript
+    if: ${{ vars.CODE_SCANNING_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
