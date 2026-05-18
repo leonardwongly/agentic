@@ -7,6 +7,7 @@ import {
   RiskClassSchema,
   nowIso
 } from "@agentic/contracts";
+import { listAgentSideEffectCapabilities } from "@agentic/agents";
 import { requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
@@ -63,6 +64,8 @@ export async function POST(request: Request) {
     const actorContext = createActorContextFromPrincipal(principal);
 
     const now = nowIso();
+    const allowedCapabilities = body.allowedCapabilities ?? ["read", "search"];
+    const sideEffectCapabilities = listAgentSideEffectCapabilities(allowedCapabilities);
     const agent = AgentDefinitionSchema.parse({
       id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       userId: principal.userId,
@@ -84,7 +87,7 @@ export async function POST(request: Request) {
         responseStyle: body.behaviorConfig?.responseStyle ?? "balanced",
         formality: body.behaviorConfig?.formality ?? "professional"
       },
-      allowedCapabilities: body.allowedCapabilities ?? ["read", "search"],
+      allowedCapabilities,
       blockedCapabilities: body.blockedCapabilities ?? [],
       maxRiskClass: body.maxRiskClass ?? "R2",
       integrationPermissions: [],
@@ -93,7 +96,7 @@ export async function POST(request: Request) {
       isBuiltIn: false,
       parentAgentId: body.parentAgentId ?? null,
       version: 1,
-      status: "active",
+      status: sideEffectCapabilities.length > 0 ? "draft" : "active",
       createdAt: now,
       updatedAt: now
     });

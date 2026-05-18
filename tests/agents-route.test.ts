@@ -6,7 +6,8 @@ import {
   SYSTEM_USER_ID,
   createHumanActorContext,
   createSystemActorContext,
-  nowIso
+  nowIso,
+  type AgentDefinition
 } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +41,7 @@ function buildAuthorizedGetRequest(url: string): Request {
   });
 }
 
-function buildCustomAgent(userId: string, id: string, name: string) {
+function buildCustomAgent(userId: string, id: string, name: string, overrides?: Partial<AgentDefinition>) {
   const timestamp = nowIso();
   return AgentDefinitionSchema.parse({
     id,
@@ -63,16 +64,16 @@ function buildCustomAgent(userId: string, id: string, name: string) {
       responseStyle: "balanced",
       formality: "professional"
     },
-    allowedCapabilities: ["read", "search"],
-    blockedCapabilities: [],
-    maxRiskClass: "R2",
+    allowedCapabilities: overrides?.allowedCapabilities ?? ["read", "search"],
+    blockedCapabilities: overrides?.blockedCapabilities ?? [],
+    maxRiskClass: overrides?.maxRiskClass ?? "R2",
     integrationPermissions: [],
     memoryPermissions: [],
     actorContext: null,
     isBuiltIn: false,
     parentAgentId: null,
     version: 1,
-    status: "active",
+    status: overrides?.status ?? "active",
     createdAt: timestamp,
     updatedAt: timestamp
   });
@@ -122,6 +123,32 @@ describe("agents routes", () => {
     expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
   });
 
+  it("quarantines newly created custom agents with side-effect capabilities", async () => {
+    const response = await createAgentRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/agents", "POST", {
+        name: "mail-sender",
+        displayName: "Mail Sender",
+        description: "Drafts and sends approved operator email.",
+        systemPrompt: "Prepare and send operator-approved email follow-ups.",
+        allowedCapabilities: ["read", "search", "send"],
+        maxRiskClass: "R3"
+      })
+    );
+    const payload = (await response.json()) as {
+      agent: { id: string; status: string; allowedCapabilities: string[] };
+    };
+
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const persisted = await repository.getAgent(payload.agent.id, SYSTEM_USER_ID);
+
+    expect(response.status).toBe(200);
+    expect(payload.agent.status).toBe("draft");
+    expect(payload.agent.allowedCapabilities).toContain("send");
+    expect(persisted?.status).toBe("draft");
+  });
+
   it("stamps the human actor when a session principal updates a custom agent", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
@@ -167,6 +194,96 @@ describe("agents routes", () => {
     expect(payload.agent.version).toBe(2);
     expect(persisted?.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
     expect(persisted?.displayName).toBe("Session Updated Agent");
+  });
+
+  it("requires explicit owner review before activating a side-effect custom agent", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveAgent(
+      buildCustomAgent(SYSTEM_USER_ID, "agent-side-effect-draft", "side-effect-draft", {
+        allowedCapabilities: ["read", "search", "send"],
+        maxRiskClass: "R3",
+        status: "draft"
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const blocked = await updateAgentRoute(
+      new Request("http://localhost/api/agents/agent-side-effect-draft", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          status: "active"
+        })
+      }),
+      { params: Promise.resolve({ id: "agent-side-effect-draft" }) }
+    );
+    const blockedPayload = (await blocked.json()) as { error?: string };
+    const afterBlocked = await repository.getAgent("agent-side-effect-draft", SYSTEM_USER_ID);
+
+    expect(blocked.status).toBe(409);
+    expect(blockedPayload.error).toBe("Side-effect agent activation requires explicit owner review confirmation.");
+    expect(afterBlocked?.status).toBe("draft");
+
+    const activated = await updateAgentRoute(
+      new Request("http://localhost/api/agents/agent-side-effect-draft", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          status: "active",
+          sideEffectReviewConfirmed: true
+        })
+      }),
+      { params: Promise.resolve({ id: "agent-side-effect-draft" }) }
+    );
+    const activatedPayload = (await activated.json()) as { agent: { status: string; version: number } };
+    const afterActivated = await repository.getAgent("agent-side-effect-draft", SYSTEM_USER_ID);
+
+    expect(activated.status).toBe(200);
+    expect(activatedPayload.agent.status).toBe("active");
+    expect(activatedPayload.agent.version).toBe(2);
+    expect(afterActivated?.status).toBe("active");
+  });
+
+  it("re-quarantines active custom agents when side-effect capabilities are added without review", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveAgent(buildCustomAgent(SYSTEM_USER_ID, "agent-capability-upgrade", "capability-upgrade"));
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await updateAgentRoute(
+      new Request("http://localhost/api/agents/agent-capability-upgrade", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          allowedCapabilities: ["read", "search", "schedule"],
+          maxRiskClass: "R3"
+        })
+      }),
+      { params: Promise.resolve({ id: "agent-capability-upgrade" }) }
+    );
+    const payload = (await response.json()) as { agent: { status: string; allowedCapabilities: string[] } };
+    const persisted = await repository.getAgent("agent-capability-upgrade", SYSTEM_USER_ID);
+
+    expect(response.status).toBe(200);
+    expect(payload.agent.status).toBe("draft");
+    expect(payload.agent.allowedCapabilities).toContain("schedule");
+    expect(persisted?.status).toBe("draft");
   });
 
   it("rejects non-operational integration and memory permission updates", async () => {
