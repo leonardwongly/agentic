@@ -27,7 +27,12 @@ Optional but commonly needed:
 ```bash
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_INGRESS_PROVIDER=render
+export AGENTIC_INGRESS_ENVIRONMENT=production-like
+export AGENTIC_INGRESS_ROLLOUT_MODE=manual-only
+export AGENTIC_INGRESS_ROLLBACK_AUTHORITY=platform-operator
 export AGENTIC_TRUST_PROXY_HEADERS=true
+export AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED=true
 export AGENTIC_TRUSTED_CLIENT_IP_HEADER=x-forwarded-for
 export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
 export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
@@ -43,6 +48,14 @@ export AGENTIC_DASHBOARD_COCKPIT=legacy
 ## Stable Ingress Contract
 
 External staging and production-like rollout evidence must come from a stable HTTPS origin. Temporary tunnel domains, localhost or private-network addresses, URL credentials, URL paths, URL query strings, and URL fragments are not accepted as the deployment smoke target.
+
+The stable ingress gate also requires the target identity and rollback contract
+to be encoded in environment, not just mentioned in prose. Set
+`AGENTIC_INGRESS_PROVIDER`, `AGENTIC_INGRESS_ENVIRONMENT`,
+`AGENTIC_INGRESS_ROLLOUT_MODE`, and
+`AGENTIC_INGRESS_ROLLBACK_AUTHORITY` before running the gate. Keep
+`AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED=false` or unset until the provider has
+been verified to overwrite the configured client-IP header at the edge.
 
 ## First Container Target Candidate
 
@@ -106,7 +119,12 @@ After the target is approved and created, configure GitHub Actions for provider-
 ```bash
 gh secret set STAGING_BASE_URL --repo leonardwongly/agentic --body "https://agentic.example.com"
 gh secret set STAGING_SMOKE_ACCESS_KEY --repo leonardwongly/agentic --body "<same class of value as AGENTIC_ACCESS_KEY>"
+gh variable set STAGING_INGRESS_PROVIDER --repo leonardwongly/agentic --body "render"
+gh variable set STAGING_INGRESS_ENVIRONMENT --repo leonardwongly/agentic --body "production-like"
+gh variable set STAGING_INGRESS_ROLLOUT_MODE --repo leonardwongly/agentic --body "manual-only"
+gh variable set STAGING_INGRESS_ROLLBACK_AUTHORITY --repo leonardwongly/agentic --body "<operator-or-team>"
 gh variable set STAGING_TRUST_PROXY_HEADERS --repo leonardwongly/agentic --body "true"
+gh variable set STAGING_PROXY_HEADER_OVERWRITE_CONFIRMED --repo leonardwongly/agentic --body "true"
 gh variable set STAGING_TRUSTED_CLIENT_IP_HEADER --repo leonardwongly/agentic --body "x-forwarded-for"
 gh variable set STAGING_DEPLOY_BIN --repo leonardwongly/agentic --body "<provider deploy executable>"
 gh secret set STAGING_DEPLOY_ARGS_JSON --repo leonardwongly/agentic --body '["<provider>","<args>"]'
@@ -118,9 +136,14 @@ Use the stable ingress preflight before a provider-backed deployment:
 
 ```bash
 export NODE_ENV=production
+export AGENTIC_INGRESS_PROVIDER=render
+export AGENTIC_INGRESS_ENVIRONMENT=production-like
+export AGENTIC_INGRESS_ROLLOUT_MODE=manual-only
+export AGENTIC_INGRESS_ROLLBACK_AUTHORITY=platform-operator
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
 export AGENTIC_TRUST_PROXY_HEADERS=true
+export AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED=true
 export AGENTIC_TRUSTED_CLIENT_IP_HEADER=x-forwarded-for
 export AGENTIC_WORKER_HEALTH_PATH=/var/lib/agentic/worker-health.json
 export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
@@ -137,7 +160,12 @@ For GitHub Actions, configure these repository secrets and variables before expe
 | --- | --- | --- |
 | `STAGING_BASE_URL` secret | `AGENTIC_SMOKE_BASE_URL` | Stable HTTPS origin used by ingress preflight and deployment smoke tests. |
 | `STAGING_SMOKE_ACCESS_KEY` secret | `AGENTIC_SMOKE_ACCESS_KEY` | Allows the smoke suite to verify authenticated session bootstrap. |
+| `STAGING_INGRESS_PROVIDER` variable | `AGENTIC_INGRESS_PROVIDER` | Names the approved provider, currently `render` for the first target. |
+| `STAGING_INGRESS_ENVIRONMENT` variable | `AGENTIC_INGRESS_ENVIRONMENT` | Must be `staging`, `production-like`, or `production`. |
+| `STAGING_INGRESS_ROLLOUT_MODE` variable | `AGENTIC_INGRESS_ROLLOUT_MODE` | Must be `manual-only`, `scheduled-disabled`, or `scheduled-enabled`. |
+| `STAGING_INGRESS_ROLLBACK_AUTHORITY` variable | `AGENTIC_INGRESS_ROLLBACK_AUTHORITY` | Names the operator or team allowed to roll back or disable the target. |
 | `STAGING_TRUST_PROXY_HEADERS` variable | `AGENTIC_TRUST_PROXY_HEADERS` | Must be `true` after proxy overwrite behavior is confirmed. |
+| `STAGING_PROXY_HEADER_OVERWRITE_CONFIRMED` variable | `AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED` | Must be `true` only after the provider overwrites the configured client-IP header at the edge. |
 | `STAGING_TRUSTED_CLIENT_IP_HEADER` variable | `AGENTIC_TRUSTED_CLIENT_IP_HEADER` | Names the one ingress-overwritten client-IP header to trust. |
 | `STAGING_DEPLOY_BIN` variable | `AGENTIC_STAGING_DEPLOY_BIN` | Provider deploy executable. |
 | `STAGING_DEPLOY_ARGS_JSON` secret | `AGENTIC_STAGING_DEPLOY_ARGS_JSON` | Provider deploy arguments as a JSON string array. |
