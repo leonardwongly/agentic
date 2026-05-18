@@ -143,6 +143,8 @@ The system intentionally moves long-running or failure-prone work out of request
 - goal creation is queued and processed by the worker runtime
 - public goal-create, goal-refine, and template-run ingress must carry a caller-provided `x-idempotency-key` or receive a server-derived durable job key before enqueue
 - autopilot events are deduplicated, claimed, and retried through durable jobs
+- scheduled template and briefing autopilot events must carry a valid due time that is not in the future; missing or future due windows are rejected at ingress and ignored if a stale persisted event reaches the worker
+- manual template runs remain a separate durable job path and are allowed independently of the template's next scheduled run window
 - privacy retention, workspace export, and workspace deletion are worker-backed operations
 - retries use bounded policies and dead-letter state rather than unbounded in-request loops
 - operator-visible status is sanitized so backend failures do not leak raw secrets or provider internals
