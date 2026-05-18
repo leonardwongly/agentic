@@ -357,6 +357,59 @@ describe("GitHub App issue sync route", () => {
     expect(jobs).toHaveLength(0);
   });
 
+  it("fails closed when the runtime GitHub App private key is missing", async () => {
+    delete process.env.AGENTIC_GITHUB_APP_PRIVATE_KEY;
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "AGENTIC_GITHUB_APP_PRIVATE_KEY is not configured."
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("fails closed when the sync secret runtime configuration is too short", async () => {
+    process.env.AGENTIC_GITHUB_APP_SYNC_SECRET = "too-short";
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest({
+      secret: "too-short"
+    }));
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "AGENTIC_GITHUB_APP_SYNC_SECRET is too short."
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("fails closed when the allowed repository runtime configuration is malformed", async () => {
+    process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES = "not-a-full-name";
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "GitHub issue allowed repository configuration is invalid."
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
+  });
+
   it("fails closed when GitHub returns a repository outside the allowlist", async () => {
     fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : input.toString();
