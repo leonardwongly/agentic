@@ -124,6 +124,110 @@ describe("workflow DAG process model", () => {
     ).toThrow(/missing required capabilities|exceeds permission ceiling/i);
   });
 
+  it("rejects duplicate node ids, invalid edges, and incomplete compensation contracts", () => {
+    const base = buildDag();
+
+    expect(() =>
+      validateWorkflowDag({
+        ...base,
+        nodes: [
+          base.nodes[0]!,
+          {
+            ...base.nodes[1]!,
+            id: base.nodes[0]!.id
+          }
+        ]
+      } as WorkflowDag)
+    ).toThrow(/Duplicate workflow DAG node/);
+
+    expect(() =>
+      validateWorkflowDag({
+        ...base,
+        edges: [
+          {
+            from: "draft",
+            to: "unknown",
+            condition: "success"
+          }
+        ]
+      } as WorkflowDag)
+    ).toThrow(/edge references missing target node/);
+
+    expect(() =>
+      validateWorkflowDag({
+        ...base,
+        edges: [
+          {
+            from: "draft",
+            to: "draft",
+            condition: "always"
+          }
+        ]
+      } as WorkflowDag)
+    ).toThrow(/cannot target the same node/);
+
+    expect(() =>
+      validateWorkflowDag({
+        ...base,
+        nodes: [
+          {
+            ...base.nodes[0]!,
+            compensation: {
+              required: true,
+              actionIntent: null,
+              note: "Manual rollback is required before retry."
+            }
+          }
+        ],
+        edges: []
+      })
+    ).toThrow(/requires compensation but has no compensation action intent/);
+  });
+
+  it("allows fan-out from one completed dependency while preserving handoff criteria", () => {
+    const base = buildDag();
+    const fanOut = validateWorkflowDag({
+      ...base,
+      nodes: [
+        base.nodes[0]!,
+        {
+          ...base.nodes[1]!,
+          id: "monitor-vip",
+          label: "Monitor VIP inbox"
+        },
+        {
+          ...base.nodes[1]!,
+          id: "monitor-support",
+          label: "Monitor support inbox",
+          actionIntent: {
+            type: "monitor_signal",
+            targetEntity: "Support inbox",
+            condition: "Escalation arrives.",
+            triggerAction: "Create an operator review.",
+            sourceSystems: ["gmail"]
+          }
+        }
+      ],
+      edges: [
+        {
+          from: "draft",
+          to: "monitor-vip",
+          condition: "success"
+        },
+        {
+          from: "draft",
+          to: "monitor-support",
+          condition: "success"
+        }
+      ]
+    });
+    const downstream = fanOut.nodes.filter((node) => node.dependsOn.includes("draft"));
+
+    expect(downstream.map((node) => node.id).sort()).toEqual(["monitor-support", "monitor-vip"]);
+    expect(fanOut.edges.filter((edge) => edge.from === "draft")).toHaveLength(2);
+    expect(fanOut.nodes.every((node) => node.permissionGrant.maxRiskClass === "R2")).toBe(true);
+  });
+
   it("accepts draft message nodes with either draft or send capability grants", () => {
     const draftNode = WorkflowDagNodeSchema.parse({
       id: "draft-message",
