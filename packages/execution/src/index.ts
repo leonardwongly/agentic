@@ -180,6 +180,18 @@ const defaultRetryPolicy: JobRetryPolicy = {
   maxDelayMs: 5 * 60_000
 };
 
+function isPositiveInteger(value: number | undefined): boolean {
+  return Number.isInteger(value) && value !== undefined && value > 0;
+}
+
+function hasPositiveConcurrencyLimit(limits: JobConcurrencyLimits | undefined): boolean {
+  return Boolean(
+    isPositiveInteger(limits?.maxRunningPerKind) ||
+      isPositiveInteger(limits?.maxRunningPerUser) ||
+      isPositiveInteger(limits?.maxRunningPerConcurrencyKey)
+  );
+}
+
 function deriveJobSideEffectTarget(payload: JobPayload): string | null {
   if (payload.type === "approval_follow_up") {
     return `goal:${payload.goalId}:task:${payload.taskId}`;
@@ -729,11 +741,16 @@ export function createDurableJobQueue(
       );
     },
     async claimNext(params) {
+      const effectiveConcurrencyLimits = params?.concurrencyLimits ?? options.concurrencyLimits;
+      const concurrencyLimited = hasPositiveConcurrencyLimit(effectiveConcurrencyLimits);
+
       return withSpan(
         "durable_job.claim",
         {
           runnerId: options.runnerId,
-          requestedJobKinds: params?.kinds?.join(",") ?? null
+          requestedJobKinds: params?.kinds?.join(",") ?? null,
+          queue: params?.queue ?? null,
+          concurrencyLimited
         },
         async () => {
           const claimed = await store.claimNextJob({
@@ -743,13 +760,15 @@ export function createDurableJobQueue(
             runnerId: options.runnerId,
             leaseMs,
             now: params?.now,
-            concurrencyLimits: params?.concurrencyLimits ?? options.concurrencyLimits
+            concurrencyLimits: effectiveConcurrencyLimits
           });
 
           recordCounter("durable_job.claim.total", 1, {
             runnerId: options.runnerId,
             claimResult: claimed ? "hit" : "miss",
-            jobKind: claimed?.kind ?? null
+            jobKind: claimed?.kind ?? null,
+            queue: params?.queue ?? claimed?.queue ?? null,
+            concurrencyLimited
           });
 
           return claimed;

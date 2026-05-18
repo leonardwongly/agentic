@@ -190,6 +190,29 @@ describe("repository", () => {
     });
   }
 
+  function createDocsRenderJob(params: {
+    userId: string;
+    idempotencyKey?: string | null;
+    availableAt?: string;
+    priority?: "critical" | "high" | "normal" | "low" | "maintenance";
+    concurrencyKey?: string | null;
+    queue?: string;
+  }) {
+    return createJobRecord({
+      userId: params.userId,
+      kind: "docs_render",
+      idempotencyKey: params.idempotencyKey,
+      availableAt: params.availableAt,
+      priority: params.priority,
+      concurrencyKey: params.concurrencyKey,
+      queue: params.queue,
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      }
+    });
+  }
+
   async function expectDurableQueueLifecycle(repository: ReturnType<typeof createRepository>, userId: string) {
     const queue = createDurableJobQueue(repository, {
       runnerId: `worker-${userId}`,
@@ -304,6 +327,92 @@ describe("repository", () => {
     expect(blockedByConcurrency).toBeNull();
     expect(reclaimedAfterLeaseExpiry?.id).toBe(critical.id);
     expect(normal.id).not.toBe(critical.id);
+
+    await queue.acknowledge({
+      jobId: reclaimedAfterLeaseExpiry!.id,
+      now: "2026-04-16T03:02:02.000Z"
+    });
+    const drainedNormal = await queue.claimNext({
+      userId,
+      now: "2026-04-16T03:02:03.000Z"
+    });
+    expect(drainedNormal?.id).toBe(normal.id);
+    await queue.acknowledge({
+      jobId: drainedNormal!.id,
+      now: "2026-04-16T03:02:04.000Z"
+    });
+
+    const backpressureUserId = `${userId}-backpressure`;
+    const otherUserId = `${userId}-other`;
+    const runningKind = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId: backpressureUserId,
+        priority: "critical",
+        concurrencyKey: `${backpressureUserId}:running-kind`,
+        availableAt: "2026-04-16T03:03:00.000Z"
+      })
+    );
+    const claimedRunningKind = await queue.claimNext({
+      userId: backpressureUserId,
+      now: "2026-04-16T03:03:00.000Z"
+    });
+    const blockedCriticalSameKind = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId: backpressureUserId,
+        priority: "critical",
+        concurrencyKey: `${backpressureUserId}:blocked-kind`,
+        availableAt: "2026-04-16T03:03:01.000Z"
+      })
+    );
+    const eligibleHighDifferentKind = await repository.enqueueJob(
+      createDocsRenderJob({
+        userId: backpressureUserId,
+        priority: "high",
+        concurrencyKey: `${backpressureUserId}:docs`,
+        availableAt: "2026-04-16T03:03:01.000Z"
+      })
+    );
+    const skippedBlockedKind = await queue.claimNext({
+      userId: backpressureUserId,
+      now: "2026-04-16T03:03:01.000Z",
+      concurrencyLimits: {
+        maxRunningPerKind: 1
+      }
+    });
+    const blockedCriticalSameUser = await repository.enqueueJob(
+      createDocsRenderJob({
+        userId: backpressureUserId,
+        priority: "critical",
+        concurrencyKey: `${backpressureUserId}:blocked-user`,
+        availableAt: "2026-04-16T03:03:02.000Z"
+      })
+    );
+    const eligibleHighOtherUser = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId: otherUserId,
+        priority: "high",
+        concurrencyKey: `${otherUserId}:eligible-user`,
+        availableAt: "2026-04-16T03:03:02.000Z"
+      })
+    );
+    const skippedBlockedUser = await queue.claimNext({
+      now: "2026-04-16T03:03:02.000Z",
+      concurrencyLimits: {
+        maxRunningPerUser: 1
+      }
+    });
+
+    expect(claimedRunningKind?.id).toBe(runningKind.id);
+    expect(skippedBlockedKind?.id).toBe(eligibleHighDifferentKind.id);
+    expect(skippedBlockedKind?.kind).toBe("docs_render");
+    expect(skippedBlockedKind?.priority).toBe("high");
+    expect(skippedBlockedUser?.id).toBe(eligibleHighOtherUser.id);
+    await expect(repository.getJob(blockedCriticalSameKind.id, backpressureUserId)).resolves.toMatchObject({
+      status: "queued"
+    });
+    await expect(repository.getJob(blockedCriticalSameUser.id, backpressureUserId)).resolves.toMatchObject({
+      status: "queued"
+    });
   }
 
   it("appends goal action logs without rewriting the full bundle", async () => {
