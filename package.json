@@ -45,6 +45,7 @@
     "typecheck": "tsc --noEmit --project tsconfig.typecheck.json",
     "format:check": "tsx scripts/check-format.ts",
     "release:check-context": "tsx scripts/check-release-context.ts",
+    "release:closeout:evidence": "tsx scripts/release-closeout-evidence.ts",
     "setup:check": "tsx scripts/check-first-run.ts",
     "hygiene:repo": "tsx scripts/repo-hygiene-report.ts",
     "test": "vitest run",
