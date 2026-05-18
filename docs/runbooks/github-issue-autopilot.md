@@ -101,7 +101,19 @@ GitHub App sync data flow:
 4. Agentic verifies the bearer secret with constant-time comparison and validates GitHub App runtime configuration.
 5. Agentic creates a short-lived GitHub App JWT, exchanges it for an installation token, and lists open issues from each allowlisted repository.
 6. Agentic validates and bounds GitHub API responses, skips pull requests returned by the issues endpoint, and enqueues `github_issue_intake` jobs with trigger `issues.sync`.
-7. Repeated syncs de-duplicate by repository, issue number, automation mode, and the stable `github_app:open_issue_sync` trigger id.
+7. The sync response returns each queued job id plus `statusUrl: /api/jobs/<job-id>` so the deployed worker path can be polled without exposing GitHub App credentials.
+8. Repeated syncs de-duplicate by repository, issue number, automation mode, and the stable `github_app:open_issue_sync` trigger id.
+
+Deployed completion proof:
+
+```bash
+export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
+export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-the-runtime-access-key
+export AGENTIC_GITHUB_APP_SYNC_SECRET=replace-this-with-the-runtime-sync-secret
+npm run test:smoke:github-app-sync
+```
+
+The canary calls `/api/github/issues/app/sync`, validates same-origin job status URLs, and polls `/api/jobs/<job-id>` until every returned `github_issue_intake` job completes, dead-letters, or times out. The emitted evidence includes repository names, issue numbers, job ids, attempts, request/trace ids, and timings; it does not print the sync secret, access key, GitHub App private key, installation token, or raw issue body.
 
 ## Security Notes
 
@@ -123,6 +135,7 @@ Run focused checks after changing this flow:
 
 ```bash
 npm test -- tests/github-issue-webhook-route.test.ts tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/worker-runtime.test.ts
+npm test -- tests/github-issue-job-route.test.ts tests/deployment-github-app-sync-canary.test.ts
 npm run ci:validate-provenance
 npm run build
 ```

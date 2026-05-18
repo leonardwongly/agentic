@@ -252,6 +252,7 @@ describe("GitHub App issue sync route", () => {
         {
           kind: "github_issue_intake",
           status: "queued",
+          statusUrl: expect.stringMatching(/^\/api\/jobs\/[^/?#]+$/u),
           repository: "leonardwongly/agentic",
           issueNumber: 134,
           automationMode: "work"
@@ -335,6 +336,8 @@ describe("GitHub App issue sync route", () => {
     expect(first.status).toBe(202);
     expect(second.status).toBe(202);
     expect(secondPayload.jobs[0]?.id).toBe(firstPayload.jobs[0]?.id);
+    expect(secondPayload.jobs[0]?.statusUrl).toBe(firstPayload.jobs[0]?.statusUrl);
+    expect(secondPayload.jobs[0]?.statusUrl).toBe(`/api/jobs/${encodeURIComponent(firstPayload.jobs[0]?.id)}`);
     expect(jobs).toHaveLength(1);
   });
 

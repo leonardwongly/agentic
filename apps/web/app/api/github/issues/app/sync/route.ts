@@ -559,6 +559,7 @@ export async function POST(request: Request) {
             id: job.id,
             kind: job.kind,
             status: job.status,
+            statusUrl: `/api/jobs/${encodeURIComponent(job.id)}`,
             repository: job.payload.repository.fullName,
             issueNumber: job.payload.issue.number,
             automationMode: job.payload.automationMode,
