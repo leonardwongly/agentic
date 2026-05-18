@@ -10,6 +10,7 @@ import {
 import { requireApiSession } from "../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../lib/api-response";
 import { createGovernedMutationRoute } from "../../../lib/governed-route";
+import { buildUpdatedAtETag, requireUpdatedAtPrecondition } from "../../../lib/mutation-preconditions";
 import { getSeededRepository } from "../../../lib/server";
 
 const GovernanceUpdateSchema = z
@@ -58,13 +59,34 @@ function buildGovernanceResponse(governance: z.infer<typeof WorkspaceGovernanceS
   };
 }
 
+function buildDefaultWorkspaceGovernance(activeWorkspace: { id: string; createdAt: string; updatedAt: string }, userId: string) {
+  return WorkspaceGovernanceSchema.parse({
+    workspaceId: activeWorkspace.id,
+    ...resolveWorkspaceGovernanceDefaultsFromEnv(),
+    updatedBy: userId,
+    createdAt: activeWorkspace.createdAt,
+    updatedAt: activeWorkspace.updatedAt
+  });
+}
+
+function governanceResponse(governance: z.infer<typeof WorkspaceGovernanceSchema>, dashboard: unknown) {
+  return authenticatedJson(buildGovernanceResponse(governance, dashboard), {
+    headers: {
+      ETag: buildUpdatedAtETag(governance.updatedAt)
+    }
+  });
+}
+
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
     const { repository, dashboard, activeWorkspace } = await resolveWorkspaceContext(principal.userId);
-    const governance = dashboard.workspaceGovernance ?? (await repository.getWorkspaceGovernance(activeWorkspace.id, principal.userId));
+    const governance =
+      dashboard.workspaceGovernance ??
+      (await repository.getWorkspaceGovernance(activeWorkspace.id, principal.userId)) ??
+      buildDefaultWorkspaceGovernance(activeWorkspace, principal.userId);
 
-    return authenticatedJson(buildGovernanceResponse(governance, dashboard));
+    return governanceResponse(governance, dashboard);
   } catch (error) {
     return handleApiError(error, "Failed to load workspace governance.");
   }
@@ -81,18 +103,14 @@ export const POST = createGovernedMutationRoute(
     },
     idempotency: "optional"
   },
-  async ({ principal, actorContext, body }) => {
+  async ({ request, principal, actorContext, body }) => {
     const { repository, activeWorkspace } = await resolveWorkspaceContext(principal.userId);
     assertOwnerCanEditGovernance(activeWorkspace, principal.userId);
     const current =
       (await repository.getWorkspaceGovernance(activeWorkspace.id, principal.userId)) ??
-      WorkspaceGovernanceSchema.parse({
-        workspaceId: activeWorkspace.id,
-        ...resolveWorkspaceGovernanceDefaultsFromEnv(),
-        updatedBy: principal.userId,
-        createdAt: activeWorkspace.createdAt,
-        updatedAt: activeWorkspace.updatedAt
-      });
+      buildDefaultWorkspaceGovernance(activeWorkspace, principal.userId);
+
+    requireUpdatedAtPrecondition(request, current.updatedAt);
 
     const updated = WorkspaceGovernanceSchema.parse({
       ...current,
@@ -107,6 +125,6 @@ export const POST = createGovernedMutationRoute(
 
     await repository.saveWorkspaceGovernance(updated, actorContext);
 
-    return authenticatedJson(buildGovernanceResponse(updated, await repository.getDashboardData(principal.userId)));
+    return governanceResponse(updated, await repository.getDashboardData(principal.userId));
   }
 );

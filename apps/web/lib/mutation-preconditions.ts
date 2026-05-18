@@ -23,3 +23,7 @@ export function requireUpdatedAtPrecondition(request: Request, expectedUpdatedAt
     throw new ApiRouteError(412, "The record changed before this action was applied. Refresh and retry.");
   }
 }
+
+export function buildUpdatedAtETag(updatedAt: string): string {
+  return `"${updatedAt}"`;
+}
