@@ -3,6 +3,7 @@ import { z } from "zod";
 import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
 import { createGoogleOAuthClient } from "./google-oauth";
 import {
+  createInvalidConnectorRequestError,
   createConnectorTimeoutSignal,
   normalizeConnectorThrownError
 } from "./connector-errors";
@@ -63,6 +64,20 @@ function buildCalendarMutationSignal(signal?: AbortSignal) {
   });
 }
 
+function requireCalendarIdempotencyKey(operation: string, idempotencyKey: string | undefined): string {
+  const normalized = idempotencyKey?.trim();
+
+  if (!normalized) {
+    throw createInvalidConnectorRequestError({
+      provider: "google_calendar",
+      operation,
+      message: `Google Calendar ${operation} requires an idempotency key before provider mutation.`
+    });
+  }
+
+  return normalized;
+}
+
 function parseCreatedCalendarEvent(
   event: { id?: string | null; summary?: string | null; start?: unknown; end?: unknown; htmlLink?: string | null },
   fallback: { summary: string; start: string; end: string }
@@ -102,6 +117,7 @@ export type GoogleCalendarAdapter = {
     end?: string;
     location?: string;
     calendarId?: string;
+    signal?: AbortSignal;
   }) => Promise<CreatedEvent>;
 };
 
@@ -254,29 +270,28 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
         },
         async () => {
           const calendar = getClient();
+          const idempotencyKey = requireCalendarIdempotencyKey("events.create", paramsCreate.idempotencyKey);
           const isAllDay = paramsCreate.start.length === 10;
           const requestOptions = {
             signal: buildCalendarMutationSignal(paramsCreate.signal)
           };
 
-          if (paramsCreate.idempotencyKey) {
-            const existing = await calendar.events.list({
-              calendarId: paramsCreate.calendarId ?? "primary",
-              maxResults: 1,
-              privateExtendedProperty: [
-                `${GOOGLE_CALENDAR_IDEMPOTENCY_PROPERTY}=${paramsCreate.idempotencyKey}`
-              ],
-              singleEvents: false
-            }, requestOptions);
-            const existingEvent = existing.data.items?.[0];
+          const existing = await calendar.events.list({
+            calendarId: paramsCreate.calendarId ?? "primary",
+            maxResults: 1,
+            privateExtendedProperty: [
+              `${GOOGLE_CALENDAR_IDEMPOTENCY_PROPERTY}=${idempotencyKey}`
+            ],
+            singleEvents: false
+          }, requestOptions);
+          const existingEvent = existing.data.items?.[0];
 
-            if (existingEvent?.id) {
-              return parseCreatedCalendarEvent(existingEvent, {
-                summary: paramsCreate.summary,
-                start: paramsCreate.start,
-                end: paramsCreate.end
-              });
-            }
+          if (existingEvent?.id) {
+            return parseCreatedCalendarEvent(existingEvent, {
+              summary: paramsCreate.summary,
+              start: paramsCreate.start,
+              end: paramsCreate.end
+            });
           }
 
           const response = await calendar.events.insert({
@@ -288,13 +303,11 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
               start: isAllDay ? { date: paramsCreate.start } : { dateTime: paramsCreate.start },
               end: isAllDay ? { date: paramsCreate.end } : { dateTime: paramsCreate.end },
               attendees: paramsCreate.attendees?.map((email) => ({ email })),
-              extendedProperties: paramsCreate.idempotencyKey
-                ? {
-                    private: {
-                      [GOOGLE_CALENDAR_IDEMPOTENCY_PROPERTY]: paramsCreate.idempotencyKey
-                    }
-                  }
-                : undefined
+              extendedProperties: {
+                private: {
+                  [GOOGLE_CALENDAR_IDEMPOTENCY_PROPERTY]: idempotencyKey
+                }
+              }
             }
           }, requestOptions);
 
@@ -318,10 +331,13 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
         },
         async () => {
           const calendar = getClient();
+          const requestOptions = {
+            signal: buildCalendarMutationSignal(paramsUpdate.signal)
+          };
           const existing = await calendar.events.get({
             calendarId: paramsUpdate.calendarId ?? "primary",
             eventId: paramsUpdate.eventId
-          });
+          }, requestOptions);
 
           const isAllDay = paramsUpdate.start ? paramsUpdate.start.length === 10 : !existing.data.start?.dateTime;
 
@@ -335,7 +351,7 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
               start: paramsUpdate.start ? (isAllDay ? { date: paramsUpdate.start } : { dateTime: paramsUpdate.start }) : undefined,
               end: paramsUpdate.end ? (isAllDay ? { date: paramsUpdate.end } : { dateTime: paramsUpdate.end }) : undefined
             }
-          });
+          }, requestOptions);
 
           return CreatedEventSchema.parse({
             id: response.data.id!,
@@ -398,6 +414,7 @@ export async function updateEvent(params: {
   end?: string;
   location?: string;
   calendarId?: string;
+  signal?: AbortSignal;
 }): Promise<CreatedEvent> {
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
 

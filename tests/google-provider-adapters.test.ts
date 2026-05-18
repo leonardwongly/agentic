@@ -19,7 +19,9 @@ const googleApiMocks = vi.hoisted(() => ({
   gmailDraftsSend: vi.fn(),
   gmailMessagesList: vi.fn(),
   calendarEventsList: vi.fn(),
-  calendarEventsInsert: vi.fn()
+  calendarEventsInsert: vi.fn(),
+  calendarEventsGet: vi.fn(),
+  calendarEventsPatch: vi.fn()
 }));
 
 vi.mock("googleapis", () => ({
@@ -45,7 +47,9 @@ vi.mock("googleapis", () => ({
     calendar: () => ({
       events: {
         list: googleApiMocks.calendarEventsList,
-        insert: googleApiMocks.calendarEventsInsert
+        insert: googleApiMocks.calendarEventsInsert,
+        get: googleApiMocks.calendarEventsGet,
+        patch: googleApiMocks.calendarEventsPatch
       }
     })
   }
@@ -259,6 +263,32 @@ describe("resolveGoogleWorkspaceAdapters", () => {
     );
   });
 
+  it("rejects Gmail mutations without an idempotency key before provider calls", async () => {
+    const adapter = createGmailAdapter({ refreshToken: "refresh-token" });
+
+    await expect(
+      adapter.createDraft({
+        to: "person@example.com",
+        subject: "Follow up",
+        body: "Confirming the next action."
+      })
+    ).rejects.toMatchObject({
+      provider: "gmail",
+      operation: "drafts.create",
+      code: "invalid_request",
+      retryable: false
+    });
+    await expect(adapter.sendDraft("draft-1")).rejects.toMatchObject({
+      provider: "gmail",
+      operation: "drafts.send",
+      code: "invalid_request",
+      retryable: false
+    });
+    expect(googleApiMocks.gmailDraftsList).not.toHaveBeenCalled();
+    expect(googleApiMocks.gmailDraftsCreate).not.toHaveBeenCalled();
+    expect(googleApiMocks.gmailDraftsSend).not.toHaveBeenCalled();
+  });
+
   it("reuses a Calendar event with the same idempotency key", async () => {
     googleApiMocks.calendarEventsList.mockResolvedValue({
       data: {
@@ -324,6 +354,71 @@ describe("resolveGoogleWorkspaceAdapters", () => {
       agenticIdempotencyKey: "calendar-key-2"
     });
     expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("rejects Calendar event creation without an idempotency key before provider calls", async () => {
+    const adapter = createCalendarAdapter({ refreshToken: "refresh-token" });
+
+    await expect(
+      adapter.createEvent({
+        summary: "Planning",
+        start: "2026-05-19T09:00:00.000Z",
+        end: "2026-05-19T09:30:00.000Z"
+      })
+    ).rejects.toMatchObject({
+      provider: "google_calendar",
+      operation: "events.create",
+      code: "invalid_request",
+      retryable: false
+    });
+    expect(googleApiMocks.calendarEventsList).not.toHaveBeenCalled();
+    expect(googleApiMocks.calendarEventsInsert).not.toHaveBeenCalled();
+  });
+
+  it("bounds Calendar event updates with timeout signals", async () => {
+    googleApiMocks.calendarEventsGet.mockResolvedValue({
+      data: {
+        id: "event-existing",
+        summary: "Planning",
+        start: { dateTime: "2026-05-19T09:00:00.000Z" },
+        end: { dateTime: "2026-05-19T09:30:00.000Z" }
+      }
+    });
+    googleApiMocks.calendarEventsPatch.mockResolvedValue({
+      data: {
+        id: "event-existing",
+        summary: "Planning updated",
+        start: { dateTime: "2026-05-19T09:00:00.000Z" },
+        end: { dateTime: "2026-05-19T09:45:00.000Z" },
+        htmlLink: "https://calendar.example.com/event-existing"
+      }
+    });
+    const adapter = createCalendarAdapter({ refreshToken: "refresh-token" });
+    const controller = new AbortController();
+
+    await adapter.updateEvent({
+      eventId: "event-existing",
+      summary: "Planning updated",
+      end: "2026-05-19T09:45:00.000Z",
+      signal: controller.signal
+    });
+
+    expect(googleApiMocks.calendarEventsGet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId: "event-existing"
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal)
+      })
+    );
+    expect(googleApiMocks.calendarEventsPatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId: "event-existing"
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal)
+      })
+    );
   });
 
   it("normalizes Google adapter timeouts into retryable connector failures", async () => {
