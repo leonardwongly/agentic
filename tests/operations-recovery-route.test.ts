@@ -16,7 +16,11 @@ import { processUserRequest } from "@agentic/orchestrator";
 import { enqueueApprovalFollowUpJob } from "@agentic/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { POST as recoveryRoute } from "../apps/web/app/api/operations/recovery/route";
-import { resetAuthSessionStateStoreForTesting } from "../apps/web/lib/auth-session-store";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import { buildAuthorizedJsonRequest, createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
 
 describe("operations recovery route", () => {
@@ -27,6 +31,7 @@ describe("operations recovery route", () => {
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
     process.env.AGENTIC_PROVIDER_SECRET_KEY = "test-provider-secret-key";
+    resetAuthSessionStateStoreForTesting();
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
       await mkdtemp(path.join(os.tmpdir(), "agentic-operations-recovery-route-")),
       "runtime-store.json"
@@ -39,8 +44,82 @@ describe("operations recovery route", () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_PROVIDER_SECRET_KEY = originalProviderSecretKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
+    resetAuthSessionStateStoreForTesting();
     Reflect.set(globalThis, "__agenticRepository", undefined);
     resetAuthSessionStateStoreForTesting();
+  });
+
+  it("rejects unauthenticated recovery requests before mutation", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const queued = await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "docs_render",
+        payload: {
+          type: "docs_render",
+          metadata: {}
+        },
+        availableAt: nowIso()
+      })
+    );
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await recoveryRoute(
+      new Request("http://localhost/api/operations/recovery", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "cancel_job",
+          jobId: queued.id,
+          confirm: true
+        })
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+    const unchanged = await repository.getJob(queued.id, SYSTEM_USER_ID);
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toContain("Unauthorized");
+    expect(unchanged?.status).toBe("queued");
+    expectNoStoreHeaders(response);
+  });
+
+  it("applies an operations-scoped abuse limit before recovery execution", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return { allowed: false, retryAfterMs: 30_000 };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await recoveryRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+        action: "release_expired_lease",
+        jobId: "job-rate-limited"
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(429);
+    expect(payload.error).toBe("Too many operations recovery requests. Try again later.");
+    expect(response.headers.get("retry-after")).toBe("30");
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain(`operations-recovery:user:${SYSTEM_USER_ID}:`);
+    expectNoStoreHeaders(response);
   });
 
   it("releases an expired worker lease back to the retry queue", async () => {
@@ -323,6 +402,15 @@ describe("operations recovery route", () => {
     expect(payload.recovery.credential.lastRefreshFailureAt).toBeNull();
     expect(raw).not.toContain("super-secret-refresh-token");
     expect(raw).not.toContain("ciphertext");
+
+    const saved = await repository.getProviderCredential(credential.id, SYSTEM_USER_ID);
+    expect(saved?.metadata.recoveryAudit).toEqual([
+      expect.objectContaining({
+        action: "revalidate_connector_credential",
+        actorUserId: SYSTEM_USER_ID,
+        reason: null
+      })
+    ]);
   });
 
   it("rejects malformed recovery actions before mutation", async () => {
