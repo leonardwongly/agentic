@@ -130,4 +130,26 @@ describe("DashboardFirstRunChecklist", () => {
     expect(markup).toContain("Worker and queue");
     expect(markup).toContain("Open operations");
   });
+
+  it("keeps rendering when readiness is missing the optional checks array", () => {
+    const milestones = buildFirstRunMilestones({
+      data: createDashboardData(),
+      notes: [],
+      templates: [],
+      readiness: {
+        ok: true,
+        status: "ready",
+        storageBackend: "file"
+      } as Parameters<typeof buildFirstRunMilestones>[0]["readiness"]
+    });
+
+    expect(milestones.find((milestone) => milestone.id === "storage-readiness")).toMatchObject({
+      state: "active",
+      title: "File-backed runtime"
+    });
+    expect(milestones.find((milestone) => milestone.id === "worker-readiness")).toMatchObject({
+      state: "active",
+      actionLabel: "Open operations"
+    });
+  });
 });

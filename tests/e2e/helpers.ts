@@ -31,7 +31,7 @@ export async function enablePublicSharingForE2E(page: Page) {
 
 export async function openRequestComposer(page: Page) {
   await page.getByRole("button", { name: "Request work" }).click();
-  const requestCard = page.locator(".request-card").first();
+  const requestCard = page.locator("#section-goals.request-card");
   const requestInput = requestCard.getByPlaceholder(REQUEST_PLACEHOLDER);
 
   await expect(requestCard).toBeVisible({ timeout: E2E_UI_TIMEOUT_MS });

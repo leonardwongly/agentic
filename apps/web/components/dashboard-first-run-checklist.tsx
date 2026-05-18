@@ -47,7 +47,7 @@ type BuildFirstRunMilestonesParams = {
 };
 
 function getReadinessCheck(readiness: ReadinessSnapshot | null, name: string): ReadinessCheckSnapshot | null {
-  return readiness?.checks.find((check) => check.name === name) ?? null;
+  return readiness?.checks?.find((check) => check.name === name) ?? null;
 }
 
 function describeReadinessState(check: ReadinessCheckSnapshot | null): FirstRunMilestoneState {
