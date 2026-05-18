@@ -156,7 +156,7 @@ Risk classes remain intentionally simple:
 | `R3` | External commitment such as sending or scheduling | Require approval |
 | `R4` | Irreversible or highly sensitive action | Block by default |
 
-Low-confidence tasks downgrade to draft behavior instead of acting autonomously. Connector readiness additionally constrains whether a provider can draft, require approval, or participate in higher-trust autonomous execution. Gmail and Calendar side effects require approval-grade readiness at execution time; missing or lower readiness skips before ledger reservation or provider mutation.
+Low-confidence tasks downgrade to draft behavior instead of acting autonomously. Connector readiness additionally constrains whether a provider can draft, require approval, or participate in higher-trust autonomous execution. Gmail and Calendar side effects require approval-grade readiness at execution time; missing or lower readiness skips before ledger reservation or provider mutation. Google provider mutations also fail closed at the adapter boundary unless execution supplies a stable idempotency key; adapter calls carry bounded abort signals so worker cancellation, timeouts, and retry-safe duplicate reconciliation share the same contract.
 
 ## Memory Model
 
