@@ -850,6 +850,7 @@ export function deriveRecommendationInsights(
   const minimumEvidence = Math.max(1, Math.trunc(options?.minimumEvidence ?? 3));
   const lowConfidenceThreshold = clamp(options?.lowConfidenceThreshold ?? 0.58, 0, 1);
   const automationThreshold = clamp(options?.automationThreshold ?? 0.78, 0, 1);
+  const controls = buildRecommendationControls(episodes);
   const grouped = new Map<
     string,
     {
@@ -870,6 +871,15 @@ export function deriveRecommendationInsights(
 
   for (const episode of episodes) {
     if (!episode.recommendation || !episode.outcomeLink) {
+      continue;
+    }
+
+    const control = controls.get(episode.recommendation.key);
+    if (control?.action === "suppress") {
+      continue;
+    }
+
+    if (control?.action === "expire" && episode.timestamp <= control.timestamp) {
       continue;
     }
 
@@ -1006,6 +1016,58 @@ export function deriveRecommendationInsights(
 
       return right.lastSeenAt.localeCompare(left.lastSeenAt);
     });
+}
+
+type RecommendationControlAction = "suppress" | "expire";
+
+type RecommendationControl = {
+  action: RecommendationControlAction;
+  timestamp: string;
+};
+
+function getRecommendationControlAction(episode: EpisodeRecord): RecommendationControlAction | null {
+  const metadata = episode.metadata;
+
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+
+  const control = metadata.recommendationControl;
+
+  if (!control || typeof control !== "object" || Array.isArray(control)) {
+    return null;
+  }
+
+  const action = (control as Record<string, unknown>).action;
+
+  return action === "suppress" || action === "expire" ? action : null;
+}
+
+function buildRecommendationControls(episodes: EpisodeRecord[]): Map<string, RecommendationControl> {
+  const controls = new Map<string, RecommendationControl>();
+
+  for (const episode of episodes) {
+    if (!episode.recommendation || episode.provenance.source !== "feedback") {
+      continue;
+    }
+
+    const action = getRecommendationControlAction(episode);
+    if (!action) {
+      continue;
+    }
+
+    const existing = controls.get(episode.recommendation.key);
+    if (existing && existing.timestamp.localeCompare(episode.timestamp) >= 0) {
+      continue;
+    }
+
+    controls.set(episode.recommendation.key, {
+      action,
+      timestamp: episode.timestamp
+    });
+  }
+
+  return controls;
 }
 
 export function buildRecommendationReplayReport(

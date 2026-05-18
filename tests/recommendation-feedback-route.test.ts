@@ -407,4 +407,75 @@ describe("recommendation feedback route", () => {
       })
     });
   });
+
+  it("records explicit suppress and expire controls for learned recommendations", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a reviewed outbound reply for a customer.");
+    Reflect.set(globalThis, "__agenticRepository", repository);
+
+    for (const decision of ["suppressed", "expired"] as const) {
+      const response = await recommendationFeedbackRoute(
+        buildAuthorizedJsonRequest(`http://localhost/api/goals/${bundle.goal.id}/recommendations/feedback`, {
+          decision,
+          recommendation: buildRecommendation(),
+          notes: `Operator marked recommendation as ${decision}.`
+        }),
+        {
+          params: Promise.resolve({ id: bundle.goal.id })
+        }
+      );
+
+      expect(response.status).toBe(200);
+    }
+
+    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: SYSTEM_USER_ID });
+    const suppressedEpisode = episodes.find((episode) => episode.metadata?.decision === "suppressed");
+    const expiredEpisode = episodes.find((episode) => episode.metadata?.decision === "expired");
+    const snapshot = getTelemetrySnapshot();
+    const suppressedMetric = snapshot.metrics.find(
+      (entry) =>
+        entry.name === "product.learning.recommendation.feedback.total" &&
+        entry.attributes.decision === "suppressed"
+    );
+    const expiredMetric = snapshot.metrics.find(
+      (entry) =>
+        entry.name === "product.learning.recommendation.feedback.total" &&
+        entry.attributes.decision === "expired"
+    );
+
+    expect(episodes).toHaveLength(2);
+    expect(suppressedEpisode?.outcome).toBe("failure");
+    expect(suppressedEpisode?.outcomeLink).toMatchObject({
+      userCorrection: true,
+      outcomeScore: -1
+    });
+    expect(suppressedEpisode?.metadata?.recommendationControl).toMatchObject({
+      action: "suppress",
+      recommendationKey: buildRecommendation().key,
+      reasonProvided: true
+    });
+    expect(expiredEpisode?.outcome).toBe("failure");
+    expect(expiredEpisode?.outcomeLink).toMatchObject({
+      userCorrection: true,
+      outcomeScore: -1
+    });
+    expect(expiredEpisode?.metadata?.recommendationControl).toMatchObject({
+      action: "expire",
+      recommendationKey: buildRecommendation().key,
+      reasonProvided: true
+    });
+    expect(suppressedMetric).toMatchObject({
+      attributes: expect.objectContaining({
+        operatorOutcome: "suppressed"
+      })
+    });
+    expect(expiredMetric).toMatchObject({
+      attributes: expect.objectContaining({
+        operatorOutcome: "expired"
+      })
+    });
+  });
 });

@@ -33,8 +33,8 @@ The learning memory flywheel turns completed goals, approval decisions, executio
 ## Rollback
 
 - Disable recommendation consumers or omit `recommendationKey` graph queries to stop using the learning flywheel without deleting stored episodes.
-- To suppress stale or unsafe guidance, record rejected or edited feedback; replay gates will downgrade the recommendation to review-required or draft-only.
-- To remove historical influence, expire affected episode files or move them out of the self-improvement store and rerun the targeted recommendation tests.
+- To suppress stale or unsafe guidance, use the recommendation feedback suppress action. It writes an append-only feedback control episode and recommendation derivation excludes that recommendation key from future reuse.
+- To remove historical influence without deleting learning files, use the recommendation feedback expire action. It writes an append-only feedback control episode and recommendation derivation ignores older evidence for that key until fresh outcomes rebuild confidence.
 
 ## Validation
 

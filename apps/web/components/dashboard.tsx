@@ -72,7 +72,7 @@ import {
 import {
   buildGoalRecommendationQuery,
   buildRecommendationFeedbackPayload,
-  buildRecommendationRefinementSource
+  buildRecommendationRefinementSource, type RecommendationFeedbackDecision
 } from "../lib/workflow-recommendations";
 import {
   buildClientIdempotencyKey,
@@ -410,7 +410,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   const deepLink = useDeepLink();
   const pinnedItems = usePinnedItems();
   const theme = useTheme();
-  
+
   // 10x Dashboard Hooks - Phase 2
   const undo = useUndo();
   const timelineFilters = useFilteredTimeline(data.actionLogs);
@@ -451,7 +451,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   );
   const approvalGroups = useApprovalGroups(filteredPendingApprovals, approvalGroupBy);
   const selectedExecutionModeFilter = getExecutionModeFilterOption(executionModeFilter);
-  
+
   // NL Executor for dashboard commands
   const executeNlIntent = useCallback(
     async (intent: { type: "query" | "command" | "summary"; [key: string]: unknown }): Promise<NLIntentApiResponse> => {
@@ -549,7 +549,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       return executeNlIntent({ type: "summary", timeRange });
     }
   });
-  
+
   // Batch selection for approvals
   const approvalBatch = useBatchSelection(filteredPendingApprovals, "approval");
   const { approvalBatchState, respondApprovalBatch } = useApprovalBatchActions({
@@ -922,7 +922,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       cancelled = true;
     };
   }, [filteredGoalBundles]);
- 
+
   useEffect(() => {
     setCommandCenterRole(getPreferredCommandCenterRole(selectedOperatorProduct));
   }, [selectedOperatorProduct]);
@@ -1020,7 +1020,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   }, []);
 
   const submitRecommendationFeedback = useCallback(
-    async (goalId: string, recommendation: WorkflowRecommendation, decision: "accepted" | "edited" | "rejected" | "ignored", goalTitle: string) => {
+    async (goalId: string, recommendation: WorkflowRecommendation, decision: RecommendationFeedbackDecision, goalTitle: string) => {
       setRecommendationPendingByGoal((prev) => ({ ...prev, [goalId]: true }));
 
       try {
@@ -1574,7 +1574,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
     await submitGoalRequest(nextRequest, selectedAgentId);
     setRequest("");
     setSelectedAgentId(undefined); // Reset agent selection
-    
+
     // Track recent action
     recentActions.addAction({
       type: "create",
@@ -1772,7 +1772,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       "Saved the memory record."
     );
     setMemoryContent("");
-    
+
     recentActions.addAction({
       type: "save",
       label: `Memory: ${memoryCategory}`,
@@ -2879,10 +2879,10 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               />
             </div>
           </div>
-          
+
           {/* Keyboard Navigation Hints */}
           <ApprovalKeyboardHints isActive={true} />
-          
+
           {/* Batch Actions Bar */}
           {approvalBatch.hasSelection && (
             <BatchActionsBar
@@ -2913,7 +2913,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           {approvalBatchState.message ? (
             <p className={`status-chip ${approvalBatchState.kind}`}>{approvalBatchState.message}</p>
           ) : null}
-          
+
           {/* Grouped or Flat View */}
           {approvalGroupBy !== "none" ? (
             <div className="approval-groups-container">

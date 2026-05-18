@@ -1143,6 +1143,120 @@ describe("workflow recommendations", () => {
     ]);
   });
 
+  it("honors explicit recommendation suppression controls", () => {
+    const recommendationKey = "execution_path:communications:send_message:R3:send";
+    const suppression = buildWorkflowEpisode("wf-suppress-control", {
+      timestamp: "2026-04-20T10:00:00.000Z",
+      outcome: "failure",
+      outcomeLink: {
+        goalId: "goal-wf-suppress-control",
+        workflowId: "workflow-wf-suppress-control",
+        taskId: "task-wf-suppress-control",
+        goalStatus: "running",
+        taskState: "blocked",
+        approvalDecision: null,
+        executionKind: "not_run",
+        outcomeScore: -1,
+        userCorrection: true,
+        notes: "Operator suppressed stale learned guidance."
+      },
+      provenance: {
+        ownerUserId: "user-1",
+        workspaceId: "workspace-1",
+        source: "feedback",
+        memoryIds: [],
+        actionLogIds: ["action-suppress"],
+        evidenceRecordIds: [],
+        recommendationKeys: [recommendationKey]
+      },
+      metadata: {
+        recommendationControl: {
+          action: "suppress",
+          recommendationKey,
+          appliedAt: "2026-04-20T10:00:00.000Z",
+          reasonProvided: true
+        }
+      }
+    });
+
+    expect(
+      deriveWorkflowRecommendations(
+        [
+          buildWorkflowEpisode("wf-suppress-1"),
+          buildWorkflowEpisode("wf-suppress-2", { timestamp: "2026-04-20T09:05:00.000Z" }),
+          suppression
+        ],
+        {
+          includeDraftOnly: true,
+          minimumEvidence: 1,
+          minimumScore: 0
+        }
+      )
+    ).toEqual([]);
+  });
+
+  it("expires old recommendation evidence while allowing fresh outcomes to rebuild guidance", () => {
+    const recommendationKey = "execution_path:communications:send_message:R3:send";
+    const expiry = buildWorkflowEpisode("wf-expire-control", {
+      timestamp: "2026-04-20T10:00:00.000Z",
+      outcome: "failure",
+      outcomeLink: {
+        goalId: "goal-wf-expire-control",
+        workflowId: "workflow-wf-expire-control",
+        taskId: "task-wf-expire-control",
+        goalStatus: "running",
+        taskState: "blocked",
+        approvalDecision: null,
+        executionKind: "not_run",
+        outcomeScore: -1,
+        userCorrection: true,
+        notes: "Operator expired stale learned guidance."
+      },
+      provenance: {
+        ownerUserId: "user-1",
+        workspaceId: "workspace-1",
+        source: "feedback",
+        memoryIds: [],
+        actionLogIds: ["action-expire"],
+        evidenceRecordIds: [],
+        recommendationKeys: [recommendationKey]
+      },
+      metadata: {
+        recommendationControl: {
+          action: "expire",
+          recommendationKey,
+          appliedAt: "2026-04-20T10:00:00.000Z",
+          reasonProvided: true
+        }
+      }
+    });
+    const recommendations = deriveWorkflowRecommendations(
+      [
+        buildWorkflowEpisode("wf-expire-old-1", { timestamp: "2026-04-20T09:00:00.000Z" }),
+        buildWorkflowEpisode("wf-expire-old-2", { timestamp: "2026-04-20T09:05:00.000Z" }),
+        expiry,
+        buildWorkflowEpisode("wf-expire-new-1", { timestamp: "2026-04-20T10:05:00.000Z" }),
+        buildWorkflowEpisode("wf-expire-new-2", { timestamp: "2026-04-20T10:10:00.000Z" })
+      ],
+      {
+        minimumEvidence: 2,
+        minimumScore: 0
+      }
+    );
+
+    expect(recommendations).toEqual([
+      expect.objectContaining({
+        evidence: expect.objectContaining({
+          count: 2
+        }),
+        provenance: expect.objectContaining({
+          episodeIds: expect.arrayContaining(["wf-expire-new-1", "wf-expire-new-2"])
+        })
+      })
+    ]);
+    expect(recommendations[0]?.provenance.episodeIds).not.toEqual(expect.arrayContaining(["wf-expire-old-1", "wf-expire-old-2"]));
+  });
+
   it("excludes draft-only recommendations by default but includes them when requested", () => {
     const draftOnlyEpisode = buildWorkflowEpisode("wf-draft-1", {
       recommendation: {

@@ -10,7 +10,11 @@ import type { PolicyLearningInfluenceComparison, PolicyShadowReplayReadiness } f
 import type { DashboardData } from "@agentic/repository";
 import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import type { GoalShareDisclosureReview } from "../lib/share-disclosure";
-import { formatRecommendationOperatorActionLabel, isGoalRecommendationEligible } from "../lib/workflow-recommendations";
+import {
+  formatRecommendationOperatorActionLabel,
+  isGoalRecommendationEligible,
+  type RecommendationFeedbackDecision
+} from "../lib/workflow-recommendations";
 import {
   AgentOverride,
   ContextualSuggestion,
@@ -85,7 +89,7 @@ type DashboardGoalsCardProps = {
   submitRecommendationFeedback: (
     goalId: string,
     recommendation: WorkflowRecommendation,
-    decision: "accepted" | "edited" | "rejected" | "ignored",
+    decision: RecommendationFeedbackDecision,
     goalTitle: string
   ) => Promise<void>;
 };
@@ -533,6 +537,26 @@ export function DashboardGoalsCard({
                               disabled={isPending || recommendationPending}
                             >
                               Reject
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() =>
+                                void submitRecommendationFeedback(bundle.goal.id, recommendation, "suppressed", bundle.goal.title)
+                              }
+                              disabled={isPending || recommendationPending}
+                            >
+                              Suppress
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() =>
+                                void submitRecommendationFeedback(bundle.goal.id, recommendation, "expired", bundle.goal.title)
+                              }
+                              disabled={isPending || recommendationPending}
+                            >
+                              Expire
                             </button>
                           </div>
                         </div>
