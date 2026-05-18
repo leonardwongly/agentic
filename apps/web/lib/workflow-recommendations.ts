@@ -1,7 +1,7 @@
 import type { GoalBundle } from "@agentic/contracts";
 import type { WorkflowRecommendation, WorkflowRecommendationOperatorAction } from "@agentic/self-improvement-memory";
 
-export type RecommendationFeedbackDecision = "accepted" | "edited" | "rejected" | "ignored";
+export type RecommendationFeedbackDecision = "accepted" | "edited" | "rejected" | "ignored" | "suppressed" | "expired";
 
 export type GoalRecommendationContext = {
   agent: string;

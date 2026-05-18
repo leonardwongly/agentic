@@ -19,7 +19,7 @@ import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from 
 import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../../../lib/server";
 
 const GoalIdSchema = z.string().trim().min(1).max(200);
-const RecommendationDecisionSchema = z.enum(["accepted", "edited", "rejected", "ignored"]);
+const RecommendationDecisionSchema = z.enum(["accepted", "edited", "rejected", "ignored", "suppressed", "expired"]);
 const RecommendationBodySchema = z
   .object({
     key: z.string().trim().min(1).max(160),
@@ -103,6 +103,10 @@ function describeDecision(decision: z.infer<typeof RecommendationDecisionSchema>
       return "rejected";
     case "ignored":
       return "ignored";
+    case "suppressed":
+      return "suppressed";
+    case "expired":
+      return "expired";
   }
 }
 
@@ -114,6 +118,8 @@ function outcomeFromDecision(decision: z.infer<typeof RecommendationDecisionSche
       return "partial";
     case "edited":
     case "rejected":
+    case "suppressed":
+    case "expired":
       return "failure";
   }
 }
@@ -127,6 +133,8 @@ function outcomeScoreFromDecision(decision: z.infer<typeof RecommendationDecisio
     case "edited":
       return -0.4;
     case "rejected":
+    case "suppressed":
+    case "expired":
       return -1;
   }
 }
@@ -140,7 +148,51 @@ function feedbackRatingFromDecision(decision: z.infer<typeof RecommendationDecis
     case "edited":
       return 4;
     case "rejected":
+    case "suppressed":
+    case "expired":
       return 2;
+  }
+}
+
+function recommendationControlFromDecision(decision: z.infer<typeof RecommendationDecisionSchema>, recommendationKey: string, appliedAt: string, notes: string | undefined) {
+  if (decision !== "suppressed" && decision !== "expired") {
+    return null;
+  }
+
+  return {
+    action: decision === "suppressed" ? "suppress" : "expire",
+    recommendationKey,
+    appliedAt,
+    reasonProvided: Boolean(notes)
+  };
+}
+
+function lessonFromDecision(decision: z.infer<typeof RecommendationDecisionSchema>) {
+  switch (decision) {
+    case "accepted":
+      return "This recommendation remains eligible for reuse when replay gates continue to pass.";
+    case "suppressed":
+      return "This recommendation is suppressed from future reuse until the learning evidence is reviewed.";
+    case "expired":
+      return "Prior evidence for this recommendation should not influence reuse until fresh outcomes are captured.";
+    default:
+      return "This recommendation requires tighter review until operator feedback and replay evidence improve.";
+  }
+}
+
+function rootCauseFromDecision(decision: z.infer<typeof RecommendationDecisionSchema>) {
+  switch (decision) {
+    case "accepted":
+    case "ignored":
+      return null;
+    case "edited":
+      return "Operator corrected the learned recommendation.";
+    case "rejected":
+      return "Operator rejected the learned recommendation.";
+    case "suppressed":
+      return "Operator suppressed the learned recommendation.";
+    case "expired":
+      return "Operator expired the learned recommendation evidence.";
   }
 }
 
@@ -301,6 +353,12 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const selfImprovementRepository = await getSeededSelfImprovementRepository();
+    const recommendationControl = recommendationControlFromDecision(
+      decision,
+      recommendation.key,
+      actionLog.createdAt,
+      notes
+    );
     const feedbackEpisodeBase = EpisodeRecordSchema.parse({
       id: `feedback-${actionLog.id}`,
       timestamp: actionLog.createdAt,
@@ -308,15 +366,9 @@ export async function POST(request: Request, context: RouteContext) {
       task: `Operator feedback for ${recommendation.workflow.action}`,
       outcome: outcomeFromDecision(decision),
       situation: `Recommendation ${recommendation.key} was presented for goal "${bundle.goal.title}".`,
-      rootCause:
-        decision === "accepted" || decision === "ignored"
-          ? null
-          : `Operator ${decision === "edited" ? "corrected" : "rejected"} the learned recommendation.`,
+      rootCause: rootCauseFromDecision(decision),
       solution: `Recorded operator feedback as a bounded learning episode for future replay gates.`,
-      lesson:
-        decision === "accepted"
-          ? "This recommendation remains eligible for reuse when replay gates continue to pass."
-          : "This recommendation requires tighter review until operator feedback and replay evidence improve.",
+      lesson: lessonFromDecision(decision),
       recommendation: {
         key: recommendation.key,
         kind: recommendation.workflow.kind,
@@ -340,7 +392,7 @@ export async function POST(request: Request, context: RouteContext) {
         approvalDecision: null,
         executionKind: "not_run",
         outcomeScore: outcomeScoreFromDecision(decision),
-        userCorrection: decision === "edited" || decision === "rejected",
+        userCorrection: decision === "edited" || decision === "rejected" || decision === "suppressed" || decision === "expired",
         notes: notes ?? null
       },
       relatedPatternId: null,
@@ -374,7 +426,8 @@ export async function POST(request: Request, context: RouteContext) {
       metadata: {
         decision,
         source: "recommendation_feedback_route",
-        feedbackActionLogId: actionLog.id
+        feedbackActionLogId: actionLog.id,
+        ...(recommendationControl ? { recommendationControl } : {})
       }
     });
     const feedbackEpisode = applyLearningPrivacyToFeedbackEpisode(
