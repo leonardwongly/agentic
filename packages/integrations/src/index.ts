@@ -1,5 +1,5 @@
 import { CapabilitySchema, IntegrationAccountSchema, nowIso, type Capability, type IntegrationAccount } from "@agentic/contracts";
-import { defaultLocalNotesBasePath, ensureLocalNotesDirectory, seedLocalNotes } from "./local-notes";
+import { getLocalNotesPublicMetadata, isLocalNotesRuntimeEnabled, ensureLocalNotesDirectory, seedLocalNotes } from "./local-notes";
 import { isSlackReady } from "./slack";
 import { isTelegramReady } from "./telegram";
 
@@ -13,7 +13,7 @@ export type IntegrationTemplate = {
   metadata?: Record<string, unknown>;
 };
 
-export const integrationTemplates: IntegrationTemplate[] = [
+const baseIntegrationTemplates: IntegrationTemplate[] = [
   {
     key: "gmail",
     name: "Gmail Adapter",
@@ -53,10 +53,7 @@ export const integrationTemplates: IntegrationTemplate[] = [
     status: "ready",
     scopes: ["notes.read", "notes.write"],
     capabilities: ["read", "search", "create", "update"],
-    metadata: {
-      provider: "local-filesystem",
-      basePath: defaultLocalNotesBasePath()
-    }
+    metadata: getLocalNotesPublicMetadata()
   },
   {
     key: "slack",
@@ -76,8 +73,27 @@ export const integrationTemplates: IntegrationTemplate[] = [
   }
 ];
 
+export function getIntegrationTemplates(): IntegrationTemplate[] {
+  return baseIntegrationTemplates.map((template) => {
+    if (template.key !== "local-notes") {
+      return template;
+    }
+
+    const enabled = isLocalNotesRuntimeEnabled();
+
+    return {
+      ...template,
+      status: enabled ? "ready" : "disabled",
+      capabilities: enabled ? template.capabilities : [],
+      metadata: getLocalNotesPublicMetadata()
+    };
+  });
+}
+
+export const integrationTemplates: IntegrationTemplate[] = getIntegrationTemplates();
+
 export function buildDefaultIntegrationAccounts(userId: string): IntegrationAccount[] {
-  return integrationTemplates.map((template) =>
+  return getIntegrationTemplates().map((template) =>
     IntegrationAccountSchema.parse({
       id: template.key,
       userId,
@@ -94,7 +110,11 @@ export function buildDefaultIntegrationAccounts(userId: string): IntegrationAcco
 }
 
 export async function prepareDefaultIntegrations(): Promise<void> {
-  const basePath = await ensureLocalNotesDirectory(defaultLocalNotesBasePath());
+  if (!isLocalNotesRuntimeEnabled()) {
+    return;
+  }
+
+  const basePath = await ensureLocalNotesDirectory();
   await seedLocalNotes(basePath);
 }
 

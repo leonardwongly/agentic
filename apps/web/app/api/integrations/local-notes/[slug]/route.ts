@@ -4,6 +4,7 @@ import { getSeededRepository } from "../../../../../lib/server";
 import { requireApiSession } from "../../../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../../lib/api-errors";
+import { normalizeLocalNotesRouteError } from "../local-notes-route-errors";
 
 const NoteSlugSchema = z.string().trim().min(1).max(120).regex(/^[a-z0-9-]+$/);
 
@@ -29,7 +30,7 @@ export async function GET(request: Request, context: RouteContext) {
       note: await readLocalNote(NoteSlugSchema.parse(slug))
     });
   } catch (error) {
-    return handleApiError(error, "Failed to load the local note.");
+    return handleApiError(normalizeLocalNotesRouteError(error), "Failed to load the local note.");
   }
 }
 
@@ -52,6 +53,6 @@ export async function PUT(request: Request, context: RouteContext) {
       dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
-    return handleApiError(error, "Failed to update the local note.");
+    return handleApiError(normalizeLocalNotesRouteError(error), "Failed to update the local note.");
   }
 }
