@@ -668,6 +668,18 @@ select {
   flex-wrap: wrap;
 }
 
+.connector-recovery-steps {
+  margin: 0.85rem 0 0;
+  padding-left: 1.25rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.connector-recovery-steps li + li {
+  margin-top: 0.25rem;
+}
+
 .card.advanced-operations-expanded {
   display: block;
 }
@@ -5726,7 +5738,7 @@ select {
   flex: 1;
   position: relative;
   overflow: auto;
-  background: 
+  background:
     linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 20px 20px,
     linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 20px 20px;
 }
