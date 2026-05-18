@@ -323,6 +323,18 @@ Capture:
 - rollout-gate summary
 - any residual risk or operator follow-up
 
+Before closing production-readiness work, package the evidence with the
+release-closeout validator:
+
+```bash
+npm run release:closeout:evidence
+```
+
+The closeout package must link PRs, local CI, live validation, rollback,
+disablement, secret rotation, and residual risks without copying secret values.
+If a live gate cannot run, keep it marked blocked with the linked blocker issue
+instead of treating local validation as live proof.
+
 ## Observability Rollout Artifacts
 
 The rollout path is backed by checked-in observability config:
