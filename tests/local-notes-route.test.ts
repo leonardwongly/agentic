@@ -15,6 +15,9 @@ function buildAuthorizedHeaders() {
 
 describe("local notes routes", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
+  const originalLocalNotesEnabled = process.env.AGENTIC_LOCAL_NOTES_ENABLED;
+  const originalLocalNotesAllowedRoot = process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT;
+  const originalNodeEnv = process.env.NODE_ENV;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
   const originalNotesPath = process.env.AGENTIC_NOTES_PATH;
 
@@ -24,13 +27,19 @@ describe("local notes routes", () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(sandboxRoot, "runtime-store.json");
     process.env.AGENTIC_NOTES_PATH = path.join(sandboxRoot, "notes");
+    process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = sandboxRoot;
+    process.env.AGENTIC_LOCAL_NOTES_ENABLED = "true";
+    process.env.NODE_ENV = originalNodeEnv;
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
+    process.env.AGENTIC_LOCAL_NOTES_ENABLED = originalLocalNotesEnabled;
+    process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = originalLocalNotesAllowedRoot;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     process.env.AGENTIC_NOTES_PATH = originalNotesPath;
+    process.env.NODE_ENV = originalNodeEnv;
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
@@ -109,6 +118,7 @@ describe("local notes routes", () => {
     const createdPayload = (await createdResponse.json()) as { note: { slug: string } };
 
     expect(createdResponse.status).toBe(200);
+    expect(createdPayload.note).not.toHaveProperty("path");
 
     const updateResponse = await localNoteRoutePut(
       new Request(`http://localhost/api/integrations/local-notes/${createdPayload.note.slug}`, {
@@ -142,6 +152,49 @@ describe("local notes routes", () => {
 
     expect(response.status).toBe(400);
     expect(payload.error).toContain("Invalid string");
+    expectNoStoreHeaders(response);
+  });
+
+  it("fails closed without leaking local paths when production local notes are not explicitly enabled", async () => {
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTIC_LOCAL_NOTES_ENABLED;
+
+    const response = await localNotesRouteGet(
+      new Request("http://localhost/api/integrations/local-notes?q=travel", {
+        method: "GET",
+        headers: buildAuthorizedHeaders()
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(403);
+    expect(payload.error).toContain("Local notes are disabled in production");
+    expect(payload.error).not.toContain(process.env.AGENTIC_NOTES_PATH!);
+    expectNoStoreHeaders(response);
+  });
+
+  it("fails closed when production local notes are outside the allowed root", async () => {
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "agentic-local-notes-outside-"));
+
+    process.env.NODE_ENV = "production";
+    process.env.AGENTIC_LOCAL_NOTES_ENABLED = "true";
+    process.env.AGENTIC_NOTES_PATH = path.join(outsideRoot, "notes");
+
+    const response = await localNotesRoutePost(
+      new Request("http://localhost/api/integrations/local-notes", {
+        method: "POST",
+        headers: buildAuthorizedHeaders(),
+        body: JSON.stringify({
+          title: "Outside root",
+          content: "This should not be written."
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(403);
+    expect(payload.error).toContain("Local notes are disabled in production");
+    expect(payload.error).not.toContain(outsideRoot);
     expectNoStoreHeaders(response);
   });
 });

@@ -32,6 +32,18 @@ function buildGoogleCredential(overrides?: Partial<ProviderCredential>): Provide
 }
 
 describe("describeIntegrationReadiness", () => {
+  const originalLocalNotesEnabled = process.env.AGENTIC_LOCAL_NOTES_ENABLED;
+  const originalLocalNotesAllowedRoot = process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT;
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalNotesPath = process.env.AGENTIC_NOTES_PATH;
+
+  afterEach(() => {
+    process.env.AGENTIC_LOCAL_NOTES_ENABLED = originalLocalNotesEnabled;
+    process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = originalLocalNotesAllowedRoot;
+    process.env.AGENTIC_NOTES_PATH = originalNotesPath;
+    process.env.NODE_ENV = originalNodeEnv;
+  });
+
   it("compares readiness tiers monotonically for execution gates", () => {
     expect(integrationReadinessMeetsTier("approval-grade", "draft-grade")).toBe(true);
     expect(integrationReadinessMeetsTier("approval-grade", "approval-grade")).toBe(true);
@@ -41,9 +53,19 @@ describe("describeIntegrationReadiness", () => {
   });
 
   it("marks live notes as autonomous-grade", () => {
+    process.env.NODE_ENV = originalNodeEnv;
+
     const notes = buildDefaultIntegrationAccounts("user-1").find((integration) => integration.system === "notes");
 
     expect(notes).toBeDefined();
+    expect(notes?.metadata).toEqual(
+      expect.objectContaining({
+        provider: "local-filesystem",
+        storage: "local-markdown",
+        enabled: true
+      })
+    );
+    expect(notes?.metadata).not.toHaveProperty("basePath");
     expect(describeIntegrationReadiness(notes!)).toEqual(
       expect.objectContaining({
         tier: "autonomous-grade",
@@ -51,6 +73,34 @@ describe("describeIntegrationReadiness", () => {
       })
     );
     expect(integrationSupportsExecutionMode(notes!, "autonomous")).toBe(true);
+  });
+
+  it("disables local notes in production until explicitly enabled and scoped", () => {
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTIC_LOCAL_NOTES_ENABLED;
+    process.env.AGENTIC_NOTES_PATH = "/tmp/agentic-notes";
+    process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = "/tmp";
+
+    const notes = buildDefaultIntegrationAccounts("user-1").find((integration) => integration.system === "notes");
+
+    expect(notes).toEqual(
+      expect.objectContaining({
+        status: "disabled",
+        capabilities: [],
+        metadata: expect.objectContaining({
+          enabled: false,
+          productionGate: true,
+          explicitlyEnabled: false,
+          scoped: true
+        })
+      })
+    );
+    expect(describeIntegrationReadiness(notes!)).toEqual(
+      expect.objectContaining({
+        tier: "experimental",
+        supportedModes: []
+      })
+    );
   });
 
   it("keeps manual email at draft-grade", () => {

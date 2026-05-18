@@ -10,6 +10,43 @@ const LocalNoteMutationSchema = z.object({
 });
 
 const LocalNoteSlugSchema = z.string().trim().min(1).max(120).regex(/^[a-z0-9-]+$/);
+const LOCAL_NOTES_ENABLE_VALUES = new Set(["1", "true", "yes", "on"]);
+
+export class LocalNotesConfigurationError extends Error {
+  constructor(message = "Local notes are disabled for this runtime.") {
+    super(message);
+    this.name = "LocalNotesConfigurationError";
+  }
+}
+
+export class LocalNoteNotFoundError extends Error {
+  constructor() {
+    super("Local note was not found.");
+    this.name = "LocalNoteNotFoundError";
+  }
+}
+
+export type LocalNotesRuntimeConfig = {
+  enabled: boolean;
+  production: boolean;
+  explicitlyEnabled: boolean;
+  notesPathConfigured: boolean;
+  allowedRootConfigured: boolean;
+  scoped: boolean;
+};
+
+function isEnabledFlag(value: string | undefined): boolean {
+  return LOCAL_NOTES_ENABLE_VALUES.has(value?.trim().toLowerCase() ?? "");
+}
+
+function isPathWithin(candidatePath: string, allowedRoot: string): boolean {
+  const relative = path.relative(path.resolve(allowedRoot), path.resolve(candidatePath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
 
 export function defaultLocalNotesBasePath(): string {
   const configured = process.env.AGENTIC_NOTES_PATH?.trim();
@@ -19,6 +56,56 @@ export function defaultLocalNotesBasePath(): string {
   }
 
   return path.join(/* turbopackIgnore: true */ process.cwd(), ".agentic", "notes");
+}
+
+export function getLocalNotesRuntimeConfig(basePath = defaultLocalNotesBasePath()): LocalNotesRuntimeConfig {
+  const production = process.env.NODE_ENV === "production";
+  const explicitlyEnabled = isEnabledFlag(process.env.AGENTIC_LOCAL_NOTES_ENABLED);
+  const notesPathConfigured = Boolean(process.env.AGENTIC_NOTES_PATH?.trim());
+  const allowedRoot = process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT?.trim();
+  const allowedRootConfigured = Boolean(allowedRoot);
+  const scoped = !production || (allowedRootConfigured && isPathWithin(basePath, allowedRoot!));
+
+  return {
+    enabled: production ? explicitlyEnabled && notesPathConfigured && scoped : true,
+    production,
+    explicitlyEnabled,
+    notesPathConfigured,
+    allowedRootConfigured,
+    scoped
+  };
+}
+
+export function getLocalNotesPublicMetadata(basePath = defaultLocalNotesBasePath()): Record<string, unknown> {
+  const config = getLocalNotesRuntimeConfig(basePath);
+
+  return {
+    provider: "local-filesystem",
+    storage: "local-markdown",
+    enabled: config.enabled,
+    productionGate: config.production,
+    explicitlyEnabled: config.explicitlyEnabled,
+    notesPathConfigured: config.notesPathConfigured,
+    allowedRootConfigured: config.allowedRootConfigured,
+    scoped: config.scoped
+  };
+}
+
+export function isLocalNotesRuntimeEnabled(basePath = defaultLocalNotesBasePath()): boolean {
+  return getLocalNotesRuntimeConfig(basePath).enabled;
+}
+
+export function assertLocalNotesRuntimeEnabled(basePath = defaultLocalNotesBasePath()): string {
+  const resolved = path.resolve(basePath);
+  const config = getLocalNotesRuntimeConfig(resolved);
+
+  if (!config.enabled) {
+    throw new LocalNotesConfigurationError(
+      "Local notes are disabled in production until AGENTIC_LOCAL_NOTES_ENABLED=true, AGENTIC_NOTES_PATH, and AGENTIC_LOCAL_NOTES_ALLOWED_ROOT are configured with the notes path under the allowed root."
+    );
+  }
+
+  return resolved;
 }
 
 function toSlug(value: string): string {
@@ -42,13 +129,25 @@ function safeNotePath(basePath: string, slug: string): string {
 }
 
 export async function ensureLocalNotesDirectory(basePath = defaultLocalNotesBasePath()): Promise<string> {
-  const resolved = path.resolve(basePath);
+  const resolved = assertLocalNotesRuntimeEnabled(basePath);
   await mkdir(resolved, { recursive: true });
   return resolved;
 }
 
 async function parseLocalNote(notePath: string): Promise<LocalNoteDocument> {
-  const [content, fileInfo] = await Promise.all([readFile(notePath, "utf8"), stat(notePath)]);
+  let content: string;
+  let fileInfo: Awaited<ReturnType<typeof stat>>;
+
+  try {
+    [content, fileInfo] = await Promise.all([readFile(notePath, "utf8"), stat(notePath)]);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      throw new LocalNoteNotFoundError();
+    }
+
+    throw error;
+  }
+
   const slug = path.basename(notePath, ".md");
   const titleLine = content.split("\n").find((line) => line.trim().startsWith("# "));
   const title = titleLine ? titleLine.replace(/^#\s+/, "").trim() : slug.replace(/-/g, " ");
@@ -58,7 +157,6 @@ async function parseLocalNote(notePath: string): Promise<LocalNoteDocument> {
     slug,
     title,
     content,
-    path: notePath,
     createdAt: fileInfo.birthtime.toISOString(),
     updatedAt: fileInfo.mtime.toISOString()
   });
@@ -98,8 +196,8 @@ export async function searchLocalNotes(query: string, basePath = defaultLocalNot
 }
 
 export async function readLocalNote(slug: string, basePath = defaultLocalNotesBasePath()): Promise<LocalNoteDocument> {
-  await ensureLocalNotesDirectory(basePath);
-  return parseLocalNote(safeNotePath(basePath, slug));
+  const resolvedBase = await ensureLocalNotesDirectory(basePath);
+  return parseLocalNote(safeNotePath(resolvedBase, slug));
 }
 
 export async function createLocalNote(
@@ -120,15 +218,16 @@ export async function updateLocalNote(
   params: { slug: string; content: string; title?: string },
   basePath = defaultLocalNotesBasePath()
 ): Promise<LocalNoteDocument> {
-  const existing = await readLocalNote(LocalNoteSlugSchema.parse(params.slug), basePath);
+  const resolvedBase = await ensureLocalNotesDirectory(basePath);
+  const existing = await parseLocalNote(safeNotePath(resolvedBase, LocalNoteSlugSchema.parse(params.slug)));
   const normalized = LocalNoteMutationSchema.parse({
     title: params.title ?? existing.title,
     content: params.content
   });
   const nextContent = `# ${normalized.title}\n\n${normalized.content}\n`;
 
-  await writeNoteAtomically(existing.path, nextContent);
-  return readLocalNote(existing.slug, basePath);
+  await writeNoteAtomically(safeNotePath(resolvedBase, existing.slug), nextContent);
+  return readLocalNote(existing.slug, resolvedBase);
 }
 
 export async function seedLocalNotes(basePath = defaultLocalNotesBasePath()): Promise<void> {

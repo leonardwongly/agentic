@@ -4,6 +4,7 @@ import { getSeededRepository } from "../../../../lib/server";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
+import { normalizeLocalNotesRouteError } from "./local-notes-route-errors";
 
 const CreateLocalNoteSchema = z
   .object({
@@ -27,7 +28,7 @@ export async function GET(request: Request) {
       notes: await searchLocalNotes(query)
     });
   } catch (error) {
-    return handleApiError(error, "Failed to list local notes.");
+    return handleApiError(normalizeLocalNotesRouteError(error), "Failed to list local notes.");
   }
 }
 
@@ -36,7 +37,8 @@ export async function POST(request: Request) {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
     const body = await parseJsonBody(request, CreateLocalNoteSchema);
-    const [note, repository] = await Promise.all([createLocalNote(body), getSeededRepository()]);
+    const note = await createLocalNote(body);
+    const repository = await getSeededRepository();
 
     return authenticatedJson({
       note,
@@ -44,6 +46,6 @@ export async function POST(request: Request) {
       dashboard: await repository.getDashboardData(principal.userId)
     });
   } catch (error) {
-    return handleApiError(error, "Failed to create a local note.");
+    return handleApiError(normalizeLocalNotesRouteError(error), "Failed to create a local note.");
   }
 }

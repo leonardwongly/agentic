@@ -5,7 +5,6 @@ export const LocalNoteDocumentSchema = z.object({
   slug: z.string().min(1),
   title: z.string().min(1),
   content: z.string(),
-  path: z.string().min(1),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });

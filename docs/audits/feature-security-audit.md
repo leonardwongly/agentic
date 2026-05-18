@@ -62,6 +62,7 @@ Document note:
 - Evidence: note creation and updates wrote directly to target paths with `writeFile`.
 - Impact: interrupted writes could leave partial files; oversized direct library calls bypassed route-level limits.
 - Fix: added atomic temp-write-plus-rename behavior and adapter-level input validation in [`packages/integrations/src/local-notes.ts`](https://github.com/leonardwongly/agentic/blob/main/packages/integrations/src/local-notes.ts).
+- Follow-up hardening: production local notes now fail closed unless `AGENTIC_LOCAL_NOTES_ENABLED=true`, `AGENTIC_NOTES_PATH`, and `AGENTIC_LOCAL_NOTES_ALLOWED_ROOT` are configured with the notes path under the allowed root. Public note responses and integration metadata no longer expose absolute filesystem paths.
 - Residual risk: concurrent edits still last-write-win because the product has no optimistic concurrency or file locks.
 
 6. Docs rendering allowed overlapping builds and surfaced raw execution failures to routes
