@@ -122,12 +122,14 @@ export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
 export AGENTIC_TRUST_PROXY_HEADERS=true
 export AGENTIC_TRUSTED_CLIENT_IP_HEADER=x-forwarded-for
+export AGENTIC_WORKER_HEALTH_PATH=/var/lib/agentic/worker-health.json
 export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
 export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
 npm run deploy:ingress:check
 ```
 
 `AGENTIC_TRUST_PROXY_HEADERS=true` is only safe after confirming the ingress provider overwrites the single header named by `AGENTIC_TRUSTED_CLIENT_IP_HEADER` at the edge. Supported values are `x-forwarded-for`, `x-real-ip`, and `cf-connecting-ip`. Do not enable proxy trust behind an ingress that forwards that configured header from users unchanged.
+`AGENTIC_WORKER_HEALTH_PATH` must point to a small JSON heartbeat file that the worker can write and the web process can read. In production, `/api/ready` fails closed when this value is absent, unreadable, stale, or reports an error state. On multi-container providers, mount this path on a shared volume or use an equivalent provider-supported shared filesystem path before treating readiness as authoritative.
 
 For GitHub Actions, configure these repository secrets and variables before expecting `.github/workflows/staging-manual-deploy.yml` to run in external mode:
 
@@ -254,10 +256,11 @@ npm run start:web:prod -- --hostname 0.0.0.0 --port 3000
 4. Start the worker process after the schema is confirmed ready.
 
 ```bash
+export AGENTIC_WORKER_HEALTH_PATH=/var/lib/agentic/worker-health.json
 npm run start:worker:prod
 ```
 
-Do not skip the worker rollout. Goal creation, autopilot execution, and privacy lifecycle operations depend on the worker runtime and will remain queued if only the web process is healthy.
+Do not skip the worker rollout. Goal creation, autopilot execution, and privacy lifecycle operations depend on the worker runtime and will remain queued if only the web process is healthy. The worker writes heartbeat snapshots to `AGENTIC_WORKER_HEALTH_PATH`; readiness treats a missing or stale heartbeat as failed production startup even when queue depth and dead-letter counts are otherwise clean.
 
 5. Verify liveness and readiness from outside the deployment boundary.
 
@@ -288,7 +291,7 @@ Minimum rollout expectations:
 Successful smoke validation confirms:
 
 - the container is live and serving `/api/health`
-- readiness passes on `/api/ready`, including async execution backlog health
+- readiness passes on `/api/ready`, including async execution backlog health and a fresh worker heartbeat
 - authenticated session bootstrap works when `AGENTIC_SMOKE_ACCESS_KEY` is provided
 - a deployed goal request can be enqueued and completed through the live worker path
 - telemetry export sanitizes secret-bearing payloads before retention or backend delivery

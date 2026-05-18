@@ -269,13 +269,7 @@ function buildAsyncExecutionCheck(params: ReadinessEvaluationParams): ReadinessC
 function buildWorkerHeartbeatCheck(params: ReadinessEvaluationParams): ReadinessCheck {
   return {
     name: "worker_heartbeat",
-    ...(params.workerHeartbeat ?? {
-      status: "pass",
-      message: "Worker heartbeat is not configured; readiness is using durable queue state only.",
-      details: {
-        configured: false
-      }
-    })
+    ...(params.workerHeartbeat ?? buildMissingWorkerHeartbeatCheck(normalizeRuntime(params.nodeEnv)))
   };
 }
 
@@ -319,6 +313,19 @@ function getConnectorHealthWarningStatus(runtime: WebReadinessReport["runtime"])
 
 function getWorkerHeartbeatFailureStatus(runtime: WebReadinessReport["runtime"]): ReadinessCheck["status"] {
   return runtime === "production" ? "fail" : "warn";
+}
+
+function buildMissingWorkerHeartbeatCheck(runtime: WebReadinessReport["runtime"]): WorkerHeartbeatCheckSnapshot {
+  return {
+    status: getWorkerHeartbeatFailureStatus(runtime),
+    message:
+      runtime === "production"
+        ? "Worker heartbeat is not configured; set AGENTIC_WORKER_HEALTH_PATH so readiness can verify the worker process."
+        : "Worker heartbeat is not configured; readiness is using durable queue state only.",
+    details: {
+      configured: false
+    }
+  };
 }
 
 function formatCountLabel(count: number, singular: string, plural: string): string {
@@ -578,13 +585,7 @@ async function getWorkerHeartbeatCheckSnapshot(nodeEnv: string | undefined): Pro
   const healthPath = process.env.AGENTIC_WORKER_HEALTH_PATH?.trim();
 
   if (!healthPath) {
-    return {
-      status: "pass",
-      message: "Worker heartbeat is not configured; readiness is using durable queue state only.",
-      details: {
-        configured: false
-      }
-    };
+    return buildMissingWorkerHeartbeatCheck(runtime);
   }
 
   try {
