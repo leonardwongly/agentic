@@ -11,6 +11,10 @@ import type {
 } from "@agentic/contracts";
 import {
   describeIntegrationReadiness,
+  getManagedGoogleRequiredScopes,
+  isManagedGoogleIntegration,
+  type GoogleCredentialLifecycleState,
+  type GoogleCredentialRepairState,
   type IntegrationExecutionMode,
   type IntegrationReadinessTier
 } from "@agentic/integrations";
@@ -71,7 +75,10 @@ export type DashboardConnectorHealthIssue = {
   summary: string;
   severity: DashboardOperationsIssueSeverity;
   provider: ProviderCredential["provider"];
-  status: ProviderCredential["status"];
+  status: ProviderCredential["status"] | "missing";
+  lifecycleState: GoogleCredentialLifecycleState;
+  repairState: GoogleCredentialRepairState;
+  missingScopes: string[];
   updatedAt: string;
   target: DashboardOperationsTarget;
   expectedReadinessTier: IntegrationReadinessTier | "mixed" | null;
@@ -80,6 +87,7 @@ export type DashboardConnectorHealthIssue = {
   linkedIntegrationIds: string[];
   linkedIntegrationNames: string[];
   meetingReadinessTarget: boolean | null;
+  operatorSteps?: string[];
   remediation: DashboardConnectorRemediation | null;
 };
 
@@ -94,7 +102,11 @@ export type DashboardConnectorHealthSummary = {
   status: DashboardOperationsStatus;
   totalCount: number;
   connectedCount: number;
+  healthyCount?: number;
   degradedCount: number;
+  lifecycleDegradedCount?: number;
+  missingCount?: number;
+  scopeMismatchCount?: number;
   reconnectRequiredCount: number;
   refreshFailedCount: number;
   revokedCount: number;
@@ -178,6 +190,10 @@ function findLinkedIntegrations(
   integrations: IntegrationAccount[]
 ): IntegrationAccount[] {
   return integrations.filter((account) => extractProviderCredentialId(account) === credential.id);
+}
+
+function shouldSurfaceManagedCredentialLifecycle(account: IntegrationAccount): boolean {
+  return isManagedGoogleIntegration(account) && (account.status === "ready" || extractProviderCredentialId(account) !== null);
 }
 
 function describeExpectedIntegrationReadiness(account: IntegrationAccount): {
@@ -808,6 +824,17 @@ function buildConnectorIssueForCredential(
     credential.status === "connected" &&
     validationReferenceMs !== null &&
     now - validationReferenceMs >= validationStaleMs;
+  const missingScopes =
+    credential.provider === "google"
+      ? Array.from(
+          new Set(
+            linkedIntegrations
+              .filter(isManagedGoogleIntegration)
+              .flatMap((account) => getManagedGoogleRequiredScopes(account.id))
+              .filter((scope) => !credential.scopes.includes(scope))
+          )
+        )
+      : [];
   const label = [credential.provider, credential.accountEmail ?? credential.displayName]
     .filter((value): value is string => Boolean(value && value.trim().length > 0))
     .join(" · ") || `${credential.provider} connector`;
@@ -818,6 +845,9 @@ function buildConnectorIssueForCredential(
     label,
     provider: credential.provider,
     status: credential.status,
+    lifecycleState: "degraded",
+    repairState: "none",
+    missingScopes,
     updatedAt: credential.updatedAt,
     ...readinessExpectation,
     target: {
@@ -832,6 +862,12 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        repairState: "reconnect_required",
+        operatorSteps: [
+          "Open the affected integration setup flow.",
+          "Complete provider re-authentication with the account owner.",
+          "Verify the connector returns to approval-grade readiness before resuming automation."
+        ],
         remediation: {
           kind: "open_target",
           label: "Reconnect",
@@ -850,6 +886,13 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        lifecycleState: "revoked",
+        repairState: "reconnect_required",
+        operatorSteps: [
+          "Mark the connector as reconnect-required from the recovery lane.",
+          "Ask the workspace owner to complete provider re-authorization.",
+          "Keep provider-backed automation gated until the reconnect-required state clears."
+        ],
         remediation: {
           kind: "mark_connector_reconnect_required",
           label: "Require reconnect",
@@ -868,6 +911,13 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        lifecycleState: "expired",
+        repairState: "reconnect_required",
+        operatorSteps: [
+          "Mark the expired credential as reconnect-required.",
+          "Reconnect or rotate the provider credential with fresh expiry evidence.",
+          "Confirm downstream integrations meet their expected readiness tier."
+        ],
         remediation: {
           kind: "mark_connector_reconnect_required",
           label: "Require reconnect",
@@ -882,10 +932,36 @@ function buildConnectorIssueForCredential(
     };
   }
 
+  if (missingScopes.length > 0) {
+    return {
+      issue: {
+        ...base,
+        lifecycleState: "scope_mismatch",
+        repairState: "scope_repair_required",
+        remediation: {
+          kind: "open_target",
+          label: "Request scope upgrade",
+          note: `Reconnect with missing scopes: ${missingScopes.join(", ")}.`,
+          permission: "owner"
+        },
+        severity: "critical",
+        summary: `Credential is missing required Google scopes: ${missingScopes.join(", ")}.`
+      },
+      expired,
+      validationStale
+    };
+  }
+
   if (credential.status === "refresh_failed") {
     return {
       issue: {
         ...base,
+        repairState: "refresh_repair_required",
+        operatorSteps: [
+          "Run connector revalidation from the recovery lane.",
+          "Confirm encrypted credential storage remains present and secret material is not exposed.",
+          "If revalidation fails again, reconnect the provider account before widening automation."
+        ],
         remediation: {
           kind: "revalidate_connector_credential",
           label: "Revalidate",
@@ -904,6 +980,12 @@ function buildConnectorIssueForCredential(
     return {
       issue: {
         ...base,
+        repairState: "validation_required",
+        operatorSteps: [
+          "Run connector revalidation to refresh readiness evidence.",
+          "Review linked integration targets before allowing provider-backed actions.",
+          "Leave autonomy held if validation freshness cannot be restored."
+        ],
         remediation: {
           kind: "revalidate_connector_credential",
           label: "Revalidate",
@@ -922,6 +1004,34 @@ function buildConnectorIssueForCredential(
     issue: null,
     expired,
     validationStale
+  };
+}
+
+function buildMissingManagedConnectorIssue(account: IntegrationAccount): DashboardConnectorHealthIssue {
+  return {
+    id: `operations-connector-missing-${account.id}`,
+    credentialId: extractProviderCredentialId(account) ?? `missing:${account.id}`,
+    label: `${account.name} credential`,
+    summary: `${account.name} is marked ready for managed Google setup, but no provider credential is available in this dashboard scope.`,
+    severity: "critical",
+    provider: "google",
+    status: "missing",
+    lifecycleState: "missing",
+    repairState: "setup_required",
+    missingScopes: [...getManagedGoogleRequiredScopes(account.id)],
+    updatedAt: account.updatedAt,
+    ...buildConnectorReadinessExpectation([account]),
+    target: {
+      section: "integrations",
+      itemId: account.id,
+      label: "Open Google integration setup"
+    },
+    remediation: {
+      kind: "open_target",
+      label: "Connect Google",
+      note: "Open the integration setup and complete provider authentication before automation resumes.",
+      permission: "owner"
+    }
   };
 }
 
@@ -1205,7 +1315,8 @@ export function buildDashboardOperationsTower(params: BuildDashboardOperationsPa
 
   let expiredCredentialCount = 0;
   let validationStaleCount = 0;
-  const connectorIssues = visibleCredentials.flatMap((credential) => {
+  const visibleCredentialIds = new Set(visibleCredentials.map((credential) => credential.id));
+  const credentialConnectorIssues = visibleCredentials.flatMap((credential) => {
     const linkedIntegrations = findLinkedIntegrations(credential, params.integrations);
     const { issue, expired, validationStale } = buildConnectorIssueForCredential(
       credential,
@@ -1224,9 +1335,17 @@ export function buildDashboardOperationsTower(params: BuildDashboardOperationsPa
 
     return issue ? [issue] : [];
   });
+  const missingManagedCredentialIssues = params.integrations
+    .filter(shouldSurfaceManagedCredentialLifecycle)
+    .filter((account) => {
+      const credentialId = extractProviderCredentialId(account);
+      return credentialId === null || !visibleCredentialIds.has(credentialId);
+    })
+    .map(buildMissingManagedConnectorIssue);
+  const connectorIssues = [...credentialConnectorIssues, ...missingManagedCredentialIssues];
   const connectorCriticalCount = connectorIssues.filter((item) => item.severity === "critical").length;
   const connectorStatus: DashboardOperationsStatus =
-    visibleCredentials.length === 0
+    visibleCredentials.length === 0 && missingManagedCredentialIssues.length === 0
       ? "idle"
       : connectorCriticalCount > 0
         ? "critical"
@@ -1248,9 +1367,13 @@ export function buildDashboardOperationsTower(params: BuildDashboardOperationsPa
   };
   const connectorHealth: DashboardConnectorHealthSummary = {
     status: connectorStatus,
-    totalCount: visibleCredentials.length,
+    totalCount: visibleCredentials.length + missingManagedCredentialIssues.length,
     connectedCount: visibleCredentials.filter((credential) => credential.status === "connected").length,
+    healthyCount: visibleCredentials.length - credentialConnectorIssues.length,
     degradedCount: connectorIssues.length,
+    lifecycleDegradedCount: connectorIssues.filter((issue) => issue.lifecycleState === "degraded").length,
+    missingCount: missingManagedCredentialIssues.length,
+    scopeMismatchCount: connectorIssues.filter((issue) => issue.lifecycleState === "scope_mismatch").length,
     reconnectRequiredCount: visibleCredentials.filter((credential) => credential.status === "reconnect_required").length,
     refreshFailedCount: visibleCredentials.filter((credential) => credential.status === "refresh_failed").length,
     revokedCount: visibleCredentials.filter((credential) => credential.status === "revoked").length,

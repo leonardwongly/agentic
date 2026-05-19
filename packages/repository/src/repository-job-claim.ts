@@ -25,11 +25,27 @@ function normalizeSqlConcurrencyLimit(value: number | undefined): number | null 
   return value;
 }
 
+function isJobInClaimScope(job: JobRecord, params: ClaimNextJobParams, kinds: JobKind[]): boolean {
+  if (params.userId && job.userId !== params.userId) {
+    return false;
+  }
+
+  if (kinds.length > 0 && !kinds.includes(job.kind)) {
+    return false;
+  }
+
+  if (params.queue && job.queue !== params.queue) {
+    return false;
+  }
+
+  return true;
+}
+
 export function claimNextJobFromStore(store: JobStore, params: ClaimNextJobParams): JobRecord | null {
   const claimedAt = params.now ?? new Date().toISOString();
   const claimedAtMs = Date.parse(claimedAt);
   const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
-  const runningJobs = store.jobs.filter((job) => job.status === "running");
+  const runningJobs = store.jobs.filter((job) => job.status === "running" && isJobInClaimScope(job, params, kinds));
   const claimable = sortJobsForClaim(
     store.jobs.filter((job) => {
       if (params.userId && job.userId !== params.userId) {
@@ -66,6 +82,8 @@ export async function claimNextJobWithClient(
   const predicates = [
     `((status in ('queued', 'retrying') and available_at <= $1) or (status = 'running' and lease_expires_at is not null and lease_expires_at <= $1))`
   ];
+  let kindsParameter: number | null = null;
+  let queueParameter: number | null = null;
 
   if (params.userId) {
     values.push(params.userId);
@@ -74,11 +92,13 @@ export async function claimNextJobWithClient(
 
   if (kinds.length > 0) {
     values.push(kinds);
+    kindsParameter = values.length;
     predicates.push(`kind = any($${values.length}::text[])`);
   }
 
   if (params.queue) {
     values.push(params.queue);
+    queueParameter = values.length;
     predicates.push(`queue_name = $${values.length}`);
   }
 
@@ -93,6 +113,8 @@ export async function claimNextJobWithClient(
         select count(*) from jobs running_kind
         where running_kind.status = 'running'
           and running_kind.kind = jobs.kind
+          ${params.userId ? `and running_kind.user_id = jobs.user_id` : ""}
+          ${queueParameter !== null ? `and running_kind.queue_name = $${queueParameter}` : ""}
           and (running_kind.lease_expires_at is null or running_kind.lease_expires_at > $1)
       ) < $${values.length}
     `);
@@ -105,6 +127,8 @@ export async function claimNextJobWithClient(
         select count(*) from jobs running_user
         where running_user.status = 'running'
           and running_user.user_id = jobs.user_id
+          ${kindsParameter !== null ? `and running_user.kind = any($${kindsParameter}::text[])` : ""}
+          ${queueParameter !== null ? `and running_user.queue_name = $${queueParameter}` : ""}
           and (running_user.lease_expires_at is null or running_user.lease_expires_at > $1)
       ) < $${values.length}
     `);
@@ -119,6 +143,9 @@ export async function claimNextJobWithClient(
           select count(*) from jobs running_key
           where running_key.status = 'running'
             and running_key.concurrency_key = jobs.concurrency_key
+            ${params.userId ? `and running_key.user_id = jobs.user_id` : ""}
+            ${kindsParameter !== null ? `and running_key.kind = any($${kindsParameter}::text[])` : ""}
+            ${queueParameter !== null ? `and running_key.queue_name = $${queueParameter}` : ""}
             and (running_key.lease_expires_at is null or running_key.lease_expires_at > $1)
         ) < $${values.length}
       )

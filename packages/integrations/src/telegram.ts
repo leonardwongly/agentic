@@ -3,6 +3,7 @@ import { logError, recordCounter, withSpan, withTelemetryContext } from "@agenti
 import {
   ConnectorFailureError,
   createHttpConnectorError,
+  createConnectorTimeoutSignal,
   createNotConfiguredConnectorError,
   normalizeConnectorThrownError,
   parseRetryAfterSeconds
@@ -26,7 +27,11 @@ export function isTelegramReady(): boolean {
   return Boolean(getTelegramBotToken()) && Boolean(getTelegramWebhookSecret());
 }
 
-async function telegramPost<T>(method: string, body: Record<string, unknown>): Promise<T> {
+async function telegramPost<T>(
+  method: string,
+  body: Record<string, unknown>,
+  options?: { signal?: AbortSignal }
+): Promise<T> {
   const token = getTelegramBotToken();
 
   if (!token) {
@@ -59,7 +64,10 @@ async function telegramPost<T>(method: string, body: Record<string, unknown>): P
                 "Content-Type": "application/json; charset=utf-8"
               },
               body: JSON.stringify(body),
-              signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS)
+              signal: createConnectorTimeoutSignal({
+                timeoutMs: TELEGRAM_API_TIMEOUT_MS,
+                signal: options?.signal
+              })
             });
 
             if (!response.ok) {
@@ -139,6 +147,7 @@ function buildApprovalText(approval: {
 
 export async function sendTelegramApprovalMessage(params: {
   chatId: string;
+  signal?: AbortSignal;
   approval: {
     title: string;
     rationale: string;
@@ -165,7 +174,7 @@ export async function sendTelegramApprovalMessage(params: {
         ]
       ]
     }
-  });
+  }, { signal: params.signal });
 
   return {
     ok: true,
@@ -176,11 +185,12 @@ export async function sendTelegramApprovalMessage(params: {
 export async function sendTelegramNotification(params: {
   chatId: string;
   text: string;
+  signal?: AbortSignal;
 }): Promise<{ ok: boolean; messageId: number }> {
   const result = await telegramPost<{ message_id: number }>("sendMessage", {
     chat_id: params.chatId,
     text: params.text
-  });
+  }, { signal: params.signal });
 
   return {
     ok: true,
@@ -192,12 +202,13 @@ export async function updateTelegramMessage(params: {
   chatId: string;
   messageId: number;
   text: string;
+  signal?: AbortSignal;
 }): Promise<{ ok: boolean }> {
   await telegramPost("editMessageText", {
     chat_id: params.chatId,
     message_id: params.messageId,
     text: params.text
-  });
+  }, { signal: params.signal });
 
   return { ok: true };
 }
@@ -206,12 +217,13 @@ export async function answerTelegramCallbackQuery(params: {
   callbackQueryId: string;
   text: string;
   showAlert?: boolean;
+  signal?: AbortSignal;
 }): Promise<{ ok: boolean }> {
   await telegramPost("answerCallbackQuery", {
     callback_query_id: params.callbackQueryId,
     text: params.text,
     show_alert: params.showAlert ?? false
-  });
+  }, { signal: params.signal });
 
   return { ok: true };
 }

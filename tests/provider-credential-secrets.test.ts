@@ -6,11 +6,20 @@ import {
 } from "@agentic/integrations";
 
 describe("provider credential secrets", () => {
+  const originalProviderKeyring = process.env.AGENTIC_PROVIDER_SECRET_KEYRING;
   const context = {
     credentialId: "google:workspace-1:acct-1",
     userId: "user-1",
     kind: "oauth_refresh_token"
   };
+
+  afterEach(() => {
+    if (originalProviderKeyring === undefined) {
+      delete process.env.AGENTIC_PROVIDER_SECRET_KEYRING;
+    } else {
+      process.env.AGENTIC_PROVIDER_SECRET_KEYRING = originalProviderKeyring;
+    }
+  });
 
   it("round-trips encrypted provider secrets", () => {
     const store = createProviderCredentialSecretStore({
@@ -84,6 +93,46 @@ describe("provider credential secrets", () => {
         kind: "oauth_refresh_token"
       })
     ).toThrow("Provider secret decryption failed.");
+  });
+
+  it("fails closed when credential id or secret kind context does not match", () => {
+    const store = createProviderCredentialSecretStore({
+      masterKey: "test-provider-master-key"
+    });
+    const envelope = store.encrypt("refresh-token-123", context);
+
+    expect(() =>
+      store.decrypt(envelope, {
+        ...context,
+        credentialId: "google:workspace-1:acct-2"
+      })
+    ).toThrow("Provider secret decryption failed.");
+    expect(() =>
+      store.decrypt(envelope, {
+        ...context,
+        kind: "oauth_access_token"
+      })
+    ).toThrow("Provider secret decryption failed.");
+  });
+
+  it("rejects malformed provider secret keyring configuration", () => {
+    process.env.AGENTIC_PROVIDER_SECRET_KEYRING = "[]";
+
+    expect(() =>
+      createProviderCredentialSecretStore({
+        masterKey: "test-provider-master-key"
+      })
+    ).toThrow("AGENTIC_PROVIDER_SECRET_KEYRING must be a JSON object of key versions to secrets.");
+
+    process.env.AGENTIC_PROVIDER_SECRET_KEYRING = JSON.stringify({
+      "": "old-provider-master-key"
+    });
+
+    expect(() =>
+      createProviderCredentialSecretStore({
+        masterKey: "test-provider-master-key"
+      })
+    ).toThrow("AGENTIC_PROVIDER_SECRET_KEYRING contains an invalid key version or secret.");
   });
 
   it("does not silently fall back to legacy unbound provider secrets", () => {

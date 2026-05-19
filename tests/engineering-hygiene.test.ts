@@ -131,6 +131,7 @@ describe("engineering hygiene gates", () => {
       "artifacts/security/report.json",
       "tmp/private-key.pem",
       "docs/token-notes.md",
+      "docs/runbooks/connector-credential-lifecycle.md",
       "packages/integrations/src/provider-credential-secrets.ts",
       "tests/provider-credential-secrets.test.ts"
     ]);

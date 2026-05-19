@@ -1,8 +1,6 @@
 import {
   AutopilotProcessJobPayloadSchema,
-  buildApprovalNotificationDeliveryTarget,
   createSystemActorContext,
-  type ApprovalNotificationJobPayload,
   type ApprovalFollowUpJobPayload,
   GoalTemplateSchema,
   nowIso,
@@ -33,14 +31,10 @@ import {
 import {
   createLocalNote,
   isSlackReady,
-  isTelegramReady,
   logError,
   logInfo,
   logWarn,
   recordCounter,
-  sendNotification,
-  updateMessage,
-  updateTelegramMessage,
   withSpan,
   withTelemetryContext
 } from "@agentic/integrations";
@@ -64,6 +58,7 @@ import {
   isEventFabricAutopilotKind,
   resolveAutopilotEventFabricExecutionContext
 } from "./autopilot-event-fabric";
+import { executeApprovalNotificationJob } from "./approval-notification-executor";
 import {
   buildAutopilotGoalId,
   buildAutopilotProcessJobIdempotencyKey,
@@ -150,6 +145,7 @@ export {
 } from "./job-executors-core";
 export type { GoalJobResultSummary } from "./job-executors-core";
 export { executeGitHubIssueIntakeJob, isGitHubIssueIntakeJob } from "./github-issue-intake-executor";
+export { executeApprovalNotificationJob, isApprovalNotificationJob } from "./approval-notification-executor";
 export { executePrivacyOperationJob, executePublicShareViewJob } from "./privacy-share-executors";
 export {
   runWatcherSchedulerLoop,
@@ -463,6 +459,7 @@ async function executeGenericAutopilotEvent(params: {
   actorContext: ActorContext | null;
   event: AutopilotEvent;
   jobId: string;
+  signal?: AbortSignal;
 }) {
   const requestedWorkspaceId = normalizeAutopilotText(params.event.details.workspaceId, 200);
   let workspaceId = requestedWorkspaceId;
@@ -495,7 +492,9 @@ async function executeGenericAutopilotEvent(params: {
     resolvePolicyReplayValidation
   });
 
+  params.signal?.throwIfAborted();
   await params.repository.saveGoalBundle(bundle);
+  params.signal?.throwIfAborted();
   await persistCapturedMemories({
     repository: params.repository,
     selfImprovementRepository: params.selfImprovementRepository,
@@ -604,6 +603,7 @@ async function executeWatcherEvent(params: {
   goal: GoalBundle;
   eventId: string;
   jobId: string;
+  signal?: AbortSignal;
 }) {
   const [memories, integrations, episodes] = await Promise.all([
     params.repository.listMemory(params.userId),
@@ -627,7 +627,9 @@ async function executeWatcherEvent(params: {
     resolvePolicyReplayValidation
   });
 
+  params.signal?.throwIfAborted();
   await params.repository.saveGoalBundle(bundle);
+  params.signal?.throwIfAborted();
   await persistCapturedMemories({
     repository: params.repository,
     selfImprovementRepository: params.selfImprovementRepository,
@@ -651,6 +653,7 @@ async function runTemplateExecution(params: {
   workspaceId: string | null;
   workspaceGovernance: WorkspaceGovernance | null;
   jobId: string;
+  signal?: AbortSignal;
 }) {
   const [memories, integrations, episodes] = await Promise.all([
     params.repository.listMemory(params.userId),
@@ -671,7 +674,9 @@ async function runTemplateExecution(params: {
     resolvePolicyReplayValidation
   });
 
+  params.signal?.throwIfAborted();
   await params.repository.saveGoalBundle(bundle);
+  params.signal?.throwIfAborted();
   await params.repository.saveTemplate(
     GoalTemplateSchema.parse({
       ...params.template,
@@ -687,6 +692,7 @@ async function runTemplateExecution(params: {
       updatedAt: nowIso()
     })
   );
+  params.signal?.throwIfAborted();
   await persistCapturedMemories({
     repository: params.repository,
     selfImprovementRepository: params.selfImprovementRepository,
@@ -707,6 +713,7 @@ async function executeTemplateEvent(params: {
   template: GoalTemplate;
   eventId: string;
   jobId: string;
+  signal?: AbortSignal;
 }) {
   const { workspaceId, workspaceGovernance } = await resolveDashboardWorkspaceContext(
     params.repository,
@@ -722,7 +729,8 @@ async function executeTemplateEvent(params: {
     workflowId: buildAutopilotWorkflowId(params.eventId),
     workspaceId,
     workspaceGovernance,
-    jobId: params.jobId
+    jobId: params.jobId,
+    signal: params.signal
   });
 }
 
@@ -734,6 +742,7 @@ async function executeBriefingEvent(params: {
   type: BriefingType;
   eventId: string;
   jobId: string;
+  signal?: AbortSignal;
 }) {
   const [preferences, memories, integrations, approvals, watchers, episodes] = await Promise.all([
     params.repository.getBriefingPreferences(params.userId),
@@ -764,7 +773,9 @@ async function executeBriefingEvent(params: {
     resolvePolicyReplayValidation
   });
 
+  params.signal?.throwIfAborted();
   await params.repository.saveGoalBundle(bundle);
+  params.signal?.throwIfAborted();
   await persistCapturedMemories({
     repository: params.repository,
     selfImprovementRepository: params.selfImprovementRepository,
@@ -785,6 +796,7 @@ async function executeEventFabricEvent(params: {
   event: AutopilotEvent;
   eventId: string;
   jobId: string;
+  signal?: AbortSignal;
 }) {
   const envelope = getAutopilotEventFabricEnvelope(params.event);
   if (!envelope) {
@@ -818,7 +830,9 @@ async function executeEventFabricEvent(params: {
     workflowId: buildAutopilotWorkflowId(params.eventId),
     resolveAgentMetrics: (agentIdOrName) => params.repository.getAgentMetrics(agentIdOrName, "all", params.userId)
   });
+  params.signal?.throwIfAborted();
   await params.repository.saveGoalBundle(bundle);
+  params.signal?.throwIfAborted();
   await persistCapturedMemories({
     repository: params.repository,
     selfImprovementRepository: params.selfImprovementRepository,
@@ -842,17 +856,12 @@ export function isApprovalFollowUpJob(
   return job?.kind === "approval_follow_up" && job.payload.type === "approval_follow_up";
 }
 
-export function isApprovalNotificationJob(
-  job: JobRecord | null
-): job is JobRecord & { payload: ApprovalNotificationJobPayload } {
-  return job?.kind === "approval_notification" && job.payload.type === "approval_notification";
-}
-
 export async function executeAutopilotProcessJob(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
   retryPolicy?: Partial<JobRetryPolicy>;
+  signal?: AbortSignal;
 }) {
   const { job, repository } = params;
 
@@ -907,7 +916,8 @@ export async function executeAutopilotProcessJob(params: {
         watcher,
         goal,
         eventId: event.id,
-        jobId: job.id
+        jobId: job.id,
+        signal: params.signal
       });
     } else if (autopilotPayload.kind === "template_due") {
       const { template } = await resolveTemplateExecutionSource(repository, autopilotPayload.sourceId, job.userId);
@@ -918,7 +928,8 @@ export async function executeAutopilotProcessJob(params: {
         actorContext: job.actorContext,
         template,
         eventId: event.id,
-        jobId: job.id
+        jobId: job.id,
+        signal: params.signal
       });
     } else if (autopilotPayload.kind === "briefing_due") {
       const { type } = await resolveBriefingExecutionSource(repository, autopilotPayload.sourceId, job.userId);
@@ -929,7 +940,8 @@ export async function executeAutopilotProcessJob(params: {
         actorContext: job.actorContext,
         type,
         eventId: event.id,
-        jobId: job.id
+        jobId: job.id,
+        signal: params.signal
       });
     } else if (isEventFabricAutopilotKind(autopilotPayload.kind)) {
       bundle = await executeEventFabricEvent({
@@ -939,7 +951,8 @@ export async function executeAutopilotProcessJob(params: {
         actorContext: job.actorContext,
         event,
         eventId: event.id,
-        jobId: job.id
+        jobId: job.id,
+        signal: params.signal
       });
     } else {
       bundle = await executeGenericAutopilotEvent({
@@ -948,11 +961,13 @@ export async function executeAutopilotProcessJob(params: {
         userId: job.userId,
         actorContext: job.actorContext,
         event,
-        jobId: job.id
+        jobId: job.id,
+        signal: params.signal
       });
     }
 
     const processedAt = nowIso();
+    params.signal?.throwIfAborted();
     await repository.saveAutopilotEvent({
       ...event,
       status: "executed",
@@ -970,6 +985,7 @@ export async function executeAutopilotProcessJob(params: {
     });
   } catch (error) {
     const processedAt = nowIso();
+    params.signal?.throwIfAborted();
     await repository.saveAutopilotEvent({
       ...event,
       status: "failed",
@@ -1234,106 +1250,6 @@ export async function executeApprovalFollowUpJob(params: {
   }
 }
 
-export async function executeApprovalNotificationJob(params: {
-  repository: AgenticRepository;
-  job: JobRecord;
-  signal?: AbortSignal;
-}) {
-  const { job, repository } = params;
-
-  if (!isApprovalNotificationJob(job)) {
-    throw new Error(`Expected an approval_notification payload for job ${job.id}.`);
-  }
-
-  const bundle = await repository.getGoalBundleForUser(job.payload.goalId, job.userId);
-
-  if (!bundle) {
-    throw new Error(`Goal ${job.payload.goalId} was not found.`);
-  }
-
-  const approval = bundle.approvals.find((candidate) => candidate.id === job.payload.approvalId);
-
-  if (!approval) {
-    throw new Error(`Approval ${job.payload.approvalId} was not found.`);
-  }
-
-  if (approval.taskId !== job.payload.taskId) {
-    throw new Error(`Approval ${approval.id} no longer matches queued task ${job.payload.taskId}.`);
-  }
-
-  if (approval.decision !== job.payload.decision) {
-    throw new Error(
-      `Approval ${approval.id} decision changed from ${job.payload.decision} to ${approval.decision}.`
-    );
-  }
-
-  const task = bundle.tasks.find((candidate) => candidate.id === approval.taskId);
-
-  if (!task) {
-    throw new Error(`Task ${approval.taskId} was not found for approval ${approval.id}.`);
-  }
-
-  const statusEmoji = job.payload.decision === "approved" ? "\u2713" : "\u2717";
-  const statusLabel = job.payload.decision === "approved" ? "Approved" : "Rejected";
-  const receiptLabel = job.payload.decision === "approved" ? "Approved" : "Rejected";
-
-  switch (job.payload.channel) {
-    case "slack":
-      if (!isSlackReady()) {
-        throw new Error("Slack integration is not configured.");
-      }
-
-      params.signal?.throwIfAborted();
-      await sendNotification({
-        channel: process.env.SLACK_DEFAULT_CHANNEL ?? "#approvals",
-        text: `${statusEmoji} ${statusLabel}: ${task.title}`
-      });
-      return;
-    case "slack_receipt":
-      if (!isSlackReady()) {
-        throw new Error("Slack integration is not configured.");
-      }
-
-      params.signal?.throwIfAborted();
-      await updateMessage({
-        channel: job.payload.slackChannelId,
-        ts: job.payload.slackMessageTs,
-        text: `${statusEmoji} ${receiptLabel}: ${task.title}`,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `${statusEmoji} *${receiptLabel}:* ${task.title}`
-            }
-          },
-          {
-            type: "context",
-            elements: [
-              {
-                type: "mrkdwn",
-                text: `Decision recorded via Slack worker for approval ${approval.id}.`
-              }
-            ]
-          }
-        ]
-      });
-      return;
-    case "telegram_receipt":
-      if (!isTelegramReady()) {
-        throw new Error("Telegram integration is not configured.");
-      }
-
-      params.signal?.throwIfAborted();
-      await updateTelegramMessage({
-        chatId: job.payload.telegramChatId,
-        messageId: job.payload.telegramMessageId,
-        text: `${job.payload.decision === "approved" ? "\u2705" : "\u274c"} ${receiptLabel}: ${task.title}`
-      });
-      return;
-  }
-}
-
 export function createWorkerJobHandlers(params: {
   repository: AgenticRepository;
   selfImprovementRepository: SelfImprovementRepository;
@@ -1397,46 +1313,53 @@ export function createWorkerJobHandlers(params: {
   };
 
   return {
-    goal_create: wrapHandler("goal_create", (job) =>
+    goal_create: wrapHandler("goal_create", (job, context) =>
       executeGoalCreateJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
-        job
+        job,
+        signal: context?.signal
     })),
-    goal_refine: wrapHandler("goal_refine", (job) =>
+    goal_refine: wrapHandler("goal_refine", (job, context) =>
       executeGoalRefineJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
-        job
+        job,
+        signal: context?.signal
       })),
-    briefing_create: wrapHandler("briefing_create", (job) =>
+    briefing_create: wrapHandler("briefing_create", (job, context) =>
       executeBriefingCreateJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
-        job
+        job,
+        signal: context?.signal
       })),
-    template_run: wrapHandler("template_run", (job) =>
+    template_run: wrapHandler("template_run", (job, context) =>
       executeTemplateRunJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
-        job
+        job,
+        signal: context?.signal
       })),
-    docs_render: wrapHandler("docs_render", (job) =>
+    docs_render: wrapHandler("docs_render", (job, context) =>
       executeDocsRenderJob({
-        job
+        job,
+        signal: context?.signal
       })),
-    autopilot_process: wrapHandler("autopilot_process", (job) =>
+    autopilot_process: wrapHandler("autopilot_process", (job, context) =>
       executeAutopilotProcessJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
         job,
-        retryPolicy: params.retryPolicy
+        retryPolicy: params.retryPolicy,
+        signal: context?.signal
       })),
-    github_issue_intake: wrapHandler("github_issue_intake", (job) =>
+    github_issue_intake: wrapHandler("github_issue_intake", (job, context) =>
       executeGitHubIssueIntakeJob({
         repository: params.repository,
         selfImprovementRepository: params.selfImprovementRepository,
-        job
+        job,
+        signal: context?.signal
       })),
     approval_follow_up: wrapHandler("approval_follow_up", (job, context) =>
       executeApprovalFollowUpJob({
@@ -1451,15 +1374,17 @@ export function createWorkerJobHandlers(params: {
         job,
         signal: context?.signal
       })),
-    privacy_operation: wrapHandler("privacy_operation", (job) =>
+    privacy_operation: wrapHandler("privacy_operation", (job, context) =>
       executePrivacyOperationJob({
         repository: params.repository,
-        job
+        job,
+        signal: context?.signal
       })),
-    public_share_view: wrapHandler("public_share_view", (job) =>
+    public_share_view: wrapHandler("public_share_view", (job, context) =>
       executePublicShareViewJob({
         repository: params.repository,
-        job
+        job,
+        signal: context?.signal
       }))
   };
 }

@@ -1,9 +1,13 @@
 import {
   ApprovalRequestSchema,
+  IntegrationAccountSchema,
   JobRecordSchema,
+  ProviderCredentialSchema,
   WorkspaceGovernanceSchema,
   type ApprovalRequest,
-  type JobRecord
+  type IntegrationAccount,
+  type JobRecord,
+  type ProviderCredential
 } from "@agentic/contracts";
 import { buildDashboardOperationsTower } from "../packages/repository/src/dashboard-operations";
 
@@ -63,6 +67,50 @@ function buildJob(overrides: Partial<JobRecord> & { payload: JobRecord["payload"
     journal: overrides.journal,
     createdAt: overrides.createdAt ?? "2026-04-20T10:00:00.000Z",
     updatedAt: overrides.updatedAt ?? overrides.createdAt ?? "2026-04-20T10:00:00.000Z"
+  });
+}
+
+function buildIntegration(overrides: Partial<IntegrationAccount> = {}): IntegrationAccount {
+  return IntegrationAccountSchema.parse({
+    id: overrides.id ?? "gmail",
+    userId: overrides.userId ?? "system",
+    name: overrides.name ?? "Gmail Adapter",
+    system: overrides.system ?? "email",
+    status: overrides.status ?? "ready",
+    scopes: overrides.scopes ?? [],
+    capabilities: overrides.capabilities ?? ["read", "search", "draft", "send"],
+    metadata: overrides.metadata ?? {
+      provider: "google",
+      managed: true
+    },
+    actorContext: overrides.actorContext ?? null,
+    createdAt: overrides.createdAt ?? "2026-04-20T00:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-04-20T00:00:00.000Z"
+  });
+}
+
+function buildProviderCredential(overrides: Partial<ProviderCredential> = {}): ProviderCredential {
+  return ProviderCredentialSchema.parse({
+    id: overrides.id ?? "google:workspace-1:acct-1",
+    userId: overrides.userId ?? "system",
+    workspaceId: overrides.workspaceId ?? "workspace-1",
+    provider: overrides.provider ?? "google",
+    accountId: overrides.accountId ?? "acct-1",
+    accountEmail: overrides.accountEmail ?? "owner@example.com",
+    displayName: overrides.displayName ?? "Owner",
+    status: overrides.status ?? "connected",
+    scopes: overrides.scopes ?? [],
+    lastValidatedAt: overrides.lastValidatedAt ?? "2026-04-20T00:00:00.000Z",
+    lastRotatedAt: overrides.lastRotatedAt ?? null,
+    lastRefreshAt: overrides.lastRefreshAt ?? null,
+    lastRefreshFailureAt: overrides.lastRefreshFailureAt ?? null,
+    reconnectRequiredAt: overrides.reconnectRequiredAt ?? null,
+    revokedAt: overrides.revokedAt ?? null,
+    expiresAt: overrides.expiresAt ?? null,
+    metadata: overrides.metadata ?? {},
+    actorContext: overrides.actorContext ?? null,
+    createdAt: overrides.createdAt ?? "2026-04-20T00:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-04-20T00:00:00.000Z"
   });
 }
 
@@ -305,5 +353,105 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         "Risk-based governance currently allows auto-run through R3."
       ])
     );
+  });
+
+  it("surfaces missing managed Google credentials as explicit setup repair work", () => {
+    const operations = buildDashboardOperationsTower({
+      activeWorkspace: null,
+      workspaceGovernance: null,
+      autopilotSettings: {
+        userId: "system",
+        mode: "notify_only",
+        debounceMinutes: 15,
+        createdAt: "2026-04-01T00:00:00.000Z",
+        updatedAt: "2026-04-01T00:00:00.000Z"
+      },
+      goals: [],
+      approvals: [],
+      autopilotEvents: [],
+      integrations: [buildIntegration()],
+      jobs: [],
+      providerCredentials: [],
+      generatedAt: "2026-04-21T00:00:00.000Z"
+    });
+
+    expect(operations.connectorHealth).toMatchObject({
+      status: "critical",
+      totalCount: 1,
+      connectedCount: 0,
+      healthyCount: 0,
+      degradedCount: 1,
+      missingCount: 1,
+      scopeMismatchCount: 0,
+      issueCount: 1
+    });
+    expect(operations.connectorHealth.items[0]).toMatchObject({
+      credentialId: "missing:gmail",
+      status: "missing",
+      lifecycleState: "missing",
+      repairState: "setup_required",
+      remediation: {
+        kind: "open_target",
+        label: "Connect Google",
+        permission: "owner"
+      },
+      missingScopes: ["https://www.googleapis.com/auth/gmail.modify"]
+    });
+  });
+
+  it("surfaces managed Google scope mismatches before automation is trusted", () => {
+    const credential = buildProviderCredential({
+      id: "google:workspace-1:acct-1",
+      scopes: []
+    });
+    const operations = buildDashboardOperationsTower({
+      activeWorkspace: null,
+      workspaceGovernance: null,
+      autopilotSettings: {
+        userId: "system",
+        mode: "notify_only",
+        debounceMinutes: 15,
+        createdAt: "2026-04-01T00:00:00.000Z",
+        updatedAt: "2026-04-01T00:00:00.000Z"
+      },
+      goals: [],
+      approvals: [],
+      autopilotEvents: [],
+      integrations: [
+        buildIntegration({
+          metadata: {
+            provider: "google",
+            managed: true,
+            providerCredentialId: credential.id
+          }
+        })
+      ],
+      jobs: [],
+      providerCredentials: [credential],
+      generatedAt: "2026-04-21T00:00:00.000Z"
+    });
+
+    expect(operations.connectorHealth).toMatchObject({
+      status: "critical",
+      totalCount: 1,
+      connectedCount: 1,
+      healthyCount: 0,
+      degradedCount: 1,
+      missingCount: 0,
+      scopeMismatchCount: 1,
+      issueCount: 1
+    });
+    expect(operations.connectorHealth.items[0]).toMatchObject({
+      credentialId: credential.id,
+      status: "connected",
+      lifecycleState: "scope_mismatch",
+      repairState: "scope_repair_required",
+      remediation: {
+        kind: "open_target",
+        label: "Request scope upgrade",
+        permission: "owner"
+      },
+      missingScopes: ["https://www.googleapis.com/auth/gmail.modify"]
+    });
   });
 });

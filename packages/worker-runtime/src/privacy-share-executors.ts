@@ -45,6 +45,7 @@ function shouldAdvanceLastViewedAt(current: string | null, candidate: string): b
 export async function executePrivacyOperationJob(params: {
   repository: AgenticRepository;
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job, repository } = params;
 
@@ -63,6 +64,7 @@ export async function executePrivacyOperationJob(params: {
   }
 
   const startedAt = nowIso();
+  params.signal?.throwIfAborted();
   const runningOperation = await repository.savePrivacyOperation({
     ...operation,
     status: "running",
@@ -77,6 +79,7 @@ export async function executePrivacyOperationJob(params: {
 
     switch (job.payload.kind) {
       case "workspace_export": {
+        params.signal?.throwIfAborted();
         const audit = await repository.exportWorkspaceAudit(job.payload.workspaceId, job.userId);
         result = {
           workspaceId: audit.workspaceId,
@@ -94,6 +97,7 @@ export async function executePrivacyOperationJob(params: {
           throw new Error(`Privacy operation ${operation.id} is missing a valid retention policy.`);
         }
 
+        params.signal?.throwIfAborted();
         result = await repository.enforceWorkspaceRetention({
           workspaceId: job.payload.workspaceId,
           userId: job.userId,
@@ -103,6 +107,7 @@ export async function executePrivacyOperationJob(params: {
         break;
       }
       case "workspace_delete":
+        params.signal?.throwIfAborted();
         result = await repository.deleteWorkspaceData({
           workspaceId: job.payload.workspaceId,
           userId: job.userId,
@@ -113,6 +118,7 @@ export async function executePrivacyOperationJob(params: {
     }
 
     const completedAt = nowIso();
+    params.signal?.throwIfAborted();
     await repository.savePrivacyOperation({
       ...runningOperation,
       status: "completed",
@@ -139,6 +145,7 @@ export async function executePrivacyOperationJob(params: {
 export async function executePublicShareViewJob(params: {
   repository: AgenticRepository;
   job: JobRecord;
+  signal?: AbortSignal;
 }) {
   const { job, repository } = params;
 
@@ -173,6 +180,7 @@ export async function executePublicShareViewJob(params: {
   const writes: Array<Promise<unknown>> = [];
 
   if (shouldUpdateShare) {
+    params.signal?.throwIfAborted();
     writes.push(
       repository.saveGoalShare({
         ...share,
@@ -183,6 +191,7 @@ export async function executePublicShareViewJob(params: {
   }
 
   if (viewedLog) {
+    params.signal?.throwIfAborted();
     writes.push(
       repository.saveGoalBundle({
         ...bundle,

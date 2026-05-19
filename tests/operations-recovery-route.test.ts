@@ -12,8 +12,15 @@ import {
 } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import { createProviderCredentialSecretStore } from "@agentic/integrations";
+import { processUserRequest } from "@agentic/orchestrator";
+import { enqueueApprovalFollowUpJob } from "@agentic/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { POST as recoveryRoute } from "../apps/web/app/api/operations/recovery/route";
+import {
+  resetAuthSessionStateStoreForTesting,
+  setAuthSessionStateStoreForTesting,
+  type AuthSessionStateStore
+} from "../apps/web/lib/auth-session-store";
 import { buildAuthorizedJsonRequest, createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
 
 describe("operations recovery route", () => {
@@ -24,10 +31,12 @@ describe("operations recovery route", () => {
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
     process.env.AGENTIC_PROVIDER_SECRET_KEY = "test-provider-secret-key";
+    resetAuthSessionStateStoreForTesting();
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
       await mkdtemp(path.join(os.tmpdir(), "agentic-operations-recovery-route-")),
       "runtime-store.json"
     );
+    resetAuthSessionStateStoreForTesting();
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
@@ -35,7 +44,82 @@ describe("operations recovery route", () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_PROVIDER_SECRET_KEY = originalProviderSecretKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
+    resetAuthSessionStateStoreForTesting();
     Reflect.set(globalThis, "__agenticRepository", undefined);
+    resetAuthSessionStateStoreForTesting();
+  });
+
+  it("rejects unauthenticated recovery requests before mutation", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const queued = await repository.enqueueJob(
+      createJobRecord({
+        userId: SYSTEM_USER_ID,
+        kind: "docs_render",
+        payload: {
+          type: "docs_render",
+          metadata: {}
+        },
+        availableAt: nowIso()
+      })
+    );
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await recoveryRoute(
+      new Request("http://localhost/api/operations/recovery", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "cancel_job",
+          jobId: queued.id,
+          confirm: true
+        })
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+    const unchanged = await repository.getJob(queued.id, SYSTEM_USER_ID);
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toContain("Unauthorized");
+    expect(unchanged?.status).toBe("queued");
+    expectNoStoreHeaders(response);
+  });
+
+  it("applies an operations-scoped abuse limit before recovery execution", async () => {
+    const seenKeys: string[] = [];
+    const store: AuthSessionStateStore = {
+      scope: "shared",
+      async checkRateLimit(key) {
+        seenKeys.push(key);
+        return { allowed: false, retryAfterMs: 30_000 };
+      },
+      async clearRateLimit() {},
+      async revokeSession() {},
+      async isSessionRevoked() {
+        return false;
+      },
+      async reset() {}
+    };
+
+    setAuthSessionStateStoreForTesting(store);
+
+    const response = await recoveryRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+        action: "release_expired_lease",
+        jobId: "job-rate-limited"
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(429);
+    expect(payload.error).toBe("Too many operations recovery requests. Try again later.");
+    expect(response.headers.get("retry-after")).toBe("30");
+    expect(seenKeys).toHaveLength(1);
+    expect(seenKeys[0]).toContain(`operations-recovery:user:${SYSTEM_USER_ID}:`);
+    expectNoStoreHeaders(response);
   });
 
   it("releases an expired worker lease back to the retry queue", async () => {
@@ -79,6 +163,121 @@ describe("operations recovery route", () => {
     expect(payload.recovery.job.status).toBe("retrying");
     expect(payload.recovery.job.leaseExpiresAt).toBeNull();
     expect(payload.recovery.job.claimedBy).toBeNull();
+  });
+
+  it("rejects lease release when the worker lease has not expired", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const queued = createJobRecord({
+      userId: SYSTEM_USER_ID,
+      kind: "docs_render",
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      },
+      availableAt: "3026-05-06T00:00:00.000Z"
+    });
+    await repository.enqueueJob({
+      ...queued,
+      status: "running",
+      attemptCount: 1,
+      claimedBy: "worker-active",
+      claimedAt: "3026-05-06T00:00:00.000Z",
+      lastAttemptAt: "3026-05-06T00:00:00.000Z",
+      leaseExpiresAt: "3026-05-06T00:10:00.000Z",
+      updatedAt: "3026-05-06T00:00:00.000Z"
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await recoveryRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+        action: "release_expired_lease",
+        jobId: queued.id,
+        reason: "Operator attempted early release."
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+    const unchanged = await repository.getJob(queued.id, SYSTEM_USER_ID);
+
+    expect(response.status).toBe(409);
+    expect(payload.error).toContain("does not have an expired worker lease");
+    expect(unchanged).toMatchObject({
+      status: "running",
+      claimedBy: "worker-active",
+      leaseExpiresAt: "3026-05-06T00:10:00.000Z"
+    });
+  });
+
+  it("replays a dead-lettered approval follow-up through the operations recovery lane", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    const bundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      request: "Review my inbox and draft responses.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+    await repository.saveGoalBundle(bundle);
+    const approval = bundle.approvals[0]!;
+    const queued = await enqueueApprovalFollowUpJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: approval.id,
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      decision: "rejected",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actionIntent: approval.actionIntent
+    });
+    const claimed = await repository.claimNextJob({
+      runnerId: "worker-dead-letter-replay",
+      leaseMs: 1_000
+    });
+    expect(claimed?.id).toBe(queued.id);
+    const deadLettered = await repository.deadLetterJob({
+      jobId: queued.id,
+      runnerId: "worker-dead-letter-replay",
+      error: "Worker exhausted approval follow-up retries."
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await recoveryRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+        action: "retry_dead_letter_job",
+        jobId: deadLettered.id
+      })
+    );
+    const payload = (await response.json()) as {
+      replayedFromJobId: string;
+      job: { id: string; kind: string; status: string; actionId: string | null };
+      statusUrl: string;
+    };
+    const replayed = await repository.getJob(payload.job.id, SYSTEM_USER_ID);
+
+    expect(response.status).toBe(202);
+    expectNoStoreHeaders(response);
+    expect(payload.replayedFromJobId).toBe(deadLettered.id);
+    expect(payload.job).toMatchObject({
+      kind: "approval_follow_up",
+      status: "queued"
+    });
+    expect(payload.job.actionId).toMatch(/^approval-action:[a-f0-9]{16}$/u);
+    expect(payload.statusUrl).toBe(`/api/approvals/jobs/${payload.job.id}`);
+    expect(replayed).toMatchObject({
+      status: "queued",
+      payload: {
+        metadata: {
+          replayedFromJobId: deadLettered.id,
+          actionId: payload.job.actionId
+        }
+      },
+      journal: {
+        replayedFromJobId: deadLettered.id
+      }
+    });
   });
 
   it("cancels a queued job with an audit journal entry", async () => {
@@ -203,6 +402,15 @@ describe("operations recovery route", () => {
     expect(payload.recovery.credential.lastRefreshFailureAt).toBeNull();
     expect(raw).not.toContain("super-secret-refresh-token");
     expect(raw).not.toContain("ciphertext");
+
+    const saved = await repository.getProviderCredential(credential.id, SYSTEM_USER_ID);
+    expect(saved?.metadata.recoveryAudit).toEqual([
+      expect.objectContaining({
+        action: "revalidate_connector_credential",
+        actorUserId: SYSTEM_USER_ID,
+        reason: null
+      })
+    ]);
   });
 
   it("rejects malformed recovery actions before mutation", async () => {

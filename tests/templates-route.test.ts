@@ -276,6 +276,55 @@ describe("templates routes", () => {
     expect(jobs[0]?.idempotencyKey).toMatch(/^template-run:/);
   });
 
+  it("allows manual template runs while a scheduled due window is still future-dated", async () => {
+    const repository = createRouteTestRepository();
+    const futureDueAt = new Date(Date.now() + 60 * 60_000).toISOString();
+
+    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.saveTemplate(
+      GoalTemplateSchema.parse({
+        id: "template-manual-run-before-schedule",
+        userId: SYSTEM_USER_ID,
+        name: "Manual review before schedule",
+        description: "Keep manual execution separate from scheduled autopilot due checks.",
+        request: "Review the inbox now even though the scheduled run is later.",
+        parameters: {},
+        schedule: {
+          enabled: true,
+          cron: "0 9 * * *",
+          timezone: "UTC",
+          lastRunAt: null,
+          nextRunAt: futureDueAt
+        },
+        actorContext: null,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await runTemplateRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/templates/template-manual-run-before-schedule/run", "POST"),
+      { params: Promise.resolve({ id: "template-manual-run-before-schedule" }) }
+    );
+    const payload = (await response.json()) as {
+      job: { kind: string; templateId: string; status: string };
+      statusUrl: string;
+    };
+    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+
+    expect(response.status).toBe(202);
+    expect(payload.job).toMatchObject({
+      kind: "template_run",
+      templateId: "template-manual-run-before-schedule",
+      status: "queued"
+    });
+    expect(payload.statusUrl).toContain("/api/templates/jobs/");
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.kind).toBe("template_run");
+    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+  });
+
   it("rate limits template runs with a route-scoped abuse key", async () => {
     const createResponse = await createTemplateRoute(
       buildAuthorizedJsonRequest("http://localhost/api/templates", "POST", {

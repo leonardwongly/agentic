@@ -116,6 +116,9 @@ describe("DashboardOperationsTowerCard", () => {
             severity: "attention",
             provider: "google",
             status: "refresh_failed",
+            lifecycleState: "degraded",
+            repairState: "refresh_repair_required",
+            missingScopes: [],
             updatedAt: "2026-04-21T00:00:00.000Z",
             target: {
               section: "integrations",
@@ -126,7 +129,12 @@ describe("DashboardOperationsTowerCard", () => {
             expectedSupportedModes: ["draft", "approval"],
             linkedIntegrationIds: ["gmail", "google-calendar"],
             linkedIntegrationNames: ["Gmail Adapter", "Google Calendar Adapter"],
-            meetingReadinessTarget: false
+            meetingReadinessTarget: false,
+            operatorSteps: [
+              "Run connector revalidation from the recovery lane.",
+              "Confirm encrypted credential storage remains present and secret material is not exposed.",
+              "If revalidation fails again, reconnect the provider account before widening automation."
+            ]
           }
         ]
       }
@@ -148,6 +156,8 @@ describe("DashboardOperationsTowerCard", () => {
     expect(html).toContain("Below target");
     expect(html).toContain("Expected draft · approval");
     expect(html).toContain("Gmail Adapter · Google Calendar Adapter");
+    expect(html).toContain("Run connector revalidation from the recovery lane.");
+    expect(html).toContain("Confirm encrypted credential storage remains present and secret material is not exposed.");
     expect(html).toContain("Shell effectiveness");
     expect(html).toContain("Shell: attention");
     expect(html).toContain("2 approval decisions / 30d");

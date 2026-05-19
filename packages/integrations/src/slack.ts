@@ -3,6 +3,7 @@ import { logError, recordCounter, withSpan, withTelemetryContext } from "@agenti
 import {
   ConnectorFailureError,
   createHttpConnectorError,
+  createConnectorTimeoutSignal,
   createNotConfiguredConnectorError,
   normalizeConnectorThrownError,
   parseRetryAfterSeconds
@@ -47,7 +48,8 @@ function summarizeSlackBody(body: Record<string, unknown>) {
 
 async function slackPost<T = unknown>(
   method: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  options?: { signal?: AbortSignal }
 ): Promise<T> {
   const token = getSlackBotToken();
   if (!token) {
@@ -79,7 +81,10 @@ async function slackPost<T = unknown>(
                 "Content-Type": "application/json; charset=utf-8"
               },
               body: JSON.stringify(body),
-              signal: AbortSignal.timeout(SLACK_API_TIMEOUT_MS)
+              signal: createConnectorTimeoutSignal({
+                timeoutMs: SLACK_API_TIMEOUT_MS,
+                signal: options?.signal
+              })
             });
 
             if (!response.ok) {
@@ -245,6 +250,7 @@ function buildApprovalBlocks(approval: {
 
 export async function sendApprovalMessage(params: {
   channel: string;
+  signal?: AbortSignal;
   approval: {
     id: string;
     title: string;
@@ -261,7 +267,7 @@ export async function sendApprovalMessage(params: {
     channel: params.channel,
     text: fallbackText,
     blocks
-  });
+  }, { signal: params.signal });
 
   return { ok: result.ok, ts: result.ts };
 }
@@ -270,12 +276,13 @@ export async function sendNotification(params: {
   channel: string;
   text: string;
   blocks?: unknown[];
+  signal?: AbortSignal;
 }): Promise<{ ok: boolean; ts: string }> {
   const result = await slackPost<{ ok: boolean; ts: string }>("chat.postMessage", {
     channel: params.channel,
     text: params.text,
     ...(params.blocks ? { blocks: params.blocks } : {})
-  });
+  }, { signal: params.signal });
 
   return { ok: result.ok, ts: result.ts };
 }
@@ -285,13 +292,14 @@ export async function updateMessage(params: {
   ts: string;
   text: string;
   blocks?: unknown[];
+  signal?: AbortSignal;
 }): Promise<{ ok: boolean }> {
   const result = await slackPost<{ ok: boolean }>("chat.update", {
     channel: params.channel,
     ts: params.ts,
     text: params.text,
     ...(params.blocks ? { blocks: params.blocks } : {})
-  });
+  }, { signal: params.signal });
 
   return { ok: result.ok };
 }

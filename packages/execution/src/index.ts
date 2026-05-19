@@ -179,6 +179,19 @@ const defaultRetryPolicy: JobRetryPolicy = {
   factor: 2,
   maxDelayMs: 5 * 60_000
 };
+const DEFAULT_TIMEOUT_SETTLEMENT_GRACE_MS = 100;
+
+function isPositiveInteger(value: number | undefined): boolean {
+  return Number.isInteger(value) && value !== undefined && value > 0;
+}
+
+function hasPositiveConcurrencyLimit(limits: JobConcurrencyLimits | undefined): boolean {
+  return Boolean(
+    isPositiveInteger(limits?.maxRunningPerKind) ||
+      isPositiveInteger(limits?.maxRunningPerUser) ||
+      isPositiveInteger(limits?.maxRunningPerConcurrencyKey)
+  );
+}
 
 function deriveJobSideEffectTarget(payload: JobPayload): string | null {
   if (payload.type === "approval_follow_up") {
@@ -729,11 +742,16 @@ export function createDurableJobQueue(
       );
     },
     async claimNext(params) {
+      const effectiveConcurrencyLimits = params?.concurrencyLimits ?? options.concurrencyLimits;
+      const concurrencyLimited = hasPositiveConcurrencyLimit(effectiveConcurrencyLimits);
+
       return withSpan(
         "durable_job.claim",
         {
           runnerId: options.runnerId,
-          requestedJobKinds: params?.kinds?.join(",") ?? null
+          requestedJobKinds: params?.kinds?.join(",") ?? null,
+          queue: params?.queue ?? null,
+          concurrencyLimited
         },
         async () => {
           const claimed = await store.claimNextJob({
@@ -743,13 +761,15 @@ export function createDurableJobQueue(
             runnerId: options.runnerId,
             leaseMs,
             now: params?.now,
-            concurrencyLimits: params?.concurrencyLimits ?? options.concurrencyLimits
+            concurrencyLimits: effectiveConcurrencyLimits
           });
 
           recordCounter("durable_job.claim.total", 1, {
             runnerId: options.runnerId,
             claimResult: claimed ? "hit" : "miss",
-            jobKind: claimed?.kind ?? null
+            jobKind: claimed?.kind ?? null,
+            queue: params?.queue ?? claimed?.queue ?? null,
+            concurrencyLimited
           });
 
           return claimed;
@@ -911,27 +931,59 @@ async function runJobHandlerWithOptionalTimeout(job: JobRecord, handler: JobHand
   const controller = new AbortController();
   const timeoutError = new Error(`Durable job ${job.id} timed out after ${job.timeoutMs}ms.`);
   const handlerPromise = Promise.resolve().then(() => handler(job, { signal: controller.signal }));
-  handlerPromise.catch(() => {
-    // The worker settles the durable job on the first failure result. Late handler
-    // failures after a timeout must not create unhandled rejections or a second
-    // queue transition.
-  });
+  let timedOut = false;
 
   try {
     await Promise.race([
       handlerPromise,
-      new Promise<never>((_resolve, reject) => {
+      new Promise<void>((resolve) => {
         timeout = setTimeout(() => {
+          timedOut = true;
           controller.abort(timeoutError);
-          reject(timeoutError);
+          resolve();
         }, job.timeoutMs ?? 0);
       })
     ]);
+
+    if (timedOut) {
+      const handlerSettled = await waitForHandlerSettlement(handlerPromise, DEFAULT_TIMEOUT_SETTLEMENT_GRACE_MS);
+      if (!handlerSettled) {
+        handlerPromise.catch(() => undefined);
+      }
+      throw timeoutError;
+    }
   } finally {
     if (timeout) {
       clearTimeout(timeout);
     }
   }
+}
+
+async function waitForHandlerSettlement(handlerPromise: Promise<void>, graceMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    }, graceMs);
+
+    handlerPromise
+      .then(
+        () => true,
+        () => true
+      )
+      .then((handlerSettled) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timeout);
+        resolve(handlerSettled);
+      });
+  });
 }
 
 export function transitionTaskState(task: Task, state: TaskState): Task {

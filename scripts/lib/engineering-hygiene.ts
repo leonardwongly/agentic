@@ -135,6 +135,7 @@ const DEFAULT_RELEASE_FORBIDDEN_EXTENSIONS = [
 
 const DEFAULT_SECRET_NAME_PATTERN = /(^|[/._-])(secret|token|credential|private-key)([/._-]|$)/iu;
 const REVIEWED_SECRET_NAME_PATHS = new Set([
+  "docs/runbooks/connector-credential-lifecycle.md",
   "packages/integrations/src/provider-credential-secrets.ts",
   "tests/provider-credential-secrets.test.ts"
 ]);
