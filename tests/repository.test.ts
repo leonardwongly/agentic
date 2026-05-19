@@ -356,6 +356,18 @@ describe("repository", () => {
       userId: backpressureUserId,
       now: "2026-04-16T03:03:00.000Z"
     });
+    const unrelatedRunningKind = await repository.enqueueJob(
+      createDocsRenderJob({
+        userId: `${backpressureUserId}-unrelated`,
+        priority: "critical",
+        concurrencyKey: `${backpressureUserId}:unrelated-docs`,
+        availableAt: "2026-04-16T03:03:00.000Z"
+      })
+    );
+    const claimedUnrelatedRunningKind = await queue.claimNext({
+      userId: `${backpressureUserId}-unrelated`,
+      now: "2026-04-16T03:03:00.000Z"
+    });
     const blockedCriticalSameKind = await repository.enqueueJob(
       createGoalCreateJob({
         userId: backpressureUserId,
@@ -403,6 +415,7 @@ describe("repository", () => {
     });
 
     expect(claimedRunningKind?.id).toBe(runningKind.id);
+    expect(claimedUnrelatedRunningKind?.id).toBe(unrelatedRunningKind.id);
     expect(skippedBlockedKind?.id).toBe(eligibleHighDifferentKind.id);
     expect(skippedBlockedKind?.kind).toBe("docs_render");
     expect(skippedBlockedKind?.priority).toBe("high");
