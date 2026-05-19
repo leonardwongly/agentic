@@ -65,6 +65,19 @@ GitHub repository configuration:
 - Secret `AGENTIC_GITHUB_APP_SYNC_SECRET`: same value as the Agentic runtime sync secret.
 - Variable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL`: `https://<agentic-host>/api/github/issues/app/sync`.
 
+Confirm the repository caller surface by name only; do not print secret values:
+
+```bash
+gh secret list --repo leonardwongly/agentic
+gh variable list --repo leonardwongly/agentic
+```
+
+The repository Actions secret inventory must include
+`AGENTIC_GITHUB_APP_SYNC_SECRET` and must not include
+`AGENTIC_GITHUB_APP_PRIVATE_KEY`, `AGENTIC_GITHUB_APP_INSTALLATION_ID`, or a
+GitHub installation token. Those values belong only in the Agentic deployment
+provider secret manager.
+
 Use a durable HTTPS URL for scheduled sync. The repository variable must point exactly at `/api/github/issues/app/sync` on the selected host and must not include embedded credentials, query strings, or fragments. Temporary tunnel hosts such as `trycloudflare.com`, `ngrok.io`, `ngrok.app`, `ngrok-free.app`, `loca.lt`, `localhost.run`, `devtunnels.ms`, `serveo.net`, `tunnelmole.net`, `localhost`, private network addresses, and `.local` are allowed only for explicit manual validation: scheduled runs emit a notice and skip them, while manual dispatch requires `allow_temporary_url=true`.
 
 The sync route is intentionally a pull model: GitHub Actions only triggers Agentic with a bearer secret and never receives the GitHub App private key or installation token.
@@ -84,11 +97,23 @@ GitHub App sync data flow:
 
 1. `.github/workflows/github-app-issue-sync.yml` runs on an hourly schedule or manual dispatch.
 2. The workflow validates the configured URL and bearer secret, skips scheduled runs that still point at temporary tunnel hosts, and requires `allow_temporary_url=true` for ad hoc tunnel validation.
-3. The workflow calls `POST /api/github/issues/app/sync` with `Authorization: Bearer <AGENTIC_GITHUB_APP_SYNC_SECRET>`.
+3. The workflow masks the bearer secret, creates a non-secret request id, and calls `POST /api/github/issues/app/sync` with `Authorization: Bearer <AGENTIC_GITHUB_APP_SYNC_SECRET>`, `x-request-id`, and `x-trace-id`.
 4. Agentic verifies the bearer secret with constant-time comparison and validates GitHub App runtime configuration.
 5. Agentic creates a short-lived GitHub App JWT, exchanges it for an installation token, and lists open issues from each allowlisted repository.
 6. Agentic validates and bounds GitHub API responses, skips pull requests returned by the issues endpoint, and enqueues `github_issue_intake` jobs with trigger `issues.sync`.
-7. Repeated syncs de-duplicate by repository, issue number, automation mode, and the stable `github_app:open_issue_sync` trigger id.
+7. The sync response returns each queued job id plus `statusUrl: /api/jobs/<job-id>` so the deployed worker path can be polled without exposing GitHub App credentials.
+8. Repeated syncs de-duplicate by repository, issue number, automation mode, and the stable `github_app:open_issue_sync` trigger id.
+
+Deployed completion proof:
+
+```bash
+export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
+export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-the-runtime-access-key
+export AGENTIC_GITHUB_APP_SYNC_SECRET=replace-this-with-the-runtime-sync-secret
+npm run test:smoke:github-app-sync
+```
+
+The canary calls `/api/github/issues/app/sync`, validates same-origin job status URLs, and polls `/api/jobs/<job-id>` until every returned `github_issue_intake` job completes, dead-letters, or times out. The emitted evidence includes repository names, issue numbers, job ids, attempts, request/trace ids, and timings; it does not print the sync secret, access key, GitHub App private key, installation token, or raw issue body.
 
 ## Security Notes
 
@@ -102,6 +127,7 @@ GitHub App sync data flow:
 - Payloads over 256 KB are rejected. Issue body text is trimmed to 10,000 characters in the job payload and to the orchestrator request limit during worker execution.
 - The GitHub App sync route stores only bounded issue fields and never logs the app private key, installation token, bearer sync secret, raw GitHub response, or raw issue body.
 - The scheduled sync workflow does not receive the GitHub App private key; it only receives a route-specific bearer secret.
+- Missing or malformed runtime-only GitHub App configuration returns a sanitized operational error before any GitHub API call is attempted.
 
 ## Validation
 
@@ -109,6 +135,7 @@ Run focused checks after changing this flow:
 
 ```bash
 npm test -- tests/github-issue-webhook-route.test.ts tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/worker-runtime.test.ts
+npm test -- tests/github-issue-job-route.test.ts tests/deployment-github-app-sync-canary.test.ts
 npm run ci:validate-provenance
 npm run build
 ```

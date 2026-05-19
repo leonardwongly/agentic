@@ -74,7 +74,7 @@ If GitHub-hosted runners are blocked before startup, local CI can prove the repo
 
 ## Requirements
 
-- Node 20 for parity with GitHub Actions. The repo declares `>=20 <26`.
+- Node 22 for parity with GitHub Actions. The repo declares `>=20 <26`.
 - Docker for `--full --with-postgres`, container image build, and artifact image export.
 - Playwright browser dependencies for full E2E, installed by the full local CI plan.
 - `pandoc` if docs rendering is part of the local validation being run separately.

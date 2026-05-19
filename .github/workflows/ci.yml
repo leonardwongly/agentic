@@ -7,8 +7,8 @@ on:
   pull_request:
 
 env:
-  # GitHub is deprecating the Node 20 Actions runtime; opt into the Node 24
-  # path now so warning-only transitions do not become surprise CI failures later.
+  # Keep JavaScript actions on the newer runtime while project validation runs
+  # on the same Node LTS major used by local CI.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NEXT_TELEMETRY_DISABLED: "1"
 
@@ -30,8 +30,14 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
+
+      - name: Report provenance runtime
+        run: |
+          node --version
+          npm --version
+          npm config get cache
 
       - run: npm ci
 
@@ -68,7 +74,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
@@ -107,7 +113,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install pandoc

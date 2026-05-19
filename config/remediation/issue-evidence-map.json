@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "generatedFor": "task/w07-tracker-evidence-map",
+  "roadmapIssue": 152,
+  "workstreamIssue": 184,
+  "entries": [
+    {
+      "issue": 184,
+      "title": "plan(tracker): refresh remediation tracker and stale work surfaces",
+      "status": "implemented",
+      "ownerLane": "lead-integrator",
+      "implementationProof": [
+        {
+          "kind": "config",
+          "ref": "config/remediation/issue-evidence-map.json",
+          "note": "Maps the W7 tracker workstream to concrete evidence, validation gates, blockers, and residual risks."
+        },
+        {
+          "kind": "docs",
+          "ref": "docs/runbooks/remediation-evidence-map.md",
+          "note": "Documents how tracker evidence separates implementation proof from deployment proof and stale work."
+        }
+      ],
+      "validationGates": [
+        "npm run remediation:evidence-map",
+        "npm run remediation:verify",
+        "npm run remediation:dashboard"
+      ],
+      "deploymentProof": {
+        "status": "not_required",
+        "evidence": [
+          {
+            "kind": "docs",
+            "ref": "docs/runbooks/remediation-evidence-map.md",
+            "note": "Tracker evidence is repository-local and has no runtime deployment step."
+          }
+        ]
+      },
+      "residualRisks": []
+    },
+    {
+      "issue": 185,
+      "parent": 184,
+      "title": "ops(tracker): reconcile AOS and DASH manifest state with live GitHub issues",
+      "status": "implemented",
+      "ownerLane": "lead-integrator",
+      "implementationProof": [
+        {
+          "kind": "script",
+          "ref": "scripts/aos-remediation-dashboard.ts",
+          "note": "Verifies the remediation tracker manifest and live GitHub coverage query."
+        },
+        {
+          "kind": "config",
+          "ref": "config/remediation/aos-tracker.json",
+          "note": "Defines the AOS tracker items, ownership lanes, dependencies, and validation gates."
+        }
+      ],
+      "validationGates": [
+        "npm run remediation:verify",
+        "npm run remediation:dashboard"
+      ],
+      "deploymentProof": {
+        "status": "not_required",
+        "evidence": [
+          {
+            "kind": "ci",
+            "ref": "npm run remediation:verify",
+            "note": "Local verification is sufficient because this is a tracker reconciliation gate."
+          }
+        ]
+      },
+      "residualRisks": []
+    },
+    {
+      "issue": 186,
+      "parent": 184,
+      "title": "ops(tracker): create issue-to-evidence map for implemented remediation work",
+      "status": "implemented",
+      "ownerLane": "lead-integrator",
+      "implementationProof": [
+        {
+          "kind": "config",
+          "ref": "config/remediation/issue-evidence-map.json",
+          "note": "Provides the updateable issue-to-evidence map for W7 tracker closeout."
+        },
+        {
+          "kind": "script",
+          "ref": "scripts/remediation-evidence-map.ts",
+          "note": "Validates the evidence map from the command line."
+        },
+        {
+          "kind": "test",
+          "ref": "tests/remediation-evidence-map.test.ts",
+          "note": "Covers valid evidence maps, missing blockers, missing paths, unsafe refs, and secret-like values."
+        }
+      ],
+      "validationGates": [
+        "npm run remediation:evidence-map",
+        "npm exec -- vitest run tests/remediation-evidence-map.test.ts"
+      ],
+      "deploymentProof": {
+        "status": "not_required",
+        "evidence": [
+          {
+            "kind": "docs",
+            "ref": "docs/runbooks/remediation-evidence-map.md",
+            "note": "The evidence map is repository-local and does not require runtime deployment proof."
+          }
+        ]
+      },
+      "residualRisks": []
+    },
+    {
+      "issue": 187,
+      "parent": 184,
+      "title": "chore(pr): triage stale OSS readiness PR #136",
+      "status": "implemented",
+      "ownerLane": "lead-integrator",
+      "implementationProof": [
+        {
+          "kind": "github_pr",
+          "ref": "https://github.com/leonardwongly/agentic/pull/136",
+          "note": "PR #136 is closed, so it no longer appears as ambiguous live remediation work."
+        }
+      ],
+      "validationGates": [
+        "gh pr view 136 --json state,mergeStateStatus,files,commits,statusCheckRollup"
+      ],
+      "deploymentProof": {
+        "status": "not_required",
+        "evidence": [
+          {
+            "kind": "github_pr",
+            "ref": "#136",
+            "note": "No deployment proof is required for stale PR triage; the live state is closed."
+          }
+        ]
+      },
+      "residualRisks": []
+    },
+    {
+      "issue": 188,
+      "parent": 184,
+      "title": "docs(tracker): document roadmap ownership and sequencing rules",
+      "status": "implemented",
+      "ownerLane": "lead-integrator",
+      "implementationProof": [
+        {
+          "kind": "docs",
+          "ref": "docs/runbooks/engineering-hygiene.md",
+          "note": "Documents issue evidence discipline, stale artifact reconciliation, branch hygiene, first-run validation, and rollback."
+        },
+        {
+          "kind": "docs",
+          "ref": "docs/runbooks/parallel-worktrees.md",
+          "note": "Documents worktree sequencing, ownership, merge order, and cleanup discipline."
+        }
+      ],
+      "validationGates": [
+        "npm run docs:validate",
+        "npm run remediation:verify"
+      ],
+      "deploymentProof": {
+        "status": "not_required",
+        "evidence": [
+          {
+            "kind": "docs",
+            "ref": "docs/runbooks/engineering-hygiene.md",
+            "note": "Tracker operating rules are repository documentation and have no deployment step."
+          }
+        ]
+      },
+      "residualRisks": []
+    },
+    {
+      "issue": 190,
+      "title": "plan(w01): Production proof and runtime closeout",
+      "status": "blocked",
+      "ownerLane": "runtime-platform",
+      "blockers": [141, 142, 143, 144, 145],
+      "implementationProof": [
+        {
+          "kind": "github_issue",
+          "ref": "#190",
+          "note": "W01 remains open because the code-backed PRs are separated from external live deployment proof."
+        }
+      ],
+      "validationGates": [
+        "npm run deploy:ingress:check",
+        "npm run db:status -- --require-ready",
+        "npm run test:smoke:deployment",
+        "npm run test:smoke:deployment-async"
+      ],
+      "deploymentProof": {
+        "status": "blocked",
+        "blockers": [141, 142, 143, 144, 145],
+        "evidence": [
+          {
+            "kind": "github_issue",
+            "ref": "#141",
+            "note": "Stable provider target and HTTPS ingress remain blocked externally."
+          }
+        ]
+      },
+      "residualRisks": [
+        {
+          "title": "Production-like deployment evidence remains unavailable until provider target setup completes.",
+          "owner": "platform",
+          "blockerIssues": [141],
+          "mitigation": "Keep #137/#141-#146 open and treat local CI as implementation evidence only."
+        }
+      ]
+    }
+  ]
+}

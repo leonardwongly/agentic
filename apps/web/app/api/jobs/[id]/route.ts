@@ -4,7 +4,8 @@ import {
 import {
   ApprovalFollowUpJobPayloadSchema,
   ApprovalNotificationJobPayloadSchema,
-  AutopilotProcessJobPayloadSchema
+  AutopilotProcessJobPayloadSchema,
+  GitHubIssueIntakeJobPayloadSchema
 } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../lib/api-response";
@@ -19,6 +20,7 @@ type RouteContext = {
 const APPROVAL_JOB_FAILURE_MESSAGE = "Approval follow-up failed. Replay the job or inspect worker logs.";
 const APPROVAL_NOTIFICATION_FAILURE_MESSAGE = "Approval notification failed. Replay the job or inspect worker logs.";
 const AUTOPILOT_JOB_FAILURE_MESSAGE = "Autopilot event processing failed. Replay the job or inspect worker logs.";
+const GITHUB_ISSUE_INTAKE_FAILURE_MESSAGE = "GitHub issue intake failed. Replay the job or inspect worker logs.";
 
 function buildJobJournal(job: {
   journal: {
@@ -221,6 +223,59 @@ export async function GET(request: Request, context: RouteContext) {
       return authenticatedJson(
         {
           ...responseBody,
+          error: null
+        },
+        { status: 202 }
+      );
+    }
+
+    if (job?.kind === "github_issue_intake" && job.payload.type === "github_issue_intake") {
+      const intakePayload = GitHubIssueIntakeJobPayloadSchema.parse(job.payload);
+      const responseBody = {
+        job: {
+          id: job.id,
+          kind: job.kind,
+          status: job.status,
+          repository: intakePayload.repository.fullName,
+          issueNumber: intakePayload.issue.number,
+          automationMode: intakePayload.automationMode,
+          goalId: intakePayload.goalId,
+          workflowId: intakePayload.workflowId,
+          triggerId: intakePayload.metadata.triggerId,
+          attemptCount: job.attemptCount,
+          maxAttempts: job.maxAttempts,
+          journal: buildJobJournal(job),
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt
+        }
+      };
+
+      if (job.status === "completed") {
+        const bundle = await repository.getGoalBundleForUser(intakePayload.goalId, principal.userId);
+
+        if (!bundle) {
+          throw new Error(`GitHub issue intake goal ${intakePayload.goalId} is missing after job completion.`);
+        }
+
+        return authenticatedJson({
+          ...responseBody,
+          result: buildGoalJobResultSummary(bundle),
+          error: null
+        });
+      }
+
+      if (job.status === "dead_letter") {
+        return authenticatedJson({
+          ...responseBody,
+          result: null,
+          error: GITHUB_ISSUE_INTAKE_FAILURE_MESSAGE
+        });
+      }
+
+      return authenticatedJson(
+        {
+          ...responseBody,
+          result: null,
           error: null
         },
         { status: 202 }

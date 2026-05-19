@@ -1,0 +1,538 @@
+{
+  "version": 1,
+  "release": {
+    "name": "W01 production proof and runtime closeout",
+    "environment": "production-like target pending provider unlock",
+    "generatedForIssue": 204,
+    "parentIssues": [137, 146, 190],
+    "status": "ready_with_blockers"
+  },
+  "pullRequests": [
+    {
+      "number": 858,
+      "title": "ci: require stable ingress evidence contract",
+      "url": "https://github.com/leonardwongly/agentic/pull/858",
+      "status": "blocked",
+      "localValidation": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run format:check",
+        "npm run ci:local"
+      ],
+      "hostedStatus": "Hosted provenance-gate failed before validate jobs because the repository billing/provenance path is unavailable; AgentForge, Socket, Snyk, and local CI provide review evidence.",
+      "blockerIssues": [141]
+    },
+    {
+      "number": 859,
+      "title": "sec: harden GitHub App sync caller boundary",
+      "url": "https://github.com/leonardwongly/agentic/pull/859",
+      "status": "blocked",
+      "localValidation": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run format:check",
+        "npm run ci:local"
+      ],
+      "hostedStatus": "Hosted provenance-gate failed before validate jobs because the repository billing/provenance path is unavailable; AgentForge, Socket, Snyk, and local CI provide review evidence.",
+      "blockerIssues": [142, 145]
+    },
+    {
+      "number": 860,
+      "title": "fix: prove Postgres shared-auth bootstrap",
+      "url": "https://github.com/leonardwongly/agentic/pull/860",
+      "status": "blocked",
+      "localValidation": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run format:check",
+        "npm run build",
+        "npm run test:security:regression",
+        "npm run test:performance:fitness",
+        "npm run ci:local"
+      ],
+      "hostedStatus": "Hosted provenance-gate failed before validate jobs because the repository billing/provenance path is unavailable; local CI is the release evidence until hosted validation can run.",
+      "blockerIssues": [141, 143]
+    },
+    {
+      "number": 861,
+      "title": "fix: prove GitHub sync worker completion",
+      "url": "https://github.com/leonardwongly/agentic/pull/861",
+      "status": "blocked",
+      "localValidation": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run format:check",
+        "npm run build",
+        "npm run test:security:regression",
+        "npm run test:performance:fitness",
+        "npm run ci:local"
+      ],
+      "hostedStatus": "Hosted provenance-gate failed before validate jobs because the repository billing/provenance path is unavailable; local CI is the release evidence until hosted validation can run.",
+      "blockerIssues": [141, 144, 145]
+    }
+  ],
+  "trackedIssues": [
+    {
+      "issue": 204,
+      "parent": 190,
+      "title": "task(w01-t05): Package rollout rollback and residual-risk evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "config/release/production-runtime-closeout.json",
+          "status": "ready",
+          "note": "Machine-readable release closeout manifest linking PRs, local CI, live blockers, rollback, disablement, and residual risk."
+        },
+        {
+          "kind": "repo_path",
+          "ref": "scripts/release-closeout-evidence.ts",
+          "status": "ready",
+          "note": "CLI validation gate for the release closeout evidence package."
+        }
+      ]
+    },
+    {
+      "issue": 286,
+      "parent": 204,
+      "title": "inventory current behavior for release closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "docs/runbooks/deployment.md",
+          "status": "ready",
+          "note": "Existing rollout, rollback, Render blocker, and live validation requirements were inventoried as the baseline."
+        }
+      ]
+    },
+    {
+      "issue": 287,
+      "parent": 204,
+      "title": "define target contract for release closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "scripts/lib/release-closeout-evidence.ts",
+          "status": "ready",
+          "note": "Defines the closeout manifest contract and required evidence gates."
+        }
+      ]
+    },
+    {
+      "issue": 288,
+      "parent": 204,
+      "title": "implement boundary changes for release closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "scripts/lib/release-closeout-evidence.ts",
+          "status": "ready",
+          "note": "Rejects unsafe refs, unresolved repo paths, missing blockers, and secret-like material before closeout evidence can pass."
+        }
+      ]
+    },
+    {
+      "issue": 289,
+      "parent": 204,
+      "title": "add happy-path and regression tests for release closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "tests/release-closeout-evidence.test.ts",
+          "status": "ready",
+          "note": "Covers the checked-in closeout manifest and a minimal valid fixture."
+        }
+      ]
+    },
+    {
+      "issue": 290,
+      "parent": 204,
+      "title": "add negative and abuse coverage for release closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "tests/release-closeout-evidence.test.ts",
+          "status": "ready",
+          "note": "Covers secret-like material, missing blockers, unsafe URLs, and unresolved repo evidence paths."
+        }
+      ]
+    },
+    {
+      "issue": 291,
+      "parent": 204,
+      "title": "add observability and evidence hooks for release closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "docs/runbooks/release-closeout-evidence.md",
+          "status": "ready",
+          "note": "Documents how retained telemetry, deployment confidence, and local CI evidence attach to the closeout package."
+        }
+      ]
+    },
+    {
+      "issue": 292,
+      "parent": 204,
+      "title": "document rollout and rollback for release closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "docs/runbooks/release-closeout-evidence.md",
+          "status": "ready",
+          "note": "Documents rollout, rollback, disablement, secret rotation, and blocked-live-proof handling."
+        }
+      ]
+    },
+    {
+      "issue": 293,
+      "parent": 204,
+      "title": "run performance sanity checks for release closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "local_ci",
+          "ref": "npm run test:performance:fitness",
+          "status": "passed",
+          "note": "Performance sanity remains bounded by the existing release fitness gate; the closeout validator is linear over manifest size."
+        }
+      ]
+    },
+    {
+      "issue": 294,
+      "parent": 204,
+      "title": "validate and link evidence for release closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "local_ci",
+          "ref": "npm run release:closeout:evidence",
+          "status": "passed",
+          "note": "The manifest validator is the local evidence-linking gate for this release closeout package."
+        }
+      ]
+    },
+    {
+      "issue": 141,
+      "parent": 190,
+      "title": "ops(deploy): choose production target and stable HTTPS ingress",
+      "status": "blocked",
+      "blockers": [141],
+      "evidence": [
+        {
+          "kind": "github_issue",
+          "ref": "#141",
+          "status": "blocked",
+          "note": "Render target creation is blocked by provider billing; no stable production-like HTTPS target exists yet."
+        }
+      ]
+    },
+    {
+      "issue": 142,
+      "parent": 190,
+      "title": "sec(config): configure GitHub App sync runtime and repo settings",
+      "status": "blocked",
+      "blockers": [141, 142],
+      "evidence": [
+        {
+          "kind": "github_issue",
+          "ref": "#142",
+          "status": "blocked",
+          "note": "Repository settings cannot be promoted from temporary URL posture until the stable ingress issue closes."
+        }
+      ]
+    },
+    {
+      "issue": 143,
+      "parent": 190,
+      "title": "ops(runtime): prove Postgres and shared-auth production bootstrap",
+      "status": "blocked",
+      "blockers": [141, 143],
+      "evidence": [
+        {
+          "kind": "github_issue",
+          "ref": "#143",
+          "status": "blocked",
+          "note": "Target database proof remains blocked until provider Postgres can be created."
+        }
+      ]
+    },
+    {
+      "issue": 144,
+      "parent": 190,
+      "title": "ops(worker): verify deployed worker durability and recovery behavior",
+      "status": "blocked",
+      "blockers": [141, 144],
+      "evidence": [
+        {
+          "kind": "github_issue",
+          "ref": "#144",
+          "status": "blocked",
+          "note": "Deployed worker proof remains blocked until the web and worker services exist behind stable ingress."
+        }
+      ]
+    },
+    {
+      "issue": 145,
+      "parent": 190,
+      "title": "test(github): validate live GitHub App issue sync end to end",
+      "status": "blocked",
+      "blockers": [141, 142, 144, 145],
+      "evidence": [
+        {
+          "kind": "github_issue",
+          "ref": "#145",
+          "status": "blocked",
+          "note": "Live sync validation remains blocked until stable ingress, repo settings, and deployed worker proof are available."
+        }
+      ]
+    },
+    {
+      "issue": 146,
+      "parent": 190,
+      "title": "docs(release): capture rollout, rollback, and production closeout evidence",
+      "status": "implemented",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "docs/runbooks/release-closeout-evidence.md",
+          "status": "ready",
+          "note": "The release closeout evidence runbook provides the operational handoff artifact and closure discipline."
+        }
+      ]
+    }
+  ],
+  "validationGates": [
+    {
+      "id": "deploy-ingress-check",
+      "command": "npm run deploy:ingress:check",
+      "status": "blocked",
+      "evidence": [
+        {
+          "kind": "github_issue",
+          "ref": "#141",
+          "status": "blocked",
+          "note": "Stable external HTTPS origin and provider ownership are not available yet."
+        }
+      ],
+      "blockerIssues": [141, 142],
+      "notes": "Run after the production-like target has a stable HTTPS base URL and trusted proxy header contract."
+    },
+    {
+      "id": "db-status-require-ready",
+      "command": "npm run db:status -- --require-ready",
+      "status": "blocked",
+      "evidence": [
+        {
+          "kind": "github_issue",
+          "ref": "#143",
+          "status": "blocked",
+          "note": "Target Postgres is not available while provider creation is blocked."
+        }
+      ],
+      "blockerIssues": [141, 143],
+      "notes": "Run against the target DATABASE_URL only after the managed database exists."
+    },
+    {
+      "id": "deployment-smoke",
+      "command": "npm run test:smoke:deployment",
+      "status": "blocked",
+      "evidence": [
+        {
+          "kind": "github_issue",
+          "ref": "#141",
+          "status": "blocked",
+          "note": "No stable target exists for external smoke validation."
+        }
+      ],
+      "blockerIssues": [141, 142],
+      "notes": "Run after AGENTIC_SMOKE_BASE_URL points to the stable deployed target."
+    },
+    {
+      "id": "deployment-async-canary",
+      "command": "npm run test:smoke:deployment-async",
+      "status": "blocked",
+      "evidence": [
+        {
+          "kind": "github_issue",
+          "ref": "#144",
+          "status": "blocked",
+          "note": "Deployed worker durability is not available until the target web and worker processes exist."
+        }
+      ],
+      "blockerIssues": [141, 144],
+      "notes": "Run after the deployed worker writes fresh heartbeat and can complete queued jobs."
+    },
+    {
+      "id": "rollout-gate",
+      "command": "npm run telemetry:rollout-gate -- --dir \"${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}\"",
+      "status": "blocked",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "config/observability/alerts.json",
+          "status": "ready",
+          "note": "Checked-in rollout gate thresholds are available, but retained live telemetry is not available until deployment."
+        }
+      ],
+      "blockerIssues": [141, 144],
+      "notes": "Run after deployment smoke and async canary have produced retained telemetry batches."
+    },
+    {
+      "id": "local-ci",
+      "command": "npm run ci:local",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "local_ci",
+          "ref": "npm run ci:local",
+          "status": "passed",
+          "note": "Used as the validation fallback while hosted provenance-gate blocks CI validate jobs."
+        }
+      ],
+      "notes": "Local CI is required on each implementation branch until hosted billing/provenance blockers are removed."
+    }
+  ],
+  "rollout": {
+    "targetStatus": "blocked",
+    "targetSummary": "Provider-backed production-like target is not created yet; Render validation reaches the provider but returns need_payment_info before resource creation.",
+    "rolloutSteps": [
+      "Unlock provider billing and confirm account owner, environment name, stable HTTPS hostname, rollback authority, and trusted proxy header behavior.",
+      "Create or sync the provider resources from deploy/render/render.yaml with Auto Sync disabled for first rollout.",
+      "Run migrations and db status against the target database before app startup.",
+      "Deploy the same release artifact to web and worker, then verify /api/health and /api/ready from outside the deployment boundary.",
+      "Run deployment smoke, async canary, GitHub App sync canary, and rollout-gate validation before marking traffic healthy."
+    ],
+    "rollbackSteps": [
+      "Stop routing new traffic to the current release.",
+      "Restore the previous known-good application image or release artifact for both web and worker.",
+      "Re-run /api/health and /api/ready against the restored target.",
+      "Re-run deployment smoke, async canary, and rollout-gate validation against the restored target.",
+      "Keep additive schema changes in place unless a separately tested operator-approved data rollback plan exists."
+    ],
+    "disablement": [
+      {
+        "surface": "Scheduled GitHub App issue sync",
+        "action": "Disable the scheduled workflow or clear the stable sync URL until live sync proof is restored.",
+        "evidence": [
+          {
+            "kind": "repo_path",
+            "ref": "docs/runbooks/deployment.md",
+            "status": "ready",
+            "note": "Deployment runbook requires waiting for a stable URL before enabling the GitHub App sync URL."
+          }
+        ]
+      },
+      {
+        "surface": "Provider-backed traffic",
+        "action": "Restore the previous web and worker release artifact and keep schema rollback manual.",
+        "evidence": [
+          {
+            "kind": "repo_path",
+            "ref": "docs/runbooks/deployment.md",
+            "status": "ready",
+            "note": "Rollback section defines traffic restore, smoke rerun, and schema rollback constraints."
+          }
+        ]
+      }
+    ],
+    "secretRotation": [
+      {
+        "surface": "Deployment smoke access key",
+        "action": "Rotate the target smoke key through the provider and matching GitHub secret, then rerun smoke validation without recording the value.",
+        "evidence": [
+          {
+            "kind": "repo_path",
+            "ref": "docs/runbooks/deployment.md",
+            "status": "ready",
+            "note": "Runbook maps STAGING_SMOKE_ACCESS_KEY to the runtime smoke key without exposing values."
+          }
+        ]
+      },
+      {
+        "surface": "GitHub App sync shared secret",
+        "action": "Rotate the runtime sync secret and repository secret together, then rerun the sync canary against the stable target.",
+        "evidence": [
+          {
+            "kind": "repo_path",
+            "ref": "docs/security/high-risk-external-side-effects-threat-model.md",
+            "status": "ready",
+            "note": "Threat model requires side-effect evidence and rollback or disablement instructions without copying raw secret values."
+          }
+        ]
+      }
+    ]
+  },
+  "residualRisks": [
+    {
+      "id": "provider-target-blocked",
+      "title": "No production-like provider target exists yet",
+      "severity": "high",
+      "status": "blocked",
+      "owner": "platform",
+      "blockerIssues": [141],
+      "mitigation": "Do not close #137 or promote live rollout claims until the provider target exists, ingress is stable, and smoke evidence is attached."
+    },
+    {
+      "id": "live-database-proof-blocked",
+      "title": "Postgres and shared-auth proof is static/local until target database exists",
+      "severity": "high",
+      "status": "blocked",
+      "owner": "platform",
+      "blockerIssues": [141, 143],
+      "mitigation": "Keep #143 open and rerun db status plus production bootstrap check against the target DATABASE_URL after provider unlock."
+    },
+    {
+      "id": "deployed-worker-sync-proof-blocked",
+      "title": "Worker durability and live GitHub sync proof require deployed web and worker",
+      "severity": "high",
+      "status": "blocked",
+      "owner": "platform",
+      "blockerIssues": [141, 144, 145],
+      "mitigation": "Keep #144 and #145 open until async canary, GitHub sync canary, and rollout telemetry pass against stable ingress."
+    },
+    {
+      "id": "hosted-ci-provenance-blocked",
+      "title": "Hosted validate jobs are skipped after provenance-gate failure",
+      "severity": "medium",
+      "status": "accepted",
+      "owner": "platform-security",
+      "blockerIssues": [190],
+      "mitigation": "Use local CI evidence on every implementation branch and re-run hosted CI after billing/provenance availability is restored."
+    }
+  ],
+  "observability": {
+    "evidenceHooks": [
+      {
+        "kind": "repo_path",
+        "ref": "scripts/deployment-confidence.ts",
+        "status": "ready",
+        "note": "Combines deployment smoke, async canary, and retained telemetry rollout-gate evidence."
+      },
+      {
+        "kind": "repo_path",
+        "ref": "scripts/observability-rollout-gate.ts",
+        "status": "ready",
+        "note": "Validates retained telemetry against checked-in rollout gate thresholds."
+      },
+      {
+        "kind": "repo_path",
+        "ref": "config/observability/alerts.json",
+        "status": "ready",
+        "note": "Defines rollout-gate and advisory thresholds."
+      }
+    ],
+    "retainedTelemetry": "AGENTIC_TELEMETRY_RETENTION_DIR",
+    "commands": [
+      "npm run test:smoke:deployment-confidence",
+      "npm run telemetry:rollout-gate -- --dir \"${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}\"",
+      "npm run release:closeout:evidence"
+    ]
+  }
+}

@@ -17,7 +17,7 @@ The product is intentionally designed as a TypeScript-first modular monolith so 
 
 ## Architecture
 
-The current system runs as a TypeScript-first Node 20 application with a Next.js web surface, a dedicated worker process for durable execution, shared packages for orchestration and policy logic, and a repository layer that can run against Postgres or a deterministic file-backed development store outside production.
+The current system runs as a TypeScript-first Node 22 application with a Next.js web surface, a dedicated worker process for durable execution, shared packages for orchestration and policy logic, and a repository layer that can run against Postgres or a deterministic file-backed development store outside production.
 
 ### Core Modules
 
