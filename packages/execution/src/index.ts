@@ -179,6 +179,7 @@ const defaultRetryPolicy: JobRetryPolicy = {
   factor: 2,
   maxDelayMs: 5 * 60_000
 };
+const DEFAULT_TIMEOUT_SETTLEMENT_GRACE_MS = 100;
 
 function isPositiveInteger(value: number | undefined): boolean {
   return Number.isInteger(value) && value !== undefined && value > 0;
@@ -945,12 +946,9 @@ async function runJobHandlerWithOptionalTimeout(job: JobRecord, handler: JobHand
     ]);
 
     if (timedOut) {
-      try {
-        await handlerPromise;
-      } catch {
-        // The timeout is the durable-job failure cause. Handler errors observed
-        // after cancellation are intentionally consumed so the queue does not
-        // transition twice or leak an unhandled rejection.
+      const handlerSettled = await waitForHandlerSettlement(handlerPromise, DEFAULT_TIMEOUT_SETTLEMENT_GRACE_MS);
+      if (!handlerSettled) {
+        handlerPromise.catch(() => undefined);
       }
       throw timeoutError;
     }
@@ -959,6 +957,33 @@ async function runJobHandlerWithOptionalTimeout(job: JobRecord, handler: JobHand
       clearTimeout(timeout);
     }
   }
+}
+
+async function waitForHandlerSettlement(handlerPromise: Promise<void>, graceMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    }, graceMs);
+
+    handlerPromise
+      .then(
+        () => true,
+        () => true
+      )
+      .then((handlerSettled) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timeout);
+        resolve(handlerSettled);
+      });
+  });
 }
 
 export function transitionTaskState(task: Task, state: TaskState): Task {

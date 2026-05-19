@@ -581,8 +581,8 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         emittingWatcherCount: data.watchers.filter(
           (watcher) =>
             watcher.status === "active" &&
-            watcher.schedule.enabled &&
-            !watcher.schedule.dryRun &&
+            watcher.schedule?.enabled === true &&
+            watcher.schedule.dryRun !== true &&
             watcher.escalationPolicy.notify
         ).length,
         autopilotMode: data.autopilotSettings.mode,
@@ -623,7 +623,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
   );
   const coreLoopSummary = useMemo(() => summarizeCoreLoopTelemetry(data), [data]);
   const coreLoopHealthCopy = useMemo(() => describeCoreLoopHealth(coreLoopSummary), [coreLoopSummary]);
-
   const selectedOperatorProduct = useMemo(
     () =>
       operatorProductSelection
@@ -631,7 +630,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         : null,
     [operatorProductSelection, operatorProducts]
   );
-
   const operatorProductTemplateLookup = templates.length > 0 ? templates : operatorProductTemplates;
   const commandCenterModel = useMemo(
     () =>
@@ -706,7 +704,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       ),
     [data.activeWorkspace, resolveSharedWorkflowMutationState]
   );
-
   const reliabilityHealth = useMemo(() => {
     const status: "healthy" | "degraded" | "failing" =
       data.diagnostics.status === "critical"
@@ -723,7 +720,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       lastCheck: new Date(data.diagnostics.generatedAt)
     };
   }, [data.diagnostics]);
-
   const reliabilitySummary = useMemo(() => {
     if (data.diagnostics.totalCount === 0) {
       return "No reliability regressions are open across approvals, memory freshness, async execution, or connector health.";
@@ -731,7 +727,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
     return `${data.diagnostics.totalCount} reliability signal${data.diagnostics.totalCount === 1 ? "" : "s"} need attention.`;
   }, [data.diagnostics.totalCount]);
-
   const focusRequestComposer = useCallback(() => {
     document.querySelector<HTMLTextAreaElement>(".request-card textarea")?.focus();
   }, []);
@@ -1176,7 +1171,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       toast.error("Commitments inbox failed", errorMessage);
     }
   }, []);
-
   useEffect(() => {
     void loadCommitmentInbox(commitmentBucket, { quiet: true });
   }, [commitmentBucket, data.commitments, loadCommitmentInbox]);
@@ -1193,7 +1187,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       action === "confirm" ? "Confirmed memory." : "Reviewed memory."
     );
   }, [refreshDashboard]);
-
   const updateWatcher = useCallback(async (watcherId: string, action: "pause" | "resume") => {
     await refreshDashboard(
       fetch(`/api/watchers/${watcherId}`, {
@@ -1206,7 +1199,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       action === "pause" ? "Paused watcher." : "Resumed watcher."
     );
   }, [refreshDashboard]);
-
   const updateCommitment = useCallback(async (
     commitmentId: string,
     updatedAt: string,
@@ -1389,7 +1381,6 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       setIsPending(false);
     }
   }, []);
-
   const runPrivacyOperation = useCallback(async (
     kind: (typeof privacyOperationKindValues)[number],
     options?: { confirmationPhrase?: string }

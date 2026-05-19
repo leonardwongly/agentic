@@ -111,7 +111,8 @@ describe("dashboard async helpers", () => {
       {
         fetchImpl,
         pollIntervalMs: 0,
-        timeoutMs: 10
+        timeoutMs: 10,
+        preferEventStream: false
       }
     );
 
