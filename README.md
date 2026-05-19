@@ -1,236 +1,160 @@
 # Agentic
 
-Agentic is a trusted execution control plane for goals, commitments, approvals, automations, memories, documents, and integrations. It is built as a TypeScript-first modular monolith with a Next.js web surface, a durable worker-backed execution loop, tenant-scoped provider credentials, governance and privacy controls, and a reproducible `agentic.docx` pipeline.
+Agentic is a trusted execution control plane for governed goals, approvals, automations, memories, documents, and integrations. It is a private TypeScript monorepo with a Next.js dashboard/API surface, a dedicated worker runtime, shared packages for policy and orchestration, and production gates for persistence, readiness, security, and deployment evidence.
 
-## What It Does
+The project is not just a chat UI. It keeps work inside an auditable loop:
 
-Agentic keeps work inside a bounded operating loop:
+1. capture an operator request, commitment, watcher event, or integration signal
+2. validate the input and resolve workspace/user context
+3. classify risk through governance and connector readiness
+4. enqueue long-running work into durable worker jobs
+5. request approval before higher-risk external action
+6. persist evidence, artifacts, audit records, and learned context
 
-1. capture goals, commitments, and workspace signals
-2. classify risk and apply governance
-3. decide whether to draft, request approval, or execute
-4. run through provider-neutral integrations and worker jobs
-5. persist outcomes, evidence, audit history, and learned context
+## Table Of Contents
 
-The current product surface includes:
+- [Current State](#current-state)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [Local Development Modes](#local-development-modes)
+- [Configuration](#configuration)
+- [Running And Using Agentic](#running-and-using-agentic)
+- [Testing And Validation](#testing-and-validation)
+- [Deployment Notes](#deployment-notes)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [Reference Docs](#reference-docs)
 
-- a commitment-first dashboard and core-loop API
-- async goal creation and briefing generation with durable job polling
-- GitHub issue automation that enqueues governed Agentic worker jobs from issue opens, labels, and authorized comments
-- agents, templates, workflow templates, watchers, and operator products
-- approvals, autopilot events, and governance-aware execution paths
-- memories and self-improving outcome capture
-- tenant-scoped Google integrations with readiness-aware activation
-- local-notes, Slack, and Telegram integration surfaces
-- privacy lifecycle operations for retention, export, and workspace deletion
-- document rendering and validation for the checked-in `agentic.docx` pipeline
-- observability rollout gates, compliance evidence collection, and security regression tooling
+## Current State
 
-## Architecture At A Glance
+Agentic is implemented as a modular monolith. The current application surface includes a commitment-first dashboard, authenticated JSON APIs, a worker-backed execution loop, readiness endpoints, governance and privacy controls, a document rendering pipeline, GitHub issue intake, optional Google/Slack/Telegram/local-notes integrations, and a large local validation suite.
 
-- `apps/web`: Next.js UI, JSON API routes, session handling, readiness endpoints, and dashboard surfaces
-- `apps/worker`: durable worker process for queued goal, briefing, template, docs, autopilot, GitHub issue intake, and privacy jobs
-- `packages/contracts`: shared schemas and runtime contracts
-- `packages/db`: Postgres schema, migrations, and schema-readiness checks
-- `packages/orchestrator`: workflow assembly, routing, approvals, and execution coordination
-- `packages/policy`: governance rules, conformance checks, and simulation logic
-- `packages/repository`: persistence access for dashboards, goals, commitments, templates, integrations, and audits
-- `packages/integrations`: provider-neutral adapter contracts, connector readiness, and managed Google credential logic
-- `packages/memory`: memory records, ranking, and retrieval behavior
-- `packages/self-improvement-memory`: outcome capture, recommendation replay, and learned execution intelligence
-- `packages/execution`: task and workflow execution state
-- `packages/worker-runtime`: durable queue contracts, claiming, retries, leases, and dead-letter handling
-- `packages/docs-runtime`: document rendering helpers and output contracts
-- `packages/notifications`: Slack and Telegram notification delivery
-- `packages/observability`: telemetry capture, execution evidence, and rollout-gate inputs
-- `packages/agents`: bounded specialist outputs used by higher-level workflows
-- `docs/specs/agentic.md`: deeper product and architecture specification
-- `docs/templates/reference.docx`: Word template/reference for document rendering
-- `scripts`: deployment, docs, observability, security, and worktree automation helpers
+Capability readiness is explicit in `apps/web/lib/feature-capabilities.ts`:
 
-## Connector Readiness
+| Surface | Current readiness |
+| --- | --- |
+| Request work intake | Operational |
+| Commitments inbox | Operational |
+| Approvals queue | Operational |
+| Startup briefing | Operational |
+| Shared memory workbench | Operational |
+| Custom agents catalog | Operational |
+| Agent-scoped memory | Preview |
+| Integration and workspace setup | Preview |
+| Watchers | Preview until event-emitting watchers and recovery signals are healthy |
+| Workflow templates | Preview |
+| Autopilot control | Preview until runtime reliability controls stay within budget |
 
-Integrations are described by operational readiness rather than connection state alone:
+The repository currently tracks 11 capability definitions and 22 route contracts. None are marked `production` in the capability registry yet, so the safest wording is: production-shaped infrastructure and gates exist, but runtime capability readiness is still reported as operational or preview rather than production-ready.
 
-- `experimental`: visible but not ready for trustworthy draft or live execution
-- `draft-grade`: safe for draft-only assistance
-- `approval-grade`: live actions are available, but still require operator approval
-- `autonomous-grade`: approved for higher-trust autonomous execution paths
+## Features
 
-This keeps the dashboard, NL surface, and API contract aligned with what the system can safely execute.
+- **Dashboard and command loop**: Next.js dashboard for goals, commitments, approvals, memory, jobs, agents, integrations, recovery, and operating telemetry.
+- **Durable async execution**: goal creation, refinement, briefings, template runs, document renders, privacy operations, autopilot events, and GitHub issue intake run through worker jobs instead of long request handlers.
+- **Governance and approval gates**: policy classes keep external commitments and sensitive actions behind approval or block behavior.
+- **Workspace and actor context**: authenticated writes carry user/workspace actor context into persisted approvals, audits, jobs, and mutations.
+- **Connector readiness model**: integrations advertise readiness tiers before the UI/API treats them as safe to draft, approve, or execute.
+- **Provider credentials**: Google-managed credentials can be tenant-scoped and wrapped with versioned AES-GCM secret envelopes.
+- **Local notes adapter**: development-friendly Markdown notes under a configured notes directory, with stricter production enablement.
+- **GitHub issue automation**: signed webhooks and GitHub App pull sync can enqueue governed issue-intake jobs for allowlisted repositories.
+- **Notifications**: Slack and Telegram notification/approval surfaces are available when configured.
+- **Privacy lifecycle**: retention, export, and deletion requests are represented as governed worker-backed operations.
+- **Document pipeline**: `docs/specs/agentic.md` can render to `build/agentic.docx` through the checked-in document tooling.
+- **Operational gates**: health/readiness probes, migration checks, production bootstrap validation, security regression tests, SBOM generation, observability smoke tests, and deployment smoke checks are part of the repo.
 
-## Prerequisites
+## Architecture
 
-- Node.js `20.x` or `22.x`; the repo pins local version hints in `.nvmrc` and `.node-version`
-- npm
-- PostgreSQL, if you want shared-state local parity or any production-like run
-- `pandoc`, required for `npm run docs:render` and `npm run docs:build`
-- LibreOffice `soffice`, optional but recommended for PDF smoke rendering during `npm run docs:validate`
+| Path | Responsibility |
+| --- | --- |
+| `apps/web` | Next.js UI, app routes, JSON APIs, auth/session handling, health/readiness endpoints, dashboard components, security headers, request identity, and public share views. |
+| `apps/worker` | Long-running worker process for durable jobs, watcher scheduling, retries, leases, health heartbeat, and worker telemetry. |
+| `packages/contracts` | Shared types, schemas, defaults, and runtime contracts. |
+| `packages/db` | Postgres migrations, schema status checks, auth runtime schema, and migration discipline helpers. |
+| `packages/repository` | Persistence abstraction for file-backed development state and Postgres-backed production/parity state. |
+| `packages/orchestrator` | Goal refinement, execution dispatch, memory capture, briefing generation, and workflow assembly. |
+| `packages/policy` | Governance rules, privacy controls, risk/conformance checks, and simulation logic. |
+| `packages/integrations` | Provider-neutral adapter contracts plus Google, Gmail, Calendar, Slack, Telegram, and local-notes adapters. |
+| `packages/worker-runtime` | Durable job payloads, dispatch, executors, leases, retries, dead-letter/replay support, and worker health. |
+| `packages/memory` | Memory records, ranking, retrieval, and review flows. |
+| `packages/self-improvement-memory` | Outcome capture, recommendation replay, and learned execution signals. |
+| `packages/observability` | Structured telemetry, rollout gates, evidence capture, and smoke/load/failure tooling. |
+| `packages/agents` | Bounded specialist agent outputs used by higher-level workflows. |
+| `packages/docs-runtime` | Document rendering helper contracts. |
+| `packages/notifications` | Notification delivery abstractions. |
+| `packages/execution` | Task/workflow execution state helpers. |
+| `docs` | Specs, runbooks, security evidence, architecture notes, remediation plans, and templates. |
+| `scripts` | Local setup checks, CI gates, DB tools, deployment smoke checks, docs tooling, security tooling, and worktree automation. |
 
-## Getting Started
+The canonical API route inventory is [`docs/specs/api-route-inventory.md`](docs/specs/api-route-inventory.md). Add or update that inventory whenever a route under `apps/web/app/api/**/route.ts` changes.
 
-Agentic supports two useful local setups:
+## Requirements
 
-- a minimal local run with the file-backed runtime store
-- a Postgres-backed local run that more closely matches production behavior
+- Node.js `>=20 <26`; `.nvmrc` and `.node-version` currently pin `20`
+- npm with the checked-in `package-lock.json`
+- PostgreSQL for production-like local runs and production
+- `pandoc` for `npm run docs:render` / `npm run docs:build`
+- LibreOffice `soffice` is optional; docs validation uses it for PDF smoke rendering when available
+- Chromium browsers for Playwright E2E tests, installed with `npx playwright install chromium`
 
-### First-Run Checklist
+Major runtime dependencies from `package.json` include Next.js 16, React 19, TypeScript, Vitest, Playwright, Drizzle ORM, `pg`, `zod`, `googleapis`, OpenAI, Anthropic, and `jszip`.
 
-Use this checklist when setting up a fresh checkout:
+## Quick Start
 
-1. Confirm Node.js is a supported LTS release:
+Use this path for the fastest local dashboard and API run. It uses the file-backed development store and does not require Postgres.
+
+1. Clone the repository.
 
 ```bash
+git clone https://github.com/leonardwongly/agentic.git
+cd agentic
+```
+
+2. Select Node 20 if you use `nvm`.
+
+```bash
+nvm use
 node --version
 ```
 
-2. Install workspace dependencies:
+3. Install dependencies.
 
 ```bash
 npm install
 ```
 
-3. Run the local first-run readiness check:
+4. Create a local environment template and set an access key.
+
+```bash
+cp .env.example .env.local
+export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+```
+
+Next.js reads `.env.local` for the web app. Shell-export variables that must be visible to non-Next scripts or the worker process.
+
+5. Run the first-run check.
 
 ```bash
 npm run setup:check
 ```
 
-This check is read-only. It validates the supported Node range and required repo files, then warns when dependencies, `AGENTIC_ACCESS_KEY`, or Postgres parity configuration are missing.
-
-4. Choose a persistence mode:
-
-- file-backed development: leave `DATABASE_URL` unset
-- Postgres parity: set `DATABASE_URL`, run migrations, and use `npm run db:status`
-
-| Setup mode | Required env | Supported commands | Notes |
-| --- | --- | --- | --- |
-| File-backed development | `AGENTIC_ACCESS_KEY`; optional `AGENTIC_RUNTIME_STORE_PATH` | `npm run dev`, `npm run worker:start`, `npm test`, `/api/ready` | Fast local path. Database commands that require `DATABASE_URL` are expected to fail. |
-| Postgres parity | `DATABASE_URL`, `AGENTIC_ACCESS_KEY` | File-backed commands plus `npm run db:migrate` and `npm run db:status -- --require-ready` | Use this for shared-state validation and production-like readiness. |
-
-5. Set a dashboard/API access key before sharing the environment:
-
-```bash
-export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
-```
-
-6. Start the web app and, for queued work, the worker in separate terminals:
+6. Start the web app.
 
 ```bash
 npm run dev
 ```
 
-```bash
-npm run worker:start
-```
+Open [http://localhost:3000](http://localhost:3000).
 
-7. Validate the setup:
-
-```bash
-npm run lint
-npm run typecheck
-npm run format:check
-npm run release:check-context
-npm test
-npm run test:security:regression
-```
-
-8. Unlock the dashboard and use the in-app first-run checklist. It follows the same order as this section: access key, web runtime, storage readiness, worker/queue readiness, first request, approval path, local notes, optional integrations, and repeatable workflows.
-
-### Path 1: Minimal local run
-
-This is the fastest way to boot the app locally. It uses the file-backed runtime store at `.agentic/runtime-store.json`.
-
-1. Install dependencies:
-
-```bash
-npm install
-```
-
-2. Set an access key for the dashboard and API:
+7. Start the worker in a second terminal when you want queued jobs to complete.
 
 ```bash
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
-```
-
-For a disposable local-only run, you can explicitly enable the fallback key with `AGENTIC_ENABLE_LOCAL_DEV_KEY=true` and use `agentic-local-dev-key`. Do not enable that fallback in shared or production environments.
-
-3. Start the web app:
-
-```bash
-npm run dev
-```
-
-The app runs at [http://localhost:3000](http://localhost:3000).
-
-4. Start the worker in a second terminal when you want queued work to complete:
-
-```bash
 npm run worker:start
 ```
 
-Run the worker for:
-
-- async goal creation
-- briefing jobs
-- template runs
-- docs render jobs
-- autopilot events
-- GitHub issue intake jobs
-- privacy retention, export, and deletion jobs
-
-Without the worker, those job APIs will enqueue work but it will remain pending.
-
-The file-backed repository is development-only. Production refuses to start without `DATABASE_URL`, and production-like local validation should use the Postgres path below.
-
-### Path 2: Postgres-backed local parity
-
-Use this path when you want shared persistence, migration validation, or behavior closer to production.
-
-1. Install dependencies:
-
-```bash
-npm install
-```
-
-2. Configure Postgres and the dashboard access key:
-
-```bash
-export DATABASE_URL=postgres://user:password@localhost:5432/agentic
-export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
-```
-
-3. Apply checked-in migrations:
-
-```bash
-npm run db:migrate
-```
-
-4. Optional: opt development into shared auth-state behavior:
-
-```bash
-export AGENTIC_SHARED_AUTH_STATE=true
-```
-
-This lets development use the same shared auth-state backend that production expects when `DATABASE_URL` is present.
-Shared auth state depends on the checked-in auth runtime schema objects in `packages/db/migrations`; runtime request handling verifies those tables and indexes but does not create them.
-
-If you want development or test to fail closed the same way production does, also set:
-
-```bash
-export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
-```
-
-5. Start the web app and worker:
-
-```bash
-npm run dev
-npm run worker:start
-```
-
-### Sign In And Create A Session
-
-You can sign in through the dashboard UI, or create a session directly:
+8. Create a session through the dashboard, or with curl.
 
 ```bash
 curl -i \
@@ -239,138 +163,117 @@ curl -i \
   -d '{"accessKey":"replace-this-with-a-long-random-secret"}'
 ```
 
-The server will issue the `agentic_session` cookie used by authenticated routes.
+The response sets the `agentic_session` cookie used by authenticated dashboard/API routes.
 
-For access-key authenticated automation paths, the request header is:
+## Local Development Modes
 
-```text
-x-agentic-access-key
-```
+### File-Backed Development
 
-### Quick Health And Readiness Checks
+Use this for fast local exploration and most UI/API development.
 
 ```bash
-curl http://localhost:3000/api/health
-curl http://localhost:3000/api/ready
-```
-
-`/api/ready` validates more than process liveness. It checks:
-
-- access-key configuration
-- database reachability and migration readiness
-- auth runtime-state safety
-- request identity trust configuration
-- async execution readiness
-- connector health
-
-## Async Execution Model
-
-Agentic intentionally moves high-cost and stateful work off the request path.
-
-- `POST /api/goals` enqueues goal creation and returns `202 Accepted` with a pollable job status URL
-- `POST /api/briefing` enqueues briefing generation and returns `202 Accepted` with a pollable job status URL
-- template, docs, autopilot, and privacy flows follow the same durable worker-backed pattern where appropriate
-- retries, leases, and dead-letter handling preserve operator-visible recovery state without exposing raw backend failure details
-
-For realistic local validation of the product, run both the web app and the worker.
-
-The canonical API route inventory lives in [`docs/specs/api-route-inventory.md`](docs/specs/api-route-inventory.md). Update it in the same change as any new `apps/web/app/api/**/route.ts` handler.
-
-## Environment And Runtime Configuration
-
-### Required For Production
-
-```bash
-export NODE_ENV=production
-export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
-export AGENTIC_PUBLIC_BASE_URL=https://agentic.example.com
+npm run dev
 ```
 
-Production also expects:
-
-- trusted proxy headers only when the app is deployed behind a proxy that overwrites them:
-
-```bash
-export AGENTIC_TRUST_PROXY_HEADERS=true
-```
-
-- shared auth-state backing instead of process-local auth state
-
-Production fails closed when session revocation, unlock throttling, or rate limiting are still process-local. The only escape hatch is:
-
-```bash
-export AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE=true
-```
-
-Use that only for explicitly accepted single-instance deployments.
-
-### Useful Local Overrides
+Optional overrides:
 
 ```bash
 export AGENTIC_RUNTIME_STORE_PATH=.agentic/runtime-store.json
 export AGENTIC_NOTES_PATH=.agentic/notes
 ```
 
-- `AGENTIC_RUNTIME_STORE_PATH` overrides the default file-backed runtime store path
-- `AGENTIC_NOTES_PATH` overrides the filesystem-backed local notes directory
+Behavior:
 
-The default filesystem-backed notes adapter reads and writes Markdown under `.agentic/notes`.
+- `DATABASE_URL` is unset.
+- Runtime state is stored in `.agentic/runtime-store.json` by default.
+- Production-only checks that require Postgres are expected to warn or fail.
+- Queued work remains pending unless `npm run worker:start` is also running.
 
-### Worker Tuning
-
-```bash
-export AGENTIC_WORKER_RUNNER_ID=local-worker-1
-export AGENTIC_WORKER_POLL_INTERVAL_MS=1000
-export AGENTIC_WORKER_LEASE_MS=30000
-```
-
-These are optional and mainly useful when running multiple workers or tuning claim/lease behavior.
-
-## Optional Integrations
-
-### Google OAuth And Managed Credentials
-
-Use these when you want Google connect/callback flows and tenant-scoped managed credentials:
+For a disposable local-only environment, you can set:
 
 ```bash
-export GOOGLE_CLIENT_ID=replace-with-your-client-id
-export GOOGLE_CLIENT_SECRET=replace-with-your-client-secret
+export AGENTIC_ENABLE_LOCAL_DEV_KEY=true
 ```
 
-When either value is missing, Google-managed integrations remain visible as manual/setup-required adapters. The dashboard stays in context and reports that OAuth is not configured instead of sending the browser to the raw connect endpoint response.
+That enables the fallback key `agentic-local-dev-key`. Do not use this in shared, internet-visible, staging, or production environments.
 
-In production, OAuth redirects and share links are built from `AGENTIC_PUBLIC_BASE_URL` rather than request host headers. Set it to the externally reachable origin for the deployment.
+### Postgres Parity
 
-The repo also still supports a direct refresh-token path for legacy/local use:
+Use this when you need migration validation, shared auth state, queue/replay parity, or production-like readiness behavior.
 
 ```bash
-export GOOGLE_REFRESH_TOKEN=replace-with-your-refresh-token
+export DATABASE_URL=postgres://user:password@localhost:5432/agentic
+export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+npm run db:migrate
+npm run db:status -- --require-ready
 ```
 
-When storing tenant-scoped provider credentials, configure the encrypted secret wrapper:
+Then start the web and worker processes:
 
 ```bash
-export AGENTIC_PROVIDER_SECRET_KEY=replace-with-a-strong-secret
-export AGENTIC_PROVIDER_SECRET_KEY_VERSION=2026-04-18
+npm run dev
 ```
-
-Provider credential envelopes are bound to the credential id, user id, and secret kind through AES-GCM authenticated
-additional data. To rotate the wrapping key without breaking older credentials, keep the new key in
-`AGENTIC_PROVIDER_SECRET_KEY`, advance `AGENTIC_PROVIDER_SECRET_KEY_VERSION`, and expose previous versions through a
-JSON keyring:
 
 ```bash
-export AGENTIC_PROVIDER_SECRET_KEY=replace-with-new-strong-secret
-export AGENTIC_PROVIDER_SECRET_KEY_VERSION=2026-05-18
-export AGENTIC_PROVIDER_SECRET_KEYRING='{"2026-04-18":"replace-with-previous-strong-secret"}'
+npm run worker:start
 ```
 
-Call `rotateProviderCredentialSecretRecord` with `mode: "dry-run"` before saving the returned `rotatedRecord` from
-`mode: "commit"`. Legacy unbound envelopes are readable only when a migration path explicitly opts into legacy context
-fallback, and newly persisted provider secrets are written with context binding.
+Optional stricter auth-state parity:
 
-### Slack
+```bash
+export AGENTIC_SHARED_AUTH_STATE=true
+export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
+```
+
+Production requires `DATABASE_URL`; the file-backed store is a development fallback only.
+
+## Configuration
+
+Start from `.env.example`. The most important settings are:
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `AGENTIC_ACCESS_KEY` | Required outside disposable local mode | Access key for session bootstrap and access-key authenticated automation. |
+| `AGENTIC_ENABLE_LOCAL_DEV_KEY` | Optional local only | Enables the fallback key `agentic-local-dev-key`. |
+| `DATABASE_URL` | Required for production and Postgres parity | Selects the Postgres repository backend and enables DB schema checks. |
+| `AGENTIC_PUBLIC_BASE_URL` | Required in production | External origin for OAuth redirects, share links, and absolute public URLs. |
+| `AGENTIC_RUNTIME_STORE_PATH` | Optional local | File-backed runtime store path when `DATABASE_URL` is unset. |
+| `AGENTIC_NOTES_PATH` | Optional | Local Markdown notes path. |
+| `AGENTIC_LOCAL_NOTES_ENABLED` | Production local-notes only | Must be `true` in production before local notes can read/write. |
+| `AGENTIC_LOCAL_NOTES_ALLOWED_ROOT` | Production local-notes only | Allowed filesystem root for production local notes. |
+| `AGENTIC_SHARED_AUTH_STATE` | Optional | Uses shared auth runtime state when Postgres is configured. |
+| `AGENTIC_REQUIRE_SHARED_AUTH_STATE` | Production bootstrap | Fails closed if shared auth runtime state is unavailable. |
+| `AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE` | Exceptional production only | Allows audited single-instance production runs without shared auth state. |
+| `AGENTIC_TRUST_PROXY_HEADERS` | Production behind trusted proxy | Enables canonical client-IP extraction from a trusted edge-overwritten header. |
+| `AGENTIC_TRUSTED_CLIENT_IP_HEADER` | With proxy trust | One of `x-forwarded-for`, `x-real-ip`, or `cf-connecting-ip`. |
+| `AGENTIC_WORKER_HEALTH_PATH` | Production readiness | Shared heartbeat JSON path written by the worker and read by web readiness. |
+| `AGENTIC_WORKER_*` | Optional | Worker runner id, polling, lease, heartbeat, scheduler, retry, and concurrency tuning. |
+
+### Optional Integrations
+
+Google OAuth and managed credentials:
+
+```bash
+export GOOGLE_CLIENT_ID=replace-with-google-client-id
+export GOOGLE_CLIENT_SECRET=replace-with-google-client-secret
+export AGENTIC_PROVIDER_SECRET_KEY=replace-with-at-least-32-random-characters
+export AGENTIC_PROVIDER_SECRET_KEY_VERSION=2026-05-19
+```
+
+Legacy/local Google refresh-token mode:
+
+```bash
+export GOOGLE_REFRESH_TOKEN=replace-with-google-refresh-token
+```
+
+Provider key rotation can use:
+
+```bash
+export AGENTIC_PROVIDER_SECRET_KEYRING='{"2026-05-01":"previous-secret"}'
+```
+
+Slack:
 
 ```bash
 export SLACK_BOT_TOKEN=xoxb-...
@@ -379,7 +282,7 @@ export SLACK_DEFAULT_CHANNEL=C0123456789
 export SLACK_USER_MAP=U0123456789:user-id
 ```
 
-### Telegram
+Telegram:
 
 ```bash
 export TELEGRAM_BOT_TOKEN=123456:replace-with-your-bot-token
@@ -388,93 +291,125 @@ export TELEGRAM_DEFAULT_CHAT_ID=-1001234567890
 export TELEGRAM_USER_MAP=123456789:user-id,-1001234567890/123456789:user-id
 ```
 
-Telegram approval actions use short server-stored action IDs so they fit Telegram `callback_data` limits. The webhook requires the `x-telegram-bot-api-secret-token` header to match `TELEGRAM_WEBHOOK_SECRET`.
-
-### GitHub Issue Autopilot
-
-Use these when you want GitHub issue activity to create governed Agentic worker jobs:
+GitHub issue webhook intake:
 
 ```bash
 export AGENTIC_GITHUB_WEBHOOK_SECRET=replace-with-a-long-random-webhook-secret
 export AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=owner/repo
 ```
 
-In GitHub, configure the matching `AGENTIC_GITHUB_WEBHOOK_SECRET` repository secret and set the `AGENTIC_GITHUB_ISSUE_WEBHOOK_URL` repository variable to `https://<agentic-host>/api/github/issues/webhook`.
-
-By default, `issues.opened` and `issues.reopened` enqueue intake work, `agentic:plan` enqueues plan-only work, `agentic:work` enqueues implementation work, and exact `/agentic plan` or `/agentic work` issue comments are accepted from `OWNER`, `MEMBER`, or `COLLABORATOR` commenters. See [docs/runbooks/github-issue-autopilot.md](docs/runbooks/github-issue-autopilot.md) for label, command, allowlist, and authorization knobs.
-
-To have Agentic also poll currently open issues through a GitHub App installation, create a GitHub App with read-only metadata and issues permissions and configure:
+GitHub App issue pull sync:
 
 ```bash
 export AGENTIC_GITHUB_APP_ID=12345
 export AGENTIC_GITHUB_APP_INSTALLATION_ID=98765
 export AGENTIC_GITHUB_APP_PRIVATE_KEY='-----BEGIN PRIVATE KEY-----...'
 export AGENTIC_GITHUB_APP_SYNC_SECRET=replace-with-a-long-random-sync-secret
+export AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=owner/repo
 ```
 
-Set the GitHub repository secret `AGENTIC_GITHUB_APP_SYNC_SECRET` and variable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL` to `https://<agentic-host>/api/github/issues/app/sync`. The URL must target that exact path without embedded credentials, query strings, or fragments. The scheduled/manual GitHub App issue sync workflow calls Agentic, Agentic authenticates as the installation, lists allowlisted open issues, skips pull requests, and queues the existing governed `github_issue_intake` jobs in `work` mode by default. Scheduled runs require a durable HTTPS host; temporary tunnel URLs are skipped on schedules and require `allow_temporary_url=true` for manual validation.
+See [`docs/runbooks/github-issue-autopilot.md`](docs/runbooks/github-issue-autopilot.md) for webhook labels, comment commands, allowlists, GitHub Actions variables, and scheduled sync behavior.
 
-## Validation And Quality Gates
+## Running And Using Agentic
 
-Run the core validation suite:
+### Health And Readiness
+
+Public operational probes:
 
 ```bash
+curl http://localhost:3000/api/health
+curl http://localhost:3000/api/ready
+```
+
+`/api/ready` returns a public-safe summary and a pointer to `/api/ready/details`. The detailed report requires a session or access key and covers access-key configuration, database/schema status, auth runtime state, request identity, async execution, worker heartbeat, and connector health.
+
+### Access-Key Authenticated Requests
+
+Most authenticated API routes accept either the session cookie or this header:
+
+```text
+x-agentic-access-key: replace-this-with-a-long-random-secret
+```
+
+Example goal enqueue:
+
+```bash
+curl -s \
+  -X POST http://localhost:3000/api/goals \
+  -H 'content-type: application/json' \
+  -H 'x-agentic-access-key: replace-this-with-a-long-random-secret' \
+  -H 'x-idempotency-key: local-demo-goal-001' \
+  -d '{"request":"Create a concise plan for validating the local Agentic setup."}'
+```
+
+The route returns `202 Accepted` with a `statusUrl`, usually `/api/goals/jobs/<job-id>`. Poll that URL while the worker is running:
+
+```bash
+curl -s \
+  -H 'x-agentic-access-key: replace-this-with-a-long-random-secret' \
+  http://localhost:3000/api/goals/jobs/<job-id>
+```
+
+### Worker-Backed Flows
+
+Run the worker for:
+
+- goal creation and refinement
+- startup/midday/end-of-day briefings
+- template runs
+- document render jobs
+- autopilot and watcher events
+- GitHub issue intake jobs
+- privacy retention/export/deletion jobs
+- approval follow-up notifications
+
+Without the worker, APIs can enqueue jobs, but those jobs will remain pending.
+
+## Testing And Validation
+
+Use targeted checks while working, then run broader gates before review.
+
+Core local checks:
+
+```bash
+npm run setup:check
+npm run lint
+npm run typecheck
+npm run format:check
 npm test
-npm run test:architecture:fitness
-npm run test:performance:fitness
-npm run test:security:regression
 npm run build
 ```
 
-Additional useful validation commands:
+Security and architecture gates:
+
+```bash
+npm run test:security:regression
+npm run test:architecture:fitness
+npm run test:parallel-worktree:fitness
+npm run test:performance:fitness
+npm run security:audit-runtime
+npm run security:sbom
+```
+
+Browser/E2E checks:
 
 ```bash
 npx playwright install chromium
 npm run test:e2e
+```
 
+Smoke and operational checks:
+
+```bash
 npm run test:smoke:capabilities
 npm run test:smoke:observability
 npm run test:smoke:observability-export
 npm run test:smoke:deployment
 npm run test:smoke:deployment-async
-
-npm run security:audit-runtime
-npm run security:sbom
-npm run security:collect-evidence
+npm run test:smoke:github-app-sync
 ```
 
-`npm run test:e2e` starts an isolated web app and worker stack on port `3201` by default. Stop a manually running `npm run dev` server before running E2E; Next.js protects a checkout with a dev-server lock, and the Playwright helper will now fail early with the detected lock path instead of surfacing a raw framework startup error. To use another isolated port, set `PLAYWRIGHT_E2E_PORT=3202` or another unused port.
-
-## Observability Rollout Gates
-
-The observability package can retain sanitized telemetry locally and optionally export the same batches to a collector.
-
-Optional exporter configuration:
-
-```bash
-export AGENTIC_TELEMETRY_RETENTION_DIR=.agentic/telemetry
-export AGENTIC_TELEMETRY_EXPORT_URL=https://telemetry.example.com/ingest
-export AGENTIC_TELEMETRY_EXPORT_TOKEN=replace-with-a-telemetry-ingest-token
-```
-
-Useful observability checks:
-
-```bash
-npm run test:smoke:observability
-npm run test:smoke:observability-export
-npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
-```
-
-The checked-in alert and dashboard manifests live in:
-
-- `config/observability/alerts.json`
-- `config/observability/dashboard.json`
-
-## Document Pipeline
-
-The editable product spec lives in [`docs/specs/agentic.md`](docs/specs/agentic.md). The checked-in root `agentic.docx` is migration input only; the supported generated artifact is `build/agentic.docx`.
-
-Render and validate the document pipeline with:
+Docs pipeline:
 
 ```bash
 npm run docs:render
@@ -482,150 +417,103 @@ npm run docs:validate
 npm run docs:build
 ```
 
-`npm run docs:build` requires `pandoc`. PDF smoke rendering inside validation uses LibreOffice when available and skips that portion gracefully when it is not.
+Database checks:
 
-## Command Reference
+```bash
+npm run db:check-migrations
+npm run db:status -- --require-ready
+npm run db:migrate
+```
 
-These commands are the current repo-level entry points:
+Release context and local CI:
 
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Start the Next.js web app in development mode. |
-| `npm run worker:start` | Start the worker package against the configured repository backend. |
-| `npm run setup:check` | Check fresh-checkout readiness for Node, required files, dependencies, access key, and database mode. |
-| `npm run lint` | Validate repo-owned hygiene contracts, CI gate wiring, and W10 issue evidence references. |
-| `npm run typecheck` | Run TypeScript validation for production app and package surfaces with `tsconfig.typecheck.json`. |
-| `npm run format:check` | Check changed text files for LF endings, final newline, and trailing whitespace. |
-| `npm run release:check-context` | Reject local artifacts, environment files, logs, packaged outputs, and secret-like filenames from release context. |
-| `npm run build` | Build the web app and run the worker TypeScript check. |
-| `npm test` | Run the full Vitest suite. |
-| `npm run test:security:regression` | Run the categorized security regression suite. |
-| `npm run test:architecture:fitness` | Check architecture constraints. |
-| `npm run test:parallel-worktree:fitness` | Check parallel-worktree ownership constraints. |
-| `npm run test:performance:fitness` | Run performance fitness checks and the performance test file. |
-| `npm run deploy:ingress:check` | Validate stable HTTPS ingress, proxy trust posture, smoke auth, and provider deploy wiring. |
-| `npm run remediation:dashboard` | Render the checked-in AOS remediation tracker with a git snapshot. |
-| `npm run remediation:verify` | Verify live AOS tracker issue coverage and render the remediation dashboard. |
-| `npm run db:status -- --require-ready` | Verify database reachability and migration readiness; requires `DATABASE_URL` and is not part of the file-backed minimal path. |
-| `npm run db:migrate` | Apply checked-in database migrations. |
-| `npm run docs:build` | Render and validate the generated `build/agentic.docx` artifact. |
-| `npm run security:audit-runtime` | Enforce runtime dependency vulnerability policy. |
-| `npm run security:sbom` | Generate the software bill of materials. |
-| `npm run hygiene:repo` | Report stale branches, stale PRs, and dirty worktrees without mutating GitHub or local worktrees. |
+```bash
+npm run release:check-context
+npm run ci:local
+```
 
-Dependency Review in GitHub Actions requires repository support for GitHub's dependency graph / Advanced Security. The runtime dependency gate remains `npm run security:audit-runtime`, which is the repo-owned check to run locally and in CI.
+## Deployment Notes
 
-## Production Bootstrap
+Production startup is intentionally explicit:
 
-Production startup is intentionally split into explicit migration, readiness, and process-launch steps so request handling does not mutate schema state implicitly.
+1. configure production environment
+2. run migrations
+3. verify schema readiness
+4. build web and worker
+5. start web through the startup wrapper
+6. start worker through the startup wrapper
+7. verify `/api/health`, `/api/ready`, deployment smoke checks, and worker heartbeat
 
-1. Configure required production environment:
+Minimal production-shaped command sequence:
 
 ```bash
 export NODE_ENV=production
 export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
-```
+export AGENTIC_PUBLIC_BASE_URL=https://agentic.example.com
+export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
+export AGENTIC_TRUST_PROXY_HEADERS=true
+export AGENTIC_TRUSTED_CLIENT_IP_HEADER=x-forwarded-for
+export AGENTIC_WORKER_HEALTH_PATH=/var/lib/agentic/worker-health.json
 
-2. Check schema status before rollout:
-
-```bash
-npm run db:status -- --require-ready
-```
-
-3. Apply checked-in migrations from `packages/db/migrations` when needed:
-
-```bash
+npm ci
 npm run db:migrate
-```
-
-4. Build and start the web app through the readiness wrapper:
-
-```bash
+npm run db:status -- --require-ready
+npm run production:bootstrap:check
 npm run build
 npm run start:web:prod -- --hostname 0.0.0.0 --port 3000
 ```
 
-5. Start the worker through the schema-readiness wrapper:
+Start the worker in a separate process:
 
 ```bash
 npm run start:worker:prod
 ```
 
-The web startup wrapper fails closed if required production configuration is missing, if the database is unreachable, or if checked-in migrations have not been applied. The worker startup wrapper refuses to start until the schema is ready.
-Schema readiness also checks the shared auth runtime tables and indexes (`auth_session_rate_limits`, `auth_revoked_sessions`, and `session_unlock_attempts`). If an existing database has migration metadata but is missing those objects, run `npm run db:migrate` before starting the web or worker processes; do not rely on request traffic to bootstrap auth/session tables.
+Only set `AGENTIC_TRUST_PROXY_HEADERS=true` after confirming the ingress provider overwrites the configured client-IP header at the edge. Do not trust user-forwarded client-IP headers directly.
 
-## Operational Endpoints
+The first documented container target is the Render Blueprint under [`deploy/render/render.yaml`](deploy/render/render.yaml). The full deployment and stable-ingress contract is in [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md).
 
-Agentic exposes two unauthenticated operational endpoints for orchestration and deployment validation:
+## Troubleshooting
 
-- `GET /api/health`: liveness probe with uptime and timestamp
-- `GET /api/ready`: readiness probe covering configuration, storage, auth runtime state, request identity, async execution, and connector health
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `npm run setup:check` reports missing dependencies | `npm install` has not run or `node_modules` is absent | Run `npm install`. |
+| Dashboard rejects sign-in | `AGENTIC_ACCESS_KEY` in the request does not match the web process environment | Re-export the same key in the terminal running `npm run dev`, then retry. |
+| Jobs stay pending | Worker is not running | Start `npm run worker:start` in a second terminal. |
+| DB commands fail locally | `DATABASE_URL` is unset or Postgres is unreachable | Use file-backed mode for quick local work, or set `DATABASE_URL` and run migrations. |
+| Production startup fails on database readiness | Migrations are missing or schema drift is detected | Run `npm run db:migrate`, then `npm run db:status -- --require-ready`. |
+| `/api/ready` fails in production | Missing DB, shared auth state, trusted request identity, worker heartbeat, or connector readiness | Inspect authenticated `/api/ready/details` and fix the failing check. |
+| E2E startup fails with a Next.js lock error | A manual `npm run dev` is already running in the checkout | Stop the dev server or set `PLAYWRIGHT_E2E_PORT` for an isolated run. |
+| `npm run docs:build` fails on missing `pandoc` | Document rendering dependency is not installed | Install `pandoc`; install LibreOffice if you need PDF smoke rendering too. |
+| Local notes are disabled in production | Production local-notes writes require explicit filesystem boundaries | Set `AGENTIC_LOCAL_NOTES_ENABLED=true`, `AGENTIC_NOTES_PATH`, and `AGENTIC_LOCAL_NOTES_ALLOWED_ROOT` with the notes path under the allowed root. |
+| GitHub App sync refuses the URL | Sync URL is temporary, has credentials/query/fragment, or does not end at the exact sync path | Use `https://<agentic-host>/api/github/issues/app/sync` on a stable HTTPS host. |
 
-Both routes return `Cache-Control: no-store` and are safe for container probes and deployment smoke tests.
+## Contributing
 
-The deployment smoke helper exercises those endpoints against a live environment:
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, validation, commit style, review expectations, and security reporting boundaries.
 
-```bash
-export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
-export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
-export AGENTIC_TRUST_PROXY_HEADERS=true
-npm run test:smoke:deployment
-```
+Short version:
 
-Before running a provider-backed staging or production-like deploy, validate that the smoke target is a stable HTTPS ingress and not a temporary tunnel or local address:
+- keep changes focused and reversible
+- follow existing module boundaries before adding abstractions
+- update tests with behavior changes and bug fixes
+- update specs/runbooks/README when contracts or setup change
+- do not commit secrets, `.env.local`, local runtime stores, build output, logs, or machine-local paths
+- run the narrowest relevant checks while developing and broader gates before review
 
-```bash
-export NODE_ENV=production
-export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
-export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
-export AGENTIC_TRUST_PROXY_HEADERS=true
-export AGENTIC_STAGING_DEPLOY_BIN=./scripts/provider-deploy.sh
-export AGENTIC_STAGING_DEPLOY_ARGS_JSON='["--environment","staging"]'
-npm run deploy:ingress:check
-```
+Security issues should use the private reporting flow in [`SECURITY.md`](SECURITY.md), not public issues.
 
-Only set `AGENTIC_TRUST_PROXY_HEADERS=true` after confirming the ingress proxy overwrites forwarded client-IP headers at the edge.
+## Reference Docs
 
-## Parallel Delivery
-
-Agentic supports a checked-in parallel worktree model for roadmap slices that need multiple low-conflict streams at once.
-
-- `npm run worktree:setup -- --print-only`: preview the standard stream layout
-- `npm run worktree:setup`: create sibling worktrees for the standard streams
-- `npm run worktree:status`: inspect branch, head, and dirty-state across planned worktrees
-- `npm run worktree:cleanup -- --print-only`: preview which completed stream worktrees and merged branches are safe to remove
-- `npm run worktree:cleanup`: remove clean worktrees and delete fully merged stream branches
-- `npm run hygiene:repo -- --max-age-days 21`: report stale branches, stale PRs, and dirty worktrees before cleanup decisions
-
-CI enforces the ownership model as part of `npm run test:architecture:fitness`: shared protected files are spine-only, and stream-protected files must be changed from their owning stream branch or from the integrated base branch.
-
-See [`docs/runbooks/parallel-worktrees.md`](docs/runbooks/parallel-worktrees.md) for ownership rules, merge order, validation requirements, and cleanup flow.
-
-## Persistence, Security, And Privacy
-
-- If `DATABASE_URL` is set, the app uses the Postgres-backed repository
-- otherwise it falls back to a file-backed runtime store at `.agentic/runtime-store.json`
-- production requires `DATABASE_URL`
-- authenticated API routes are scoped to the signed-in principal instead of a global fallback user
-- session-authenticated and access-key-authenticated writes carry explicit actor context into approval and audit records
-- login throttling and unlock throttling ignore forwarded client-IP headers by default
-- connector readiness controls what the UI and API are allowed to advertise and execute
-- approval and execution evidence is persisted so operator-visible state matches what actually ran
-- privacy lifecycle operations run through worker-backed retention, export, and deletion paths with sanitized failure state
-
-Security and compliance supporting material lives in:
-
-- [`docs/security/compliance-evidence.md`](docs/security/compliance-evidence.md)
-- [`docs/security/security-regression-suite.md`](docs/security/security-regression-suite.md)
-- [`docs/security/supply-chain-controls.md`](docs/security/supply-chain-controls.md)
-- [`docs/runbooks/security-incident-response.md`](docs/runbooks/security-incident-response.md)
-- [`docs/runbooks/security-disclosure.md`](docs/runbooks/security-disclosure.md)
-- [`docs/runbooks/vulnerability-management.md`](docs/runbooks/vulnerability-management.md)
-
-## Additional References
-
-- [`docs/specs/agentic.md`](docs/specs/agentic.md)
-- [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)
-- [`docs/runbooks/github-issue-autopilot.md`](docs/runbooks/github-issue-autopilot.md)
-- [`docs/templates/reference.docx`](docs/templates/reference.docx)
+- [`docs/specs/agentic.md`](docs/specs/agentic.md): product and architecture specification
+- [`docs/specs/api-route-inventory.md`](docs/specs/api-route-inventory.md): canonical route inventory and mutation governance matrix
+- [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md): production/staging rollout contract
+- [`docs/runbooks/github-issue-autopilot.md`](docs/runbooks/github-issue-autopilot.md): GitHub webhook and GitHub App issue intake
+- [`docs/runbooks/postgres-shared-auth-bootstrap.md`](docs/runbooks/postgres-shared-auth-bootstrap.md): production auth-state bootstrap
+- [`docs/runbooks/worker-concurrency-controls.md`](docs/runbooks/worker-concurrency-controls.md): worker concurrency and retry controls
+- [`docs/runbooks/parallel-worktrees.md`](docs/runbooks/parallel-worktrees.md): parallel delivery model
+- [`docs/security/security-regression-suite.md`](docs/security/security-regression-suite.md): security regression coverage
+- [`docs/security/supply-chain-controls.md`](docs/security/supply-chain-controls.md): supply-chain validation
+- [`docs/security/compliance-evidence.md`](docs/security/compliance-evidence.md): compliance evidence registry
+- [`docs/templates/reference.docx`](docs/templates/reference.docx): document rendering reference template
