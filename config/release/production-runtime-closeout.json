@@ -118,6 +118,142 @@
         "npm audit --json"
       ],
       "hostedStatus": "PR #881 and post-merge main CI passed; merge commit 03cebd6f8e125d89dd61f838833f65e63a84aa79."
+    },
+    {
+      "number": 882,
+      "title": "test(release): record sync preflight PR evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/882",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts tests/github-app-sync-live-preflight.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run remediation:evidence-map -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "npm run ci:validate-provenance",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #882 and post-merge main CI passed; merge commit a4a31cce90ccc49e7fd69e2af791ecad715f03f7."
+    },
+    {
+      "number": 883,
+      "title": "test(release): link latest sync audit evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/883",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "npm run ci:validate-provenance",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #883 and post-merge main CI passed; merge commit 6181f6bc5dd28e63ec2afd79a833c6fa9f24c527."
+    },
+    {
+      "number": 884,
+      "title": "test(release): link render readiness blocker",
+      "url": "https://github.com/leonardwongly/agentic/pull/884",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "git diff --check",
+        "npm run typecheck",
+        "npm run format:check",
+        "npm run ci:validate-provenance",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #884 and post-merge main CI passed; merge commit 42907fd59b8302f8d29f684b38d5186d6893f01d."
+    },
+    {
+      "number": 885,
+      "title": "test(github): fail preflight without provider evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/885",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-app-sync-live-preflight.test.ts",
+        "npm test -- tests/release-closeout-evidence.test.ts",
+        "npm test -- tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "npm run ci:validate-provenance",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #885 and post-merge main CI passed; merge commit c873384588f8e36571cba945d42e7d31ea8e6a83."
+    },
+    {
+      "number": 886,
+      "title": "test(github): require sync smoke key in preflight",
+      "url": "https://github.com/leonardwongly/agentic/pull/886",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-app-sync-live-preflight.test.ts",
+        "npm test -- tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts",
+        "npm test -- tests/release-closeout-evidence.test.ts",
+        "npm run github:app-sync:preflight -- --json (expected fail-closed against current external blockers)",
+        "npm run release:closeout:evidence -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "npm run ci:validate-provenance",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #886 and post-merge main CI passed; merge commit 1b85ba0c0ceec0aa8af50e6be559ad666fbcbac7."
+    },
+    {
+      "number": 887,
+      "title": "test(github): reject unsafe sync canary origins",
+      "url": "https://github.com/leonardwongly/agentic/pull/887",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/deployment-github-app-sync-canary.test.ts",
+        "npm test -- tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #887 and post-merge main CI passed; merge commit 8212250c7079a4ae2aed2cacfcf2c776ac509819."
+    },
+    {
+      "number": 888,
+      "title": "test(github): require actions secret inventory in preflight",
+      "url": "https://github.com/leonardwongly/agentic/pull/888",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-app-sync-live-preflight.test.ts",
+        "npm test -- tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json",
+        "npm run github:app-sync:preflight -- --json (expected fail overall; github_actions_secret_inventory passed against live repo secret names)",
+        "npm run ci:validate-provenance",
+        "npm run build"
+      ],
+      "hostedStatus": "PR #888 and post-merge main CI passed; merge commit 3b1a6b6bf85cdb0958463fcbaf15393a8edec30f."
+    },
+    {
+      "number": 889,
+      "title": "test(github): prove negative sync auth in canary",
+      "url": "https://github.com/leonardwongly/agentic/pull/889",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/deployment-github-app-sync-canary.test.ts",
+        "npm test -- tests/deployment-github-app-sync-canary.test.ts tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/github-app-sync-live-preflight.test.ts",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm run ci:validate-provenance",
+        "npm audit --json",
+        "npm run build"
+      ],
+      "hostedStatus": "PR #889 and post-merge main CI passed; merge commit bb4ae2ed9cf892c2939a9723534b81bf17e441a9."
     }
   ],
   "trackedIssues": [
