@@ -68,6 +68,21 @@ describe("release closeout evidence", () => {
     );
   });
 
+  it("keeps the latest blocked GitHub sync completion audit in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+    const githubSyncPreflight = manifest.validationGates.find((gate) => gate.id === "github-app-sync-preflight");
+
+    expect(githubSyncPreflight?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/145#issuecomment-4498544854",
+          status: "blocked"
+        })
+      ])
+    );
+  });
+
   it("requires blocked live validation gates to link blocker issues", () => {
     const manifest = cloneManifest(clonedManifest => {
       delete clonedManifest.validationGates[0]!.blockerIssues;
