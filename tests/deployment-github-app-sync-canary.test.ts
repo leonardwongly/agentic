@@ -14,6 +14,7 @@ function jsonResponse(status: number, payload: unknown) {
 describe("deployment GitHub App sync canary", () => {
   it("proves GitHub App sync jobs reach durable worker completion", async () => {
     const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(401, { error: "Unauthorized" }))
       .mockResolvedValueOnce(
         jsonResponse(202, {
           ok: true,
@@ -89,6 +90,7 @@ describe("deployment GitHub App sync canary", () => {
     });
 
     expect(summary).toMatchObject({
+      negativeAuthStatus: 401,
       synchronizedAt: "2026-05-18T10:00:00.000Z",
       automationMode: "work",
       repositories: [
@@ -121,6 +123,18 @@ describe("deployment GitHub App sync canary", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
+          Authorization: expect.stringMatching(/^Bearer invalid-github-app-sync-[a-f0-9]{24}$/u),
+          "x-request-id": "sync-canary-request-1-negative-auth",
+          "x-trace-id": "sync-canary-trace-1"
+        })
+      })
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      "https://agentic.example.com/api/github/issues/app/sync",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
           Authorization: "Bearer github-app-sync-secret",
           "x-request-id": "sync-canary-request-1",
           "x-trace-id": "sync-canary-trace-1"
@@ -128,7 +142,7 @@ describe("deployment GitHub App sync canary", () => {
       })
     );
     expect(fetchImpl).toHaveBeenNthCalledWith(
-      2,
+      3,
       "https://agentic.example.com/api/jobs/job-sync-1",
       expect.objectContaining({
         headers: expect.objectContaining({
@@ -140,23 +154,26 @@ describe("deployment GitHub App sync canary", () => {
     );
     expect(JSON.stringify(summary)).not.toContain("github-app-sync-secret");
     expect(JSON.stringify(summary)).not.toContain("test-access-key");
+    expect(JSON.stringify(summary)).not.toContain("invalid-github-app-sync-");
     expect(wait).toHaveBeenCalledTimes(1);
   });
 
   it("fails when sync produces no durable jobs to poll", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      jsonResponse(202, {
-        ok: true,
-        repositories: [
-          {
-            fullName: "leonardwongly/agentic",
-            openIssuesSeen: 0,
-            skippedPullRequests: 0
-          }
-        ],
-        jobs: []
-      })
-    );
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(401, { error: "Unauthorized" }))
+      .mockResolvedValueOnce(
+        jsonResponse(202, {
+          ok: true,
+          repositories: [
+            {
+              fullName: "leonardwongly/agentic",
+              openIssuesSeen: 0,
+              skippedPullRequests: 0
+            }
+          ],
+          jobs: []
+        })
+      );
 
     await expect(
       runDeploymentGitHubAppSyncCanary({
@@ -170,6 +187,7 @@ describe("deployment GitHub App sync canary", () => {
 
   it("fails when a synced job dead-letters", async () => {
     const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(401, { error: "Unauthorized" }))
       .mockResolvedValueOnce(
         jsonResponse(202, {
           ok: true,
@@ -208,22 +226,24 @@ describe("deployment GitHub App sync canary", () => {
   });
 
   it("rejects unsafe job status URLs from the sync response", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      jsonResponse(202, {
-        ok: true,
-        jobs: [
-          {
-            id: "job-sync-unsafe",
-            kind: "github_issue_intake",
-            status: "queued",
-            statusUrl: "https://metadata.internal/api/jobs/job-sync-unsafe",
-            repository: "leonardwongly/agentic",
-            issueNumber: 205,
-            automationMode: "work"
-          }
-        ]
-      })
-    );
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(401, { error: "Unauthorized" }))
+      .mockResolvedValueOnce(
+        jsonResponse(202, {
+          ok: true,
+          jobs: [
+            {
+              id: "job-sync-unsafe",
+              kind: "github_issue_intake",
+              status: "queued",
+              statusUrl: "https://metadata.internal/api/jobs/job-sync-unsafe",
+              repository: "leonardwongly/agentic",
+              issueNumber: 205,
+              automationMode: "work"
+            }
+          ]
+        })
+      );
 
     await expect(
       runDeploymentGitHubAppSyncCanary({
@@ -315,5 +335,19 @@ describe("deployment GitHub App sync canary", () => {
     ).rejects.toThrow("AGENTIC_SMOKE_BASE_URL must use a public stable DNS host for live GitHub App sync proof.");
 
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails before valid sync when invalid bearer auth is not rejected", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(202, { ok: true, jobs: [] }));
+
+    await expect(
+      runDeploymentGitHubAppSyncCanary({
+        baseUrl: "https://agentic.example.com",
+        accessKey: "test-access-key",
+        syncSecret: "github-app-sync-secret",
+        fetchImpl
+      })
+    ).rejects.toThrow("Expected GitHub App sync to reject an invalid bearer token with 401, received 202.");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

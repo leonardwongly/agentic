@@ -152,7 +152,7 @@ export AGENTIC_GITHUB_APP_SYNC_SECRET=replace-this-with-the-runtime-sync-secret
 npm run test:smoke:github-app-sync
 ```
 
-The canary requires `AGENTIC_SMOKE_BASE_URL` to be a stable public HTTPS origin, not a temporary tunnel, local/private address, or URL with credentials, path, query, or fragment. It calls `/api/github/issues/app/sync`, validates same-origin job status URLs, and polls `/api/jobs/<job-id>` until every returned `github_issue_intake` job completes, dead-letters, or times out. The emitted evidence includes repository names, issue numbers, job ids, attempts, request/trace ids, and timings; it does not print the sync secret, access key, GitHub App private key, installation token, or raw issue body.
+The canary requires `AGENTIC_SMOKE_BASE_URL` to be a stable public HTTPS origin, not a temporary tunnel, local/private address, or URL with credentials, path, query, or fragment. Before the valid sync call, it sends a deliberately invalid bearer token to `/api/github/issues/app/sync` and requires `401` so the deployed route proves fail-closed authentication behavior. It then calls `/api/github/issues/app/sync` with the real sync secret, validates same-origin job status URLs, and polls `/api/jobs/<job-id>` until every returned `github_issue_intake` job completes, dead-letters, or times out. The emitted evidence includes the negative-auth status, repository names, issue numbers, job ids, attempts, request/trace ids, and timings; it does not print the sync secret, invalid probe token, access key, GitHub App private key, installation token, or raw issue body.
 
 ## Security Notes
 
