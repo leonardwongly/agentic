@@ -107,6 +107,37 @@ function buildSignedRequest(payload: unknown, options?: {
   });
 }
 
+function buildSignedStreamRequest(payload: unknown, options?: {
+  secret?: string;
+  signature?: string;
+  event?: string;
+  deliveryId?: string;
+}): Request {
+  const body = JSON.stringify(payload);
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < body.length; offset += 16_384) {
+        controller.enqueue(encoder.encode(body.slice(offset, offset + 16_384)));
+      }
+
+      controller.close();
+    }
+  });
+
+  return new Request("http://localhost/api/github/issues/webhook", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-github-event": options?.event ?? "issues",
+      "x-github-delivery": options?.deliveryId ?? "delivery-1",
+      "x-hub-signature-256": options?.signature ?? signBody(body, options?.secret ?? WEBHOOK_SECRET)
+    },
+    body: stream,
+    duplex: "half"
+  } as RequestInit & { duplex: "half" });
+}
+
 describe("GitHub issue webhook route", () => {
   let repository: AgenticRepository;
   const originalSecret = process.env.AGENTIC_GITHUB_WEBHOOK_SECRET;
@@ -509,6 +540,25 @@ describe("GitHub issue webhook route", () => {
   it("rejects oversized issue payloads before parsing JSON", async () => {
     const response = await githubIssueWebhookRoute(
       buildSignedRequest(buildIssuePayload({
+        issue: {
+          ...buildIssuePayload().issue,
+          body: "x".repeat(300_000)
+        }
+      }))
+    );
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "GitHub issue webhook payload is too large." });
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("rejects streamed oversized issue payloads without declared content length", async () => {
+    const response = await githubIssueWebhookRoute(
+      buildSignedStreamRequest(buildIssuePayload({
         issue: {
           ...buildIssuePayload().issue,
           body: "x".repeat(300_000)
