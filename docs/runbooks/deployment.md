@@ -108,7 +108,7 @@ the Blueprint until the first rollout and rollback path are captured.
 After the sync, verify Render created the expected resources:
 
 ```bash
-render services --output json
+render services list --output json
 ```
 
 Capture the generated `agentic-web` stable HTTPS URL before configuring GitHub

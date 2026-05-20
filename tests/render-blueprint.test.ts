@@ -3,9 +3,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const blueprintPath = join(process.cwd(), "deploy", "render", "render.yaml");
+const deploymentRunbookPath = join(process.cwd(), "docs", "runbooks", "deployment.md");
 
 function readBlueprint(): string {
   return readFileSync(blueprintPath, "utf8");
+}
+
+function readDeploymentRunbook(): string {
+  return readFileSync(deploymentRunbookPath, "utf8");
 }
 
 describe("Render Blueprint deployment target", () => {
@@ -75,5 +80,12 @@ describe("Render Blueprint deployment target", () => {
     expect(blueprint).toContain("property: connectionString");
     expect(blueprint).not.toMatch(/postgres:\/\//);
     expect(blueprint).not.toMatch(/postgresql:\/\//);
+  });
+
+  it("documents the current Render CLI command for service inventory evidence", () => {
+    const runbook = readDeploymentRunbook();
+
+    expect(runbook).toContain("render services list --output json");
+    expect(runbook).not.toContain("render services --output json");
   });
 });
