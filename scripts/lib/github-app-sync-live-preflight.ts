@@ -1,0 +1,467 @@
+import { isIP } from "node:net";
+
+const SYNC_PATH = "/api/github/issues/app/sync";
+const TEMPORARY_SYNC_DOMAINS = [
+  "trycloudflare.com",
+  "ngrok.io",
+  "ngrok.app",
+  "ngrok-free.app",
+  "loca.lt",
+  "localhost.run",
+  "devtunnels.ms",
+  "serveo.net",
+  "tunnelmole.net"
+];
+const REQUIRED_RUNTIME_ENV = [
+  "DATABASE_URL",
+  "AGENTIC_ACCESS_KEY",
+  "AGENTIC_GITHUB_APP_ID",
+  "AGENTIC_GITHUB_APP_INSTALLATION_ID",
+  "AGENTIC_GITHUB_APP_PRIVATE_KEY",
+  "AGENTIC_GITHUB_APP_SYNC_SECRET",
+  "AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES"
+] as const;
+const REPOSITORY_FULL_NAME_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
+const NUMERIC_ID_PATTERN = /^[1-9][0-9]{0,19}$/u;
+
+type RequiredRuntimeEnvName = (typeof REQUIRED_RUNTIME_ENV)[number];
+
+export type GitHubAppSyncLivePreflightCheck = {
+  name:
+    | "sync_url"
+    | "stable_host"
+    | "smoke_base_url"
+    | "workflow_state"
+    | "runtime_secret_inventory"
+    | "runtime_secret_shape"
+    | "repository_allowlist"
+    | "render_services"
+    | "render_blueprint";
+  status: "pass" | "warn" | "fail";
+  message: string;
+  details?: Record<string, string | number | boolean | null>;
+};
+
+export type GitHubAppSyncLivePreflightReport = {
+  ok: boolean;
+  syncUrl: string | null;
+  smokeBaseUrl: string | null;
+  workflowState: string | null;
+  endpoints: {
+    health: string | null;
+    readiness: string | null;
+    sync: string | null;
+  };
+  checks: GitHubAppSyncLivePreflightCheck[];
+};
+
+function trim(value: string | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function pass(
+  name: GitHubAppSyncLivePreflightCheck["name"],
+  message: string,
+  details?: GitHubAppSyncLivePreflightCheck["details"]
+): GitHubAppSyncLivePreflightCheck {
+  return { name, status: "pass", message, details };
+}
+
+function warn(
+  name: GitHubAppSyncLivePreflightCheck["name"],
+  message: string,
+  details?: GitHubAppSyncLivePreflightCheck["details"]
+): GitHubAppSyncLivePreflightCheck {
+  return { name, status: "warn", message, details };
+}
+
+function fail(
+  name: GitHubAppSyncLivePreflightCheck["name"],
+  message: string,
+  details?: GitHubAppSyncLivePreflightCheck["details"]
+): GitHubAppSyncLivePreflightCheck {
+  return { name, status: "fail", message, details };
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+}
+
+function domainMatches(hostname: string, domain: string): boolean {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function isTemporaryHost(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  return TEMPORARY_SYNC_DOMAINS.some((domain) => domainMatches(normalized, domain));
+}
+
+function parseIpv4(hostname: string): number[] | null {
+  const normalized = normalizeHostname(hostname);
+
+  if (isIP(normalized) !== 4) {
+    return null;
+  }
+
+  const octets = normalized.split(".").map((segment) => Number.parseInt(segment, 10));
+  return octets.length === 4 && octets.every((octet) => Number.isInteger(octet)) ? octets : null;
+}
+
+function isLocalOrPrivateHost(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  const ipVersion = isIP(normalized);
+
+  if (normalized === "localhost" || normalized === "::1") {
+    return true;
+  }
+
+  const ipv4 = parseIpv4(normalized);
+
+  if (ipv4) {
+    const [first = 0, second = 0] = ipv4;
+
+    return (
+      first === 10 ||
+      first === 127 ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168)
+    );
+  }
+
+  return ipVersion === 6 && (normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:"));
+}
+
+function parseSyncUrl(env: NodeJS.ProcessEnv): { url: URL | null; checks: GitHubAppSyncLivePreflightCheck[] } {
+  const raw = trim(env.AGENTIC_GITHUB_APP_ISSUE_SYNC_URL);
+
+  if (!raw) {
+    return {
+      url: null,
+      checks: [fail("sync_url", "Set AGENTIC_GITHUB_APP_ISSUE_SYNC_URL to the deployed sync endpoint.")]
+    };
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(raw);
+  } catch {
+    return {
+      url: null,
+      checks: [fail("sync_url", "AGENTIC_GITHUB_APP_ISSUE_SYNC_URL must be a valid absolute URL.")]
+    };
+  }
+
+  const checks: GitHubAppSyncLivePreflightCheck[] = [];
+
+  if (url.protocol !== "https:") {
+    checks.push(fail("sync_url", "Sync URL must use HTTPS.", { protocol: url.protocol.replace(/:$/, "") }));
+  }
+
+  if (url.username || url.password) {
+    checks.push(fail("sync_url", "Sync URL must not include embedded credentials."));
+  }
+
+  if (url.pathname !== SYNC_PATH || url.search || url.hash) {
+    checks.push(fail("sync_url", `Sync URL must point exactly to ${SYNC_PATH} without query or fragment.`));
+  }
+
+  if (checks.length === 0) {
+    checks.push(pass("sync_url", "Sync URL points at the canonical deployed route.", { path: SYNC_PATH }));
+  }
+
+  return { url, checks };
+}
+
+function buildStableHostCheck(url: URL | null): GitHubAppSyncLivePreflightCheck {
+  if (!url) {
+    return fail("stable_host", "Sync host cannot be checked until the sync URL is valid.");
+  }
+
+  const hostname = normalizeHostname(url.hostname);
+
+  if (isTemporaryHost(hostname)) {
+    return fail("stable_host", "Sync URL must not use a temporary tunnel host.", { host: hostname });
+  }
+
+  if (isLocalOrPrivateHost(hostname)) {
+    return fail("stable_host", "Sync URL must use a public stable DNS host.", { host: hostname });
+  }
+
+  return pass("stable_host", "Sync URL host is public and not a known temporary tunnel.", { host: hostname });
+}
+
+function parseSmokeBaseUrl(env: NodeJS.ProcessEnv, syncUrl: URL | null): GitHubAppSyncLivePreflightCheck {
+  const raw = trim(env.AGENTIC_SMOKE_BASE_URL) || trim(env.AGENTIC_INGRESS_BASE_URL);
+
+  if (!raw) {
+    return fail("smoke_base_url", "Set AGENTIC_SMOKE_BASE_URL or AGENTIC_INGRESS_BASE_URL to the deployed origin.");
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(raw);
+  } catch {
+    return fail("smoke_base_url", "Smoke base URL must be a valid absolute URL.");
+  }
+
+  if (url.protocol !== "https:" || url.username || url.password || (url.pathname && url.pathname !== "/") || url.search || url.hash) {
+    return fail("smoke_base_url", "Smoke base URL must be an HTTPS origin without credentials, path, query, or fragment.");
+  }
+
+  if (syncUrl && url.origin !== syncUrl.origin) {
+    return fail("smoke_base_url", "Smoke base URL and GitHub App sync URL must use the same origin.", {
+      smokeOrigin: url.origin,
+      syncOrigin: syncUrl.origin
+    });
+  }
+
+  return pass("smoke_base_url", "Smoke base URL matches the sync endpoint origin.", { origin: url.origin });
+}
+
+function buildWorkflowStateCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const state = trim(env.AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE).toLowerCase();
+
+  if (!state) {
+    return fail(
+      "workflow_state",
+      "Set AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE from `gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq .state`."
+    );
+  }
+
+  if (state !== "active") {
+    return fail("workflow_state", "GitHub App Issue Sync workflow must be active before live validation.", { state });
+  }
+
+  return pass("workflow_state", "GitHub App Issue Sync workflow is active.", { state });
+}
+
+function buildRuntimeInventoryCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const missing = REQUIRED_RUNTIME_ENV.filter((name) => !trim(env[name]));
+
+  if (missing.length > 0) {
+    return fail("runtime_secret_inventory", "Required runtime configuration is missing.", {
+      missingCount: missing.length,
+      missingNames: missing.join(",")
+    });
+  }
+
+  return pass("runtime_secret_inventory", "Required runtime configuration names are present.", {
+    count: REQUIRED_RUNTIME_ENV.length
+  });
+}
+
+function buildRuntimeShapeCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const invalid: string[] = [];
+  const appId = trim(env.AGENTIC_GITHUB_APP_ID);
+  const installationId = trim(env.AGENTIC_GITHUB_APP_INSTALLATION_ID);
+  const privateKey = trim(env.AGENTIC_GITHUB_APP_PRIVATE_KEY);
+  const syncSecret = trim(env.AGENTIC_GITHUB_APP_SYNC_SECRET);
+
+  if (appId && !NUMERIC_ID_PATTERN.test(appId)) {
+    invalid.push("AGENTIC_GITHUB_APP_ID");
+  }
+
+  if (installationId && !NUMERIC_ID_PATTERN.test(installationId)) {
+    invalid.push("AGENTIC_GITHUB_APP_INSTALLATION_ID");
+  }
+
+  if (privateKey && privateKey.length > 12_000) {
+    invalid.push("AGENTIC_GITHUB_APP_PRIVATE_KEY");
+  }
+
+  if (syncSecret && syncSecret.length < 32) {
+    invalid.push("AGENTIC_GITHUB_APP_SYNC_SECRET");
+  }
+
+  if (invalid.length > 0) {
+    return fail("runtime_secret_shape", "One or more runtime secrets/config values have an invalid shape.", {
+      invalidNames: invalid.join(",")
+    });
+  }
+
+  return pass("runtime_secret_shape", "Runtime secret/config values have valid non-secret shape.", {
+    checkedNames: "AGENTIC_GITHUB_APP_ID,AGENTIC_GITHUB_APP_INSTALLATION_ID,AGENTIC_GITHUB_APP_PRIVATE_KEY,AGENTIC_GITHUB_APP_SYNC_SECRET"
+  });
+}
+
+function buildAllowlistCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const raw = trim(env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES);
+
+  if (!raw) {
+    return fail("repository_allowlist", "AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES must be configured.");
+  }
+
+  const repositories = raw
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const uniqueRepositories = new Set(repositories);
+
+  if (uniqueRepositories.size === 0) {
+    return fail("repository_allowlist", "Repository allowlist must include at least one repository.");
+  }
+
+  if (uniqueRepositories.size > 50) {
+    return fail("repository_allowlist", "Repository allowlist must not include more than 50 repositories.", {
+      count: uniqueRepositories.size
+    });
+  }
+
+  const invalidRepository = Array.from(uniqueRepositories).find((repository) => !REPOSITORY_FULL_NAME_PATTERN.test(repository));
+
+  if (invalidRepository) {
+    return fail("repository_allowlist", "Repository allowlist includes an invalid repository full name.", {
+      invalidRepository
+    });
+  }
+
+  return pass("repository_allowlist", "Repository allowlist is bounded and syntactically valid.", {
+    count: uniqueRepositories.size
+  });
+}
+
+function parseJsonObject(raw: string): unknown {
+  return JSON.parse(raw);
+}
+
+function serviceName(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const service = record.service && typeof record.service === "object" ? (record.service as Record<string, unknown>) : null;
+  const candidates = [record.name, record.serviceName, record.slug, service?.name, service?.serviceName, service?.slug];
+  const candidate = candidates.find((item) => typeof item === "string" && item.trim());
+
+  return typeof candidate === "string" ? candidate.trim() : null;
+}
+
+function buildRenderServicesCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const raw = trim(env.AGENTIC_RENDER_SERVICES_JSON);
+
+  if (!raw) {
+    return warn(
+      "render_services",
+      "AGENTIC_RENDER_SERVICES_JSON is not set; live preflight cannot prove deployed web and worker services exist."
+    );
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = parseJsonObject(raw);
+  } catch {
+    return fail("render_services", "AGENTIC_RENDER_SERVICES_JSON must contain JSON from `render services list --output json`.");
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    return fail("render_services", "Render services list must include deployed Agentic services.");
+  }
+
+  const names = parsed.map(serviceName).filter((name): name is string => Boolean(name));
+  const missing = ["agentic-web", "agentic-worker"].filter(
+    (expected) => !names.some((name) => name === expected || name.includes(expected))
+  );
+
+  if (missing.length > 0) {
+    return fail("render_services", "Render services list is missing required Agentic services.", {
+      missingNames: missing.join(",")
+    });
+  }
+
+  return pass("render_services", "Render services list includes web and worker services.", {
+    serviceCount: parsed.length
+  });
+}
+
+function buildRenderBlueprintCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const raw = trim(env.AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON);
+
+  if (!raw) {
+    return warn(
+      "render_blueprint",
+      "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON is not set; live preflight cannot prove Render Blueprint validation passes."
+    );
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = parseJsonObject(raw);
+  } catch {
+    return fail(
+      "render_blueprint",
+      "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON must contain JSON from `render blueprints validate deploy/render/render.yaml --output json`."
+    );
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    return fail("render_blueprint", "Render Blueprint validation JSON must be an object.");
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const errors = Array.isArray(record.errors) ? record.errors : [];
+
+  if (record.valid === false || errors.length > 0) {
+    const firstError = errors.find((error) => error && typeof error === "object") as Record<string, unknown> | undefined;
+    const errorCode = typeof firstError?.error === "string" ? firstError.error : "unknown";
+    return fail("render_blueprint", "Render Blueprint validation must pass before live sync validation.", {
+      errorCount: errors.length,
+      firstError: errorCode
+    });
+  }
+
+  return pass("render_blueprint", "Render Blueprint validation passed.", { valid: true });
+}
+
+function endpoint(origin: string | null, path: string): string | null {
+  return origin ? `${origin}${path}` : null;
+}
+
+export function validateGitHubAppSyncLivePreflight(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightReport {
+  const sync = parseSyncUrl(env);
+  const checks = [
+    ...sync.checks,
+    buildStableHostCheck(sync.url),
+    parseSmokeBaseUrl(env, sync.url),
+    buildWorkflowStateCheck(env),
+    buildRuntimeInventoryCheck(env),
+    buildRuntimeShapeCheck(env),
+    buildAllowlistCheck(env),
+    buildRenderServicesCheck(env),
+    buildRenderBlueprintCheck(env)
+  ];
+  const smokeBaseUrl = trim(env.AGENTIC_SMOKE_BASE_URL) || trim(env.AGENTIC_INGRESS_BASE_URL) || null;
+  const smokeOrigin = smokeBaseUrl ? (() => {
+    try {
+      return new URL(smokeBaseUrl).origin;
+    } catch {
+      return null;
+    }
+  })() : null;
+
+  return {
+    ok: checks.every((check) => check.status !== "fail"),
+    syncUrl: sync.url?.toString() ?? null,
+    smokeBaseUrl,
+    workflowState: trim(env.AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE) || null,
+    endpoints: {
+      health: endpoint(smokeOrigin, "/api/health"),
+      readiness: endpoint(smokeOrigin, "/api/ready"),
+      sync: sync.url?.toString() ?? null
+    },
+    checks
+  };
+}
+
+export function redactGitHubAppSyncLivePreflightReport(
+  report: GitHubAppSyncLivePreflightReport
+): GitHubAppSyncLivePreflightReport {
+  return report;
+}
+
+export const githubAppSyncLivePreflightRequiredRuntimeEnv: readonly RequiredRuntimeEnvName[] = REQUIRED_RUNTIME_ENV;

@@ -94,5 +94,6 @@ describe("GitHub issue autopilot workflow", () => {
     expect(workflow).not.toContain("console.error(secret");
     expect(runbook).toContain("disabled_manually");
     expect(runbook).toContain("gh workflow enable github-app-issue-sync.yml --repo leonardwongly/agentic");
+    expect(runbook).toContain("npm run github:app-sync:preflight");
   });
 });
