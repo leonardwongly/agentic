@@ -6,6 +6,7 @@ const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nredacted\\n-----END RSA P
 const BASE_ENV = {
   AGENTIC_GITHUB_APP_ISSUE_SYNC_URL: "https://agentic.example.com/api/github/issues/app/sync",
   AGENTIC_SMOKE_BASE_URL: "https://agentic.example.com",
+  AGENTIC_SMOKE_ACCESS_KEY: "runtime-access-key",
   AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE: "active",
   DATABASE_URL: "postgres://agentic:redacted@postgres.internal:5432/agentic",
   AGENTIC_ACCESS_KEY: "runtime-access-key",
@@ -38,6 +39,7 @@ describe("GitHub App sync live preflight", () => {
       ["workflow_state", "pass"],
       ["runtime_secret_inventory", "pass"],
       ["runtime_secret_shape", "pass"],
+      ["smoke_canary_inventory", "pass"],
       ["repository_allowlist", "pass"],
       ["render_services", "pass"],
       ["render_blueprint", "pass"]
@@ -106,7 +108,8 @@ describe("GitHub App sync live preflight", () => {
       AGENTIC_GITHUB_APP_ID: "app-id",
       AGENTIC_GITHUB_APP_SYNC_SECRET: "short",
       AGENTIC_GITHUB_APP_PRIVATE_KEY: "",
-      AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "not-a-full-name"
+      AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "not-a-full-name",
+      AGENTIC_SMOKE_ACCESS_KEY: ""
     });
 
     expect(report.ok).toBe(false);
@@ -120,6 +123,13 @@ describe("GitHub App sync live preflight", () => {
       expect.objectContaining({
         name: "runtime_secret_shape",
         status: "fail"
+      })
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "smoke_canary_inventory",
+        status: "fail",
+        message: "Required smoke canary configuration is missing."
       })
     );
     expect(report.checks).toContainEqual(
