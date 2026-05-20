@@ -120,7 +120,8 @@ const REQUIRED_VALIDATION_GATES = [
   "rollout-gate",
   "local-ci"
 ];
-const GITHUB_AGENTIC_URL_PATTERN = /^https:\/\/github\.com\/leonardwongly\/agentic\/(?:issues|pull)\/\d+$/u;
+const GITHUB_AGENTIC_URL_PATTERN =
+  /^https:\/\/github\.com\/leonardwongly\/agentic\/(?:(?:issues\/\d+(?:#issuecomment-\d+)?)|(?:pull\/\d+))$/u;
 const GITHUB_ACTION_URL_PATTERN = /^https:\/\/github\.com\/leonardwongly\/agentic\/actions\/runs\/\d+(?:\/job\/\d+)?$/u;
 const ISSUE_REF_PATTERN = /^#\d+$/u;
 const SAFE_REPO_PATH_PATTERN = /^(?:\.github|apps|config|deploy|docs|packages|scripts|tests|package\.json|package-lock\.json|tsconfig[^/]*\.json)(?:\/|$)/u;
