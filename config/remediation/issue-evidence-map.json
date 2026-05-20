@@ -184,13 +184,25 @@
           "kind": "github_issue",
           "ref": "#190",
           "note": "W01 remains open because the code-backed PRs are separated from external live deployment proof."
+        },
+        {
+          "kind": "script",
+          "ref": "scripts/github-app-sync-live-preflight.ts",
+          "note": "GitHub App issue sync live preflight makes the stable URL, workflow state, runtime config, Render service, and Blueprint blockers machine-checkable."
+        },
+        {
+          "kind": "config",
+          "ref": "config/release/production-runtime-closeout.json",
+          "note": "Release closeout evidence now requires the GitHub App sync preflight gate before live sync proof can close."
         }
       ],
       "validationGates": [
         "npm run deploy:ingress:check",
         "npm run db:status -- --require-ready",
         "npm run test:smoke:deployment",
-        "npm run test:smoke:deployment-async"
+        "npm run test:smoke:deployment-async",
+        "npm run github:app-sync:preflight",
+        "npm run release:closeout:evidence"
       ],
       "deploymentProof": {
         "status": "blocked",
@@ -200,6 +212,11 @@
             "kind": "github_issue",
             "ref": "#141",
             "note": "Stable provider target and HTTPS ingress remain blocked externally."
+          },
+          {
+            "kind": "github_issue",
+            "ref": "#145",
+            "note": "Merged preflight currently fails because the sync URL is temporary, the workflow is disabled, Render services are absent, and Blueprint validation returns need_payment_info."
           }
         ]
       },

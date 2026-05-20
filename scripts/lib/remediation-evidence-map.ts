@@ -61,6 +61,19 @@ export type RemediationEvidenceMapReport = {
 };
 
 const REQUIRED_W7_ISSUES = [184, 185, 186, 187, 188];
+const PRODUCTION_PROOF_ISSUE = 190;
+const REQUIRED_PRODUCTION_PROOF_VALIDATION_GATES = [
+  "npm run deploy:ingress:check",
+  "npm run db:status -- --require-ready",
+  "npm run test:smoke:deployment",
+  "npm run test:smoke:deployment-async",
+  "npm run github:app-sync:preflight",
+  "npm run release:closeout:evidence"
+];
+const REQUIRED_PRODUCTION_PROOF_EVIDENCE_REFS = [
+  "scripts/github-app-sync-live-preflight.ts",
+  "config/release/production-runtime-closeout.json"
+];
 const REQUIRED_ROADMAP_ISSUE = 152;
 const REQUIRED_WORKSTREAM_ISSUE = 184;
 const GITHUB_AGENTIC_URL_PATTERN = /^https:\/\/github\.com\/leonardwongly\/agentic\/(?:issues|pull)\/\d+$/u;
@@ -210,6 +223,34 @@ export function validateRemediationEvidenceMap(
       }
 
       validateEvidenceReferences(entry.implementationProof, `${entryPath}.implementationProof`, options.cwd, issues, entry.issue);
+
+      if (entry.issue === PRODUCTION_PROOF_ISSUE) {
+        const validationGates = new Set(entry.validationGates);
+        for (const requiredGate of REQUIRED_PRODUCTION_PROOF_VALIDATION_GATES) {
+          if (!validationGates.has(requiredGate)) {
+            issues.push(
+              issue(
+                `${entryPath}.validationGates`,
+                `Production proof evidence must include validation gate '${requiredGate}'.`,
+                entry.issue
+              )
+            );
+          }
+        }
+
+        const implementationRefs = new Set((entry.implementationProof ?? []).map(reference => reference.ref));
+        for (const requiredRef of REQUIRED_PRODUCTION_PROOF_EVIDENCE_REFS) {
+          if (!implementationRefs.has(requiredRef)) {
+            issues.push(
+              issue(
+                `${entryPath}.implementationProof`,
+                `Production proof evidence must include '${requiredRef}'.`,
+                entry.issue
+              )
+            );
+          }
+        }
+      }
 
       if (entry.deploymentProof.status !== "not_required") {
         if ((entry.deploymentProof.blockers ?? []).length === 0 && entry.deploymentProof.status === "blocked") {
