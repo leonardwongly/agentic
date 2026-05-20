@@ -525,6 +525,55 @@ describe("GitHub App issue sync route", () => {
     expect(jobs).toHaveLength(0);
   });
 
+  it("does not enqueue partial work when a later repository sync fails", async () => {
+    process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES = "leonardwongly/agentic,leonardwongly/agentic-docs";
+    fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+
+      if (url === "https://github.test/app/installations/98765/access_tokens") {
+        return jsonResponse({
+          token: "github-installation-token",
+          expires_at: "2026-05-13T04:00:00.000Z"
+        });
+      }
+
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer github-installation-token");
+
+      if (url === "https://github.test/repos/leonardwongly/agentic") {
+        return jsonResponse(buildRepositoryResponse());
+      }
+
+      if (url.startsWith("https://github.test/repos/leonardwongly/agentic/issues?")) {
+        return jsonResponse([buildIssueResponse()]);
+      }
+
+      if (url === "https://github.test/repos/leonardwongly/agentic-docs") {
+        return jsonResponse(buildRepositoryResponse({
+          full_name: "leonardwongly/agentic-docs",
+          html_url: "https://github.com/leonardwongly/agentic-docs"
+        }));
+      }
+
+      if (url.startsWith("https://github.test/repos/leonardwongly/agentic-docs/issues?")) {
+        return jsonResponse({ message: "upstream unavailable" }, { status: 502 });
+      }
+
+      return jsonResponse({ message: "not found" }, { status: 404 });
+    });
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: "GitHub App issue sync request failed."
+    });
+    expect(jobs).toHaveLength(0);
+  });
+
   it("honors the configured per-repository issue cap", async () => {
     process.env.AGENTIC_GITHUB_APP_SYNC_MAX_ISSUES_PER_REPOSITORY = "1";
 

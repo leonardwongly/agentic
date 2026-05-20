@@ -91,6 +91,12 @@ type GitHubAppIssueSyncConfig = {
   workspaceId: string | null;
 };
 
+type PreparedGitHubRepositorySync = {
+  repositoryFullName: string;
+  githubRepository: GitHubRepositoryResponse;
+  githubIssues: GitHubIssueResponse[];
+};
+
 function readRequiredEnv(name: string, maxLength: number): string {
   const value = process.env[name]?.trim() ?? "";
 
@@ -507,19 +513,30 @@ export async function POST(request: Request) {
 
       const config = readGitHubAppIssueSyncConfig();
       const installationToken = await createInstallationAccessToken(config);
+      const preparedRepositories: PreparedGitHubRepositorySync[] = [];
+
+      for (const repositoryFullName of config.repositories) {
+        const githubRepository = await fetchGitHubRepository(config, installationToken, repositoryFullName);
+        const githubIssues = await fetchOpenIssues(config, installationToken, repositoryFullName);
+
+        preparedRepositories.push({
+          repositoryFullName,
+          githubRepository,
+          githubIssues
+        });
+      }
+
       const repository = await getSeededRepository();
       const actorContext = createSystemActorContext(config.userId);
       const synchronizedAt = nowIso();
       const repositories = [];
       const jobs = [];
 
-      for (const repositoryFullName of config.repositories) {
-        const githubRepository = await fetchGitHubRepository(config, installationToken, repositoryFullName);
-        const githubIssues = await fetchOpenIssues(config, installationToken, repositoryFullName);
+      for (const preparedRepository of preparedRepositories) {
         let skippedPullRequests = 0;
         let openIssueCount = 0;
 
-        for (const issue of githubIssues) {
+        for (const issue of preparedRepository.githubIssues) {
           if (issue.pull_request) {
             skippedPullRequests += 1;
             continue;
@@ -533,10 +550,10 @@ export async function POST(request: Request) {
             payload: {
               automationMode: config.automationMode,
               repository: {
-                fullName: githubRepository.full_name,
-                htmlUrl: githubRepository.html_url,
-                defaultBranch: githubRepository.default_branch,
-                private: githubRepository.private
+                fullName: preparedRepository.githubRepository.full_name,
+                htmlUrl: preparedRepository.githubRepository.html_url,
+                defaultBranch: preparedRepository.githubRepository.default_branch,
+                private: preparedRepository.githubRepository.private
               },
               issue: {
                 number: issue.number,
@@ -552,7 +569,7 @@ export async function POST(request: Request) {
               },
               deliveryId: buildSyntheticDeliveryId({
                 installationId: config.installationId,
-                repositoryFullName,
+                repositoryFullName: preparedRepository.repositoryFullName,
                 issueNumber: issue.number
               }),
               receivedAt: synchronizedAt,
@@ -584,7 +601,7 @@ export async function POST(request: Request) {
         }
 
         repositories.push({
-          fullName: githubRepository.full_name,
+          fullName: preparedRepository.githubRepository.full_name,
           openIssuesSeen: openIssueCount,
           skippedPullRequests
         });
