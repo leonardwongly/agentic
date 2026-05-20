@@ -21,10 +21,12 @@ const REQUIRED_RUNTIME_ENV = [
   "AGENTIC_GITHUB_APP_SYNC_SECRET",
   "AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES"
 ] as const;
+const REQUIRED_CANARY_ENV = ["AGENTIC_SMOKE_ACCESS_KEY"] as const;
 const REPOSITORY_FULL_NAME_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const NUMERIC_ID_PATTERN = /^[1-9][0-9]{0,19}$/u;
 
 type RequiredRuntimeEnvName = (typeof REQUIRED_RUNTIME_ENV)[number];
+type RequiredCanaryEnvName = (typeof REQUIRED_CANARY_ENV)[number];
 
 export type GitHubAppSyncLivePreflightCheck = {
   name:
@@ -34,6 +36,7 @@ export type GitHubAppSyncLivePreflightCheck = {
     | "workflow_state"
     | "runtime_secret_inventory"
     | "runtime_secret_shape"
+    | "smoke_canary_inventory"
     | "repository_allowlist"
     | "render_services"
     | "render_blueprint";
@@ -287,6 +290,21 @@ function buildRuntimeShapeCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePrefli
   });
 }
 
+function buildSmokeCanaryInventoryCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const missing = REQUIRED_CANARY_ENV.filter((name) => !trim(env[name]));
+
+  if (missing.length > 0) {
+    return fail("smoke_canary_inventory", "Required smoke canary configuration is missing.", {
+      missingCount: missing.length,
+      missingNames: missing.join(",")
+    });
+  }
+
+  return pass("smoke_canary_inventory", "Required smoke canary configuration names are present.", {
+    count: REQUIRED_CANARY_ENV.length
+  });
+}
+
 function buildAllowlistCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
   const raw = trim(env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES);
 
@@ -431,6 +449,7 @@ export function validateGitHubAppSyncLivePreflight(env: NodeJS.ProcessEnv): GitH
     buildWorkflowStateCheck(env),
     buildRuntimeInventoryCheck(env),
     buildRuntimeShapeCheck(env),
+    buildSmokeCanaryInventoryCheck(env),
     buildAllowlistCheck(env),
     buildRenderServicesCheck(env),
     buildRenderBlueprintCheck(env)
@@ -465,3 +484,4 @@ export function redactGitHubAppSyncLivePreflightReport(
 }
 
 export const githubAppSyncLivePreflightRequiredRuntimeEnv: readonly RequiredRuntimeEnvName[] = REQUIRED_RUNTIME_ENV;
+export const githubAppSyncLivePreflightRequiredCanaryEnv: readonly RequiredCanaryEnvName[] = REQUIRED_CANARY_ENV;
