@@ -80,7 +80,18 @@ provider secret manager.
 
 Use a durable HTTPS URL for scheduled sync. The repository variable must point exactly at `/api/github/issues/app/sync` on the selected host and must not include embedded credentials, query strings, or fragments. Temporary tunnel hosts such as `trycloudflare.com`, `ngrok.io`, `ngrok.app`, `ngrok-free.app`, `loca.lt`, `localhost.run`, `devtunnels.ms`, `serveo.net`, `tunnelmole.net`, `localhost`, private network addresses, and `.local` are allowed only for explicit manual validation: scheduled runs emit a notice and skip them, while manual dispatch requires `allow_temporary_url=true`.
 
-The sync route is intentionally a pull model: GitHub Actions only triggers Agentic with a bearer secret and never receives the GitHub App private key or installation token.
+The sync route is intentionally a pull model: GitHub Actions only triggers
+Agentic with a bearer secret and never receives the GitHub App private key or
+installation token. `POST /api/github/issues/app/sync` is a bodyless trigger:
+requests with a declared or streamed body are rejected before runtime GitHub App
+configuration is read or GitHub is contacted. The route bounds upstream GitHub
+work by allowlisted repositories, a maximum of 500 issues per repository, and a
+10 second timeout on each GitHub API request.
+
+The signed webhook route uses the opposite boundary because GitHub delivers a
+signed event body: `POST /api/github/issues/webhook` reads at most 256 KB of raw
+request body before signature verification and rejects oversized streamed or
+declared payloads.
 
 Before live validation, confirm the sync workflow itself is enabled. A workflow
 that is `disabled_manually` will not run scheduled syncs and cannot be used for
