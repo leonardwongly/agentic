@@ -28,7 +28,7 @@ describe("remediation evidence map", () => {
       ok: true,
       summary: {
         entries: 6,
-        blockedEntries: 1,
+        blockedEntries: 0,
         entriesWithDeploymentProof: 0,
         residualRisks: 1
       },
@@ -42,7 +42,7 @@ describe("remediation evidence map", () => {
 
     expect(rendered).toContain("Remediation evidence map passed.");
     expect(rendered).toContain("- Entries: 6");
-    expect(rendered).toContain("- Blocked entries: 1");
+    expect(rendered).toContain("- Blocked entries: 0");
   });
 
   it("requires every W7 issue to remain mapped", () => {
@@ -80,6 +80,9 @@ describe("remediation evidence map", () => {
   it("keeps W01 production proof aligned to GitHub sync preflight and release closeout gates", () => {
     const entry = readMap().entries.find(mapEntry => mapEntry.issue === 190);
 
+    expect(entry?.status).toBe("implemented");
+    expect(entry?.deploymentProof.status).toBe("blocked");
+    expect(entry?.deploymentProof.blockers).toEqual([141, 142, 143, 144, 145]);
     expect(entry?.implementationProof).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
