@@ -83,6 +83,21 @@ describe("release closeout evidence", () => {
     );
   });
 
+  it("keeps the latest Render provider readiness blocker in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+    const deployIngressCheck = manifest.validationGates.find((gate) => gate.id === "deploy-ingress-check");
+
+    expect(deployIngressCheck?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4498944971",
+          status: "blocked"
+        })
+      ])
+    );
+  });
+
   it("requires blocked live validation gates to link blocker issues", () => {
     const manifest = cloneManifest(clonedManifest => {
       delete clonedManifest.validationGates[0]!.blockerIssues;
