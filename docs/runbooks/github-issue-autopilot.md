@@ -82,6 +82,17 @@ Use a durable HTTPS URL for scheduled sync. The repository variable must point e
 
 The sync route is intentionally a pull model: GitHub Actions only triggers Agentic with a bearer secret and never receives the GitHub App private key or installation token.
 
+Before live validation, confirm the sync workflow itself is enabled. A workflow
+that is `disabled_manually` will not run scheduled syncs and cannot be used for
+manual end-to-end proof until it is explicitly re-enabled after the stable URL,
+runtime GitHub App secrets, Postgres readiness, and deployed worker checks are
+complete:
+
+```bash
+gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq '{name,state,path}'
+gh workflow enable github-app-issue-sync.yml --repo leonardwongly/agentic
+```
+
 ## Data Flow
 
 1. `.github/workflows/github-issue-autopilot.yml` runs on `issues.opened`, `issues.reopened`, `issues.labeled`, and `issue_comment.created`.

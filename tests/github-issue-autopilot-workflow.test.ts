@@ -54,6 +54,7 @@ describe("GitHub issue autopilot workflow", () => {
 
   it("schedules GitHub App open issue sync without app private key exposure", () => {
     const workflow = readRepoFile(".github/workflows/github-app-issue-sync.yml");
+    const runbook = readRepoFile("docs/runbooks/github-issue-autopilot.md");
 
     expect(workflow).toContain("name: GitHub App Issue Sync");
     expect(workflow).toContain("workflow_dispatch:");
@@ -91,5 +92,7 @@ describe("GitHub issue autopilot workflow", () => {
     expect(workflow).not.toContain("AGENTIC_GITHUB_APP_INSTALLATION_ID");
     expect(workflow).not.toContain("console.log(secret");
     expect(workflow).not.toContain("console.error(secret");
+    expect(runbook).toContain("disabled_manually");
+    expect(runbook).toContain("gh workflow enable github-app-issue-sync.yml --repo leonardwongly/agentic");
   });
 });
