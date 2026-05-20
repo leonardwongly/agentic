@@ -102,16 +102,22 @@ still reports provider blockers such as `need_payment_info`.
 ```bash
 export AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE="$(gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq .state)"
 export AGENTIC_GITHUB_APP_ISSUE_SYNC_URL="$(gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo leonardwongly/agentic)"
+export AGENTIC_GITHUB_ACTIONS_SECRETS_JSON="$(gh secret list --repo leonardwongly/agentic --json name)"
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-the-runtime-access-key
 export AGENTIC_RENDER_SERVICES_JSON="$(render services list --output json)"
 export AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON="$(render blueprints validate deploy/render/render.yaml --output json)"
 npm run github:app-sync:preflight
 ```
 
-The preflight expects the provider/runtime environment to also expose
-`AGENTIC_SMOKE_BASE_URL`, `AGENTIC_SMOKE_ACCESS_KEY`, `DATABASE_URL`, `AGENTIC_ACCESS_KEY`,
-`AGENTIC_GITHUB_APP_ID`, `AGENTIC_GITHUB_APP_INSTALLATION_ID`,
-`AGENTIC_GITHUB_APP_PRIVATE_KEY`, `AGENTIC_GITHUB_APP_SYNC_SECRET`, and
+The preflight expects the GitHub Actions secret inventory to include only the
+route caller secret required by the workflow, `AGENTIC_GITHUB_APP_SYNC_SECRET`,
+and to exclude runtime-only GitHub App credentials such as
+`AGENTIC_GITHUB_APP_PRIVATE_KEY`, `AGENTIC_GITHUB_APP_INSTALLATION_ID`, and
+`AGENTIC_GITHUB_APP_INSTALLATION_TOKEN`. It also expects the provider/runtime
+environment to expose `AGENTIC_SMOKE_BASE_URL`, `AGENTIC_SMOKE_ACCESS_KEY`,
+`DATABASE_URL`, `AGENTIC_ACCESS_KEY`, `AGENTIC_GITHUB_APP_ID`,
+`AGENTIC_GITHUB_APP_INSTALLATION_ID`, `AGENTIC_GITHUB_APP_PRIVATE_KEY`,
+`AGENTIC_GITHUB_APP_SYNC_SECRET`, and
 `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`. It reports only secret names and
 shape failures; do not paste secret values into issues or logs.
 
