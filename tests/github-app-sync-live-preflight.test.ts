@@ -8,6 +8,7 @@ const BASE_ENV = {
   AGENTIC_SMOKE_BASE_URL: "https://agentic.example.com",
   AGENTIC_SMOKE_ACCESS_KEY: "runtime-access-key",
   AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE: "active",
+  AGENTIC_GITHUB_ACTIONS_SECRETS_JSON: JSON.stringify([{ name: "AGENTIC_GITHUB_APP_SYNC_SECRET" }]),
   DATABASE_URL: "postgres://agentic:redacted@postgres.internal:5432/agentic",
   AGENTIC_ACCESS_KEY: "runtime-access-key",
   AGENTIC_GITHUB_APP_ID: "123456",
@@ -37,6 +38,7 @@ describe("GitHub App sync live preflight", () => {
       ["stable_host", "pass"],
       ["smoke_base_url", "pass"],
       ["workflow_state", "pass"],
+      ["github_actions_secret_inventory", "pass"],
       ["runtime_secret_inventory", "pass"],
       ["runtime_secret_shape", "pass"],
       ["smoke_canary_inventory", "pass"],
@@ -139,6 +141,66 @@ describe("GitHub App sync live preflight", () => {
         message: "Repository allowlist includes an invalid repository full name."
       })
     );
+  });
+
+  it("fails closed when GitHub Actions secret inventory evidence is omitted", () => {
+    const { AGENTIC_GITHUB_ACTIONS_SECRETS_JSON, ...envWithoutActionsSecretsEvidence } = BASE_ENV;
+    const report = validateGitHubAppSyncLivePreflight(envWithoutActionsSecretsEvidence);
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "github_actions_secret_inventory",
+        status: "fail",
+        message: "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON is not set; live preflight cannot prove GitHub Actions secret inventory."
+      })
+    );
+  });
+
+  it("fails closed when GitHub Actions lacks the route caller secret", () => {
+    const report = validateGitHubAppSyncLivePreflight({
+      ...BASE_ENV,
+      AGENTIC_GITHUB_ACTIONS_SECRETS_JSON: JSON.stringify([])
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "github_actions_secret_inventory",
+        status: "fail",
+        message: "GitHub Actions secret inventory is missing required sync caller secret.",
+        details: expect.objectContaining({
+          missingNames: "AGENTIC_GITHUB_APP_SYNC_SECRET"
+        })
+      })
+    );
+  });
+
+  it("fails closed when GitHub Actions contains runtime-only GitHub App credentials", () => {
+    const report = validateGitHubAppSyncLivePreflight({
+      ...BASE_ENV,
+      AGENTIC_GITHUB_ACTIONS_SECRETS_JSON: JSON.stringify([
+        { name: "AGENTIC_GITHUB_APP_SYNC_SECRET" },
+        { name: "AGENTIC_GITHUB_APP_PRIVATE_KEY" },
+        { name: "AGENTIC_GITHUB_APP_INSTALLATION_TOKEN" }
+      ])
+    });
+    const serialized = JSON.stringify(report);
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "github_actions_secret_inventory",
+        status: "fail",
+        message: "GitHub Actions secret inventory includes runtime-only GitHub App credentials.",
+        details: expect.objectContaining({
+          forbiddenNames: "AGENTIC_GITHUB_APP_PRIVATE_KEY,AGENTIC_GITHUB_APP_INSTALLATION_TOKEN"
+        })
+      })
+    );
+    expect(serialized).not.toContain(BASE_ENV.AGENTIC_GITHUB_APP_SYNC_SECRET);
+    expect(serialized).not.toContain(PRIVATE_KEY);
+    expect(serialized).not.toContain(BASE_ENV.DATABASE_URL);
   });
 
   it("captures Render provider blockers without requiring secret values in output", () => {

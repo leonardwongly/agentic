@@ -22,11 +22,19 @@ const REQUIRED_RUNTIME_ENV = [
   "AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES"
 ] as const;
 const REQUIRED_CANARY_ENV = ["AGENTIC_SMOKE_ACCESS_KEY"] as const;
+const REQUIRED_GITHUB_ACTIONS_SECRETS = ["AGENTIC_GITHUB_APP_SYNC_SECRET"] as const;
+const FORBIDDEN_GITHUB_ACTIONS_SECRETS = [
+  "AGENTIC_GITHUB_APP_PRIVATE_KEY",
+  "AGENTIC_GITHUB_APP_INSTALLATION_ID",
+  "AGENTIC_GITHUB_APP_INSTALLATION_TOKEN"
+] as const;
 const REPOSITORY_FULL_NAME_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const NUMERIC_ID_PATTERN = /^[1-9][0-9]{0,19}$/u;
 
 type RequiredRuntimeEnvName = (typeof REQUIRED_RUNTIME_ENV)[number];
 type RequiredCanaryEnvName = (typeof REQUIRED_CANARY_ENV)[number];
+type RequiredGitHubActionsSecretName = (typeof REQUIRED_GITHUB_ACTIONS_SECRETS)[number];
+type ForbiddenGitHubActionsSecretName = (typeof FORBIDDEN_GITHUB_ACTIONS_SECRETS)[number];
 
 export type GitHubAppSyncLivePreflightCheck = {
   name:
@@ -34,6 +42,7 @@ export type GitHubAppSyncLivePreflightCheck = {
     | "stable_host"
     | "smoke_base_url"
     | "workflow_state"
+    | "github_actions_secret_inventory"
     | "runtime_secret_inventory"
     | "runtime_secret_shape"
     | "smoke_canary_inventory"
@@ -239,6 +248,66 @@ function buildWorkflowStateCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePrefl
   }
 
   return pass("workflow_state", "GitHub App Issue Sync workflow is active.", { state });
+}
+
+function secretName(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const name = record.name;
+
+  return typeof name === "string" && name.trim() ? name.trim() : null;
+}
+
+function buildGitHubActionsSecretInventoryCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const raw = trim(env.AGENTIC_GITHUB_ACTIONS_SECRETS_JSON);
+
+  if (!raw) {
+    return fail(
+      "github_actions_secret_inventory",
+      "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON is not set; live preflight cannot prove GitHub Actions secret inventory."
+    );
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = parseJsonObject(raw);
+  } catch {
+    return fail(
+      "github_actions_secret_inventory",
+      "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON must contain JSON from `gh secret list --repo leonardwongly/agentic --json name`."
+    );
+  }
+
+  if (!Array.isArray(parsed)) {
+    return fail("github_actions_secret_inventory", "GitHub Actions secret inventory JSON must be an array.");
+  }
+
+  const names = new Set(parsed.map(secretName).filter((name): name is string => Boolean(name)));
+  const missing = REQUIRED_GITHUB_ACTIONS_SECRETS.filter((name) => !names.has(name));
+
+  if (missing.length > 0) {
+    return fail("github_actions_secret_inventory", "GitHub Actions secret inventory is missing required sync caller secret.", {
+      missingCount: missing.length,
+      missingNames: missing.join(",")
+    });
+  }
+
+  const forbidden = FORBIDDEN_GITHUB_ACTIONS_SECRETS.filter((name) => names.has(name));
+
+  if (forbidden.length > 0) {
+    return fail("github_actions_secret_inventory", "GitHub Actions secret inventory includes runtime-only GitHub App credentials.", {
+      forbiddenCount: forbidden.length,
+      forbiddenNames: forbidden.join(",")
+    });
+  }
+
+  return pass("github_actions_secret_inventory", "GitHub Actions secret inventory contains the route caller secret only.", {
+    requiredCount: REQUIRED_GITHUB_ACTIONS_SECRETS.length
+  });
 }
 
 function buildRuntimeInventoryCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
@@ -447,6 +516,7 @@ export function validateGitHubAppSyncLivePreflight(env: NodeJS.ProcessEnv): GitH
     buildStableHostCheck(sync.url),
     parseSmokeBaseUrl(env, sync.url),
     buildWorkflowStateCheck(env),
+    buildGitHubActionsSecretInventoryCheck(env),
     buildRuntimeInventoryCheck(env),
     buildRuntimeShapeCheck(env),
     buildSmokeCanaryInventoryCheck(env),
@@ -485,3 +555,7 @@ export function redactGitHubAppSyncLivePreflightReport(
 
 export const githubAppSyncLivePreflightRequiredRuntimeEnv: readonly RequiredRuntimeEnvName[] = REQUIRED_RUNTIME_ENV;
 export const githubAppSyncLivePreflightRequiredCanaryEnv: readonly RequiredCanaryEnvName[] = REQUIRED_CANARY_ENV;
+export const githubAppSyncLivePreflightRequiredGitHubActionsSecrets: readonly RequiredGitHubActionsSecretName[] =
+  REQUIRED_GITHUB_ACTIONS_SECRETS;
+export const githubAppSyncLivePreflightForbiddenGitHubActionsSecrets: readonly ForbiddenGitHubActionsSecretName[] =
+  FORBIDDEN_GITHUB_ACTIONS_SECRETS;
