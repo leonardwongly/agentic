@@ -10,6 +10,7 @@ import {
   ApiRouteError,
   handleOperationalApiError,
   operationalJson,
+  readBoundedRequestText,
   withApiTelemetry
 } from "../../../../../lib/api-response";
 import { getSeededRepository } from "../../../../../lib/server";
@@ -127,17 +128,6 @@ function requireWebhookSecret(): string {
 
 function hasJsonContentType(request: Request): boolean {
   return (request.headers.get("content-type") ?? "").toLowerCase().includes("application/json");
-}
-
-function hasOversizedDeclaredBody(request: Request): boolean {
-  const header = request.headers.get("content-length");
-
-  if (!header) {
-    return false;
-  }
-
-  const contentLength = Number(header);
-  return Number.isFinite(contentLength) && contentLength > MAX_GITHUB_ISSUE_WEBHOOK_BYTES;
 }
 
 function verifyGitHubSignature(params: {
@@ -389,15 +379,10 @@ export async function POST(request: Request) {
         return operationalJson({ error: "Content-Type must be application/json." }, { status: 415 });
       }
 
-      if (hasOversizedDeclaredBody(request)) {
-        return operationalJson({ error: "GitHub issue webhook payload is too large." }, { status: 413 });
-      }
-
-      const rawBody = await request.text();
-
-      if (Buffer.byteLength(rawBody, "utf8") > MAX_GITHUB_ISSUE_WEBHOOK_BYTES) {
-        return operationalJson({ error: "GitHub issue webhook payload is too large." }, { status: 413 });
-      }
+      const rawBody = await readBoundedRequestText(request, {
+        maxBytes: MAX_GITHUB_ISSUE_WEBHOOK_BYTES,
+        tooLargeMessage: "GitHub issue webhook payload is too large."
+      });
 
       const signature = request.headers.get("x-hub-signature-256") ?? "";
 
