@@ -368,6 +368,12 @@
           "ref": "#141",
           "status": "blocked",
           "note": "Stable external HTTPS origin and provider ownership are not available yet."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4498944971",
+          "status": "blocked",
+          "note": "Latest Render readiness refresh confirms workspace, project, and Production environment exist, but no services/databases exist and Blueprint validation is blocked by need_payment_info."
         }
       ],
       "blockerIssues": [141, 142],
