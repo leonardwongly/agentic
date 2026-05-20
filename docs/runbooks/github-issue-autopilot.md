@@ -93,6 +93,27 @@ gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml -
 gh workflow enable github-app-issue-sync.yml --repo leonardwongly/agentic
 ```
 
+After provisioning the target and configuring provider secrets, run the live
+preflight before manual dispatch. The preflight fails closed when the sync URL is
+still a temporary tunnel, the workflow is not `active`, required runtime config
+names are missing, Render has no deployed web/worker services, or the Blueprint
+still reports provider blockers such as `need_payment_info`.
+
+```bash
+export AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE="$(gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq .state)"
+export AGENTIC_GITHUB_APP_ISSUE_SYNC_URL="$(gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo leonardwongly/agentic)"
+export AGENTIC_RENDER_SERVICES_JSON="$(render services list --output json)"
+export AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON="$(render blueprints validate deploy/render/render.yaml --output json)"
+npm run github:app-sync:preflight
+```
+
+The preflight expects the provider/runtime environment to also expose
+`AGENTIC_SMOKE_BASE_URL`, `DATABASE_URL`, `AGENTIC_ACCESS_KEY`,
+`AGENTIC_GITHUB_APP_ID`, `AGENTIC_GITHUB_APP_INSTALLATION_ID`,
+`AGENTIC_GITHUB_APP_PRIVATE_KEY`, `AGENTIC_GITHUB_APP_SYNC_SECRET`, and
+`AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`. It reports only secret names and
+shape failures; do not paste secret values into issues or logs.
+
 ## Data Flow
 
 1. `.github/workflows/github-issue-autopilot.yml` runs on `issues.opened`, `issues.reopened`, `issues.labeled`, and `issue_comment.created`.
@@ -146,8 +167,9 @@ Run focused checks after changing this flow:
 
 ```bash
 npm test -- tests/github-issue-webhook-route.test.ts tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/worker-runtime.test.ts
-npm test -- tests/github-issue-job-route.test.ts tests/deployment-github-app-sync-canary.test.ts
+npm test -- tests/github-issue-job-route.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts
 npm run ci:validate-provenance
+npm run github:app-sync:preflight
 npm run build
 ```
 
