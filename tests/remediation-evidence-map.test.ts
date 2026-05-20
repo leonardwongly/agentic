@@ -77,6 +77,70 @@ describe("remediation evidence map", () => {
     );
   });
 
+  it("keeps W01 production proof aligned to GitHub sync preflight and release closeout gates", () => {
+    const entry = readMap().entries.find(mapEntry => mapEntry.issue === 190);
+
+    expect(entry?.implementationProof).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "script",
+          ref: "scripts/github-app-sync-live-preflight.ts"
+        }),
+        expect.objectContaining({
+          kind: "config",
+          ref: "config/release/production-runtime-closeout.json"
+        })
+      ])
+    );
+    expect(entry?.validationGates).toEqual(
+      expect.arrayContaining(["npm run github:app-sync:preflight", "npm run release:closeout:evidence"])
+    );
+    expect(entry?.deploymentProof.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#145"
+        })
+      ])
+    );
+  });
+
+  it("rejects W01 production proof when the GitHub sync preflight gate is removed", () => {
+    const map = cloneMap(clonedMap => {
+      const entry = clonedMap.entries.find(mapEntry => mapEntry.issue === 190)!;
+      entry.validationGates = entry.validationGates.filter(gate => gate !== "npm run github:app-sync:preflight");
+    });
+    const report = validateRemediationEvidenceMap(map, { cwd: repoRoot });
+
+    expect(report.ok).toBe(false);
+    expect(report.issues).toContainEqual(
+      expect.objectContaining({
+        issue: 190,
+        path: "entries[5].validationGates",
+        message: "Production proof evidence must include validation gate 'npm run github:app-sync:preflight'."
+      })
+    );
+  });
+
+  it("rejects W01 production proof when release closeout evidence is removed", () => {
+    const map = cloneMap(clonedMap => {
+      const entry = clonedMap.entries.find(mapEntry => mapEntry.issue === 190)!;
+      entry.implementationProof = entry.implementationProof.filter(
+        proof => proof.ref !== "config/release/production-runtime-closeout.json"
+      );
+    });
+    const report = validateRemediationEvidenceMap(map, { cwd: repoRoot });
+
+    expect(report.ok).toBe(false);
+    expect(report.issues).toContainEqual(
+      expect.objectContaining({
+        issue: 190,
+        path: "entries[5].implementationProof",
+        message: "Production proof evidence must include 'config/release/production-runtime-closeout.json'."
+      })
+    );
+  });
+
   it("rejects unresolved repo evidence paths", () => {
     const map = cloneMap(clonedMap => {
       clonedMap.entries[0]!.implementationProof[0]!.ref = "docs/runbooks/missing-map.md";
