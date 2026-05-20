@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 15,
+        pullRequests: 20,
         blockedValidationGates: 6,
         residualRisks: 3
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 15");
+    expect(rendered).toContain("- Pull requests: 20");
     expect(rendered).toContain("- Blocked validation gates: 6");
     expect(rendered).toContain("- Residual risks: 3");
   });
@@ -128,6 +128,45 @@ describe("release closeout evidence", () => {
           kind: "github_issue",
           ref: "https://github.com/leonardwongly/agentic/issues/145#issuecomment-4498544854",
           status: "blocked"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4503450287",
+          status: "blocked"
+        })
+      ])
+    );
+  });
+
+  it("keeps the latest GitHub issue route hardening PRs in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+
+    expect(manifest.pullRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          number: 894,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/894"
+        }),
+        expect.objectContaining({
+          number: 895,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/895"
+        }),
+        expect.objectContaining({
+          number: 896,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/896"
+        }),
+        expect.objectContaining({
+          number: 897,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/897"
+        }),
+        expect.objectContaining({
+          number: 898,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/898"
         })
       ])
     );
@@ -181,6 +220,11 @@ describe("release closeout evidence", () => {
         expect.objectContaining({
           kind: "github_issue",
           ref: "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4498944971",
+          status: "blocked"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503457603",
           status: "blocked"
         })
       ])

@@ -216,6 +216,11 @@
             "kind": "github_issue",
             "ref": "#145",
             "note": "Merged preflight currently fails because the sync URL is temporary, the workflow is disabled, Render services are absent, and Blueprint validation returns need_payment_info."
+          },
+          {
+            "kind": "github_issue",
+            "ref": "#152",
+            "note": "Latest roadmap evidence refresh at issue comment 4503450287 records PRs #894 through #898 and confirms the remaining GitHub issue sync proof is blocked only by external deployment/runtime prerequisites."
           }
         ]
       },
