@@ -1,0 +1,177 @@
+import { describe, expect, it } from "vitest";
+import {
+  collectGitHubAppSyncLivePreflight,
+  type GitHubAppSyncLivePreflightCommandRunner
+} from "../scripts/lib/github-app-sync-live-preflight-collector";
+
+const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nredacted\\n-----END RSA PRIVATE KEY-----";
+
+const RUNTIME_ENV = {
+  AGENTIC_SMOKE_BASE_URL: "https://agentic.example.com",
+  AGENTIC_SMOKE_ACCESS_KEY: "runtime-access-key",
+  DATABASE_URL: "postgres://agentic:redacted@postgres.internal:5432/agentic",
+  AGENTIC_ACCESS_KEY: "runtime-access-key",
+  AGENTIC_GITHUB_APP_ID: "123456",
+  AGENTIC_GITHUB_APP_INSTALLATION_ID: "654321",
+  AGENTIC_GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY,
+  AGENTIC_GITHUB_APP_SYNC_SECRET: "github-app-sync-secret-with-at-least-32-characters",
+  AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "leonardwongly/agentic"
+};
+
+function commandKey(command: string, args: string[]) {
+  return `${command} ${args.join(" ")}`;
+}
+
+function runnerWith(outputs: Record<string, { stdout: string; exitCode?: number }>): GitHubAppSyncLivePreflightCommandRunner {
+  return async (command, args) => {
+    const output = outputs[commandKey(command, args)];
+
+    if (!output) {
+      return {
+        stdout: "",
+        stderr: `missing test output for ${command}`,
+        exitCode: 1
+      };
+    }
+
+    return {
+      stdout: output.stdout,
+      stderr: "",
+      exitCode: output.exitCode ?? 0
+    };
+  };
+}
+
+const STABLE_OUTPUTS = {
+  "gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq .state": {
+    stdout: "active\n"
+  },
+  "gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo leonardwongly/agentic": {
+    stdout: "https://agentic.example.com/api/github/issues/app/sync\n"
+  },
+  "gh secret list --repo leonardwongly/agentic --json name": {
+    stdout: JSON.stringify([{ name: "AGENTIC_GITHUB_APP_SYNC_SECRET" }])
+  },
+  "render services list --output json": {
+    stdout: JSON.stringify([{ name: "agentic-web" }, { name: "agentic-worker" }])
+  },
+  "render blueprints validate deploy/render/render.yaml --output json": {
+    stdout: JSON.stringify({ valid: true, errors: [] })
+  }
+};
+
+describe("GitHub App sync live preflight collector", () => {
+  it("collects read-only GitHub and Render evidence before running preflight", async () => {
+    const report = await collectGitHubAppSyncLivePreflight(RUNTIME_ENV, runnerWith(STABLE_OUTPUTS));
+
+    expect(report.ok).toBe(true);
+    expect(report.collection.map((step) => [step.name, step.envName, step.status])).toEqual([
+      ["workflow_state", "AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE", "collected"],
+      ["sync_url", "AGENTIC_GITHUB_APP_ISSUE_SYNC_URL", "collected"],
+      ["github_actions_secret_inventory", "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON", "collected"],
+      ["render_services", "AGENTIC_RENDER_SERVICES_JSON", "collected"],
+      ["render_blueprint", "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON", "collected"]
+    ]);
+    expect(report.preflight.checks.every((check) => check.status === "pass")).toBe(true);
+  });
+
+  it("uses collected live evidence to expose current disabled workflow and temporary tunnel blockers", async () => {
+    const report = await collectGitHubAppSyncLivePreflight(
+      RUNTIME_ENV,
+      runnerWith({
+        ...STABLE_OUTPUTS,
+        "gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq .state": {
+          stdout: "disabled_manually\n"
+        },
+        "gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo leonardwongly/agentic": {
+          stdout: "https://occasion-translations-cover-vids.trycloudflare.com/api/github/issues/app/sync\n"
+        }
+      })
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.preflight.checks).toContainEqual(
+      expect.objectContaining({
+        name: "stable_host",
+        status: "fail"
+      })
+    );
+    expect(report.preflight.checks).toContainEqual(
+      expect.objectContaining({
+        name: "workflow_state",
+        status: "fail"
+      })
+    );
+  });
+
+  it("does not print secret values in collection or preflight output", async () => {
+    const report = await collectGitHubAppSyncLivePreflight(RUNTIME_ENV, runnerWith(STABLE_OUTPUTS));
+    const serialized = JSON.stringify(report);
+
+    expect(serialized).not.toContain(RUNTIME_ENV.AGENTIC_GITHUB_APP_SYNC_SECRET);
+    expect(serialized).not.toContain(RUNTIME_ENV.DATABASE_URL);
+    expect(serialized).not.toContain(PRIVATE_KEY);
+  });
+
+  it("preserves provider validation JSON from non-zero commands so preflight can report the real blocker", async () => {
+    const report = await collectGitHubAppSyncLivePreflight(
+      RUNTIME_ENV,
+      runnerWith({
+        ...STABLE_OUTPUTS,
+        "render blueprints validate deploy/render/render.yaml --output json": {
+          stdout: JSON.stringify({
+            valid: false,
+            errors: [{ error: "need_payment_info", path: "services[0]" }]
+          }),
+          exitCode: 1
+        }
+      })
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.collection).toContainEqual(
+      expect.objectContaining({
+        name: "render_blueprint",
+        status: "collected_with_command_failure",
+        exitCode: 1
+      })
+    );
+    expect(report.preflight.checks).toContainEqual(
+      expect.objectContaining({
+        name: "render_blueprint",
+        status: "fail",
+        details: expect.objectContaining({
+          firstError: "need_payment_info"
+        })
+      })
+    );
+  });
+
+  it("fails closed when a required read-only inventory command produces no output", async () => {
+    const report = await collectGitHubAppSyncLivePreflight(
+      RUNTIME_ENV,
+      runnerWith({
+        ...STABLE_OUTPUTS,
+        "gh secret list --repo leonardwongly/agentic --json name": {
+          stdout: "",
+          exitCode: 1
+        }
+      })
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.collection).toContainEqual(
+      expect.objectContaining({
+        name: "github_actions_secret_inventory",
+        status: "failed"
+      })
+    );
+    expect(report.preflight.checks).toContainEqual(
+      expect.objectContaining({
+        name: "github_actions_secret_inventory",
+        status: "fail"
+      })
+    );
+  });
+});
+

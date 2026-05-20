@@ -572,6 +572,12 @@
           "note": "Merged preflight fails closed until the stable sync URL, active workflow, runtime config names, Render web/worker services, and Blueprint validation evidence are available."
         },
         {
+          "kind": "repo_path",
+          "ref": "scripts/github-app-sync-live-preflight-collect.ts",
+          "status": "ready",
+          "note": "Read-only collector gathers workflow state, sync URL, GitHub Actions secret names, Render services, and Blueprint validation before running the same fail-closed preflight."
+        },
+        {
           "kind": "github_issue",
           "ref": "#145",
           "status": "blocked",
@@ -750,6 +756,7 @@
     "commands": [
       "npm run test:smoke:deployment-confidence",
       "npm run telemetry:rollout-gate -- --dir \"${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}\"",
+      "npm run github:app-sync:preflight:collect",
       "npm run release:closeout:evidence"
     ]
   }
