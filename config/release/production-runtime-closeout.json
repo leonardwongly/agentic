@@ -370,6 +370,27 @@
       "notes": "Run after the deployed worker writes fresh heartbeat and can complete queued jobs."
     },
     {
+      "id": "github-app-sync-preflight",
+      "command": "npm run github:app-sync:preflight",
+      "status": "blocked",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "scripts/github-app-sync-live-preflight.ts",
+          "status": "ready",
+          "note": "Merged preflight fails closed until the stable sync URL, active workflow, runtime config names, Render web/worker services, and Blueprint validation evidence are available."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "#145",
+          "status": "blocked",
+          "note": "Current live preflight still fails because the sync URL is a temporary tunnel, the workflow is disabled, Render has no services, and Blueprint validation returns need_payment_info."
+        }
+      ],
+      "blockerIssues": [141, 142, 143, 144, 145],
+      "notes": "Run immediately before the GitHub App sync canary and manual workflow dispatch."
+    },
+    {
       "id": "rollout-gate",
       "command": "npm run telemetry:rollout-gate -- --dir \"${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}\"",
       "status": "blocked",

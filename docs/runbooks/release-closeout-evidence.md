@@ -55,6 +55,7 @@ npm run deploy:ingress:check
 npm run db:status -- --require-ready
 npm run test:smoke:deployment
 npm run test:smoke:deployment-async
+npm run github:app-sync:preflight
 npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
 
