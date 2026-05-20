@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 4,
+        pullRequests: 7,
         blockedValidationGates: 6,
         residualRisks: 4
       },
@@ -40,8 +40,32 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 4");
+    expect(rendered).toContain("- Pull requests: 7");
     expect(rendered).toContain("- Blocked validation gates: 6");
+  });
+
+  it("keeps the GitHub sync preflight and evidence-gate PRs in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+
+    expect(manifest.pullRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          number: 879,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/879"
+        }),
+        expect.objectContaining({
+          number: 880,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/880"
+        }),
+        expect.objectContaining({
+          number: 881,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/881"
+        })
+      ])
+    );
   });
 
   it("requires blocked live validation gates to link blocker issues", () => {
