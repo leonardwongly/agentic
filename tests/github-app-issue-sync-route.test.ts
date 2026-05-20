@@ -360,6 +360,64 @@ describe("GitHub App issue sync route", () => {
     expect(jobs).toHaveLength(0);
   });
 
+  it("rejects declared request bodies before reading GitHub App runtime config", async () => {
+    delete process.env.AGENTIC_GITHUB_APP_PRIVATE_KEY;
+
+    const response = await githubAppIssueSyncRoute(
+      new Request("http://localhost/api/github/issues/app/sync", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${SYNC_SECRET}`,
+          "content-length": "2"
+        },
+        body: "{}"
+      })
+    );
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "GitHub App issue sync requests must not include a body."
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("rejects streamed request bodies without declared content length", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode("{}"));
+        controller.close();
+      }
+    });
+
+    const response = await githubAppIssueSyncRoute(
+      new Request("http://localhost/api/github/issues/app/sync", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${SYNC_SECRET}`
+        },
+        body: stream,
+        duplex: "half"
+      } as RequestInit & { duplex: "half" })
+    );
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "GitHub App issue sync requests must not include a body."
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
+  });
+
   it("fails closed when the runtime GitHub App private key is missing", async () => {
     delete process.env.AGENTIC_GITHUB_APP_PRIVATE_KEY;
 

@@ -287,6 +287,22 @@ function assertSyncAuthorized(request: Request, expectedSecret: string) {
   }
 }
 
+function assertBodylessSyncRequest(request: Request) {
+  const contentLengthHeader = request.headers.get("content-length");
+
+  if (contentLengthHeader) {
+    const contentLength = Number.parseInt(contentLengthHeader, 10);
+
+    if (Number.isFinite(contentLength) && contentLength > 0) {
+      throw new ApiRouteError(400, "GitHub App issue sync requests must not include a body.");
+    }
+  }
+
+  if (request.body !== null) {
+    throw new ApiRouteError(400, "GitHub App issue sync requests must not include a body.");
+  }
+}
+
 function base64UrlJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
@@ -510,6 +526,7 @@ export async function POST(request: Request) {
     try {
       const syncSecret = requireSyncSecret();
       assertSyncAuthorized(request, syncSecret);
+      assertBodylessSyncRequest(request);
 
       const config = readGitHubAppIssueSyncConfig();
       const installationToken = await createInstallationAccessToken(config);
