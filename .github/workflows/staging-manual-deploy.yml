@@ -187,13 +187,13 @@ jobs:
 
       - name: Attest staging security evidence
         if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
-        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: artifacts/security/agentic-sbom.spdx.json
 
       - name: Attest staging deployable build artifacts
         if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
-        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             artifacts/build/agentic-runtime-bundle.tgz
