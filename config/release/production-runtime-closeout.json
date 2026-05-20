@@ -254,6 +254,79 @@
         "npm run build"
       ],
       "hostedStatus": "PR #889 and post-merge main CI passed; merge commit bb4ae2ed9cf892c2939a9723534b81bf17e441a9."
+    },
+    {
+      "number": 894,
+      "title": "fix(github): handle issue sync dependency failures",
+      "url": "https://github.com/leonardwongly/agentic/pull/894",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-app-issue-sync-route.test.ts",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #894 and post-merge main CI passed; merge commit 65099b7636c8e1527a84f76afd3c7503a4c3cac3."
+    },
+    {
+      "number": 895,
+      "title": "fix(github): avoid partial issue sync enqueues",
+      "url": "https://github.com/leonardwongly/agentic/pull/895",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-app-issue-sync-route.test.ts",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #895 and post-merge main CI passed; merge commit 1036bc23347d5c8c0b606d52d9435343323bced3."
+    },
+    {
+      "number": 896,
+      "title": "sec(github): bound streamed issue webhook bodies",
+      "url": "https://github.com/leonardwongly/agentic/pull/896",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-issue-webhook-route.test.ts",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #896 and post-merge main CI passed; merge commit 25491270823abde1fe5548b1c6f201a957eb44f1."
+    },
+    {
+      "number": 897,
+      "title": "sec(github): reject sync trigger request bodies",
+      "url": "https://github.com/leonardwongly/agentic/pull/897",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-app-issue-sync-route.test.ts",
+        "npm test -- tests/github-app-issue-sync-route.test.ts tests/github-issue-webhook-route.test.ts tests/github-issue-job-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts",
+        "npm run typecheck",
+        "npm run format:check",
+        "npm run test:security:regression",
+        "npm run ci:local",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #897 and post-merge main CI passed; merge commit 1cb846b2cb4426217cb871fc920d51f2e57bbdc5."
+    },
+    {
+      "number": 898,
+      "title": "docs(github): document issue sync ingress contracts",
+      "url": "https://github.com/leonardwongly/agentic/pull/898",
+      "status": "merged",
+      "localValidation": [
+        "npm run docs:build",
+        "npm exec -- vitest run tests/api-route-inventory.test.ts",
+        "npm test -- tests/github-app-issue-sync-route.test.ts tests/github-issue-webhook-route.test.ts",
+        "npm run format:check",
+        "git diff --check"
+      ],
+      "hostedStatus": "PR #898 and post-merge main CI passed; merge commit de2d03df35053056a63e95330f04b4207e71d841."
     }
   ],
   "trackedIssues": [
@@ -510,6 +583,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4498944971",
           "status": "blocked",
           "note": "Latest Render readiness refresh confirms workspace, project, and Production environment exist, but no services/databases exist and Blueprint validation is blocked by need_payment_info."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503457603",
+          "status": "blocked",
+          "note": "Read-only alternate-target inventory found no existing Vercel or Netlify Agentic deployment; Render remains the only repo-prepared target path."
         }
       ],
       "blockerIssues": [141, 142],
@@ -588,6 +667,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/145#issuecomment-4498544854",
           "status": "blocked",
           "note": "Latest completion audit maps #141 through #145 acceptance criteria to repo evidence and confirms only external deployment/runtime prerequisites remain."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4503450287",
+          "status": "blocked",
+          "note": "Latest roadmap evidence refresh links PRs #894 through #898, current origin/main CI, local validation, live preflight blockers, and remaining external setup requirements."
         }
       ],
       "blockerIssues": [141, 142, 143, 144, 145],
