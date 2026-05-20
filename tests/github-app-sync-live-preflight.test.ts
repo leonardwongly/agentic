@@ -161,4 +161,25 @@ describe("GitHub App sync live preflight", () => {
     expect(serialized).not.toContain(PRIVATE_KEY);
     expect(serialized).not.toContain(BASE_ENV.DATABASE_URL);
   });
+
+  it("fails closed when live provider evidence is omitted", () => {
+    const { AGENTIC_RENDER_SERVICES_JSON, AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON, ...envWithoutProviderEvidence } = BASE_ENV;
+    const report = validateGitHubAppSyncLivePreflight(envWithoutProviderEvidence);
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "render_services",
+        status: "fail",
+        message: "AGENTIC_RENDER_SERVICES_JSON is not set; live preflight cannot prove deployed web and worker services exist."
+      })
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "render_blueprint",
+        status: "fail",
+        message: "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON is not set; live preflight cannot prove Render Blueprint validation passes."
+      })
+    );
+  });
 });

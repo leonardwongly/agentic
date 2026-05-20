@@ -344,7 +344,7 @@ function buildRenderServicesCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePref
   const raw = trim(env.AGENTIC_RENDER_SERVICES_JSON);
 
   if (!raw) {
-    return warn(
+    return fail(
       "render_services",
       "AGENTIC_RENDER_SERVICES_JSON is not set; live preflight cannot prove deployed web and worker services exist."
     );
@@ -382,7 +382,7 @@ function buildRenderBlueprintCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePre
   const raw = trim(env.AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON);
 
   if (!raw) {
-    return warn(
+    return fail(
       "render_blueprint",
       "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON is not set; live preflight cannot prove Render Blueprint validation passes."
     );
