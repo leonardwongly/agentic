@@ -99,6 +99,34 @@ still a temporary tunnel, the workflow is not `active`, required runtime config
 names are missing, Render has no deployed web/worker services, or the Blueprint
 still reports provider blockers such as `need_payment_info`.
 
+Use the collector form when the operator shell has authenticated `gh` and
+`render` CLIs. It gathers only read-only inventories and provider validation
+output, then feeds the existing fail-closed preflight. It does not enable the
+workflow, modify repository settings, provision Render resources, or read secret
+values from `gh` or `render`:
+
+```bash
+export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
+export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-the-runtime-access-key
+export DATABASE_URL=replace-this-with-provider-secret-value
+export AGENTIC_ACCESS_KEY=replace-this-with-provider-secret-value
+export AGENTIC_GITHUB_APP_ID=replace-this-with-provider-secret-value
+export AGENTIC_GITHUB_APP_INSTALLATION_ID=replace-this-with-provider-secret-value
+export AGENTIC_GITHUB_APP_PRIVATE_KEY=replace-this-with-provider-secret-value
+export AGENTIC_GITHUB_APP_SYNC_SECRET=replace-this-with-provider-secret-value
+export AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=leonardwongly/agentic
+npm run github:app-sync:preflight:collect
+```
+
+The collector replaces the manual copy/paste for these non-secret evidence
+inputs:
+
+- `AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE`
+- `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL`
+- `AGENTIC_GITHUB_ACTIONS_SECRETS_JSON`
+- `AGENTIC_RENDER_SERVICES_JSON`
+- `AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON`
+
 ```bash
 export AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE="$(gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq .state)"
 export AGENTIC_GITHUB_APP_ISSUE_SYNC_URL="$(gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo leonardwongly/agentic)"
@@ -174,9 +202,10 @@ Run focused checks after changing this flow:
 
 ```bash
 npm test -- tests/github-issue-webhook-route.test.ts tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/worker-runtime.test.ts
-npm test -- tests/github-issue-job-route.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts
+npm test -- tests/github-issue-job-route.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts tests/github-app-sync-live-preflight-collector.test.ts
 npm run ci:validate-provenance
 npm run github:app-sync:preflight
+npm run github:app-sync:preflight:collect
 npm run build
 ```
 

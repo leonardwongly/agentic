@@ -132,6 +132,22 @@ describe("release closeout evidence", () => {
     );
   });
 
+  it("keeps the read-only GitHub sync preflight collector in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+    const githubSyncPreflight = manifest.validationGates.find((gate) => gate.id === "github-app-sync-preflight");
+
+    expect(githubSyncPreflight?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "repo_path",
+          ref: "scripts/github-app-sync-live-preflight-collect.ts",
+          status: "ready"
+        })
+      ])
+    );
+    expect(manifest.observability.commands).toContain("npm run github:app-sync:preflight:collect");
+  });
+
   it("keeps the latest Render provider readiness blocker in the closeout package", () => {
     const manifest = readCheckedInManifest();
     const deployIngressCheck = manifest.validationGates.find((gate) => gate.id === "deploy-ingress-check");
