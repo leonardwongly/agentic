@@ -146,7 +146,7 @@ export AGENTIC_GITHUB_APP_SYNC_SECRET=replace-this-with-the-runtime-sync-secret
 npm run test:smoke:github-app-sync
 ```
 
-The canary calls `/api/github/issues/app/sync`, validates same-origin job status URLs, and polls `/api/jobs/<job-id>` until every returned `github_issue_intake` job completes, dead-letters, or times out. The emitted evidence includes repository names, issue numbers, job ids, attempts, request/trace ids, and timings; it does not print the sync secret, access key, GitHub App private key, installation token, or raw issue body.
+The canary requires `AGENTIC_SMOKE_BASE_URL` to be a stable public HTTPS origin, not a temporary tunnel, local/private address, or URL with credentials, path, query, or fragment. It calls `/api/github/issues/app/sync`, validates same-origin job status URLs, and polls `/api/jobs/<job-id>` until every returned `github_issue_intake` job completes, dead-letters, or times out. The emitted evidence includes repository names, issue numbers, job ids, attempts, request/trace ids, and timings; it does not print the sync secret, access key, GitHub App private key, installation token, or raw issue body.
 
 ## Security Notes
 

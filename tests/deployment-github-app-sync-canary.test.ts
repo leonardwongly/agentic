@@ -274,4 +274,46 @@ describe("deployment GitHub App sync canary", () => {
 
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("rejects unsafe smoke base URLs before making network calls", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const baseOptions = {
+      accessKey: "test-access-key",
+      syncSecret: "github-app-sync-secret",
+      fetchImpl
+    };
+
+    await expect(
+      runDeploymentGitHubAppSyncCanary({
+        ...baseOptions,
+        baseUrl: "http://agentic.example.com"
+      })
+    ).rejects.toThrow("AGENTIC_SMOKE_BASE_URL must use HTTPS for live GitHub App sync proof.");
+    await expect(
+      runDeploymentGitHubAppSyncCanary({
+        ...baseOptions,
+        baseUrl: "https://deploy-user:secret@agentic.example.com"
+      })
+    ).rejects.toThrow("AGENTIC_SMOKE_BASE_URL must not include embedded credentials.");
+    await expect(
+      runDeploymentGitHubAppSyncCanary({
+        ...baseOptions,
+        baseUrl: "https://agentic.example.com/app?token=secret#ready"
+      })
+    ).rejects.toThrow("AGENTIC_SMOKE_BASE_URL must be an origin without path, query, or fragment.");
+    await expect(
+      runDeploymentGitHubAppSyncCanary({
+        ...baseOptions,
+        baseUrl: "https://agentic-demo.trycloudflare.com"
+      })
+    ).rejects.toThrow("AGENTIC_SMOKE_BASE_URL must not use a temporary tunnel host for live GitHub App sync proof.");
+    await expect(
+      runDeploymentGitHubAppSyncCanary({
+        ...baseOptions,
+        baseUrl: "https://127.0.0.1"
+      })
+    ).rejects.toThrow("AGENTIC_SMOKE_BASE_URL must use a public stable DNS host for live GitHub App sync proof.");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
