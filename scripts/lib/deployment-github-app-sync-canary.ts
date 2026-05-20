@@ -1,8 +1,20 @@
 import crypto from "node:crypto";
+import { isIP } from "node:net";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../../apps/web/lib/auth";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
+const TEMPORARY_BASE_URL_DOMAINS = [
+  "trycloudflare.com",
+  "ngrok.io",
+  "ngrok.app",
+  "ngrok-free.app",
+  "loca.lt",
+  "localhost.run",
+  "devtunnels.ms",
+  "serveo.net",
+  "tunnelmole.net"
+];
 
 type GitHubAppSyncPayload = {
   ok?: boolean;
@@ -82,14 +94,93 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
+function normalizeHostname(hostname: string): string {
+  return hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+}
+
+function domainMatches(hostname: string, domain: string): boolean {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function isTemporaryBaseUrlHost(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  return TEMPORARY_BASE_URL_DOMAINS.some((domain) => domainMatches(normalized, domain));
+}
+
+function parseIpv4(hostname: string): number[] | null {
+  const normalized = normalizeHostname(hostname);
+
+  if (isIP(normalized) !== 4) {
+    return null;
+  }
+
+  const octets = normalized.split(".").map((segment) => Number.parseInt(segment, 10));
+  return octets.length === 4 && octets.every((octet) => Number.isInteger(octet)) ? octets : null;
+}
+
+function isLocalOrPrivateHost(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  const ipVersion = isIP(normalized);
+
+  if (normalized === "localhost" || normalized === "::1") {
+    return true;
+  }
+
+  const ipv4 = parseIpv4(normalized);
+
+  if (ipv4) {
+    const [first = 0, second = 0] = ipv4;
+
+    return (
+      first === 10 ||
+      first === 127 ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168)
+    );
+  }
+
+  return ipVersion === 6 && (normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:"));
+}
+
 function normalizeBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/u, "");
+  const trimmed = baseUrl.trim();
 
   if (!trimmed) {
     throw new Error("AGENTIC_SMOKE_BASE_URL must be configured.");
   }
 
-  return trimmed;
+  let parsed: URL;
+
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("AGENTIC_SMOKE_BASE_URL must be a valid absolute URL.");
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("AGENTIC_SMOKE_BASE_URL must use HTTPS for live GitHub App sync proof.");
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error("AGENTIC_SMOKE_BASE_URL must not include embedded credentials.");
+  }
+
+  if ((parsed.pathname && parsed.pathname !== "/") || parsed.search || parsed.hash) {
+    throw new Error("AGENTIC_SMOKE_BASE_URL must be an origin without path, query, or fragment.");
+  }
+
+  const hostname = normalizeHostname(parsed.hostname);
+
+  if (isTemporaryBaseUrlHost(hostname)) {
+    throw new Error("AGENTIC_SMOKE_BASE_URL must not use a temporary tunnel host for live GitHub App sync proof.");
+  }
+
+  if (isLocalOrPrivateHost(hostname)) {
+    throw new Error("AGENTIC_SMOKE_BASE_URL must use a public stable DNS host for live GitHub App sync proof.");
+  }
+
+  return parsed.origin;
 }
 
 function parsePositiveInt(value: number | undefined, fallback: number, label: string): number {
