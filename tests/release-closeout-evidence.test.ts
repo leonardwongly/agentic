@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 7,
+        pullRequests: 15,
         blockedValidationGates: 6,
         residualRisks: 4
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 7");
+    expect(rendered).toContain("- Pull requests: 15");
     expect(rendered).toContain("- Blocked validation gates: 6");
   });
 
@@ -63,6 +63,55 @@ describe("release closeout evidence", () => {
           number: 881,
           status: "merged",
           url: "https://github.com/leonardwongly/agentic/pull/881"
+        }),
+        expect.objectContaining({
+          number: 882,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/882"
+        }),
+        expect.objectContaining({
+          number: 883,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/883"
+        })
+      ])
+    );
+  });
+
+  it("keeps the latest GitHub sync preflight and canary hardening PRs in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+
+    expect(manifest.pullRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          number: 884,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/884"
+        }),
+        expect.objectContaining({
+          number: 885,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/885"
+        }),
+        expect.objectContaining({
+          number: 886,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/886"
+        }),
+        expect.objectContaining({
+          number: 887,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/887"
+        }),
+        expect.objectContaining({
+          number: 888,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/888"
+        }),
+        expect.objectContaining({
+          number: 889,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/889"
         })
       ])
     );
