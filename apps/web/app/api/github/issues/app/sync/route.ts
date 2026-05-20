@@ -321,17 +321,31 @@ async function githubRequest<T>(params: {
   token: string;
   schema: z.ZodType<T>;
 }): Promise<{ data: T; link: string | null }> {
-  const response = await fetch(params.url, {
-    method: params.method ?? "GET",
-    headers: githubHeaders(params.token),
-    signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS)
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(params.url, {
+      method: params.method ?? "GET",
+      headers: githubHeaders(params.token),
+      signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS)
+    });
+  } catch {
+    throw new ApiRouteError(502, "GitHub App issue sync request failed.");
+  }
 
   if (!response.ok) {
     throw new ApiRouteError(response.status >= 500 ? 502 : 424, "GitHub App issue sync request failed.");
   }
 
-  const parsed = params.schema.safeParse(await response.json());
+  let payload: unknown;
+
+  try {
+    payload = await response.json();
+  } catch {
+    throw new ApiRouteError(502, "GitHub App issue sync received an invalid GitHub response.");
+  }
+
+  const parsed = params.schema.safeParse(payload);
 
   if (!parsed.success) {
     throw new ApiRouteError(502, "GitHub App issue sync received an invalid GitHub response.");
