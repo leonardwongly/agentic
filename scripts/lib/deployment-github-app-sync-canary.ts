@@ -54,6 +54,7 @@ type JobPollPayload = {
 };
 
 export type DeploymentGitHubAppSyncCanarySummary = {
+  negativeAuthStatus: number;
   synchronizedAt: string | null;
   automationMode: string | null;
   repositories: Array<{
@@ -199,6 +200,10 @@ function resolveStatusUrl(baseUrl: string, jobId: string): string {
   return new URL(`/api/jobs/${encodeURIComponent(jobId)}`, `${baseUrl}/`).toString();
 }
 
+function invalidBearerProbeSecret(): string {
+  return `invalid-github-app-sync-${crypto.randomBytes(12).toString("hex")}`;
+}
+
 function resolveJobStatusUrl(baseUrl: string, jobId: string, statusUrl: string | undefined): string {
   const fallback = resolveStatusUrl(baseUrl, jobId);
   const raw = statusUrl?.trim();
@@ -277,8 +282,24 @@ export async function runDeploymentGitHubAppSyncCanary(
   assert(accessKey, "AGENTIC_SMOKE_ACCESS_KEY must be configured.");
   assert(syncSecret, "AGENTIC_GITHUB_APP_SYNC_SECRET must be configured.");
 
+  const syncEndpoint = `${baseUrl}/api/github/issues/app/sync`;
+  const negativeAuthResponse = await fetchImpl(syncEndpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${invalidBearerProbeSecret()}`,
+      "x-request-id": `${requestId}-negative-auth`,
+      "x-trace-id": traceId
+    }
+  });
+
+  assert(
+    negativeAuthResponse.status === 401,
+    `Expected GitHub App sync to reject an invalid bearer token with 401, received ${negativeAuthResponse.status}.`
+  );
+
   const syncStartedAt = Date.now();
-  const syncResponse = await fetchImpl(`${baseUrl}/api/github/issues/app/sync`, {
+  const syncResponse = await fetchImpl(syncEndpoint, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -346,6 +367,7 @@ export async function runDeploymentGitHubAppSyncCanary(
   }
 
   return {
+    negativeAuthStatus: negativeAuthResponse.status,
     synchronizedAt: syncPayload.synchronizedAt ?? null,
     automationMode: syncPayload.automationMode ?? null,
     repositories: normalizeRepositories(syncPayload),

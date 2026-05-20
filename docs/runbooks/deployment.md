@@ -314,6 +314,11 @@ npm run test:smoke:github-app-sync
 npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
 
+The GitHub App sync smoke first sends an invalid bearer token to the deployed
+sync route and requires `401`, then performs the valid sync and worker polling.
+This proves fail-closed route authentication before any live intake job is
+accepted.
+
 7. Review queue-behavior sanity signals before traffic is considered healthy.
 
 Minimum rollout expectations:
@@ -352,6 +357,10 @@ npm run test:smoke:deployment-async
 npm run test:smoke:github-app-sync
 npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
+
+The GitHub App sync smoke output includes `negativeAuthStatus: 401`; treat any
+other status as a release blocker because the sync route did not reject an
+invalid bearer token before the valid request.
 
 Capture:
 
