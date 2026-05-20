@@ -116,6 +116,7 @@ const REQUIRED_VALIDATION_GATES = [
   "db-status-require-ready",
   "deployment-smoke",
   "deployment-async-canary",
+  "github-app-sync-preflight",
   "rollout-gate",
   "local-ci"
 ];

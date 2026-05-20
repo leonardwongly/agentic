@@ -28,7 +28,7 @@ describe("release closeout evidence", () => {
       ok: true,
       summary: {
         pullRequests: 4,
-        blockedValidationGates: 5,
+        blockedValidationGates: 6,
         residualRisks: 4
       },
       issues: []
@@ -41,7 +41,7 @@ describe("release closeout evidence", () => {
 
     expect(rendered).toContain("Release closeout evidence passed.");
     expect(rendered).toContain("- Pull requests: 4");
-    expect(rendered).toContain("- Blocked validation gates: 5");
+    expect(rendered).toContain("- Blocked validation gates: 6");
   });
 
   it("requires blocked live validation gates to link blocker issues", () => {
@@ -116,6 +116,21 @@ describe("release closeout evidence", () => {
       expect.objectContaining({
         path: "trackedIssues",
         message: "Child issue #294 is missing from the release closeout map."
+      })
+    );
+  });
+
+  it("requires the GitHub App sync preflight to stay in the closeout gates", () => {
+    const manifest = cloneManifest(clonedManifest => {
+      clonedManifest.validationGates = clonedManifest.validationGates.filter(gate => gate.id !== "github-app-sync-preflight");
+    });
+    const report = validateReleaseCloseoutEvidenceManifest(manifest, { cwd: repoRoot });
+
+    expect(report.ok).toBe(false);
+    expect(report.issues).toContainEqual(
+      expect.objectContaining({
+        path: "validationGates",
+        message: "Required validation gate 'github-app-sync-preflight' is missing."
       })
     );
   });
