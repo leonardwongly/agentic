@@ -29,7 +29,7 @@ describe("release closeout evidence", () => {
       summary: {
         pullRequests: 15,
         blockedValidationGates: 6,
-        residualRisks: 4
+        residualRisks: 3
       },
       issues: []
     });
@@ -42,6 +42,7 @@ describe("release closeout evidence", () => {
     expect(rendered).toContain("Release closeout evidence passed.");
     expect(rendered).toContain("- Pull requests: 15");
     expect(rendered).toContain("- Blocked validation gates: 6");
+    expect(rendered).toContain("- Residual risks: 3");
   });
 
   it("keeps the GitHub sync preflight and evidence-gate PRs in the closeout package", () => {
@@ -146,6 +147,29 @@ describe("release closeout evidence", () => {
       ])
     );
     expect(manifest.observability.commands).toContain("npm run github:app-sync:preflight:collect");
+  });
+
+  it("records hosted CI recovery without leaving #190 as a residual CI blocker", () => {
+    const manifest = readCheckedInManifest();
+    const localCiGate = manifest.validationGates.find((gate) => gate.id === "local-ci");
+
+    expect(localCiGate?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26184631450",
+          status: "passed"
+        })
+      ])
+    );
+    expect(manifest.residualRisks).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "hosted-ci-provenance-blocked",
+          blockerIssues: [190]
+        })
+      ])
+    );
   });
 
   it("keeps the latest Render provider readiness blocker in the closeout package", () => {

@@ -176,14 +176,13 @@
     {
       "issue": 190,
       "title": "plan(w01): Production proof and runtime closeout",
-      "status": "blocked",
+      "status": "implemented",
       "ownerLane": "runtime-platform",
-      "blockers": [141, 142, 143, 144, 145],
       "implementationProof": [
         {
           "kind": "github_issue",
           "ref": "#190",
-          "note": "W01 remains open because the code-backed PRs are separated from external live deployment proof."
+          "note": "W01 repo-side generated workstream is closed; live deployment proof remains tracked by #137 and #141 through #145."
         },
         {
           "kind": "script",

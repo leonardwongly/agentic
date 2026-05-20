@@ -617,10 +617,16 @@
           "kind": "local_ci",
           "ref": "npm run ci:local",
           "status": "passed",
-          "note": "Used as the validation fallback while hosted provenance-gate blocks CI validate jobs."
+          "note": "Kept as branch-local validation evidence before PR review."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26184631450",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #892, proving hosted validate jobs are available again."
         }
       ],
-      "notes": "Local CI is required on each implementation branch until hosted billing/provenance blockers are removed."
+      "notes": "Run on implementation branches before PR review; hosted CI remains the merge gate when available."
     }
   ],
   "rollout": {
@@ -720,15 +726,6 @@
       "owner": "platform",
       "blockerIssues": [141, 144, 145],
       "mitigation": "Keep #144 and #145 open until async canary, GitHub sync canary, and rollout telemetry pass against stable ingress."
-    },
-    {
-      "id": "hosted-ci-provenance-blocked",
-      "title": "Hosted validate jobs are skipped after provenance-gate failure",
-      "severity": "medium",
-      "status": "accepted",
-      "owner": "platform-security",
-      "blockerIssues": [190],
-      "mitigation": "Use local CI evidence on every implementation branch and re-run hosted CI after billing/provenance availability is restored."
     }
   ],
   "observability": {
