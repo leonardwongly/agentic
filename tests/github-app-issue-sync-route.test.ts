@@ -486,6 +486,45 @@ describe("GitHub App issue sync route", () => {
     expect(jobs).toHaveLength(0);
   });
 
+  it("returns a dependency failure when GitHub requests fail before a response", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: "GitHub App issue sync request failed."
+    });
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("returns a dependency failure when GitHub returns malformed JSON", async () => {
+    fetchMock.mockImplementationOnce(async () =>
+      new Response("{", {
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        }
+      })
+    );
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: "GitHub App issue sync received an invalid GitHub response."
+    });
+    expect(jobs).toHaveLength(0);
+  });
+
   it("honors the configured per-repository issue cap", async () => {
     process.env.AGENTIC_GITHUB_APP_SYNC_MAX_ISSUES_PER_REPOSITORY = "1";
 
