@@ -454,6 +454,46 @@ type AlternateProviderEvidence = {
   errors: string[];
 };
 
+export type AlternateProviderEvidenceTemplate = {
+  provider: string;
+  environment: string;
+  services: Array<{
+    name: string;
+    role: "web" | "worker";
+  }>;
+  database: {
+    engine: "postgres";
+    configured: boolean;
+  };
+  stableHttpsIngress: boolean;
+  secretManagement: boolean;
+  rollbackAuthority: string;
+};
+
+export function createAlternateProviderEvidenceTemplate(): AlternateProviderEvidenceTemplate {
+  return {
+    provider: "approved-provider-name",
+    environment: "production-like",
+    services: [
+      {
+        name: "agentic-web",
+        role: "web"
+      },
+      {
+        name: "agentic-worker",
+        role: "worker"
+      }
+    ],
+    database: {
+      engine: "postgres",
+      configured: true
+    },
+    stableHttpsIngress: true,
+    secretManagement: true,
+    rollbackAuthority: "platform-operator"
+  };
+}
+
 function buildAlternateProviderEvidence(raw: string): AlternateProviderEvidence {
   let parsed: unknown;
 

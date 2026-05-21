@@ -1,4 +1,5 @@
 import {
+  createAlternateProviderEvidenceTemplate,
   redactGitHubAppSyncLivePreflightReport,
   validateGitHubAppSyncLivePreflight
 } from "./lib/github-app-sync-live-preflight";
@@ -22,6 +23,8 @@ Required live evidence inputs:
 - AGENTIC_DEPLOYMENT_SMOKE_JSON, AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON, AGENTIC_GITHUB_APP_SYNC_CANARY_JSON
 
 Use npm run github:app-sync:preflight:collect -- --json to collect read-only GitHub and Render inventory before this check.
+
+Use npm run github:app-sync:preflight -- --provider-evidence-template to print the non-secret JSON shape expected by AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON.
 `;
 
 function printHumanSummary(report: GitHubAppSyncLivePreflightReport) {
@@ -45,6 +48,11 @@ function printHumanSummary(report: GitHubAppSyncLivePreflightReport) {
 async function main() {
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
     console.log(HELP_TEXT);
+    return;
+  }
+
+  if (process.argv.includes("--provider-evidence-template")) {
+    console.log(JSON.stringify(createAlternateProviderEvidenceTemplate(), null, 2));
     return;
   }
 
