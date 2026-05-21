@@ -95,5 +95,15 @@ describe("GitHub issue autopilot workflow", () => {
     expect(runbook).toContain("disabled_manually");
     expect(runbook).toContain("gh workflow enable github-app-issue-sync.yml --repo leonardwongly/agentic");
     expect(runbook).toContain("npm run github:app-sync:preflight");
+    expect(runbook).toContain("npm run github:issues:completion-audit -- --json");
+    expect(runbook).toContain("The ordered closeout sequence is:");
+    expect(runbook).toContain("| #141 | Stable HTTPS ingress exists");
+    expect(runbook).toContain("| #142 | Runtime-only GitHub App credentials");
+    expect(runbook).toContain("| #143 | Target Postgres exists");
+    expect(runbook).toContain("| #144 | Deployed worker is running");
+    expect(runbook).toContain("| #145 | Manual GitHub App issue sync reaches the stable deployed route");
+    expect(runbook).toContain("| #152 | All child production proof issues are closed");
+    expect(runbook).toContain("Do not enable scheduled sync or run a");
+    expect(runbook).toContain("live manual dispatch before #141 stable ingress");
   });
 });
