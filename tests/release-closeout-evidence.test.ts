@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 32,
+        pullRequests: 33,
         blockedValidationGates: 7,
         residualRisks: 3
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 32");
+    expect(rendered).toContain("- Pull requests: 33");
     expect(rendered).toContain("- Blocked validation gates: 7");
     expect(rendered).toContain("- Residual risks: 3");
   });
@@ -345,7 +345,7 @@ describe("release closeout evidence", () => {
     expect(manifest.observability.commands).toContain("npm run github:issues:completion-audit -- --json");
   });
 
-  it("keeps the final issue-sync canary and environment-template closeout PRs in the package", () => {
+  it("keeps the final issue-sync closeout and evidence-drift PRs in the package", () => {
     const manifest = readCheckedInManifest();
     const localCiGate = manifest.validationGates.find((gate) => gate.id === "local-ci");
 
@@ -360,6 +360,11 @@ describe("release closeout evidence", () => {
           number: 912,
           status: "merged",
           url: "https://github.com/leonardwongly/agentic/pull/912"
+        }),
+        expect.objectContaining({
+          number: 913,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/913"
         })
       ])
     );
@@ -373,6 +378,11 @@ describe("release closeout evidence", () => {
         expect.objectContaining({
           kind: "github_action",
           ref: "https://github.com/leonardwongly/agentic/actions/runs/26218512794",
+          status: "passed"
+        }),
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26220293641",
           status: "passed"
         })
       ])
