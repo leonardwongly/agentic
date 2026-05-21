@@ -276,13 +276,22 @@ risk is recorded in the release notes together with an owner and follow-up date.
 
 ## Rollout Procedure
 
-1. Build the container image.
+1. Confirm whether the configured staging path is provider-backed or runner-local.
+
+```bash
+npm run deploy:staging:plan
+```
+
+Do not treat `self-test` mode as external deployment evidence. It only verifies
+the runner-local fallback path when provider settings are missing.
+
+2. Build the container image.
 
 ```bash
 docker build -t agentic:<tag> .
 ```
 
-2. Deploy the image using the provider command contract.
+3. Deploy the image using the provider command contract.
 
 ```bash
 export AGENTIC_STAGING_IMAGE_TAG=agentic:<tag>
@@ -291,13 +300,13 @@ npm run deploy:staging:provider
 
 The provider deploy command must roll both the web and worker runtimes to the same image or release artifact. Do not continue if the provider step exits non-zero.
 
-3. Start the web process with startup validation.
+4. Start the web process with startup validation.
 
 ```bash
 npm run start:web:prod -- --hostname 0.0.0.0 --port 3000
 ```
 
-4. Start the worker process after the schema is confirmed ready.
+5. Start the worker process after the schema is confirmed ready.
 
 ```bash
 export AGENTIC_WORKER_HEALTH_PATH=/var/lib/agentic/worker-health.json

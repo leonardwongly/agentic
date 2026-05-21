@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { resolveStagingExecutionPlan } from "../scripts/lib/staging-execution-plan";
 
@@ -61,5 +62,19 @@ describe("staging execution plan", () => {
       AGENTIC_STAGING_DEPLOY_BIN: "node",
       AGENTIC_STAGING_DEPLOY_TIMEOUT_MS: "45000"
     });
+  });
+
+  it("exposes the staging planner as the workflow and operator command", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const workflow = readFileSync(".github/workflows/staging-manual-deploy.yml", "utf8");
+    const runbook = readFileSync("docs/runbooks/deployment.md", "utf8");
+
+    expect(packageJson.scripts?.["deploy:staging:plan"]).toBe("tsx scripts/staging-execution-plan.ts");
+    expect(workflow).toContain("run: npm run deploy:staging:plan");
+    expect(workflow).not.toContain("run: npx tsx scripts/staging-execution-plan.ts");
+    expect(runbook).toContain("npm run deploy:staging:plan");
+    expect(runbook).toContain("Do not treat `self-test` mode as external deployment evidence.");
   });
 });
