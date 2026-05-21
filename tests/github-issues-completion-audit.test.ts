@@ -22,7 +22,30 @@ const BASE_ENV = {
   AGENTIC_GITHUB_APP_SYNC_SECRET: "github-app-sync-secret-with-at-least-32-characters",
   AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "leonardwongly/agentic",
   AGENTIC_RENDER_SERVICES_JSON: JSON.stringify([{ name: "agentic-web" }, { name: "agentic-worker" }]),
-  AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON: JSON.stringify({ valid: true, errors: [] })
+  AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON: JSON.stringify({ valid: true, errors: [] }),
+  AGENTIC_DEPLOYMENT_SMOKE_JSON: JSON.stringify({
+    ok: true,
+    healthStatus: "live",
+    readinessStatus: "ready",
+    sessionChecked: true,
+    checks: [
+      { name: "health", status: 200 },
+      { name: "readiness", status: 200 },
+      { name: "session", status: 200 }
+    ]
+  }),
+  AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: JSON.stringify({
+    ok: true,
+    jobId: "job-canary-1",
+    attempts: 2,
+    statusUrl: "https://agentic.example.com/api/goals/jobs/job-canary-1"
+  }),
+  AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: JSON.stringify({
+    ok: true,
+    negativeAuthStatus: 401,
+    repositories: [{ fullName: "leonardwongly/agentic", openIssuesSeen: 1, skippedPullRequests: 1 }],
+    jobs: [{ id: "job-sync-1", repository: "leonardwongly/agentic", issueNumber: 145, attempts: 2 }]
+  })
 };
 
 const CLOSED_ISSUES: GitHubIssueSyncCompletionIssueState[] = [
@@ -82,7 +105,10 @@ describe("GitHub issue-sync completion audit", () => {
         AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON: JSON.stringify({
           valid: false,
           errors: [{ error: "need_payment_info", path: "services[0]" }]
-        })
+        }),
+        AGENTIC_DEPLOYMENT_SMOKE_JSON: "",
+        AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: "",
+        AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: ""
       })
     });
 
@@ -137,6 +163,47 @@ describe("GitHub issue-sync completion audit", () => {
         status: "fail",
         requirement: "Production proof child gates are unblocked before roadmap closeout.",
         evidence: ["Live preflight still blocks production proof children: #141, #143, #144, #145."]
+      })
+    );
+  });
+
+  it("keeps production proof blocked without deployment smoke and canary evidence", () => {
+    const report = buildGitHubIssueSyncCompletionAudit({
+      issues: CLOSED_ISSUES,
+      preflight: collection({
+        ...BASE_ENV,
+        AGENTIC_DEPLOYMENT_SMOKE_JSON: "",
+        AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: "",
+        AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: ""
+      })
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.criteria).toContainEqual(
+      expect.objectContaining({
+        issue: 141,
+        status: "fail",
+        evidence: expect.arrayContaining([
+          "deployment_smoke: fail - Set AGENTIC_DEPLOYMENT_SMOKE_JSON from a passing `npm run test:smoke:deployment` run against the deployed origin."
+        ])
+      })
+    );
+    expect(report.criteria).toContainEqual(
+      expect.objectContaining({
+        issue: 144,
+        status: "fail",
+        evidence: expect.arrayContaining([
+          "deployment_async_canary: fail - Set AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON from a passing `npm run test:smoke:deployment-async` run against the deployed worker."
+        ])
+      })
+    );
+    expect(report.criteria).toContainEqual(
+      expect.objectContaining({
+        issue: 145,
+        status: "fail",
+        evidence: expect.arrayContaining([
+          "github_app_sync_canary: fail - Set AGENTIC_GITHUB_APP_SYNC_CANARY_JSON from a passing `npm run test:smoke:github-app-sync` run against the deployed sync route."
+        ])
       })
     );
   });

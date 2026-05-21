@@ -15,7 +15,30 @@ const RUNTIME_ENV = {
   AGENTIC_GITHUB_APP_INSTALLATION_ID: "654321",
   AGENTIC_GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY,
   AGENTIC_GITHUB_APP_SYNC_SECRET: "github-app-sync-secret-with-at-least-32-characters",
-  AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "leonardwongly/agentic"
+  AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "leonardwongly/agentic",
+  AGENTIC_DEPLOYMENT_SMOKE_JSON: JSON.stringify({
+    ok: true,
+    healthStatus: "live",
+    readinessStatus: "ready",
+    sessionChecked: true,
+    checks: [
+      { name: "health", status: 200 },
+      { name: "readiness", status: 200 },
+      { name: "session", status: 200 }
+    ]
+  }),
+  AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: JSON.stringify({
+    ok: true,
+    jobId: "job-canary-1",
+    attempts: 2,
+    statusUrl: "https://agentic.example.com/api/goals/jobs/job-canary-1"
+  }),
+  AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: JSON.stringify({
+    ok: true,
+    negativeAuthStatus: 401,
+    repositories: [{ fullName: "leonardwongly/agentic", openIssuesSeen: 1, skippedPullRequests: 1 }],
+    jobs: [{ id: "job-sync-1", repository: "leonardwongly/agentic", issueNumber: 145, attempts: 2 }]
+  })
 };
 
 function commandKey(command: string, args: string[]) {
@@ -174,4 +197,3 @@ describe("GitHub App sync live preflight collector", () => {
     );
   });
 });
-

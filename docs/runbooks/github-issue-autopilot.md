@@ -186,6 +186,22 @@ The ordered closeout sequence is:
 | #145 | Manual GitHub App issue sync reaches the stable deployed route, returns `202` for valid auth, returns `401` for invalid auth, skips pull requests, handles duplicate dispatch safely, and the worker settles queued `github_issue_intake` jobs. | `gh workflow run github-app-issue-sync.yml --repo leonardwongly/agentic`, `gh run view <run-id> --repo leonardwongly/agentic --json status,conclusion,jobs,url`, `npm run test:smoke:github-app-sync` |
 | #152 | All child production proof issues are closed and the live completion audit passes. | `npm run github:issues:completion-audit -- --json` |
 
+The completion audit requires redacted JSON evidence from the live smoke
+commands, not just closed issue state. Capture those outputs after the target is
+approved and deployed, then expose them to the audit as environment variables:
+
+```bash
+export AGENTIC_DEPLOYMENT_SMOKE_JSON="$(npm run --silent test:smoke:deployment)"
+export AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON="$(npm run --silent test:smoke:deployment-async)"
+export AGENTIC_GITHUB_APP_SYNC_CANARY_JSON="$(npm run --silent test:smoke:github-app-sync)"
+npm run github:issues:completion-audit -- --json
+```
+
+These smoke command outputs are intentionally redacted summaries. They include
+statuses, request or trace ids, repository names, issue numbers, job ids, and
+timings, but not the smoke access key, sync secret, GitHub App private key,
+installation token, raw issue body, or database URL.
+
 The closeout is intentionally sequential. Do not enable scheduled sync or run a
 live manual dispatch before #141 stable ingress, #142 runtime/repo
 configuration, #143 Postgres/shared-auth bootstrap, and #144 worker proof are

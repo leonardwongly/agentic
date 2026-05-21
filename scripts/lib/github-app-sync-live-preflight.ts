@@ -48,7 +48,10 @@ export type GitHubAppSyncLivePreflightCheck = {
     | "smoke_canary_inventory"
     | "repository_allowlist"
     | "render_services"
-    | "render_blueprint";
+    | "render_blueprint"
+    | "deployment_smoke"
+    | "deployment_async_canary"
+    | "github_app_sync_canary";
   status: "pass" | "warn" | "fail";
   message: string;
   details?: Record<string, string | number | boolean | null>;
@@ -505,6 +508,183 @@ function buildRenderBlueprintCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePre
   return pass("render_blueprint", "Render Blueprint validation passed.", { valid: true });
 }
 
+function recordValue(record: Record<string, unknown>, key: string): unknown {
+  return record[key];
+}
+
+function numberValue(record: Record<string, unknown>, key: string): number | null {
+  const value = recordValue(record, key);
+
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringValue(record: Record<string, unknown>, key: string): string | null {
+  const value = recordValue(record, key);
+
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function booleanValue(record: Record<string, unknown>, key: string): boolean | null {
+  const value = recordValue(record, key);
+
+  return typeof value === "boolean" ? value : null;
+}
+
+function jsonEvidenceObject(env: NodeJS.ProcessEnv, envName: string): Record<string, unknown> | null {
+  const raw = trim(env[envName]);
+
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = parseJsonObject(raw);
+
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+}
+
+function arrayValue(record: Record<string, unknown>, key: string): unknown[] {
+  const value = recordValue(record, key);
+
+  return Array.isArray(value) ? value : [];
+}
+
+function checkNames(record: Record<string, unknown>): Set<string> {
+  return new Set(
+    arrayValue(record, "checks")
+      .map((item) => {
+        if (!item || typeof item !== "object") {
+          return null;
+        }
+
+        const name = (item as Record<string, unknown>).name;
+        return typeof name === "string" ? name : null;
+      })
+      .filter((name): name is string => Boolean(name))
+  );
+}
+
+function buildDeploymentSmokeCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  let parsed: Record<string, unknown> | null;
+
+  try {
+    parsed = jsonEvidenceObject(env, "AGENTIC_DEPLOYMENT_SMOKE_JSON");
+  } catch {
+    return fail(
+      "deployment_smoke",
+      "AGENTIC_DEPLOYMENT_SMOKE_JSON must contain JSON output from `npm run test:smoke:deployment`."
+    );
+  }
+
+  if (!parsed) {
+    return fail(
+      "deployment_smoke",
+      "Set AGENTIC_DEPLOYMENT_SMOKE_JSON from a passing `npm run test:smoke:deployment` run against the deployed origin."
+    );
+  }
+
+  const healthStatus = stringValue(parsed, "healthStatus");
+  const readinessStatus = stringValue(parsed, "readinessStatus");
+  const sessionChecked = booleanValue(parsed, "sessionChecked");
+  const names = checkNames(parsed);
+
+  if (recordValue(parsed, "ok") !== true || healthStatus !== "live" || readinessStatus !== "ready") {
+    return fail("deployment_smoke", "Deployment smoke evidence must prove live health and ready readiness.", {
+      healthStatus,
+      readinessStatus
+    });
+  }
+
+  if (!names.has("health") || !names.has("readiness")) {
+    return fail("deployment_smoke", "Deployment smoke evidence must include health and readiness checks.");
+  }
+
+  if (trim(env.AGENTIC_SMOKE_ACCESS_KEY) && sessionChecked !== true) {
+    return fail("deployment_smoke", "Deployment smoke evidence must include authenticated session bootstrap when a smoke access key is configured.");
+  }
+
+  return pass("deployment_smoke", "Deployment smoke evidence proves health, readiness, and session bootstrap.", {
+    healthStatus,
+    readinessStatus,
+    sessionChecked,
+    checkCount: names.size
+  });
+}
+
+function buildDeploymentAsyncCanaryCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  let parsed: Record<string, unknown> | null;
+
+  try {
+    parsed = jsonEvidenceObject(env, "AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON");
+  } catch {
+    return fail(
+      "deployment_async_canary",
+      "AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON must contain JSON output from `npm run test:smoke:deployment-async`."
+    );
+  }
+
+  if (!parsed) {
+    return fail(
+      "deployment_async_canary",
+      "Set AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON from a passing `npm run test:smoke:deployment-async` run against the deployed worker."
+    );
+  }
+
+  const attempts = numberValue(parsed, "attempts");
+  const jobId = stringValue(parsed, "jobId");
+  const statusUrl = stringValue(parsed, "statusUrl");
+
+  if (recordValue(parsed, "ok") !== true || !jobId || !statusUrl || attempts === null || attempts < 1) {
+    return fail("deployment_async_canary", "Deployment async canary evidence must prove a queued job reached durable completion.", {
+      attempts,
+      hasJobId: Boolean(jobId),
+      hasStatusUrl: Boolean(statusUrl)
+    });
+  }
+
+  return pass("deployment_async_canary", "Deployment async canary evidence proves worker-backed job completion.", {
+    attempts,
+    hasJobId: true
+  });
+}
+
+function buildGitHubAppSyncCanaryCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  let parsed: Record<string, unknown> | null;
+
+  try {
+    parsed = jsonEvidenceObject(env, "AGENTIC_GITHUB_APP_SYNC_CANARY_JSON");
+  } catch {
+    return fail(
+      "github_app_sync_canary",
+      "AGENTIC_GITHUB_APP_SYNC_CANARY_JSON must contain JSON output from `npm run test:smoke:github-app-sync`."
+    );
+  }
+
+  if (!parsed) {
+    return fail(
+      "github_app_sync_canary",
+      "Set AGENTIC_GITHUB_APP_SYNC_CANARY_JSON from a passing `npm run test:smoke:github-app-sync` run against the deployed sync route."
+    );
+  }
+
+  const negativeAuthStatus = numberValue(parsed, "negativeAuthStatus");
+  const repositories = arrayValue(parsed, "repositories");
+  const jobs = arrayValue(parsed, "jobs");
+
+  if (recordValue(parsed, "ok") !== true || negativeAuthStatus !== 401 || repositories.length === 0 || jobs.length === 0) {
+    return fail("github_app_sync_canary", "GitHub App sync canary evidence must prove invalid auth, repository sync, and worker-settled jobs.", {
+      negativeAuthStatus,
+      repositoryCount: repositories.length,
+      jobCount: jobs.length
+    });
+  }
+
+  return pass("github_app_sync_canary", "GitHub App sync canary evidence proves invalid auth, repository sync, and worker-settled jobs.", {
+    negativeAuthStatus,
+    repositoryCount: repositories.length,
+    jobCount: jobs.length
+  });
+}
+
 function endpoint(origin: string | null, path: string): string | null {
   return origin ? `${origin}${path}` : null;
 }
@@ -522,7 +702,10 @@ export function validateGitHubAppSyncLivePreflight(env: NodeJS.ProcessEnv): GitH
     buildSmokeCanaryInventoryCheck(env),
     buildAllowlistCheck(env),
     buildRenderServicesCheck(env),
-    buildRenderBlueprintCheck(env)
+    buildRenderBlueprintCheck(env),
+    buildDeploymentSmokeCheck(env),
+    buildDeploymentAsyncCanaryCheck(env),
+    buildGitHubAppSyncCanaryCheck(env)
   ];
   const smokeBaseUrl = trim(env.AGENTIC_SMOKE_BASE_URL) || trim(env.AGENTIC_INGRESS_BASE_URL) || null;
   const smokeOrigin = smokeBaseUrl ? (() => {

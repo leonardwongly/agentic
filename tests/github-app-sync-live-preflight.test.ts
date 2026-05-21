@@ -20,7 +20,30 @@ const BASE_ENV = {
     { name: "agentic-web" },
     { name: "agentic-worker" }
   ]),
-  AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON: JSON.stringify({ valid: true, errors: [] })
+  AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON: JSON.stringify({ valid: true, errors: [] }),
+  AGENTIC_DEPLOYMENT_SMOKE_JSON: JSON.stringify({
+    ok: true,
+    healthStatus: "live",
+    readinessStatus: "ready",
+    sessionChecked: true,
+    checks: [
+      { name: "health", status: 200 },
+      { name: "readiness", status: 200 },
+      { name: "session", status: 200 }
+    ]
+  }),
+  AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: JSON.stringify({
+    ok: true,
+    jobId: "job-canary-1",
+    attempts: 2,
+    statusUrl: "https://agentic.example.com/api/goals/jobs/job-canary-1"
+  }),
+  AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: JSON.stringify({
+    ok: true,
+    negativeAuthStatus: 401,
+    repositories: [{ fullName: "leonardwongly/agentic", openIssuesSeen: 1, skippedPullRequests: 1 }],
+    jobs: [{ id: "job-sync-1", repository: "leonardwongly/agentic", issueNumber: 145, attempts: 2 }]
+  })
 };
 
 describe("GitHub App sync live preflight", () => {
@@ -44,7 +67,10 @@ describe("GitHub App sync live preflight", () => {
       ["smoke_canary_inventory", "pass"],
       ["repository_allowlist", "pass"],
       ["render_services", "pass"],
-      ["render_blueprint", "pass"]
+      ["render_blueprint", "pass"],
+      ["deployment_smoke", "pass"],
+      ["deployment_async_canary", "pass"],
+      ["github_app_sync_canary", "pass"]
     ]);
   });
 
@@ -251,6 +277,95 @@ describe("GitHub App sync live preflight", () => {
         name: "render_blueprint",
         status: "fail",
         message: "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON is not set; live preflight cannot prove Render Blueprint validation passes."
+      })
+    );
+  });
+
+  it("fails closed when live smoke and canary evidence is omitted", () => {
+    const {
+      AGENTIC_DEPLOYMENT_SMOKE_JSON,
+      AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON,
+      AGENTIC_GITHUB_APP_SYNC_CANARY_JSON,
+      ...envWithoutCanaryEvidence
+    } = BASE_ENV;
+    const report = validateGitHubAppSyncLivePreflight(envWithoutCanaryEvidence);
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "deployment_smoke",
+        status: "fail",
+        message: "Set AGENTIC_DEPLOYMENT_SMOKE_JSON from a passing `npm run test:smoke:deployment` run against the deployed origin."
+      })
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "deployment_async_canary",
+        status: "fail",
+        message: "Set AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON from a passing `npm run test:smoke:deployment-async` run against the deployed worker."
+      })
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "github_app_sync_canary",
+        status: "fail",
+        message: "Set AGENTIC_GITHUB_APP_SYNC_CANARY_JSON from a passing `npm run test:smoke:github-app-sync` run against the deployed sync route."
+      })
+    );
+  });
+
+  it("rejects smoke evidence that does not prove health and readiness", () => {
+    const report = validateGitHubAppSyncLivePreflight({
+      ...BASE_ENV,
+      AGENTIC_DEPLOYMENT_SMOKE_JSON: JSON.stringify({
+        ok: true,
+        healthStatus: "live",
+        readinessStatus: "not_ready",
+        sessionChecked: true,
+        checks: [{ name: "health", status: 200 }]
+      })
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "deployment_smoke",
+        status: "fail",
+        message: "Deployment smoke evidence must prove live health and ready readiness."
+      })
+    );
+  });
+
+  it("rejects canary evidence that omits worker or GitHub App sync proof", () => {
+    const report = validateGitHubAppSyncLivePreflight({
+      ...BASE_ENV,
+      AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: JSON.stringify({
+        ok: true,
+        jobId: "",
+        attempts: 0,
+        statusUrl: ""
+      }),
+      AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: JSON.stringify({
+        ok: true,
+        negativeAuthStatus: 200,
+        repositories: [],
+        jobs: []
+      })
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "deployment_async_canary",
+        status: "fail",
+        message: "Deployment async canary evidence must prove a queued job reached durable completion."
+      })
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "github_app_sync_canary",
+        status: "fail",
+        message: "GitHub App sync canary evidence must prove invalid auth, repository sync, and worker-settled jobs."
       })
     );
   });
