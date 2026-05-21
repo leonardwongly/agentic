@@ -305,6 +305,88 @@ describe("GitHub issue webhook route", () => {
     expect(jobs).toHaveLength(0);
   });
 
+  it("rejects non-JSON payloads before signature verification", async () => {
+    const response = await githubIssueWebhookRoute(
+      new Request("http://localhost/api/github/issues/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "text/plain",
+          "x-github-event": "issues",
+          "x-github-delivery": "delivery-plain",
+          "x-hub-signature-256": signBody("not-json")
+        },
+        body: "not-json"
+      })
+    );
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(415);
+    expect(await response.json()).toEqual({ error: "Content-Type must be application/json." });
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("rejects missing signature headers", async () => {
+    const response = await githubIssueWebhookRoute(
+      new Request("http://localhost/api/github/issues/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-github-event": "issues",
+          "x-github-delivery": "delivery-missing-signature"
+        },
+        body: JSON.stringify(buildIssuePayload())
+      })
+    );
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Missing GitHub signature header." });
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("rejects signed payloads with invalid delivery identifiers", async () => {
+    const response = await githubIssueWebhookRoute(
+      buildSignedRequest(buildIssuePayload(), {
+        deliveryId: "delivery id with spaces"
+      })
+    );
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid GitHub delivery id." });
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("acknowledges unsupported signed GitHub events without enqueueing work", async () => {
+    const response = await githubIssueWebhookRoute(
+      buildSignedRequest(buildIssuePayload(), {
+        event: "pull_request",
+        deliveryId: "delivery-unsupported-event"
+      })
+    );
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({
+      ok: true,
+      skipped: true,
+      reason: "unsupported_event"
+    });
+    expect(jobs).toHaveLength(0);
+  });
+
   it("acknowledges non-opened issue actions without enqueueing work", async () => {
     const response = await githubIssueWebhookRoute(buildSignedRequest(buildIssuePayload({ action: "edited" })));
     const jobs = await repository.listJobs({
