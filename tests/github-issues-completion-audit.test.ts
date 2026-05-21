@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { validateGitHubAppSyncLivePreflight } from "../scripts/lib/github-app-sync-live-preflight";
 import {
   buildGitHubIssueSyncCompletionAudit,
+  buildGitHubIssueSyncRemediationPlan,
   type GitHubIssueSyncCompletionIssueState
 } from "../scripts/lib/github-issues-completion-audit";
 import type { GitHubAppSyncLivePreflightCollectionReport } from "../scripts/lib/github-app-sync-live-preflight-collector";
@@ -63,7 +64,7 @@ const CLOSED_ISSUES: GitHubIssueSyncCompletionIssueState[] = [
 const PASSING_RELEASE_CLOSEOUT_EVIDENCE: ReleaseCloseoutEvidenceReport = {
   ok: true,
   summary: {
-    pullRequests: 39,
+    pullRequests: 40,
     trackedIssues: 16,
     validationGates: 8,
     blockedValidationGates: 7,
@@ -75,7 +76,7 @@ const PASSING_RELEASE_CLOSEOUT_EVIDENCE: ReleaseCloseoutEvidenceReport = {
 const FAILING_RELEASE_CLOSEOUT_EVIDENCE: ReleaseCloseoutEvidenceReport = {
   ok: false,
   summary: {
-    pullRequests: 39,
+    pullRequests: 40,
     trackedIssues: 16,
     validationGates: 7,
     blockedValidationGates: 6,
@@ -107,9 +108,10 @@ describe("GitHub issue-sync completion audit", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: npm run github:issues:completion-audit -- [--json]");
+    expect(result.stdout).toContain("Usage: npm run github:issues:completion-audit -- [--json] [--remediation-plan]");
     expect(result.stdout).toContain("GitHub issue states for #141, #142, #143, #144, #145, #146, and #152");
     expect(result.stdout).toContain("github:app-sync:preflight:collect");
+    expect(result.stdout).toContain("--remediation-plan");
     expect(result.stderr).toBe("");
   });
 
@@ -191,6 +193,100 @@ describe("GitHub issue-sync completion audit", () => {
         ])
       })
     );
+  });
+
+  it("builds a deterministic read-only remediation plan from failed audit criteria", () => {
+    const report = buildGitHubIssueSyncCompletionAudit({
+      issues: [
+        { number: 141, state: "OPEN", title: "Deploy stable ingress" },
+        { number: 142, state: "OPEN", title: "Configure GitHub App sync secrets" },
+        { number: 143, state: "OPEN", title: "Bootstrap production database" },
+        { number: 144, state: "OPEN", title: "Deploy durable worker" },
+        { number: 145, state: "OPEN", title: "Validate live issue sync" },
+        { number: 146, state: "CLOSED", title: "Capture rollout evidence" },
+        { number: 152, state: "OPEN", title: "Close roadmap" }
+      ],
+      preflight: collection({
+        ...BASE_ENV,
+        AGENTIC_GITHUB_APP_ISSUE_SYNC_URL:
+          "https://occasion-translations-cover-vids.trycloudflare.com/api/github/issues/app/sync",
+        AGENTIC_SMOKE_BASE_URL: "https://occasion-translations-cover-vids.trycloudflare.com",
+        AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE: "disabled_manually",
+        DATABASE_URL: "",
+        AGENTIC_ACCESS_KEY: "",
+        AGENTIC_GITHUB_APP_ID: "",
+        AGENTIC_GITHUB_APP_INSTALLATION_ID: "",
+        AGENTIC_GITHUB_APP_PRIVATE_KEY: "",
+        AGENTIC_GITHUB_APP_SYNC_SECRET: "",
+        AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "",
+        AGENTIC_RENDER_SERVICES_JSON: "null",
+        AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON: JSON.stringify({
+          valid: false,
+          errors: [{ error: "need_payment_info", path: "services[0]" }]
+        }),
+        AGENTIC_DEPLOYMENT_SMOKE_JSON: "",
+        AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: "",
+        AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: ""
+      }),
+      releaseCloseoutEvidence: PASSING_RELEASE_CLOSEOUT_EVIDENCE
+    });
+    const plan = buildGitHubIssueSyncRemediationPlan(report);
+
+    expect(plan.ok).toBe(false);
+    expect(plan.generatedFrom).toEqual({
+      checkedIssues: 7,
+      failedCriteria: report.summary.failedCriteria
+    });
+    expect(plan.commands).toEqual([
+      "npm run github:app-sync:preflight:collect -- --json",
+      "npm run github:issues:completion-audit -- --remediation-plan",
+      "npm run github:issues:completion-audit -- --json",
+      "npm run release:closeout:evidence -- --json"
+    ]);
+
+    const stableIngress = plan.items.find((item) => item.issue === 141);
+    expect(stableIngress).toEqual(
+      expect.objectContaining({
+        blocked: true,
+        open: true,
+        failedChecks: expect.arrayContaining(["stable_host", "provider_services", "provider_configuration", "deployment_smoke"]),
+        actions: expect.arrayContaining([
+          "Replace the temporary tunnel URL with a stable public HTTPS deployment origin for `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL`.",
+          "Provision or sync deployed Agentic web and worker services, or provide alternate provider evidence JSON for the selected target.",
+          "Run `npm run test:smoke:deployment` against the stable origin and export passing JSON as `AGENTIC_DEPLOYMENT_SMOKE_JSON`."
+        ]),
+        validation: expect.arrayContaining([
+          "npm run github:app-sync:preflight:collect -- --json",
+          "npm run test:smoke:deployment",
+          "npm run github:issues:completion-audit -- --json"
+        ])
+      })
+    );
+
+    const runtimeConfig = plan.items.find((item) => item.issue === 142);
+    expect(runtimeConfig).toEqual(
+      expect.objectContaining({
+        blocked: true,
+        open: true,
+        failedChecks: expect.arrayContaining(["workflow_state", "runtime_secret_inventory", "repository_allowlist"]),
+        actions: expect.arrayContaining([
+          "Re-enable the GitHub App Issue Sync workflow only after stable deployment and runtime proof are ready.",
+          "Configure provider runtime variables for database access, runtime access key, GitHub App credentials, sync secret, and repository allowlist.",
+          "Set `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=leonardwongly/agentic` in the provider runtime."
+        ])
+      })
+    );
+
+    const roadmap = plan.items.find((item) => item.issue === 152);
+    expect(roadmap).toEqual(
+      expect.objectContaining({
+        actions: expect.arrayContaining([
+          "Resolve production proof child issues #141-#145 and rerun the completion audit before closing #152."
+        ])
+      })
+    );
+    expect(JSON.stringify(plan)).not.toContain("-----BEGIN RSA PRIVATE KEY-----");
+    expect(JSON.stringify(plan)).not.toContain("runtime-access-key");
   });
 
   it("keeps roadmap closeout blocked while any production proof child gate fails", () => {
