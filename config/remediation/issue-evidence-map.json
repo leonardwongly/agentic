@@ -210,17 +210,32 @@
           {
             "kind": "github_issue",
             "ref": "#141",
-            "note": "Stable provider target and HTTPS ingress remain blocked externally."
+            "note": "Stable provider target and HTTPS ingress remain blocked externally; latest blocker refresh is issue comment 4503659677."
+          },
+          {
+            "kind": "github_issue",
+            "ref": "#142",
+            "note": "Runtime GitHub App config, stable repo sync URL, active workflow, and deployed fail-closed auth proof remain blocked; latest blocker refresh is issue comment 4503661352."
+          },
+          {
+            "kind": "github_issue",
+            "ref": "#143",
+            "note": "Target Postgres, db:migrate, db:status --require-ready, and shared-auth readiness proof remain blocked; latest blocker refresh is issue comment 4503661364."
+          },
+          {
+            "kind": "github_issue",
+            "ref": "#144",
+            "note": "Deployed worker service, shared durable state, and job claim/settlement proof remain blocked; latest blocker refresh is issue comment 4503661357."
           },
           {
             "kind": "github_issue",
             "ref": "#145",
-            "note": "Merged preflight currently fails because the sync URL is temporary, the workflow is disabled, Render services are absent, and Blueprint validation returns need_payment_info."
+            "note": "Merged preflight currently fails because the sync URL is temporary, the workflow is disabled, Render services are absent, and Blueprint validation returns need_payment_info; latest blocker refresh is issue comment 4503653561."
           },
           {
             "kind": "github_issue",
             "ref": "#152",
-            "note": "Latest roadmap evidence refresh at issue comment 4503450287 records PRs #894 through #898 and confirms the remaining GitHub issue sync proof is blocked only by external deployment/runtime prerequisites."
+            "note": "Latest roadmap evidence refresh at issue comment 4503654967 records current origin/main, focused route/sync/preflight tests, release/remediation validation, and remaining external deployment/runtime prerequisites."
           }
         ]
       },

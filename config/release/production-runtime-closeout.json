@@ -589,6 +589,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503457603",
           "status": "blocked",
           "note": "Read-only alternate-target inventory found no existing Vercel or Netlify Agentic deployment; Render remains the only repo-prepared target path."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503659677",
+          "status": "blocked",
+          "note": "Post-PR #899 stable-ingress refresh confirms the sync URL is still temporary, no stable deployed origin is configured, Render services are absent, and Blueprint validation is still blocked by need_payment_info."
         }
       ],
       "blockerIssues": [141, 142],
@@ -604,6 +610,12 @@
           "ref": "#143",
           "status": "blocked",
           "note": "Target Postgres is not available while provider creation is blocked."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/143#issuecomment-4503661364",
+          "status": "blocked",
+          "note": "Post-PR #899 Postgres/shared-auth refresh confirms DATABASE_URL and AGENTIC_ACCESS_KEY are unavailable in live proof and no target database exists for migration or status checks."
         }
       ],
       "blockerIssues": [141, 143],
@@ -619,6 +631,12 @@
           "ref": "#141",
           "status": "blocked",
           "note": "No stable target exists for external smoke validation."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503659677",
+          "status": "blocked",
+          "note": "Post-PR #899 stable-ingress refresh confirms no stable deployed origin exists for health/readiness smoke proof."
         }
       ],
       "blockerIssues": [141, 142],
@@ -634,6 +652,12 @@
           "ref": "#144",
           "status": "blocked",
           "note": "Deployed worker durability is not available until the target web and worker processes exist."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/144#issuecomment-4503661357",
+          "status": "blocked",
+          "note": "Post-PR #899 deployed-worker refresh confirms Render services are absent and no deployed worker can claim, complete, or safely fail a github_issue_intake job yet."
         }
       ],
       "blockerIssues": [141, 144],
@@ -673,6 +697,24 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4503450287",
           "status": "blocked",
           "note": "Latest roadmap evidence refresh links PRs #894 through #898, current origin/main CI, local validation, live preflight blockers, and remaining external setup requirements."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/142#issuecomment-4503661352",
+          "status": "blocked",
+          "note": "Post-PR #899 runtime-config refresh confirms the stable sync URL, active workflow, provider runtime config names, and live fail-closed auth proof are still missing."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/145#issuecomment-4503653561",
+          "status": "blocked",
+          "note": "Post-PR #899 live-sync refresh records the focused route/sync/preflight tests, release/remediation validation, and current live preflight failures before manual dispatch."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4503654967",
+          "status": "blocked",
+          "note": "Post-PR #899 completion audit maps the current repo-side green state to remaining live deployment/runtime acceptance criteria across #141 through #145."
         }
       ],
       "blockerIssues": [141, 142, 143, 144, 145],
