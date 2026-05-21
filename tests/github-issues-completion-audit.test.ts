@@ -5,6 +5,7 @@ import {
   type GitHubIssueSyncCompletionIssueState
 } from "../scripts/lib/github-issues-completion-audit";
 import type { GitHubAppSyncLivePreflightCollectionReport } from "../scripts/lib/github-app-sync-live-preflight-collector";
+import type { ReleaseCloseoutEvidenceReport } from "../scripts/lib/release-closeout-evidence";
 
 const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nredacted\\n-----END RSA PRIVATE KEY-----";
 
@@ -58,6 +59,35 @@ const CLOSED_ISSUES: GitHubIssueSyncCompletionIssueState[] = [
   { number: 152, state: "CLOSED", title: "Close roadmap" }
 ];
 
+const PASSING_RELEASE_CLOSEOUT_EVIDENCE: ReleaseCloseoutEvidenceReport = {
+  ok: true,
+  summary: {
+    pullRequests: 37,
+    trackedIssues: 16,
+    validationGates: 8,
+    blockedValidationGates: 7,
+    residualRisks: 3
+  },
+  issues: []
+};
+
+const FAILING_RELEASE_CLOSEOUT_EVIDENCE: ReleaseCloseoutEvidenceReport = {
+  ok: false,
+  summary: {
+    pullRequests: 37,
+    trackedIssues: 16,
+    validationGates: 7,
+    blockedValidationGates: 6,
+    residualRisks: 3
+  },
+  issues: [
+    {
+      path: "validationGates",
+      message: "Required validation gate 'github-app-sync-preflight' is missing."
+    }
+  ]
+};
+
 function collection(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCollectionReport {
   const preflight = validateGitHubAppSyncLivePreflight(env);
 
@@ -72,7 +102,8 @@ describe("GitHub issue-sync completion audit", () => {
   it("passes only when tracked issues are closed and live preflight gates pass", () => {
     const report = buildGitHubIssueSyncCompletionAudit({
       issues: CLOSED_ISSUES,
-      preflight: collection(BASE_ENV)
+      preflight: collection(BASE_ENV),
+      releaseCloseoutEvidence: PASSING_RELEASE_CLOSEOUT_EVIDENCE
     });
 
     expect(report.ok).toBe(true);
@@ -109,7 +140,8 @@ describe("GitHub issue-sync completion audit", () => {
         AGENTIC_DEPLOYMENT_SMOKE_JSON: "",
         AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: "",
         AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: ""
-      })
+      }),
+      releaseCloseoutEvidence: PASSING_RELEASE_CLOSEOUT_EVIDENCE
     });
 
     expect(report.ok).toBe(false);
@@ -153,7 +185,8 @@ describe("GitHub issue-sync completion audit", () => {
       preflight: collection({
         ...BASE_ENV,
         AGENTIC_RENDER_SERVICES_JSON: "null"
-      })
+      }),
+      releaseCloseoutEvidence: PASSING_RELEASE_CLOSEOUT_EVIDENCE
     });
 
     expect(report.ok).toBe(false);
@@ -175,7 +208,8 @@ describe("GitHub issue-sync completion audit", () => {
         AGENTIC_DEPLOYMENT_SMOKE_JSON: "",
         AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: "",
         AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: ""
-      })
+      }),
+      releaseCloseoutEvidence: PASSING_RELEASE_CLOSEOUT_EVIDENCE
     });
 
     expect(report.ok).toBe(false);
@@ -211,7 +245,8 @@ describe("GitHub issue-sync completion audit", () => {
   it("keeps roadmap closeout blocked while any production proof child issue remains open", () => {
     const report = buildGitHubIssueSyncCompletionAudit({
       issues: CLOSED_ISSUES.map((issue) => (issue.number === 145 ? { ...issue, state: "OPEN" } : issue)),
-      preflight: collection(BASE_ENV)
+      preflight: collection(BASE_ENV),
+      releaseCloseoutEvidence: PASSING_RELEASE_CLOSEOUT_EVIDENCE
     });
 
     expect(report.ok).toBe(false);
@@ -228,7 +263,8 @@ describe("GitHub issue-sync completion audit", () => {
   it("keeps completion blocked when the release evidence package issue is open", () => {
     const report = buildGitHubIssueSyncCompletionAudit({
       issues: CLOSED_ISSUES.map((issue) => (issue.number === 146 ? { ...issue, state: "OPEN" } : issue)),
-      preflight: collection(BASE_ENV)
+      preflight: collection(BASE_ENV),
+      releaseCloseoutEvidence: PASSING_RELEASE_CLOSEOUT_EVIDENCE
     });
 
     expect(report.ok).toBe(false);
@@ -244,7 +280,33 @@ describe("GitHub issue-sync completion audit", () => {
         issue: 146,
         status: "fail",
         requirement: "Release closeout evidence package is complete before roadmap closeout.",
-        evidence: ["#146 OPEN: release closeout evidence package is not closed."]
+        evidence: expect.arrayContaining([
+          "#146 OPEN: release closeout evidence package is not closed.",
+          "Release closeout evidence manifest passed with 8 validation gates."
+        ])
+      })
+    );
+  });
+
+  it("keeps completion blocked when the release closeout manifest verifier fails", () => {
+    const report = buildGitHubIssueSyncCompletionAudit({
+      issues: CLOSED_ISSUES,
+      preflight: collection(BASE_ENV),
+      releaseCloseoutEvidence: FAILING_RELEASE_CLOSEOUT_EVIDENCE
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.releaseCloseoutEvidence.ok).toBe(false);
+    expect(report.criteria).toContainEqual(
+      expect.objectContaining({
+        issue: 146,
+        status: "fail",
+        requirement: "Release closeout evidence package is complete before roadmap closeout.",
+        evidence: expect.arrayContaining([
+          "#146 release closeout evidence issue is closed.",
+          "Release closeout evidence manifest failed with 1 issue(s).",
+          "validationGates: Required validation gate 'github-app-sync-preflight' is missing."
+        ])
       })
     );
   });
@@ -252,7 +314,8 @@ describe("GitHub issue-sync completion audit", () => {
   it("fails closed when a tracked issue state is missing from collection", () => {
     const report = buildGitHubIssueSyncCompletionAudit({
       issues: CLOSED_ISSUES.filter((issue) => issue.number !== 145),
-      preflight: collection(BASE_ENV)
+      preflight: collection(BASE_ENV),
+      releaseCloseoutEvidence: PASSING_RELEASE_CLOSEOUT_EVIDENCE
     });
 
     expect(report.ok).toBe(false);

@@ -169,11 +169,12 @@ npm run github:issues:completion-audit -- --json
 ```
 
 The audit is read-only. It collects the live states for #141, #142, #143,
-#144, #145, and #152 with `gh issue view`, collects the existing live preflight
-evidence, and exits non-zero until every tracked issue is closed and every
-mapped production proof gate passes. Do not close #152 from local tests, PR
-status, or operator intent alone; the completion audit must pass against the
-actual target.
+#144, #145, #146, and #152 with `gh issue view`, validates the release closeout
+evidence manifest, collects the existing live preflight evidence, and exits
+non-zero until every tracked issue is closed and every mapped production proof
+gate passes. Do not close #152 from local tests, PR status, a closed release
+issue, or operator intent alone; the completion audit must pass against the
+actual target and the checked-in release evidence package.
 
 The ordered closeout sequence is:
 
@@ -184,6 +185,7 @@ The ordered closeout sequence is:
 | #143 | Target Postgres exists, migrations apply idempotently, schema readiness passes, shared-auth state is required, and deployed readiness proves Postgres-backed state. | `npm run db:migrate`, `npm run db:status -- --require-ready`, `npm run production:bootstrap:check`, `npm run test:smoke:deployment` |
 | #144 | Deployed worker is running against the same durable store as web/API, worker heartbeat is fresh, and a harmless job reaches completed or sanitized failed state without secret leakage. | provider worker logs, `/api/ready`, `npm run test:smoke:deployment-async`, job status evidence |
 | #145 | Manual GitHub App issue sync reaches the stable deployed route, returns `202` for valid auth, returns `401` for invalid auth, skips pull requests, handles duplicate dispatch safely, and the worker settles queued `github_issue_intake` jobs. | `gh workflow run github-app-issue-sync.yml --repo leonardwongly/agentic`, `gh run view <run-id> --repo leonardwongly/agentic --json status,conclusion,jobs,url`, `npm run test:smoke:github-app-sync` |
+| #146 | Rollout, rollback, disablement, secret rotation, residual risk, and observability evidence are captured and the manifest verifier passes. | `npm run release:closeout:evidence -- --json`, `npm run github:issues:completion-audit -- --json` |
 | #152 | All child production proof issues are closed and the live completion audit passes. | `npm run github:issues:completion-audit -- --json` |
 
 The completion audit requires redacted JSON evidence from the live smoke

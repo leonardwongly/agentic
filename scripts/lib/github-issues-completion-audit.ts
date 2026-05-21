@@ -1,5 +1,6 @@
 import type { GitHubAppSyncLivePreflightCheck } from "./github-app-sync-live-preflight";
 import type { GitHubAppSyncLivePreflightCollectionReport } from "./github-app-sync-live-preflight-collector";
+import type { ReleaseCloseoutEvidenceReport } from "./release-closeout-evidence";
 
 export type GitHubIssueSyncCompletionIssueNumber = 141 | 142 | 143 | 144 | 145 | 146 | 152;
 
@@ -21,6 +22,7 @@ export type GitHubIssueSyncCompletionAuditCriterion = {
 export type GitHubIssueSyncCompletionAuditReport = {
   ok: boolean;
   issues: GitHubIssueSyncCompletionIssueState[];
+  releaseCloseoutEvidence: ReleaseCloseoutEvidenceReport;
   criteria: GitHubIssueSyncCompletionAuditCriterion[];
   summary: {
     checkedIssues: number;
@@ -118,6 +120,7 @@ function issueStateCriterion(
 function preflightCriterion(
   issues: GitHubIssueSyncCompletionIssueState[],
   preflight: GitHubAppSyncLivePreflightCollectionReport,
+  releaseCloseoutEvidence: ReleaseCloseoutEvidenceReport,
   issueNumber: GitHubIssueSyncCompletionIssueNumber
 ): GitHubIssueSyncCompletionAuditCriterion {
   const requiredChecks = ISSUE_PREFLIGHT_CHECKS[issueNumber];
@@ -129,12 +132,17 @@ function preflightCriterion(
 
       return {
         issue: issueNumber,
-        status: state === "CLOSED" || state === "MERGED" ? "pass" : "fail",
+        status: (state === "CLOSED" || state === "MERGED") && releaseCloseoutEvidence.ok ? "pass" : "fail",
         requirement: "Release closeout evidence package is complete before roadmap closeout.",
-        evidence:
+        evidence: [
           state === "CLOSED" || state === "MERGED"
-            ? ["#146 release closeout evidence package is closed."]
-            : [`#146 ${state || "MISSING"}: release closeout evidence package is not closed.`]
+            ? "#146 release closeout evidence issue is closed."
+            : `#146 ${state || "MISSING"}: release closeout evidence package is not closed.`,
+          releaseCloseoutEvidence.ok
+            ? `Release closeout evidence manifest passed with ${releaseCloseoutEvidence.summary.validationGates} validation gates.`
+            : `Release closeout evidence manifest failed with ${releaseCloseoutEvidence.issues.length} issue(s).`,
+          ...releaseCloseoutEvidence.issues.slice(0, 5).map((validationIssue) => `${validationIssue.path}: ${validationIssue.message}`)
+        ]
       };
     }
 
@@ -197,10 +205,11 @@ function preflightCriterion(
 export function buildGitHubIssueSyncCompletionAudit(params: {
   issues: GitHubIssueSyncCompletionIssueState[];
   preflight: GitHubAppSyncLivePreflightCollectionReport;
+  releaseCloseoutEvidence: ReleaseCloseoutEvidenceReport;
 }): GitHubIssueSyncCompletionAuditReport {
   const criteria = TRACKED_ISSUES.flatMap((issue) => [
     issueStateCriterion(params.issues, issue),
-    preflightCriterion(params.issues, params.preflight, issue)
+    preflightCriterion(params.issues, params.preflight, params.releaseCloseoutEvidence, issue)
   ]);
   const failedCriteria = criteria.filter((criterion) => criterion.status === "fail").length;
   const passedCriteria = criteria.length - failedCriteria;
@@ -208,6 +217,7 @@ export function buildGitHubIssueSyncCompletionAudit(params: {
   return {
     ok: failedCriteria === 0,
     issues: params.issues,
+    releaseCloseoutEvidence: params.releaseCloseoutEvidence,
     criteria,
     summary: {
       checkedIssues: TRACKED_ISSUES.length,

@@ -6,6 +6,11 @@ import {
   type GitHubIssueSyncCompletionIssueState
 } from "./lib/github-issues-completion-audit";
 import { collectGitHubAppSyncLivePreflight } from "./lib/github-app-sync-live-preflight-collector";
+import {
+  DEFAULT_RELEASE_CLOSEOUT_EVIDENCE_PATH,
+  readReleaseCloseoutEvidenceManifest,
+  validateReleaseCloseoutEvidenceManifest
+} from "./lib/release-closeout-evidence";
 
 type CommandResult = {
   stdout: string;
@@ -107,7 +112,11 @@ function printHumanSummary(report: GitHubIssueSyncCompletionAuditReport) {
 async function main() {
   const json = process.argv.includes("--json");
   const [issues, preflight] = await Promise.all([collectIssueStates(), collectGitHubAppSyncLivePreflight(process.env)]);
-  const report = buildGitHubIssueSyncCompletionAudit({ issues, preflight });
+  const releaseCloseoutEvidence = validateReleaseCloseoutEvidenceManifest(
+    readReleaseCloseoutEvidenceManifest(DEFAULT_RELEASE_CLOSEOUT_EVIDENCE_PATH),
+    { cwd: process.cwd() }
+  );
+  const report = buildGitHubIssueSyncCompletionAudit({ issues, preflight, releaseCloseoutEvidence });
 
   if (json) {
     console.log(JSON.stringify(report, null, 2));
