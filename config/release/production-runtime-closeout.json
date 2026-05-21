@@ -627,6 +627,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503659677",
           "status": "blocked",
           "note": "Post-PR #899 stable-ingress refresh confirms the sync URL is still temporary, no stable deployed origin is configured, Render services are absent, and Blueprint validation is still blocked by need_payment_info."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503962701",
+          "status": "blocked",
+          "note": "Post-PR #901 stable-ingress refresh confirms the same external blockers with current origin/main, release/remediation validators, and live preflight collection."
         }
       ],
       "blockerIssues": [141, 142],
@@ -648,6 +654,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/143#issuecomment-4503661364",
           "status": "blocked",
           "note": "Post-PR #899 Postgres/shared-auth refresh confirms DATABASE_URL and AGENTIC_ACCESS_KEY are unavailable in live proof and no target database exists for migration or status checks."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/143#issuecomment-4503964192",
+          "status": "blocked",
+          "note": "Post-PR #901 Postgres/shared-auth refresh confirms no target database exists for db:migrate, db:status --require-ready, health, or readiness proof."
         }
       ],
       "blockerIssues": [141, 143],
@@ -669,6 +681,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503659677",
           "status": "blocked",
           "note": "Post-PR #899 stable-ingress refresh confirms no stable deployed origin exists for health/readiness smoke proof."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503962701",
+          "status": "blocked",
+          "note": "Post-PR #901 stable-ingress refresh confirms no deployed health/readiness target exists because Render services are absent and Blueprint validation remains blocked."
         }
       ],
       "blockerIssues": [141, 142],
@@ -690,6 +708,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/144#issuecomment-4503661357",
           "status": "blocked",
           "note": "Post-PR #899 deployed-worker refresh confirms Render services are absent and no deployed worker can claim, complete, or safely fail a github_issue_intake job yet."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/144#issuecomment-4503965002",
+          "status": "blocked",
+          "note": "Post-PR #901 deployed-worker refresh confirms no deployed worker service, shared durable state, or live job settlement proof is available yet."
         }
       ],
       "blockerIssues": [141, 144],
@@ -747,6 +771,24 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4503654967",
           "status": "blocked",
           "note": "Post-PR #899 completion audit maps the current repo-side green state to remaining live deployment/runtime acceptance criteria across #141 through #145."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/142#issuecomment-4503963483",
+          "status": "blocked",
+          "note": "Post-PR #901 runtime-config refresh confirms the stable sync URL, active workflow, provider runtime config names, smoke key, and live fail-closed auth proof are still missing."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/145#issuecomment-4503965733",
+          "status": "blocked",
+          "note": "Post-PR #901 live-sync refresh records current live preflight failures before any workflow re-enable or manual dispatch."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4503966874",
+          "status": "blocked",
+          "note": "Post-PR #901 roadmap refresh records current origin/main, latest evidence package counts, live preflight collection, and remaining external deployment/runtime blockers."
         }
       ],
       "blockerIssues": [141, 142, 143, 144, 145],

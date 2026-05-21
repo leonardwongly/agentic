@@ -210,32 +210,32 @@
           {
             "kind": "github_issue",
             "ref": "#141",
-            "note": "Stable provider target and HTTPS ingress remain blocked externally; latest blocker refresh is issue comment 4503659677."
+            "note": "Stable provider target and HTTPS ingress remain blocked externally; latest blocker refresh is issue comment 4503962701."
           },
           {
             "kind": "github_issue",
             "ref": "#142",
-            "note": "Runtime GitHub App config, stable repo sync URL, active workflow, and deployed fail-closed auth proof remain blocked; latest blocker refresh is issue comment 4503661352."
+            "note": "Runtime GitHub App config, stable repo sync URL, active workflow, and deployed fail-closed auth proof remain blocked; latest blocker refresh is issue comment 4503963483."
           },
           {
             "kind": "github_issue",
             "ref": "#143",
-            "note": "Target Postgres, db:migrate, db:status --require-ready, and shared-auth readiness proof remain blocked; latest blocker refresh is issue comment 4503661364."
+            "note": "Target Postgres, db:migrate, db:status --require-ready, and shared-auth readiness proof remain blocked; latest blocker refresh is issue comment 4503964192."
           },
           {
             "kind": "github_issue",
             "ref": "#144",
-            "note": "Deployed worker service, shared durable state, and job claim/settlement proof remain blocked; latest blocker refresh is issue comment 4503661357."
+            "note": "Deployed worker service, shared durable state, and job claim/settlement proof remain blocked; latest blocker refresh is issue comment 4503965002."
           },
           {
             "kind": "github_issue",
             "ref": "#145",
-            "note": "Merged preflight currently fails because the sync URL is temporary, the workflow is disabled, Render services are absent, and Blueprint validation returns need_payment_info; latest blocker refresh is issue comment 4503653561."
+            "note": "Merged preflight currently fails because the sync URL is temporary, the workflow is disabled, Render services are absent, and Blueprint validation returns need_payment_info; latest blocker refresh is issue comment 4503965733."
           },
           {
             "kind": "github_issue",
             "ref": "#152",
-            "note": "Latest roadmap evidence refresh at issue comment 4503654967 records current origin/main, focused route/sync/preflight tests, release/remediation validation, and remaining external deployment/runtime prerequisites."
+            "note": "Latest roadmap evidence refresh at issue comment 4503966874 records current origin/main, release/remediation validation, live preflight collection, and remaining external deployment/runtime prerequisites."
           }
         ]
       },

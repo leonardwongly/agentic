@@ -136,17 +136,17 @@ describe("release closeout evidence", () => {
         }),
         expect.objectContaining({
           kind: "github_issue",
-          ref: "https://github.com/leonardwongly/agentic/issues/142#issuecomment-4503661352",
+          ref: "https://github.com/leonardwongly/agentic/issues/142#issuecomment-4503963483",
           status: "blocked"
         }),
         expect.objectContaining({
           kind: "github_issue",
-          ref: "https://github.com/leonardwongly/agentic/issues/145#issuecomment-4503653561",
+          ref: "https://github.com/leonardwongly/agentic/issues/145#issuecomment-4503965733",
           status: "blocked"
         }),
         expect.objectContaining({
           kind: "github_issue",
-          ref: "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4503654967",
+          ref: "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4503966874",
           status: "blocked"
         })
       ])
@@ -263,7 +263,7 @@ describe("release closeout evidence", () => {
         }),
         expect.objectContaining({
           kind: "github_issue",
-          ref: "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503659677",
+          ref: "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503962701",
           status: "blocked"
         })
       ])
