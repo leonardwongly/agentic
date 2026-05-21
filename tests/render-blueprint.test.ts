@@ -88,4 +88,15 @@ describe("Render Blueprint deployment target", () => {
     expect(runbook).toContain("render services list --output json");
     expect(runbook).not.toContain("render services --output json");
   });
+
+  it("documents that free-tier rewrites are not production waivers for the worker topology", () => {
+    const runbook = readDeploymentRunbook();
+
+    expect(runbook).toContain("Do not treat a free-tier Blueprint rewrite as a production waiver");
+    expect(runbook).toContain("not for");
+    expect(runbook).toContain("background workers");
+    expect(runbook).toContain("services[1]");
+    expect(runbook).toContain("need_payment_info");
+    expect(runbook).toContain("preDeployCommand");
+  });
 });

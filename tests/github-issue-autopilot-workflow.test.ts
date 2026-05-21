@@ -105,5 +105,9 @@ describe("GitHub issue autopilot workflow", () => {
     expect(runbook).toContain("| #152 | All child production proof issues are closed");
     expect(runbook).toContain("Do not enable scheduled sync or run a");
     expect(runbook).toContain("live manual dispatch before #141 stable ingress");
+    expect(runbook).toContain("Do not waive `need_payment_info` by rewriting the production Blueprint");
+    expect(runbook).toContain("does not allow the");
+    expect(runbook).toContain("`free` plan for background workers");
+    expect(runbook).toContain("equivalent web, worker, Postgres, HTTPS ingress");
   });
 });
