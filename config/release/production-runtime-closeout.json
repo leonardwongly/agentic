@@ -422,6 +422,24 @@
         "npm test -- tests/github-issue-webhook-route.test.ts tests/github-app-issue-sync-route.test.ts tests/github-issue-job-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts tests/github-app-sync-live-preflight-collector.test.ts"
       ],
       "hostedStatus": "PR #903 and post-merge main CI passed; merge commit 75b13ba5caad67e9f412c9c966b7a18dc7617be3, CI https://github.com/leonardwongly/agentic/actions/runs/26202597305."
+    },
+    {
+      "number": 904,
+      "title": "test(release): refresh post-merge blocker evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/904",
+      "status": "merged",
+      "localValidation": [
+        "npm ci --include=dev",
+        "npm test -- tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run remediation:evidence-map -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json",
+        "npm run github:app-sync:preflight:collect -- --json"
+      ],
+      "hostedStatus": "PR #904 and post-merge main CI passed; merge commit 9bfdb8f89ce0e3a10a1cb80017057f0bd336a88b, CI https://github.com/leonardwongly/agentic/actions/runs/26203705829."
     }
   ],
   "trackedIssues": [
@@ -702,6 +720,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4504440830",
           "status": "blocked",
           "note": "Post-PR #903 correction reopens the stable-ingress issue after GitHub keyword parsing closed it even though stable ingress proof remains unavailable."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4504609146",
+          "status": "blocked",
+          "note": "Post-PR #904 stable-ingress refresh confirms the sync URL remains temporary, no stable smoke origin is configured, Render services are absent, Blueprint validation is still blocked by need_payment_info, and no deployed health/readiness proof exists."
         }
       ],
       "blockerIssues": [141, 142],
@@ -729,6 +753,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/143#issuecomment-4503964192",
           "status": "blocked",
           "note": "Post-PR #901 Postgres/shared-auth refresh confirms no target database exists for db:migrate, db:status --require-ready, health, or readiness proof."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/143#issuecomment-4504612149",
+          "status": "blocked",
+          "note": "Post-PR #904 Postgres/shared-auth refresh confirms DATABASE_URL and AGENTIC_ACCESS_KEY remain unavailable in live proof and no target database exists for migration, status, health, or readiness proof."
         }
       ],
       "blockerIssues": [141, 143],
@@ -756,6 +786,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503962701",
           "status": "blocked",
           "note": "Post-PR #901 stable-ingress refresh confirms no deployed health/readiness target exists because Render services are absent and Blueprint validation remains blocked."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4504609146",
+          "status": "blocked",
+          "note": "Post-PR #904 stable-ingress refresh confirms no deployed health/readiness target exists because the sync URL is still temporary, no stable smoke origin is configured, Render services are absent, and Blueprint validation remains blocked."
         }
       ],
       "blockerIssues": [141, 142],
@@ -783,6 +819,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/144#issuecomment-4503965002",
           "status": "blocked",
           "note": "Post-PR #901 deployed-worker refresh confirms no deployed worker service, shared durable state, or live job settlement proof is available yet."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/144#issuecomment-4504613320",
+          "status": "blocked",
+          "note": "Post-PR #904 deployed-worker refresh confirms Render services remain absent, DATABASE_URL is missing from live proof, no stable deployed origin exists, and no github_issue_intake job can be settled by a deployed worker."
         }
       ],
       "blockerIssues": [141, 144],
@@ -860,6 +902,24 @@
           "note": "Post-PR #901 roadmap refresh records current origin/main, latest evidence package counts, live preflight collection, and remaining external deployment/runtime blockers."
         },
         {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/142#issuecomment-4504610449",
+          "status": "blocked",
+          "note": "Post-PR #904 runtime-config refresh confirms the stable sync URL, active workflow, provider runtime config names, smoke key, allowlist, and live fail-closed auth proof are still missing."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/145#issuecomment-4504614955",
+          "status": "blocked",
+          "note": "Post-PR #904 live-sync refresh records current live preflight failures before any workflow enablement or manual dispatch."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4504616601",
+          "status": "blocked",
+          "note": "Post-PR #904 roadmap refresh records current origin/main, latest evidence package counts, live preflight collection, and remaining external deployment/runtime blockers."
+        },
+        {
           "kind": "runtime_blocker",
           "ref": "2026-05-21T02:29Z github:app-sync:preflight:collect",
           "status": "blocked",
@@ -870,6 +930,12 @@
           "ref": "2026-05-21T03:10Z github:app-sync:preflight:collect",
           "status": "blocked",
           "note": "Post-PR #903 clean origin/main preflight still fails on temporary sync host, missing deployed origin, disabled workflow, missing runtime config names, missing smoke key and allowlist, absent Render services, and Render need_payment_info."
+        },
+        {
+          "kind": "runtime_blocker",
+          "ref": "2026-05-21T03:51Z github:app-sync:preflight:collect",
+          "status": "blocked",
+          "note": "Post-PR #904 clean origin/main preflight still fails on temporary sync host, missing deployed origin, disabled workflow, missing runtime config names, missing smoke key and allowlist, absent Render services, and Render need_payment_info."
         }
       ],
       "blockerIssues": [141, 142, 143, 144, 145],
@@ -918,6 +984,12 @@
           "ref": "https://github.com/leonardwongly/agentic/actions/runs/26202597305",
           "status": "passed",
           "note": "Post-merge main CI passed after PR #903 on origin/main 75b13ba, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26203705829",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #904 on origin/main 9bfdb8f, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
         }
       ],
       "notes": "Run on implementation branches before PR review; hosted CI remains the merge gate when available."
