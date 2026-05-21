@@ -327,6 +327,38 @@
         "git diff --check"
       ],
       "hostedStatus": "PR #898 and post-merge main CI passed; merge commit de2d03df35053056a63e95330f04b4207e71d841."
+    },
+    {
+      "number": 899,
+      "title": "test(release): refresh github issue sync closeout evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/899",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run remediation:evidence-map -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #899 and post-merge main CI passed; merge commit 03e76957d2a6bd45b98dd20a3d10ed6a74e33c5a."
+    },
+    {
+      "number": 900,
+      "title": "test(release): align blocker evidence refresh",
+      "url": "https://github.com/leonardwongly/agentic/pull/900",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run remediation:evidence-map -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #900 and post-merge main CI passed; merge commit bdee73da92e483a30edc2b16cd6086b8f039eaa9."
     }
   ],
   "trackedIssues": [
