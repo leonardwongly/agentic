@@ -104,6 +104,10 @@ describe("remediation evidence map", () => {
         expect.objectContaining({
           kind: "github_pr",
           ref: "https://github.com/leonardwongly/agentic/pull/903"
+        }),
+        expect.objectContaining({
+          kind: "github_pr",
+          ref: "https://github.com/leonardwongly/agentic/pull/904"
         })
       ])
     );
@@ -146,6 +150,10 @@ describe("remediation evidence map", () => {
         }),
         expect.objectContaining({
           kind: "ci",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26203705829"
+        }),
+        expect.objectContaining({
+          kind: "ci",
           ref: "github:app-sync:preflight:collect 2026-05-21T02:29Z"
         }),
         expect.objectContaining({
@@ -153,9 +161,38 @@ describe("remediation evidence map", () => {
           ref: "github:app-sync:preflight:collect 2026-05-21T03:10Z"
         }),
         expect.objectContaining({
+          kind: "ci",
+          ref: "github:app-sync:preflight:collect 2026-05-21T03:51Z"
+        }),
+        expect.objectContaining({
           kind: "github_issue",
           ref: "#141",
-          note: expect.stringContaining("reopened")
+          note: expect.stringContaining("4504609146")
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#142",
+          note: expect.stringContaining("4504610449")
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#143",
+          note: expect.stringContaining("4504612149")
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#144",
+          note: expect.stringContaining("4504613320")
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#145",
+          note: expect.stringContaining("4504614955")
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#152",
+          note: expect.stringContaining("4504616601")
         })
       ])
     );

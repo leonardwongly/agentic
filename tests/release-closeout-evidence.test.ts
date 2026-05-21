@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 26,
+        pullRequests: 27,
         blockedValidationGates: 6,
         residualRisks: 3
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 26");
+    expect(rendered).toContain("- Pull requests: 27");
     expect(rendered).toContain("- Blocked validation gates: 6");
     expect(rendered).toContain("- Residual risks: 3");
   });
@@ -232,6 +232,11 @@ describe("release closeout evidence", () => {
           number: 903,
           status: "merged",
           url: "https://github.com/leonardwongly/agentic/pull/903"
+        }),
+        expect.objectContaining({
+          number: 904,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/904"
         })
       ])
     );
@@ -245,6 +250,11 @@ describe("release closeout evidence", () => {
         expect.objectContaining({
           kind: "github_action",
           ref: "https://github.com/leonardwongly/agentic/actions/runs/26202597305",
+          status: "passed"
+        }),
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26203705829",
           status: "passed"
         })
       ])
@@ -260,6 +270,11 @@ describe("release closeout evidence", () => {
           kind: "runtime_blocker",
           ref: "2026-05-21T03:10Z github:app-sync:preflight:collect",
           status: "blocked"
+        }),
+        expect.objectContaining({
+          kind: "runtime_blocker",
+          ref: "2026-05-21T03:51Z github:app-sync:preflight:collect",
+          status: "blocked"
         })
       ])
     );
@@ -268,12 +283,72 @@ describe("release closeout evidence", () => {
   it("keeps the reopened stable-ingress blocker correction in the closeout package", () => {
     const manifest = readCheckedInManifest();
     const ingressGate = manifest.validationGates.find((gate) => gate.id === "deploy-ingress-check");
+    const smokeGate = manifest.validationGates.find((gate) => gate.id === "deployment-smoke");
 
     expect(ingressGate?.evidence).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           kind: "github_issue",
           ref: "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4504440830",
+          status: "blocked"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4504609146",
+          status: "blocked"
+        })
+      ])
+    );
+    expect(smokeGate?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4504609146",
+          status: "blocked"
+        })
+      ])
+    );
+  });
+
+  it("keeps the post-PR #904 blocker refresh comments in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+    const dbGate = manifest.validationGates.find((gate) => gate.id === "db-status-require-ready");
+    const asyncGate = manifest.validationGates.find((gate) => gate.id === "deployment-async-canary");
+    const githubSyncPreflight = manifest.validationGates.find((gate) => gate.id === "github-app-sync-preflight");
+
+    expect(dbGate?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/143#issuecomment-4504612149",
+          status: "blocked"
+        })
+      ])
+    );
+    expect(asyncGate?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/144#issuecomment-4504613320",
+          status: "blocked"
+        })
+      ])
+    );
+    expect(githubSyncPreflight?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/142#issuecomment-4504610449",
+          status: "blocked"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/145#issuecomment-4504614955",
+          status: "blocked"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4504616601",
           status: "blocked"
         })
       ])
