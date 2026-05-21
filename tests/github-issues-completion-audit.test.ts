@@ -62,7 +62,7 @@ const CLOSED_ISSUES: GitHubIssueSyncCompletionIssueState[] = [
 const PASSING_RELEASE_CLOSEOUT_EVIDENCE: ReleaseCloseoutEvidenceReport = {
   ok: true,
   summary: {
-    pullRequests: 37,
+    pullRequests: 39,
     trackedIssues: 16,
     validationGates: 8,
     blockedValidationGates: 7,
@@ -74,7 +74,7 @@ const PASSING_RELEASE_CLOSEOUT_EVIDENCE: ReleaseCloseoutEvidenceReport = {
 const FAILING_RELEASE_CLOSEOUT_EVIDENCE: ReleaseCloseoutEvidenceReport = {
   ok: false,
   summary: {
-    pullRequests: 37,
+    pullRequests: 39,
     trackedIssues: 16,
     validationGates: 7,
     blockedValidationGates: 6,

@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 37,
+        pullRequests: 39,
         blockedValidationGates: 7,
         residualRisks: 3
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 37");
+    expect(rendered).toContain("- Pull requests: 39");
     expect(rendered).toContain("- Blocked validation gates: 7");
     expect(rendered).toContain("- Residual risks: 3");
   });
@@ -240,6 +240,40 @@ describe("release closeout evidence", () => {
           number: 917,
           status: "merged",
           url: "https://github.com/leonardwongly/agentic/pull/917"
+        })
+      ])
+    );
+  });
+
+  it("keeps the latest release evidence and completion-audit PRs in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+    const localCiGate = manifest.validationGates.find((gate) => gate.id === "local-ci");
+
+    expect(manifest.pullRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          number: 918,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/918"
+        }),
+        expect.objectContaining({
+          number: 919,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/919"
+        })
+      ])
+    );
+    expect(localCiGate?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26228981246",
+          status: "passed"
+        }),
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26231120574",
+          status: "passed"
         })
       ])
     );

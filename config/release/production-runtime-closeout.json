@@ -594,6 +594,37 @@
         "npm run github:issues:completion-audit -- --json (expected fail-closed on live production blockers)"
       ],
       "hostedStatus": "PR #917 and post-merge main CI passed with Snyk quota/status errors waived; merge commit 6875609d86ef5ce5a21b26af8c250fd438e92cda, PR CI https://github.com/leonardwongly/agentic/actions/runs/26226176015, main CI https://github.com/leonardwongly/agentic/actions/runs/26226985792."
+    },
+    {
+      "number": 918,
+      "title": "test(release): record latest closeout evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/918",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run format:check -- config/release/production-runtime-closeout.json tests/release-closeout-evidence.test.ts",
+        "git diff --check",
+        "npm run typecheck",
+        "npm run github:issues:completion-audit -- --json (expected fail-closed on live production blockers)"
+      ],
+      "hostedStatus": "PR #918 and post-merge main CI passed with Snyk quota/status errors waived; merge commit 2f76cba8386156eb81b9b9c6f180b01a034f84bd, PR CI https://github.com/leonardwongly/agentic/actions/runs/26228102281, main CI https://github.com/leonardwongly/agentic/actions/runs/26228981246."
+    },
+    {
+      "number": 919,
+      "title": "test(github): require release evidence in completion audit",
+      "url": "https://github.com/leonardwongly/agentic/pull/919",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-issues-completion-audit.test.ts tests/release-closeout-evidence.test.ts",
+        "npm test -- tests/github-issues-completion-audit.test.ts tests/github-issue-autopilot-workflow.test.ts tests/release-closeout-evidence.test.ts",
+        "npm run format:check -- scripts/lib/github-issues-completion-audit.ts scripts/github-issues-completion-audit.ts tests/github-issues-completion-audit.test.ts docs/runbooks/github-issue-autopilot.md",
+        "git diff --check",
+        "npm run typecheck",
+        "npm run release:closeout:evidence -- --json",
+        "npm run github:issues:completion-audit -- --json (expected fail-closed on live production blockers)"
+      ],
+      "hostedStatus": "PR #919 and post-merge main CI passed with Snyk quota/status errors waived; merge commit 1675caffdcc925b5000171548d9e95e676009365, PR CI https://github.com/leonardwongly/agentic/actions/runs/26230186773, main CI https://github.com/leonardwongly/agentic/actions/runs/26231120574."
     }
   ],
   "trackedIssues": [
@@ -1231,6 +1262,18 @@
           "ref": "https://github.com/leonardwongly/agentic/actions/runs/26220293641",
           "status": "passed",
           "note": "Post-merge main CI passed after PR #913 on origin/main 0acef86, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26228981246",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #918 on origin/main 2f76cba, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26231120574",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #919 on origin/main 1675caf, after explicit Snyk quota status waiver, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
         }
       ],
       "notes": "Run on implementation branches before PR review; hosted CI remains the merge gate when available."
