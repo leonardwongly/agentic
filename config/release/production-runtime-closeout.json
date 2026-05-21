@@ -404,6 +404,24 @@
         "PR issue-theme-gates passed"
       ],
       "hostedStatus": "PR #877 merged after review of the actions/github-script v9 breaking-change surface; post-merge main CI passed at https://github.com/leonardwongly/agentic/actions/runs/26201318000."
+    },
+    {
+      "number": 903,
+      "title": "test(release): record final github issue blocker audit",
+      "url": "https://github.com/leonardwongly/agentic/pull/903",
+      "status": "merged",
+      "localValidation": [
+        "npm ci --include=dev",
+        "npm test -- tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run remediation:evidence-map -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json",
+        "npm test -- tests/github-issue-webhook-route.test.ts tests/github-app-issue-sync-route.test.ts tests/github-issue-job-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts tests/github-app-sync-live-preflight-collector.test.ts"
+      ],
+      "hostedStatus": "PR #903 and post-merge main CI passed; merge commit 75b13ba5caad67e9f412c9c966b7a18dc7617be3, CI https://github.com/leonardwongly/agentic/actions/runs/26202597305."
     }
   ],
   "trackedIssues": [
@@ -678,6 +696,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4503962701",
           "status": "blocked",
           "note": "Post-PR #901 stable-ingress refresh confirms the same external blockers with current origin/main, release/remediation validators, and live preflight collection."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4504440830",
+          "status": "blocked",
+          "note": "Post-PR #903 correction reopens the stable-ingress issue after GitHub keyword parsing closed it even though stable ingress proof remains unavailable."
         }
       ],
       "blockerIssues": [141, 142],
@@ -840,6 +864,12 @@
           "ref": "2026-05-21T02:29Z github:app-sync:preflight:collect",
           "status": "blocked",
           "note": "Final audit on origin/main dd7a28e still fails live preflight: temporary sync host, missing deployed origin, disabled workflow, missing runtime config names, absent Render services, and Render need_payment_info."
+        },
+        {
+          "kind": "runtime_blocker",
+          "ref": "2026-05-21T03:10Z github:app-sync:preflight:collect",
+          "status": "blocked",
+          "note": "Post-PR #903 clean origin/main preflight still fails on temporary sync host, missing deployed origin, disabled workflow, missing runtime config names, missing smoke key and allowlist, absent Render services, and Render need_payment_info."
         }
       ],
       "blockerIssues": [141, 142, 143, 144, 145],
@@ -882,6 +912,12 @@
           "ref": "https://github.com/leonardwongly/agentic/actions/runs/26201318000",
           "status": "passed",
           "note": "Post-merge main CI passed after PR #877 on origin/main dd7a28e, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26202597305",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #903 on origin/main 75b13ba, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
         }
       ],
       "notes": "Run on implementation branches before PR review; hosted CI remains the merge gate when available."
