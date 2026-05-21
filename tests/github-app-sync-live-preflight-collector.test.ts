@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import {
   collectGitHubAppSyncLivePreflight,
   runGitHubAppSyncLivePreflightCommand,
@@ -85,6 +86,19 @@ const STABLE_OUTPUTS = {
 };
 
 describe("GitHub App sync live preflight collector", () => {
+  it("prints operator help without running GitHub or Render commands", () => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/github-app-sync-live-preflight-collect.ts", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: npm run github:app-sync:preflight:collect -- [--json]");
+    expect(result.stdout).toContain("GitHub App Issue Sync workflow state");
+    expect(result.stdout).toContain("Runtime-only secrets are not fetched");
+    expect(result.stderr).toBe("");
+  });
+
   it("collects read-only GitHub and Render evidence before running preflight", async () => {
     const report = await collectGitHubAppSyncLivePreflight(RUNTIME_ENV, runnerWith(STABLE_OUTPUTS));
 

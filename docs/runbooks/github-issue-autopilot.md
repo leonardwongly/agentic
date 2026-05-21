@@ -110,6 +110,15 @@ still a temporary tunnel, the workflow is not `active`, required runtime config
 names are missing, Render has no deployed web/worker services, or the Blueprint
 still reports provider blockers such as `need_payment_info`.
 
+If you need the exact evidence inputs before exporting anything, use the help
+paths first. They print operator guidance without collecting live GitHub or
+Render evidence:
+
+```bash
+npm run github:app-sync:preflight -- --help
+npm run github:app-sync:preflight:collect -- --help
+```
+
 Use the collector form when the operator shell has authenticated `gh` and
 `render` CLIs. It gathers only read-only inventories and provider validation
 output, then feeds the existing fail-closed preflight. It does not enable the
@@ -165,6 +174,7 @@ shape failures; do not paste secret values into issues or logs.
 Use the completion audit as the final issue-sync closeout gate:
 
 ```bash
+npm run github:issues:completion-audit -- --help
 npm run github:issues:completion-audit -- --json
 ```
 
@@ -193,6 +203,9 @@ commands, not just closed issue state. Capture those outputs after the target is
 approved and deployed, then expose them to the audit as environment variables:
 
 ```bash
+npm run test:smoke:deployment -- --help
+npm run test:smoke:deployment-async -- --help
+npm run test:smoke:github-app-sync -- --help
 export AGENTIC_DEPLOYMENT_SMOKE_JSON="$(npm run --silent test:smoke:deployment)"
 export AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON="$(npm run --silent test:smoke:deployment-async)"
 export AGENTIC_GITHUB_APP_SYNC_CANARY_JSON="$(npm run --silent test:smoke:github-app-sync)"
@@ -277,6 +290,10 @@ Run focused checks after changing this flow:
 npm test -- tests/github-issue-webhook-route.test.ts tests/github-app-issue-sync-route.test.ts tests/github-issue-autopilot-workflow.test.ts tests/worker-runtime.test.ts
 npm test -- tests/github-issue-job-route.test.ts tests/deployment-github-app-sync-canary.test.ts tests/github-app-sync-live-preflight.test.ts tests/github-app-sync-live-preflight-collector.test.ts
 npm run ci:validate-provenance
+npm run github:issues:completion-audit -- --help
+npm run test:smoke:deployment -- --help
+npm run test:smoke:deployment-async -- --help
+npm run test:smoke:github-app-sync -- --help
 npm run github:app-sync:preflight
 npm run github:app-sync:preflight:collect
 npm run build

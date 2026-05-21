@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import { validateGitHubAppSyncLivePreflight } from "../scripts/lib/github-app-sync-live-preflight";
 
 const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nredacted\\n-----END RSA PRIVATE KEY-----";
@@ -47,6 +48,20 @@ const BASE_ENV = {
 };
 
 describe("GitHub App sync live preflight", () => {
+  it("prints operator help without requiring live production evidence", () => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/github-app-sync-live-preflight.ts", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: npm run github:app-sync:preflight -- [--json]");
+    expect(result.stdout).toContain("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL");
+    expect(result.stdout).toContain("AGENTIC_GITHUB_APP_SYNC_CANARY_JSON");
+    expect(result.stdout).toContain("github:app-sync:preflight:collect");
+    expect(result.stderr).toBe("");
+  });
+
   it("accepts a stable deployed sync target with active workflow and provider evidence", () => {
     const report = validateGitHubAppSyncLivePreflight(BASE_ENV);
 

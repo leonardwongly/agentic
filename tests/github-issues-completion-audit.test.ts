@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import { validateGitHubAppSyncLivePreflight } from "../scripts/lib/github-app-sync-live-preflight";
 import {
   buildGitHubIssueSyncCompletionAudit,
@@ -99,6 +100,19 @@ function collection(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCollectio
 }
 
 describe("GitHub issue-sync completion audit", () => {
+  it("prints operator help without collecting live GitHub or provider evidence", () => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/github-issues-completion-audit.ts", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: npm run github:issues:completion-audit -- [--json]");
+    expect(result.stdout).toContain("GitHub issue states for #141, #142, #143, #144, #145, #146, and #152");
+    expect(result.stdout).toContain("github:app-sync:preflight:collect");
+    expect(result.stderr).toBe("");
+  });
+
   it("passes only when tracked issues are closed and live preflight gates pass", () => {
     const report = buildGitHubIssueSyncCompletionAudit({
       issues: CLOSED_ISSUES,

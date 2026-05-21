@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
 import { runDeploymentSmoke } from "../scripts/lib/deployment-smoke";
 
 function buildJsonResponse(payload: unknown, status = 200): Response {
@@ -11,6 +12,19 @@ function buildJsonResponse(payload: unknown, status = 200): Response {
 }
 
 describe("deployment smoke", () => {
+  it("prints operator help without running live smoke checks", () => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/deployment-smoke.ts", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: npm run test:smoke:deployment -- [--json]");
+    expect(result.stdout).toContain("AGENTIC_SMOKE_BASE_URL");
+    expect(result.stdout).toContain("AGENTIC_DEPLOYMENT_SMOKE_JSON");
+    expect(result.stderr).toBe("");
+  });
+
   it("passes health and readiness checks without a session login", async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(buildJsonResponse({ status: "live" }))

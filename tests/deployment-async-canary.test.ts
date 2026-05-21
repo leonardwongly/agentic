@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { runDeploymentAsyncCanary } from "../scripts/lib/deployment-async-canary";
 
@@ -12,6 +13,19 @@ function jsonResponse(status: number, payload: unknown) {
 }
 
 describe("deployment async canary", () => {
+  it("prints operator help without running live canary calls", () => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/deployment-async-canary.ts", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: npm run test:smoke:deployment-async -- [--json]");
+    expect(result.stdout).toContain("AGENTIC_SMOKE_ACCESS_KEY");
+    expect(result.stdout).toContain("AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON");
+    expect(result.stderr).toBe("");
+  });
+
   it("proves queued work reaches durable completion", async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(
