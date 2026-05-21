@@ -162,6 +162,16 @@ export AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON="$(render blueprints validate de
 npm run github:app-sync:preflight
 ```
 
+Use the built-in template before preparing alternate-provider evidence:
+
+```bash
+npm run github:app-sync:preflight -- --provider-evidence-template
+```
+
+The template is non-secret and shows only the evidence shape required to prove
+provider name, environment, web service, worker service, configured Postgres,
+stable HTTPS ingress, provider secret management, and rollback authority.
+
 The preflight expects the GitHub Actions secret inventory to include only the
 route caller secret required by the workflow, `AGENTIC_GITHUB_APP_SYNC_SECRET`,
 and to exclude runtime-only GitHub App credentials such as

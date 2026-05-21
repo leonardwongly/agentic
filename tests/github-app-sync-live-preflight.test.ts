@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { validateGitHubAppSyncLivePreflight } from "../scripts/lib/github-app-sync-live-preflight";
+import {
+  createAlternateProviderEvidenceTemplate,
+  validateGitHubAppSyncLivePreflight
+} from "../scripts/lib/github-app-sync-live-preflight";
 
 const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nredacted\\n-----END RSA PRIVATE KEY-----";
 
@@ -59,7 +62,28 @@ describe("GitHub App sync live preflight", () => {
     expect(result.stdout).toContain("AGENTIC_GITHUB_APP_ISSUE_SYNC_URL");
     expect(result.stdout).toContain("AGENTIC_GITHUB_APP_SYNC_CANARY_JSON");
     expect(result.stdout).toContain("github:app-sync:preflight:collect");
+    expect(result.stdout).toContain("--provider-evidence-template");
     expect(result.stderr).toBe("");
+  });
+
+  it("prints a non-secret alternate provider evidence template", () => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/github-app-sync-live-preflight.ts", "--provider-evidence-template"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+    const template = JSON.parse(result.stdout) as ReturnType<typeof createAlternateProviderEvidenceTemplate>;
+    const serialized = JSON.stringify(template);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(template).toEqual(createAlternateProviderEvidenceTemplate());
+    expect(serialized).toContain("agentic-web");
+    expect(serialized).toContain("agentic-worker");
+    expect(serialized).toContain("postgres");
+    expect(serialized).not.toContain("token");
+    expect(serialized).not.toContain("password");
+    expect(serialized).not.toContain("private");
+    expect(serialized).not.toContain(PRIVATE_KEY);
   });
 
   it("accepts a stable deployed sync target with active workflow and provider evidence", () => {
