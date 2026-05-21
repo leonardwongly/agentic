@@ -379,16 +379,16 @@ export async function POST(request: Request) {
         return operationalJson({ error: "Content-Type must be application/json." }, { status: 415 });
       }
 
-      const rawBody = await readBoundedRequestText(request, {
-        maxBytes: MAX_GITHUB_ISSUE_WEBHOOK_BYTES,
-        tooLargeMessage: "GitHub issue webhook payload is too large."
-      });
-
       const signature = request.headers.get("x-hub-signature-256") ?? "";
 
       if (!signature) {
         return operationalJson({ error: "Missing GitHub signature header." }, { status: 401 });
       }
+
+      const rawBody = await readBoundedRequestText(request, {
+        maxBytes: MAX_GITHUB_ISSUE_WEBHOOK_BYTES,
+        tooLargeMessage: "GitHub issue webhook payload is too large."
+      });
 
       if (!verifyGitHubSignature({ rawBody, signature, secret })) {
         return operationalJson({ error: "Invalid GitHub signature." }, { status: 401 });

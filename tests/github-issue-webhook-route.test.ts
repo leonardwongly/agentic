@@ -329,17 +329,18 @@ describe("GitHub issue webhook route", () => {
   });
 
   it("rejects missing signature headers", async () => {
-    const response = await githubIssueWebhookRoute(
-      new Request("http://localhost/api/github/issues/webhook", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-github-event": "issues",
-          "x-github-delivery": "delivery-missing-signature"
-        },
-        body: JSON.stringify(buildIssuePayload())
-      })
-    );
+    const body = JSON.stringify(buildIssuePayload());
+    const request = new Request("http://localhost/api/github/issues/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "issues",
+        "x-github-delivery": "delivery-missing-signature"
+      },
+      body
+    });
+
+    const response = await githubIssueWebhookRoute(request);
     const jobs = await repository.listJobs({
       userId: SYSTEM_USER_ID,
       kinds: ["github_issue_intake"]
@@ -347,6 +348,7 @@ describe("GitHub issue webhook route", () => {
 
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "Missing GitHub signature header." });
+    expect(await request.text()).toBe(body);
     expect(jobs).toHaveLength(0);
   });
 
