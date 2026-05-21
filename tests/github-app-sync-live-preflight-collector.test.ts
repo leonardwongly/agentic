@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectGitHubAppSyncLivePreflight,
+  runGitHubAppSyncLivePreflightCommand,
   type GitHubAppSyncLivePreflightCommandRunner
 } from "../scripts/lib/github-app-sync-live-preflight-collector";
 
@@ -195,5 +196,49 @@ describe("GitHub App sync live preflight collector", () => {
         status: "fail"
       })
     );
+  });
+
+  it("fails closed when a read-only inventory command output is truncated", async () => {
+    const report = await collectGitHubAppSyncLivePreflight(
+      RUNTIME_ENV,
+      async (command, args) => {
+        const baseOutput = await runnerWith(STABLE_OUTPUTS)(command, args);
+
+        if (commandKey(command, args) === "render services list --output json") {
+          return {
+            ...baseOutput,
+            stdout: JSON.stringify([{ name: "agentic-web" }, { name: "agentic-worker" }]),
+            truncatedStream: "stdout"
+          };
+        }
+
+        return baseOutput;
+      }
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.collection).toContainEqual(
+      expect.objectContaining({
+        name: "render_services",
+        status: "failed",
+        message: expect.stringContaining("stdout exceeded 1048576 bytes")
+      })
+    );
+    expect(report.preflight.checks).toContainEqual(
+      expect.objectContaining({
+        name: "render_services",
+        status: "fail"
+      })
+    );
+  });
+
+  it("bounds stdout captured from live preflight commands", async () => {
+    const result = await runGitHubAppSyncLivePreflightCommand(process.execPath, [
+      "-e",
+      "process.stdout.write('x'.repeat(1048577));"
+    ]);
+
+    expect(result.truncatedStream).toBe("stdout");
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBe(1048576);
   });
 });
