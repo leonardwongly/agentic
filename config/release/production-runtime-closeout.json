@@ -625,6 +625,23 @@
         "npm run github:issues:completion-audit -- --json (expected fail-closed on live production blockers)"
       ],
       "hostedStatus": "PR #919 and post-merge main CI passed with Snyk quota/status errors waived; merge commit 1675caffdcc925b5000171548d9e95e676009365, PR CI https://github.com/leonardwongly/agentic/actions/runs/26230186773, main CI https://github.com/leonardwongly/agentic/actions/runs/26231120574."
+    },
+    {
+      "number": 929,
+      "title": "docs(github): expose provider evidence template",
+      "url": "https://github.com/leonardwongly/agentic/pull/929",
+      "status": "merged",
+      "localValidation": [
+        "npm run github:app-sync:preflight -- --provider-evidence-template",
+        "npm test -- tests/dashboard-async.test.ts",
+        "npm test -- tests/github-app-sync-live-preflight.test.ts tests/github-app-sync-live-preflight-collector.test.ts tests/github-issues-completion-audit.test.ts tests/github-issue-autopilot-workflow.test.ts",
+        "npm run docs:validate",
+        "npm run format:check",
+        "npm run typecheck",
+        "npm run lint",
+        "git diff --check"
+      ],
+      "hostedStatus": "PR #929 and post-merge main CI passed with Snyk quota/status errors waived as a scanner availability issue only; merge commit 37fc916aff720d1c75ece2749c50240ad18fdb11, PR CI https://github.com/leonardwongly/agentic/actions/runs/26252478417, main CI https://github.com/leonardwongly/agentic/actions/runs/26253307486."
     }
   ],
   "trackedIssues": [
@@ -1274,6 +1291,12 @@
           "ref": "https://github.com/leonardwongly/agentic/actions/runs/26231120574",
           "status": "passed",
           "note": "Post-merge main CI passed after PR #919 on origin/main 1675caf, after explicit Snyk quota status waiver, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26253307486",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #929 on origin/main 37fc916, after explicit Snyk quota status waiver, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
         }
       ],
       "notes": "Run on implementation branches before PR review; hosted CI remains the merge gate when available."
