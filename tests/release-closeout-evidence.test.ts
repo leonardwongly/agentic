@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 22,
+        pullRequests: 25,
         blockedValidationGates: 6,
         residualRisks: 3
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 22");
+    expect(rendered).toContain("- Pull requests: 25");
     expect(rendered).toContain("- Blocked validation gates: 6");
     expect(rendered).toContain("- Residual risks: 3");
   });
@@ -201,6 +201,50 @@ describe("release closeout evidence", () => {
           number: 900,
           status: "merged",
           url: "https://github.com/leonardwongly/agentic/pull/900"
+        }),
+        expect.objectContaining({
+          number: 901,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/901"
+        }),
+        expect.objectContaining({
+          number: 902,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/902"
+        })
+      ])
+    );
+  });
+
+  it("keeps the final workflow dependency and post-merge CI audit in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+    const localCiGate = manifest.validationGates.find((gate) => gate.id === "local-ci");
+    const githubSyncPreflight = manifest.validationGates.find((gate) => gate.id === "github-app-sync-preflight");
+
+    expect(manifest.pullRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          number: 877,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/877"
+        })
+      ])
+    );
+    expect(localCiGate?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26201318000",
+          status: "passed"
+        })
+      ])
+    );
+    expect(githubSyncPreflight?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "runtime_blocker",
+          ref: "2026-05-21T02:29Z github:app-sync:preflight:collect",
+          status: "blocked"
         })
       ])
     );

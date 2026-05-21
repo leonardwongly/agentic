@@ -359,6 +359,51 @@
         "npm audit --json"
       ],
       "hostedStatus": "PR #900 and post-merge main CI passed; merge commit bdee73da92e483a30edc2b16cd6086b8f039eaa9."
+    },
+    {
+      "number": 901,
+      "title": "test(release): refresh PR900 blocker evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/901",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run remediation:evidence-map -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #901 and post-merge main CI passed; merge commit b2b5ffc8d82ad54ec2310ae2bde565275ddf3b1e."
+    },
+    {
+      "number": 902,
+      "title": "test(release): link latest tracker blocker evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/902",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run remediation:evidence-map -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json"
+      ],
+      "hostedStatus": "PR #902 and post-merge main CI passed; merge commit 87ef41c333669c2f0a1fb2a4c1dc9dff3612842b."
+    },
+    {
+      "number": 877,
+      "title": "ci(deps): bump the dependencies group across 1 directory with 3 updates",
+      "url": "https://github.com/leonardwongly/agentic/pull/877",
+      "status": "merged",
+      "localValidation": [
+        "PR dependency-review passed",
+        "PR validate passed",
+        "PR provenance-gate passed",
+        "PR issue-theme-gates passed"
+      ],
+      "hostedStatus": "PR #877 merged after review of the actions/github-script v9 breaking-change surface; post-merge main CI passed at https://github.com/leonardwongly/agentic/actions/runs/26201318000."
     }
   ],
   "trackedIssues": [
@@ -789,6 +834,12 @@
           "ref": "https://github.com/leonardwongly/agentic/issues/152#issuecomment-4503966874",
           "status": "blocked",
           "note": "Post-PR #901 roadmap refresh records current origin/main, latest evidence package counts, live preflight collection, and remaining external deployment/runtime blockers."
+        },
+        {
+          "kind": "runtime_blocker",
+          "ref": "2026-05-21T02:29Z github:app-sync:preflight:collect",
+          "status": "blocked",
+          "note": "Final audit on origin/main dd7a28e still fails live preflight: temporary sync host, missing deployed origin, disabled workflow, missing runtime config names, absent Render services, and Render need_payment_info."
         }
       ],
       "blockerIssues": [141, 142, 143, 144, 145],
@@ -825,6 +876,12 @@
           "ref": "https://github.com/leonardwongly/agentic/actions/runs/26184631450",
           "status": "passed",
           "note": "Post-merge main CI passed after PR #892, proving hosted validate jobs are available again."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26201318000",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #877 on origin/main dd7a28e, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
         }
       ],
       "notes": "Run on implementation branches before PR review; hosted CI remains the merge gate when available."
