@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 27,
+        pullRequests: 30,
         blockedValidationGates: 6,
         residualRisks: 3
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 27");
+    expect(rendered).toContain("- Pull requests: 30");
     expect(rendered).toContain("- Blocked validation gates: 6");
     expect(rendered).toContain("- Residual risks: 3");
   });
@@ -278,6 +278,71 @@ describe("release closeout evidence", () => {
         })
       ])
     );
+  });
+
+  it("keeps the issue-sync completion audit and runbook PRs in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+    const localCiGate = manifest.validationGates.find((gate) => gate.id === "local-ci");
+    const githubSyncPreflight = manifest.validationGates.find((gate) => gate.id === "github-app-sync-preflight");
+
+    expect(manifest.pullRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          number: 905,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/905"
+        }),
+        expect.objectContaining({
+          number: 906,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/906"
+        }),
+        expect.objectContaining({
+          number: 907,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/907"
+        })
+      ])
+    );
+    expect(localCiGate?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26204947119",
+          status: "passed"
+        }),
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26206287937",
+          status: "passed"
+        }),
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26207505033",
+          status: "passed"
+        })
+      ])
+    );
+    expect(githubSyncPreflight?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "repo_path",
+          ref: "scripts/github-issues-completion-audit.ts",
+          status: "ready"
+        }),
+        expect.objectContaining({
+          kind: "runtime_blocker",
+          ref: "2026-05-21T05:50Z github:app-sync:preflight:collect",
+          status: "blocked"
+        }),
+        expect.objectContaining({
+          kind: "runtime_blocker",
+          ref: "2026-05-21T05:50Z github:issues:completion-audit",
+          status: "blocked"
+        })
+      ])
+    );
+    expect(manifest.observability.commands).toContain("npm run github:issues:completion-audit -- --json");
   });
 
   it("keeps the reopened stable-ingress blocker correction in the closeout package", () => {
