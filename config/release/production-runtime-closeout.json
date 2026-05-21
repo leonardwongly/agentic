@@ -532,6 +532,53 @@
         "npm run github:app-sync:preflight:collect (expected fail-closed on live production blockers)"
       ],
       "hostedStatus": "PR #913 and post-merge main CI passed; merge commit 0acef8676a327513307e2e48bdb747b2fb3dd1a7, PR CI https://github.com/leonardwongly/agentic/actions/runs/26219561396, main CI https://github.com/leonardwongly/agentic/actions/runs/26220293641."
+    },
+    {
+      "number": 914,
+      "title": "test(release): record latest issue sync evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/914",
+      "status": "merged",
+      "localValidation": [
+        "npm run release:closeout:evidence -- --json",
+        "npm run github:issues:completion-audit -- --json (expected fail-closed on live production blockers)",
+        "npm run github:app-sync:preflight:collect -- --json (expected fail-closed on live production blockers)"
+      ],
+      "hostedStatus": "PR #914 and post-merge main CI passed; merge commit fdca19de426ff2895fb22f8f8090694ca74f1c5c, PR CI https://github.com/leonardwongly/agentic/actions/runs/26221215114, main CI https://github.com/leonardwongly/agentic/actions/runs/26221960258."
+    },
+    {
+      "number": 915,
+      "title": "sec(github): redact preflight report urls",
+      "url": "https://github.com/leonardwongly/agentic/pull/915",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-app-sync-live-preflight.test.ts tests/github-app-sync-live-preflight-collector.test.ts",
+        "npm run format:check -- scripts/lib/github-app-sync-live-preflight.ts tests/github-app-sync-live-preflight.test.ts",
+        "git diff --check",
+        "npm run typecheck",
+        "npm run github:app-sync:preflight:collect -- --json (expected fail-closed on live production blockers)",
+        "npm run github:issues:completion-audit -- --json (expected fail-closed on live production blockers)",
+        "npm run release:closeout:evidence -- --json",
+        "npm run test:security:regression"
+      ],
+      "hostedStatus": "PR #915 and post-merge main CI passed with Snyk quota/status errors waived; merge commit 76aee34ae09d177919a41255ecfcf502b5535c44, PR CI https://github.com/leonardwongly/agentic/actions/runs/26222877980, main CI https://github.com/leonardwongly/agentic/actions/runs/26223626605."
+    },
+    {
+      "number": 916,
+      "title": "sec(github): bound preflight collector output",
+      "url": "https://github.com/leonardwongly/agentic/pull/916",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-app-sync-live-preflight-collector.test.ts",
+        "npm test -- tests/github-app-sync-live-preflight.test.ts tests/github-app-sync-live-preflight-collector.test.ts tests/github-issues-completion-audit.test.ts",
+        "npm run format:check -- scripts/lib/github-app-sync-live-preflight-collector.ts tests/github-app-sync-live-preflight-collector.test.ts",
+        "git diff --check",
+        "npm run typecheck",
+        "npm run test:security:regression",
+        "npm run release:closeout:evidence -- --json",
+        "npm run github:app-sync:preflight:collect -- --json (expected fail-closed on live production blockers)",
+        "npm run github:issues:completion-audit -- --json (expected fail-closed on live production blockers)"
+      ],
+      "hostedStatus": "PR #916 and post-merge main CI passed with Snyk quota/status errors waived; merge commit ac824f221695e4d60a4eb57044fc7078a496db0b, PR CI https://github.com/leonardwongly/agentic/actions/runs/26224584780, main CI https://github.com/leonardwongly/agentic/actions/runs/26225314273."
     }
   ],
   "trackedIssues": [
