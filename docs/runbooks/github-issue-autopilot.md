@@ -212,6 +212,16 @@ complete. If any command returns a blocker such as `need_payment_info`,
 Render services, record that blocker on the relevant issue instead of marking
 the proof complete.
 
+Do not waive `need_payment_info` by rewriting the production Blueprint to a
+free-only shape. Render supports free web services and free Postgres databases
+for preview or hobby workloads, but its Blueprint reference does not allow the
+`free` plan for background workers. The Agentic production proof requires the
+deployed worker in #144 and the live GitHub App sync canary in #145 to settle
+jobs against the same durable store as the web/API process, so the safe next
+step is provider billing/provisioning approval or an approved alternate
+provider with equivalent web, worker, Postgres, HTTPS ingress, secret
+management, and rollback controls.
+
 ## Data Flow
 
 1. `.github/workflows/github-issue-autopilot.yml` runs on `issues.opened`, `issues.reopened`, `issues.labeled`, and `issue_comment.created`.

@@ -85,6 +85,14 @@ Current provider blocker:
   `agentic-web`, and `agentic-worker`.
 - No Render services or datastores have been created yet. Add payment info to
   the `leonardwongly` Render workspace before the first Blueprint sync.
+- Do not treat a free-tier Blueprint rewrite as a production waiver. Render's
+  Blueprint reference permits `free` for web services and Postgres, but not for
+  background workers, private services, or cron jobs. A throwaway validation of
+  a free web/database plus starter worker variant still failed on
+  `services[1]` with `need_payment_info`, and removing the web
+  `preDeployCommand` to satisfy free-tier validation would drop the migration
+  gate required for this production topology. See
+  <https://render.com/docs/blueprint-spec> and <https://render.com/free>.
 
 Required confirmation before provider setup:
 
