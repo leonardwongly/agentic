@@ -42,7 +42,7 @@ const ISSUE_REQUIREMENTS: Record<GitHubIssueSyncCompletionIssueNumber, string> =
 };
 
 const ISSUE_PREFLIGHT_CHECKS: Record<GitHubIssueSyncCompletionIssueNumber, GitHubAppSyncLivePreflightCheck["name"][]> = {
-  141: ["sync_url", "stable_host", "smoke_base_url", "render_services", "render_blueprint"],
+  141: ["sync_url", "stable_host", "smoke_base_url", "render_services", "render_blueprint", "deployment_smoke"],
   142: [
     "workflow_state",
     "github_actions_secret_inventory",
@@ -50,8 +50,8 @@ const ISSUE_PREFLIGHT_CHECKS: Record<GitHubIssueSyncCompletionIssueNumber, GitHu
     "runtime_secret_shape",
     "repository_allowlist"
   ],
-  143: ["runtime_secret_inventory", "smoke_base_url", "render_services", "render_blueprint"],
-  144: ["runtime_secret_inventory", "render_services", "render_blueprint"],
+  143: ["runtime_secret_inventory", "smoke_base_url", "render_services", "render_blueprint", "deployment_smoke"],
+  144: ["runtime_secret_inventory", "render_services", "render_blueprint", "deployment_async_canary"],
   145: [
     "sync_url",
     "stable_host",
@@ -63,7 +63,10 @@ const ISSUE_PREFLIGHT_CHECKS: Record<GitHubIssueSyncCompletionIssueNumber, GitHu
     "smoke_canary_inventory",
     "repository_allowlist",
     "render_services",
-    "render_blueprint"
+    "render_blueprint",
+    "deployment_smoke",
+    "deployment_async_canary",
+    "github_app_sync_canary"
   ],
   146: [],
   152: []
