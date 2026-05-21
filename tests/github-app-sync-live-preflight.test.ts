@@ -130,6 +130,26 @@ describe("GitHub App sync live preflight", () => {
     );
   });
 
+  it("redacts URL credentials, query strings, and fragments from failed preflight reports", () => {
+    const report = validateGitHubAppSyncLivePreflight({
+      ...BASE_ENV,
+      AGENTIC_GITHUB_APP_ISSUE_SYNC_URL:
+        "https://user:sync-token@agentic.example.com/api/github/issues/app/sync?token=secret#debug",
+      AGENTIC_SMOKE_BASE_URL: "https://smoke-user:smoke-token@agentic.example.com/smoke?access_key=secret#debug"
+    });
+    const serialized = JSON.stringify(report);
+
+    expect(report.ok).toBe(false);
+    expect(report.syncUrl).toBe("https://agentic.example.com/api/github/issues/app/sync");
+    expect(report.smokeBaseUrl).toBe("https://agentic.example.com");
+    expect(report.endpoints.sync).toBe("https://agentic.example.com/api/github/issues/app/sync");
+    expect(serialized).not.toContain("sync-token");
+    expect(serialized).not.toContain("smoke-token");
+    expect(serialized).not.toContain("access_key");
+    expect(serialized).not.toContain("token=secret");
+    expect(serialized).not.toContain("#debug");
+  });
+
   it("fails closed when runtime config is missing or malformed", () => {
     const report = validateGitHubAppSyncLivePreflight({
       ...BASE_ENV,

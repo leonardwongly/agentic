@@ -689,6 +689,29 @@ function endpoint(origin: string | null, path: string): string | null {
   return origin ? `${origin}${path}` : null;
 }
 
+function safeReportUrl(raw: string | null, options: { originOnly?: boolean } = {}): string | null {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const url = new URL(raw);
+
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+
+    if (options.originOnly) {
+      url.pathname = "/";
+    }
+
+    return options.originOnly ? url.origin : url.toString();
+  } catch {
+    return "[invalid-url]";
+  }
+}
+
 export function validateGitHubAppSyncLivePreflight(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightReport {
   const sync = parseSyncUrl(env);
   const checks = [
@@ -708,6 +731,7 @@ export function validateGitHubAppSyncLivePreflight(env: NodeJS.ProcessEnv): GitH
     buildGitHubAppSyncCanaryCheck(env)
   ];
   const smokeBaseUrl = trim(env.AGENTIC_SMOKE_BASE_URL) || trim(env.AGENTIC_INGRESS_BASE_URL) || null;
+  const safeSmokeBaseUrl = safeReportUrl(smokeBaseUrl, { originOnly: true });
   const smokeOrigin = smokeBaseUrl ? (() => {
     try {
       return new URL(smokeBaseUrl).origin;
@@ -718,13 +742,13 @@ export function validateGitHubAppSyncLivePreflight(env: NodeJS.ProcessEnv): GitH
 
   return {
     ok: checks.every((check) => check.status !== "fail"),
-    syncUrl: sync.url?.toString() ?? null,
-    smokeBaseUrl,
+    syncUrl: safeReportUrl(sync.url?.toString() ?? null),
+    smokeBaseUrl: safeSmokeBaseUrl,
     workflowState: trim(env.AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE) || null,
     endpoints: {
       health: endpoint(smokeOrigin, "/api/health"),
       readiness: endpoint(smokeOrigin, "/api/ready"),
-      sync: sync.url?.toString() ?? null
+      sync: safeReportUrl(sync.url?.toString() ?? null)
     },
     checks
   };
