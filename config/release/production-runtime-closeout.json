@@ -516,6 +516,22 @@
         "git diff --check"
       ],
       "hostedStatus": "PR #912 and post-merge main CI passed; merge commit 390c6415ee29946654c2cdc45b3232a7d11154f3, CI https://github.com/leonardwongly/agentic/actions/runs/26218512794."
+    },
+    {
+      "number": 913,
+      "title": "test(release): record final issue sync closeout PRs",
+      "url": "https://github.com/leonardwongly/agentic/pull/913",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts tests/env-example.test.ts tests/github-issues-completion-audit.test.ts tests/github-app-sync-live-preflight.test.ts tests/github-app-sync-live-preflight-collector.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run format:check -- config/release/production-runtime-closeout.json tests/release-closeout-evidence.test.ts",
+        "npm run typecheck",
+        "git diff --check",
+        "npm run github:issues:completion-audit -- --json (expected fail-closed on live production blockers)",
+        "npm run github:app-sync:preflight:collect (expected fail-closed on live production blockers)"
+      ],
+      "hostedStatus": "PR #913 and post-merge main CI passed; merge commit 0acef8676a327513307e2e48bdb747b2fb3dd1a7, PR CI https://github.com/leonardwongly/agentic/actions/runs/26219561396, main CI https://github.com/leonardwongly/agentic/actions/runs/26220293641."
     }
   ],
   "trackedIssues": [
@@ -1147,6 +1163,12 @@
           "ref": "https://github.com/leonardwongly/agentic/actions/runs/26218512794",
           "status": "passed",
           "note": "Post-merge main CI passed after PR #912 on origin/main 390c641, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26220293641",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #913 on origin/main 0acef86, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
         }
       ],
       "notes": "Run on implementation branches before PR review; hosted CI remains the merge gate when available."
