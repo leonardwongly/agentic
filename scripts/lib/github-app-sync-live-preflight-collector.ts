@@ -26,6 +26,7 @@ export type GitHubAppSyncLivePreflightCommandResult = {
   stderr: string;
   exitCode: number | null;
   error?: Error;
+  truncatedStream?: "stdout" | "stderr";
 };
 
 export type GitHubAppSyncLivePreflightCommandRunner = (
@@ -72,34 +73,83 @@ const COLLECTION_COMMANDS: CollectionCommand[] = [
     args: ["blueprints", "validate", "deploy/render/render.yaml", "--output", "json"]
   }
 ];
+const MAX_COMMAND_OUTPUT_BYTES = 1_048_576;
 
 export function runGitHubAppSyncLivePreflightCommand(
   command: string,
   args: string[]
 ): Promise<GitHubAppSyncLivePreflightCommandResult> {
   return new Promise((resolve) => {
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let truncatedStream: "stdout" | "stderr" | undefined;
+    let settled = false;
     const child = spawn(command, args, {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"]
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
+    const appendChunk = (stream: "stdout" | "stderr", chunk: Buffer) => {
+      if (truncatedStream) {
+        return;
+      }
 
-    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+      const currentBytes = stream === "stdout" ? stdoutBytes : stderrBytes;
+      const remainingBytes = MAX_COMMAND_OUTPUT_BYTES - currentBytes;
+
+      if (remainingBytes <= 0 || chunk.length > remainingBytes) {
+        truncatedStream = stream;
+
+        if (remainingBytes > 0) {
+          const partialChunk = chunk.subarray(0, remainingBytes);
+          if (stream === "stdout") {
+            stdoutChunks.push(partialChunk);
+            stdoutBytes += partialChunk.length;
+          } else {
+            stderrChunks.push(partialChunk);
+            stderrBytes += partialChunk.length;
+          }
+        }
+
+        child.kill("SIGTERM");
+        return;
+      }
+
+      if (stream === "stdout") {
+        stdoutChunks.push(chunk);
+        stdoutBytes += chunk.length;
+      } else {
+        stderrChunks.push(chunk);
+        stderrBytes += chunk.length;
+      }
+    };
+    const resolveOnce = (result: GitHubAppSyncLivePreflightCommandResult) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      resolve(result);
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => appendChunk("stdout", chunk));
+    child.stderr.on("data", (chunk: Buffer) => appendChunk("stderr", chunk));
     child.on("error", (error) => {
-      resolve({
+      resolveOnce({
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),
         stderr: Buffer.concat(stderrChunks).toString("utf8"),
         exitCode: null,
-        error
+        error,
+        truncatedStream
       });
     });
     child.on("close", (exitCode) => {
-      resolve({
+      resolveOnce({
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),
         stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        exitCode
+        exitCode,
+        truncatedStream
       });
     });
   });
@@ -107,6 +157,19 @@ export function runGitHubAppSyncLivePreflightCommand(
 
 function buildCollectionStep(command: CollectionCommand, result: GitHubAppSyncLivePreflightCommandResult) {
   const stdout = result.stdout.trim();
+
+  if (result.truncatedStream) {
+    return {
+      envValue: null,
+      step: {
+        name: command.name,
+        envName: command.envName,
+        status: "failed" as const,
+        message: `${command.command} ${result.truncatedStream} exceeded ${MAX_COMMAND_OUTPUT_BYTES} bytes; live preflight evidence must be bounded and complete.`,
+        exitCode: result.exitCode
+      }
+    };
+  }
 
   if (!stdout) {
     return {
@@ -164,4 +227,3 @@ export async function collectGitHubAppSyncLivePreflight(
     preflight
   };
 }
-
