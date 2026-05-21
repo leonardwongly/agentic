@@ -68,6 +68,7 @@ const REQUIRED_PRODUCTION_PROOF_VALIDATION_GATES = [
   "npm run test:smoke:deployment",
   "npm run test:smoke:deployment-async",
   "npm run github:app-sync:preflight",
+  "npm run test:smoke:github-app-sync",
   "npm run release:closeout:evidence"
 ];
 const REQUIRED_PRODUCTION_PROOF_EVIDENCE_REFS = [

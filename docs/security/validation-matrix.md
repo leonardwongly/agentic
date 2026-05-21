@@ -26,6 +26,7 @@ durability or abuse regressions.
 | Anonymous/public share surfaces | `P0` | Request size limits, anonymous rate limiting, no inline state mutation on request path | `tests/public-share-view-route.test.ts`, `tests/share-route.test.ts`, `tests/governance-privacy-route.test.ts` | Verify public share telemetry is recorded asynchronously and deduplicated | Anonymous write path reintroduced, oversized payload accepted, or privacy metadata leaked |
 | Runtime readiness and rollout telemetry | `P1` | Database/schema readiness, connector health, queue health, alert manifest evaluation | `tests/runtime-readiness.test.ts`, `tests/observability-rollout-gate.test.ts`, `npm run telemetry:rollout-gate -- --dir <retention-dir>` | Review rollout dashboard for HTTP, worker, provider, and queue signals | `/api/ready` returns `503`, rollout gate fails, or critical alerts fire |
 | Deployment async canary and smoke harness | `P1` | Valid enqueue response, pollable status URL, bounded timeout, malformed response rejection | `tests/deployment-async-canary.test.ts`, `npm run test:smoke:deployment`, `npm run test:smoke:deployment-async` | Canary completes in staging before traffic shift and again after production shift | Async canary timeout, malformed response, dead letter, or missing result payload |
+| GitHub App issue sync canary | `P1` | Stable sync URL, fail-closed bearer auth, allowlisted issue intake, pull-request skip behavior, same-origin job polling, worker settlement | `tests/deployment-github-app-sync-canary.test.ts`, `tests/github-app-sync-live-preflight.test.ts`, `npm run github:app-sync:preflight:collect`, `npm run test:smoke:github-app-sync` | Manual workflow dispatch and live canary evidence are captured before enabling scheduled sync | Temporary tunnel URL, disabled workflow, invalid auth not returning `401`, missing worker settlement, duplicate unsafe work, or secret leakage |
 | Dashboard operational surfaces | `P2` | Surface decomposition, explicit role gating, no direct request-path execution | `npm run test:architecture:fitness`, dashboard component tests, targeted Vitest suites after edits | Spot-check operations tower, advanced ops sections, and detail panes in staging | Critical operator panel missing or role surface regression blocks incident response |
 
 ## Release Evidence By Phase
@@ -54,6 +55,7 @@ Required evidence:
 
 - `npm run test:smoke:deployment`
 - `npm run test:smoke:deployment-async`
+- `npm run test:smoke:github-app-sync`
 - `npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"`
 - No new `dead_letter`, `expired_leases`, or `stale_pending_jobs` readiness failures
 
@@ -64,6 +66,7 @@ Required evidence after traffic shift:
 - `/api/health` returns success
 - `/api/ready` returns success
 - staged async canary and post-shift async canary both complete
+- GitHub App issue sync canary completes against the stable deployed route
 - rollout-gate manifest passes on retained telemetry
 - on-call operator records residual risks or confirms none remain
 

@@ -1011,6 +1011,33 @@
       "notes": "Run immediately before the GitHub App sync canary and manual workflow dispatch."
     },
     {
+      "id": "github-app-sync-canary",
+      "command": "npm run test:smoke:github-app-sync",
+      "status": "blocked",
+      "evidence": [
+        {
+          "kind": "repo_path",
+          "ref": "scripts/deployment-github-app-sync-canary.ts",
+          "status": "ready",
+          "note": "The deployed GitHub App sync canary validates fail-closed invalid auth, valid sync enqueue, same-origin job polling, and worker settlement without printing secrets."
+        },
+        {
+          "kind": "github_issue",
+          "ref": "#145",
+          "status": "blocked",
+          "note": "Live GitHub App sync canary remains blocked until stable ingress, runtime config, Postgres/shared-auth, and deployed worker proof are complete."
+        },
+        {
+          "kind": "runtime_blocker",
+          "ref": "2026-05-21T07:34Z github:issues:completion-audit",
+          "status": "blocked",
+          "note": "Completion audit now requires AGENTIC_GITHUB_APP_SYNC_CANARY_JSON from a passing npm run test:smoke:github-app-sync run before #145 and #152 can pass."
+        }
+      ],
+      "blockerIssues": [141, 142, 143, 144, 145],
+      "notes": "Run after live preflight passes and before enabling scheduled GitHub App issue sync."
+    },
+    {
       "id": "rollout-gate",
       "command": "npm run telemetry:rollout-gate -- --dir \"${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}\"",
       "status": "blocked",
@@ -1096,7 +1123,7 @@
       "Stop routing new traffic to the current release.",
       "Restore the previous known-good application image or release artifact for both web and worker.",
       "Re-run /api/health and /api/ready against the restored target.",
-      "Re-run deployment smoke, async canary, and rollout-gate validation against the restored target.",
+      "Re-run deployment smoke, async canary, GitHub App sync canary, and rollout-gate validation against the restored target.",
       "Keep additive schema changes in place unless a separately tested operator-approved data rollback plan exists."
     ],
     "disablement": [
@@ -1207,6 +1234,7 @@
       "npm run test:smoke:deployment-confidence",
       "npm run telemetry:rollout-gate -- --dir \"${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}\"",
       "npm run github:app-sync:preflight:collect",
+      "npm run test:smoke:github-app-sync",
       "npm run github:issues:completion-audit -- --json",
       "npm run release:closeout:evidence"
     ]

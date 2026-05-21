@@ -56,8 +56,23 @@ npm run db:status -- --require-ready
 npm run test:smoke:deployment
 npm run test:smoke:deployment-async
 npm run github:app-sync:preflight
+npm run test:smoke:github-app-sync
 npm run telemetry:rollout-gate -- --dir "${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}"
 ```
+
+The production GitHub issue-sync closeout audit also requires redacted JSON
+summaries from the live deployment smoke, async worker canary, and GitHub App
+sync canary. Capture them only after the target is approved and deployed:
+
+```bash
+export AGENTIC_DEPLOYMENT_SMOKE_JSON="$(npm run --silent test:smoke:deployment)"
+export AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON="$(npm run --silent test:smoke:deployment-async)"
+export AGENTIC_GITHUB_APP_SYNC_CANARY_JSON="$(npm run --silent test:smoke:github-app-sync)"
+npm run github:issues:completion-audit -- --json
+```
+
+These summaries must not include smoke access keys, sync secrets, GitHub App
+private keys, installation tokens, raw issue bodies, or database URLs.
 
 Local CI evidence remains required on implementation branches while hosted CI is
 unavailable or stops before validate jobs:
@@ -89,7 +104,8 @@ minimum operator actions so the evidence bundle is useful during an incident:
 2. Restore the previous known-good release artifact for web and worker.
 3. Re-run `/api/health` and `/api/ready`.
 4. Re-run deployment smoke, async canary, and rollout-gate validation.
-5. Keep additive schema changes in place unless a separate tested rollback plan
+5. Re-run the GitHub App sync canary before re-enabling scheduled sync.
+6. Keep additive schema changes in place unless a separate tested rollback plan
    exists.
 
 ## Disablement

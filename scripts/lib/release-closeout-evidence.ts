@@ -112,13 +112,38 @@ export type ReleaseCloseoutEvidenceReport = {
 const REQUIRED_CHILD_ISSUES = [286, 287, 288, 289, 290, 291, 292, 293, 294];
 const REQUIRED_PARENT_ISSUES = [137, 146, 190];
 const REQUIRED_VALIDATION_GATES = [
-  "deploy-ingress-check",
-  "db-status-require-ready",
-  "deployment-smoke",
-  "deployment-async-canary",
-  "github-app-sync-preflight",
-  "rollout-gate",
-  "local-ci"
+  {
+    id: "deploy-ingress-check",
+    command: "npm run deploy:ingress:check"
+  },
+  {
+    id: "db-status-require-ready",
+    command: "npm run db:status -- --require-ready"
+  },
+  {
+    id: "deployment-smoke",
+    command: "npm run test:smoke:deployment"
+  },
+  {
+    id: "deployment-async-canary",
+    command: "npm run test:smoke:deployment-async"
+  },
+  {
+    id: "github-app-sync-preflight",
+    command: "npm run github:app-sync:preflight"
+  },
+  {
+    id: "github-app-sync-canary",
+    command: "npm run test:smoke:github-app-sync"
+  },
+  {
+    id: "rollout-gate",
+    command: "npm run telemetry:rollout-gate -- --dir \"${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}\""
+  },
+  {
+    id: "local-ci",
+    command: "npm run ci:local"
+  }
 ];
 const GITHUB_AGENTIC_URL_PATTERN =
   /^https:\/\/github\.com\/leonardwongly\/agentic\/(?:(?:issues\/\d+(?:#issuecomment-\d+)?)|(?:pull\/\d+))$/u;
@@ -297,12 +322,12 @@ export function validateReleaseCloseoutEvidenceManifest(
     }
   }
 
-  const validationGateIds = new Set<string>();
+  const validationGateById = new Map<string, ReleaseCloseoutEvidenceManifest["validationGates"][number]>();
   if (!Array.isArray(manifest.validationGates)) {
     issues.push(issue("validationGates", "Validation gates must be an array."));
   } else {
     manifest.validationGates.forEach((gate, index) => {
-      validationGateIds.add(gate.id);
+      validationGateById.set(gate.id, gate);
 
       if (!isNonEmptyString(gate.command)) {
         issues.push(issue(`validationGates[${index}].command`, "Validation gates must include the exact command."));
@@ -318,8 +343,16 @@ export function validateReleaseCloseoutEvidenceManifest(
     });
 
     for (const requiredGate of REQUIRED_VALIDATION_GATES) {
-      if (!validationGateIds.has(requiredGate)) {
-        issues.push(issue("validationGates", `Required validation gate '${requiredGate}' is missing.`));
+      const gate = validationGateById.get(requiredGate.id);
+      if (!gate) {
+        issues.push(issue("validationGates", `Required validation gate '${requiredGate.id}' is missing.`));
+        continue;
+      }
+
+      if (gate.command !== requiredGate.command) {
+        issues.push(
+          issue("validationGates", `Validation gate '${requiredGate.id}' must use command '${requiredGate.command}'.`)
+        );
       }
     }
   }
