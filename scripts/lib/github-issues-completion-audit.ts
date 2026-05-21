@@ -1,7 +1,7 @@
 import type { GitHubAppSyncLivePreflightCheck } from "./github-app-sync-live-preflight";
 import type { GitHubAppSyncLivePreflightCollectionReport } from "./github-app-sync-live-preflight-collector";
 
-export type GitHubIssueSyncCompletionIssueNumber = 141 | 142 | 143 | 144 | 145 | 152;
+export type GitHubIssueSyncCompletionIssueNumber = 141 | 142 | 143 | 144 | 145 | 146 | 152;
 
 export type GitHubIssueSyncCompletionIssueState = {
   number: GitHubIssueSyncCompletionIssueNumber;
@@ -29,7 +29,7 @@ export type GitHubIssueSyncCompletionAuditReport = {
   };
 };
 
-const TRACKED_ISSUES = [141, 142, 143, 144, 145, 152] as const;
+const TRACKED_ISSUES = [141, 142, 143, 144, 145, 146, 152] as const;
 
 const ISSUE_REQUIREMENTS: Record<GitHubIssueSyncCompletionIssueNumber, string> = {
   141: "Stable HTTPS ingress, provider target, health/readiness, proxy posture, and rollback authority are complete.",
@@ -37,6 +37,7 @@ const ISSUE_REQUIREMENTS: Record<GitHubIssueSyncCompletionIssueNumber, string> =
   143: "Postgres/shared-auth production bootstrap, migrations, db status, and readiness proof are complete.",
   144: "Deployed worker durability, shared state, job settlement, retry, and sanitized failure proof are complete.",
   145: "Live GitHub App issue sync workflow dispatch, valid/invalid auth, duplicate behavior, PR skip, and worker result proof are complete.",
+  146: "Release evidence, rollout, rollback, disablement, and residual-risk closeout package is complete.",
   152: "Roadmap closeout after production proof is complete and no production proof child issue remains open."
 };
 
@@ -64,6 +65,7 @@ const ISSUE_PREFLIGHT_CHECKS: Record<GitHubIssueSyncCompletionIssueNumber, GitHu
     "render_services",
     "render_blueprint"
   ],
+  146: [],
   152: []
 };
 
@@ -118,6 +120,21 @@ function preflightCriterion(
   const requiredChecks = ISSUE_PREFLIGHT_CHECKS[issueNumber];
 
   if (requiredChecks.length === 0) {
+    if (issueNumber === 146) {
+      const issue = issueByNumber(issues, issueNumber);
+      const state = normalizeState(issue?.state ?? "");
+
+      return {
+        issue: issueNumber,
+        status: state === "CLOSED" || state === "MERGED" ? "pass" : "fail",
+        requirement: "Release closeout evidence package is complete before roadmap closeout.",
+        evidence:
+          state === "CLOSED" || state === "MERGED"
+            ? ["#146 release closeout evidence package is closed."]
+            : [`#146 ${state || "MISSING"}: release closeout evidence package is not closed.`]
+      };
+    }
+
     const childIssues = [141, 142, 143, 144, 145] as const;
     const openChildIssues = childIssues.filter((childIssue) => {
       const issue = issueByNumber(issues, childIssue);

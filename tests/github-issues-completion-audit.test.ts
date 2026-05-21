@@ -31,6 +31,7 @@ const CLOSED_ISSUES: GitHubIssueSyncCompletionIssueState[] = [
   { number: 143, state: "CLOSED", title: "Bootstrap production database" },
   { number: 144, state: "CLOSED", title: "Deploy durable worker" },
   { number: 145, state: "CLOSED", title: "Validate live issue sync" },
+  { number: 146, state: "CLOSED", title: "Capture rollout evidence" },
   { number: 152, state: "CLOSED", title: "Close roadmap" }
 ];
 
@@ -53,8 +54,8 @@ describe("GitHub issue-sync completion audit", () => {
 
     expect(report.ok).toBe(true);
     expect(report.summary).toEqual({
-      checkedIssues: 6,
-      passedCriteria: 12,
+      checkedIssues: 7,
+      passedCriteria: 14,
       failedCriteria: 0
     });
     expect(report.criteria.every((criterion) => criterion.status === "pass")).toBe(true);
@@ -68,6 +69,7 @@ describe("GitHub issue-sync completion audit", () => {
         { number: 143, state: "OPEN", title: "Bootstrap production database" },
         { number: 144, state: "OPEN", title: "Deploy durable worker" },
         { number: 145, state: "OPEN", title: "Validate live issue sync" },
+        { number: 146, state: "CLOSED", title: "Capture rollout evidence" },
         { number: 152, state: "OPEN", title: "Close roadmap" }
       ],
       preflight: collection({
@@ -152,6 +154,30 @@ describe("GitHub issue-sync completion audit", () => {
         status: "fail",
         requirement: "Production proof child gates are unblocked before roadmap closeout.",
         evidence: ["Production proof child issues remain open or uncollected: #145."]
+      })
+    );
+  });
+
+  it("keeps completion blocked when the release evidence package issue is open", () => {
+    const report = buildGitHubIssueSyncCompletionAudit({
+      issues: CLOSED_ISSUES.map((issue) => (issue.number === 146 ? { ...issue, state: "OPEN" } : issue)),
+      preflight: collection(BASE_ENV)
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.criteria).toContainEqual(
+      expect.objectContaining({
+        issue: 146,
+        status: "fail",
+        evidence: ["#146 OPEN: Capture rollout evidence"]
+      })
+    );
+    expect(report.criteria).toContainEqual(
+      expect.objectContaining({
+        issue: 146,
+        status: "fail",
+        requirement: "Release closeout evidence package is complete before roadmap closeout.",
+        evidence: ["#146 OPEN: release closeout evidence package is not closed."]
       })
     );
   });
