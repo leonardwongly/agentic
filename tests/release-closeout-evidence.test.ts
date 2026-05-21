@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 20,
+        pullRequests: 22,
         blockedValidationGates: 6,
         residualRisks: 3
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 20");
+    expect(rendered).toContain("- Pull requests: 22");
     expect(rendered).toContain("- Blocked validation gates: 6");
     expect(rendered).toContain("- Residual risks: 3");
   });
@@ -182,6 +182,25 @@ describe("release closeout evidence", () => {
           number: 898,
           status: "merged",
           url: "https://github.com/leonardwongly/agentic/pull/898"
+        })
+      ])
+    );
+  });
+
+  it("keeps the latest closeout evidence refresh PRs in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+
+    expect(manifest.pullRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          number: 899,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/899"
+        }),
+        expect.objectContaining({
+          number: 900,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/900"
         })
       ])
     );
