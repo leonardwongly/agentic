@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 30,
+        pullRequests: 32,
         blockedValidationGates: 7,
         residualRisks: 3
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 30");
+    expect(rendered).toContain("- Pull requests: 32");
     expect(rendered).toContain("- Blocked validation gates: 7");
     expect(rendered).toContain("- Residual risks: 3");
   });
@@ -343,6 +343,40 @@ describe("release closeout evidence", () => {
       ])
     );
     expect(manifest.observability.commands).toContain("npm run github:issues:completion-audit -- --json");
+  });
+
+  it("keeps the final issue-sync canary and environment-template closeout PRs in the package", () => {
+    const manifest = readCheckedInManifest();
+    const localCiGate = manifest.validationGates.find((gate) => gate.id === "local-ci");
+
+    expect(manifest.pullRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          number: 911,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/911"
+        }),
+        expect.objectContaining({
+          number: 912,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/912"
+        })
+      ])
+    );
+    expect(localCiGate?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26216692067",
+          status: "passed"
+        }),
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26218512794",
+          status: "passed"
+        })
+      ])
+    );
   });
 
   it("keeps the reopened stable-ingress blocker correction in the closeout package", () => {
