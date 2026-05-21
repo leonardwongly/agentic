@@ -94,8 +94,14 @@ describe("GitHub issue autopilot workflow", () => {
     expect(workflow).not.toContain("console.error(secret");
     expect(runbook).toContain("disabled_manually");
     expect(runbook).toContain("gh workflow enable github-app-issue-sync.yml --repo leonardwongly/agentic");
+    expect(runbook).toContain("npm run github:app-sync:preflight -- --help");
+    expect(runbook).toContain("npm run github:app-sync:preflight:collect -- --help");
     expect(runbook).toContain("npm run github:app-sync:preflight");
+    expect(runbook).toContain("npm run github:issues:completion-audit -- --help");
     expect(runbook).toContain("npm run github:issues:completion-audit -- --json");
+    expect(runbook).toContain("npm run test:smoke:deployment -- --help");
+    expect(runbook).toContain("npm run test:smoke:deployment-async -- --help");
+    expect(runbook).toContain("npm run test:smoke:github-app-sync -- --help");
     expect(runbook).toContain("The ordered closeout sequence is:");
     expect(runbook).toContain("| #141 | Stable HTTPS ingress exists");
     expect(runbook).toContain("| #142 | Runtime-only GitHub App credentials");

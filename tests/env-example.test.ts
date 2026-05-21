@@ -22,6 +22,11 @@ describe(".env.example", () => {
       "AGENTIC_GITHUB_APP_PRIVATE_KEY",
       "AGENTIC_GITHUB_APP_SYNC_SECRET",
       "AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES",
+      "AGENTIC_GITHUB_APP_ISSUE_SYNC_URL",
+      "AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE",
+      "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON",
+      "AGENTIC_RENDER_SERVICES_JSON",
+      "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON",
       "AGENTIC_DEPLOYMENT_SMOKE_JSON",
       "AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON",
       "AGENTIC_GITHUB_APP_SYNC_CANARY_JSON"
@@ -32,6 +37,7 @@ describe(".env.example", () => {
     }
 
     expect(envExample).toContain("Runtime-only credentials belong in the");
+    expect(envExample).toContain("Non-secret live preflight evidence");
     expect(envExample).toContain("hand-edit them to bypass live proof");
     expect(envExample).not.toContain("trycloudflare.com");
     expect(envExample).not.toMatch(/^AGENTIC_GITHUB_APP_PRIVATE_KEY=/mu);

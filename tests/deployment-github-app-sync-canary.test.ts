@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { runDeploymentGitHubAppSyncCanary } from "../scripts/lib/deployment-github-app-sync-canary";
 
@@ -12,6 +13,19 @@ function jsonResponse(status: number, payload: unknown) {
 }
 
 describe("deployment GitHub App sync canary", () => {
+  it("prints operator help without running live sync canary calls", () => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/deployment-github-app-sync-canary.ts", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: npm run test:smoke:github-app-sync -- [--json]");
+    expect(result.stdout).toContain("AGENTIC_GITHUB_APP_SYNC_SECRET");
+    expect(result.stdout).toContain("AGENTIC_GITHUB_APP_SYNC_CANARY_JSON");
+    expect(result.stderr).toBe("");
+  });
+
   it("proves GitHub App sync jobs reach durable worker completion", async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(401, { error: "Unauthorized" }))

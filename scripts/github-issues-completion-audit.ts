@@ -19,6 +19,20 @@ type CommandResult = {
   error?: Error;
 };
 
+const HELP_TEXT = `Usage: npm run github:issues:completion-audit -- [--json]
+
+Audits whether the GitHub issue-sync production-proof issue tree is complete.
+
+Live evidence checked:
+- GitHub issue states for #141, #142, #143, #144, #145, #146, and #152
+- GitHub App sync live preflight collection and checks
+- Release closeout evidence manifest
+
+This command fails closed until stable ingress, runtime configuration, deployed Render services, workflow activation, deployment smoke evidence, async worker canary evidence, GitHub App sync canary evidence, and issue closeout are all proven.
+
+Run npm run github:app-sync:preflight:collect -- --json first to inspect the live preflight blockers without closing issues.
+`;
+
 function runCommand(command: string, args: string[]): Promise<CommandResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
@@ -110,6 +124,11 @@ function printHumanSummary(report: GitHubIssueSyncCompletionAuditReport) {
 }
 
 async function main() {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(HELP_TEXT);
+    return;
+  }
+
   const json = process.argv.includes("--json");
   const [issues, preflight] = await Promise.all([collectIssueStates(), collectGitHubAppSyncLivePreflight(process.env)]);
   const releaseCloseoutEvidence = validateReleaseCloseoutEvidenceManifest(

@@ -2,6 +2,20 @@ import { collectGitHubAppSyncLivePreflight } from "./lib/github-app-sync-live-pr
 
 type GitHubAppSyncLivePreflightCollectionReport = Awaited<ReturnType<typeof collectGitHubAppSyncLivePreflight>>;
 
+const HELP_TEXT = `Usage: npm run github:app-sync:preflight:collect -- [--json]
+
+Collects read-only GitHub and Render inventory, then runs the live GitHub App issue sync preflight.
+
+Read-only inventory collected:
+- GitHub App Issue Sync workflow state
+- AGENTIC_GITHUB_APP_ISSUE_SYNC_URL repository variable
+- GitHub Actions secret names
+- Render service list
+- Render Blueprint validation result for deploy/render/render.yaml
+
+Runtime-only secrets are not fetched by this command. Provide deployment runtime configuration through the environment before using the collected report as production-proof evidence.
+`;
+
 function printHumanSummary(report: GitHubAppSyncLivePreflightCollectionReport) {
   const heading = report.ok
     ? "GitHub App sync live preflight collection passed."
@@ -31,6 +45,11 @@ function printHumanSummary(report: GitHubAppSyncLivePreflightCollectionReport) {
 }
 
 async function main() {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(HELP_TEXT);
+    return;
+  }
+
   const json = process.argv.includes("--json");
   const report = await collectGitHubAppSyncLivePreflight(process.env);
 
@@ -49,4 +68,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : "GitHub App sync live preflight collection failed.");
   process.exitCode = 1;
 });
-

@@ -1,5 +1,22 @@
 import { runDeploymentGitHubAppSyncCanary } from "./lib/deployment-github-app-sync-canary";
 
+const HELP_TEXT = `Usage: npm run test:smoke:github-app-sync -- [--json]
+
+Runs a live GitHub App issue sync canary against the deployed Agentic origin. The canary first proves invalid bearer auth returns 401, then syncs allowlisted issues and polls queued github_issue_intake jobs to settlement.
+
+Required inputs:
+- AGENTIC_SMOKE_BASE_URL: stable deployed origin to test
+- AGENTIC_SMOKE_ACCESS_KEY: runtime access key for job polling
+- AGENTIC_GITHUB_APP_SYNC_SECRET: shared bearer secret configured in the deployed runtime and GitHub Actions caller
+
+Optional inputs:
+- AGENTIC_GITHUB_APP_SYNC_CANARY_TIMEOUT_MS: positive timeout in milliseconds
+- AGENTIC_GITHUB_APP_SYNC_CANARY_POLL_INTERVAL_MS: positive poll interval in milliseconds
+
+Output:
+- Redacted JSON suitable for AGENTIC_GITHUB_APP_SYNC_CANARY_JSON after the command passes.
+`;
+
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
 
@@ -27,6 +44,11 @@ function readPositiveIntEnv(name: string): number | undefined {
 }
 
 async function main() {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(HELP_TEXT);
+    return;
+  }
+
   const summary = await runDeploymentGitHubAppSyncCanary({
     baseUrl: requireEnv("AGENTIC_SMOKE_BASE_URL"),
     accessKey: requireEnv("AGENTIC_SMOKE_ACCESS_KEY"),
