@@ -43,6 +43,14 @@ CI and staging deploy both emit:
 These artifacts are uploaded into workflow storage for audit and incident-response use.
 Pull request builds still generate and validate the same evidence bundle, but skip upload to avoid artifact-quota failures before merge. Push-based builds keep uploading the evidence bundle.
 
+## Third-party scanner quota statuses
+
+External scanner quota or account-status failures, such as Snyk reporting `Code test limit reached`, are waiver-eligible only as scanner availability failures. Treat them as unresolved third-party status, not as a clean security scan.
+
+A waiver must record the exact failing context and message, and it must be paired with current evidence that the repo-owned gates passed: runtime vulnerability gate, dependency review where applicable, provenance validation, test/build validation, and at least one independent dependency or supply-chain scanner such as Socket or the generated SBOM workflow evidence. Do not waive a scanner quota failure when the failure includes a concrete vulnerability finding, a reachable exploit report, a policy violation, or a target URL with actionable scan details.
+
+When a quota/status waiver is used, keep the failed external status visible in the handoff and rerun or re-enable the scanner once quota is restored. Do not create a runtime vulnerability exception for quota exhaustion; exceptions are only for known advisories with documented mitigation and expiry.
+
 ## Provenance
 
 Push-based builds attest the generated security evidence and deployable build artifacts with GitHub build provenance so the team can trace which workflow and commit produced them.
