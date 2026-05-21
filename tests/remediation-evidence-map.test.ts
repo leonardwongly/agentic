@@ -112,7 +112,11 @@ describe("remediation evidence map", () => {
       ])
     );
     expect(entry?.validationGates).toEqual(
-      expect.arrayContaining(["npm run github:app-sync:preflight", "npm run release:closeout:evidence"])
+      expect.arrayContaining([
+        "npm run github:app-sync:preflight",
+        "npm run test:smoke:github-app-sync",
+        "npm run release:closeout:evidence"
+      ])
     );
     expect(entry?.deploymentProof.evidence).toEqual(
       expect.arrayContaining([
@@ -211,6 +215,23 @@ describe("remediation evidence map", () => {
         issue: 190,
         path: "entries[5].validationGates",
         message: "Production proof evidence must include validation gate 'npm run github:app-sync:preflight'."
+      })
+    );
+  });
+
+  it("rejects W01 production proof when the GitHub sync canary gate is removed", () => {
+    const map = cloneMap(clonedMap => {
+      const entry = clonedMap.entries.find(mapEntry => mapEntry.issue === 190)!;
+      entry.validationGates = entry.validationGates.filter(gate => gate !== "npm run test:smoke:github-app-sync");
+    });
+    const report = validateRemediationEvidenceMap(map, { cwd: repoRoot });
+
+    expect(report.ok).toBe(false);
+    expect(report.issues).toContainEqual(
+      expect.objectContaining({
+        issue: 190,
+        path: "entries[5].validationGates",
+        message: "Production proof evidence must include validation gate 'npm run test:smoke:github-app-sync'."
       })
     );
   });

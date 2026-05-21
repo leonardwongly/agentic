@@ -221,6 +221,7 @@
         "npm run test:smoke:deployment",
         "npm run test:smoke:deployment-async",
         "npm run github:app-sync:preflight",
+        "npm run test:smoke:github-app-sync",
         "npm run release:closeout:evidence"
       ],
       "deploymentProof": {

@@ -28,7 +28,7 @@ describe("release closeout evidence", () => {
       ok: true,
       summary: {
         pullRequests: 30,
-        blockedValidationGates: 6,
+        blockedValidationGates: 7,
         residualRisks: 3
       },
       issues: []
@@ -41,7 +41,7 @@ describe("release closeout evidence", () => {
 
     expect(rendered).toContain("Release closeout evidence passed.");
     expect(rendered).toContain("- Pull requests: 30");
-    expect(rendered).toContain("- Blocked validation gates: 6");
+    expect(rendered).toContain("- Blocked validation gates: 7");
     expect(rendered).toContain("- Residual risks: 3");
   });
 
@@ -436,6 +436,12 @@ describe("release closeout evidence", () => {
     expect(manifest.observability.commands).toContain("npm run github:app-sync:preflight:collect");
   });
 
+  it("keeps the GitHub App sync canary in the closeout operator commands", () => {
+    const manifest = readCheckedInManifest();
+
+    expect(manifest.observability.commands).toContain("npm run test:smoke:github-app-sync");
+  });
+
   it("records hosted CI recovery without leaving #190 as a residual CI blocker", () => {
     const manifest = readCheckedInManifest();
     const localCiGate = manifest.validationGates.find((gate) => gate.id === "local-ci");
@@ -571,6 +577,39 @@ describe("release closeout evidence", () => {
       expect.objectContaining({
         path: "validationGates",
         message: "Required validation gate 'github-app-sync-preflight' is missing."
+      })
+    );
+  });
+
+  it("requires the GitHub App sync canary to stay in the closeout gates", () => {
+    const manifest = cloneManifest(clonedManifest => {
+      clonedManifest.validationGates = clonedManifest.validationGates.filter(gate => gate.id !== "github-app-sync-canary");
+    });
+    const report = validateReleaseCloseoutEvidenceManifest(manifest, { cwd: repoRoot });
+
+    expect(report.ok).toBe(false);
+    expect(report.issues).toContainEqual(
+      expect.objectContaining({
+        path: "validationGates",
+        message: "Required validation gate 'github-app-sync-canary' is missing."
+      })
+    );
+  });
+
+  it("requires required validation gates to keep their expected commands", () => {
+    const manifest = cloneManifest(clonedManifest => {
+      const syncCanaryGate = clonedManifest.validationGates.find(gate => gate.id === "github-app-sync-canary");
+      if (syncCanaryGate) {
+        syncCanaryGate.command = "npm run github:app-sync:preflight";
+      }
+    });
+    const report = validateReleaseCloseoutEvidenceManifest(manifest, { cwd: repoRoot });
+
+    expect(report.ok).toBe(false);
+    expect(report.issues).toContainEqual(
+      expect.objectContaining({
+        path: "validationGates",
+        message: "Validation gate 'github-app-sync-canary' must use command 'npm run test:smoke:github-app-sync'."
       })
     );
   });
