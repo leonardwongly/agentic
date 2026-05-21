@@ -100,6 +100,10 @@ describe("remediation evidence map", () => {
         expect.objectContaining({
           kind: "github_pr",
           ref: "https://github.com/leonardwongly/agentic/pull/877"
+        }),
+        expect.objectContaining({
+          kind: "github_pr",
+          ref: "https://github.com/leonardwongly/agentic/pull/903"
         })
       ])
     );
@@ -138,7 +142,20 @@ describe("remediation evidence map", () => {
         }),
         expect.objectContaining({
           kind: "ci",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26202597305"
+        }),
+        expect.objectContaining({
+          kind: "ci",
           ref: "github:app-sync:preflight:collect 2026-05-21T02:29Z"
+        }),
+        expect.objectContaining({
+          kind: "ci",
+          ref: "github:app-sync:preflight:collect 2026-05-21T03:10Z"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#141",
+          note: expect.stringContaining("reopened")
         })
       ])
     );

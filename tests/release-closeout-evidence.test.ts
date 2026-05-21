@@ -27,7 +27,7 @@ describe("release closeout evidence", () => {
     expect(report).toMatchObject({
       ok: true,
       summary: {
-        pullRequests: 25,
+        pullRequests: 26,
         blockedValidationGates: 6,
         residualRisks: 3
       },
@@ -40,7 +40,7 @@ describe("release closeout evidence", () => {
     const rendered = renderReleaseCloseoutEvidenceReport(report);
 
     expect(rendered).toContain("Release closeout evidence passed.");
-    expect(rendered).toContain("- Pull requests: 25");
+    expect(rendered).toContain("- Pull requests: 26");
     expect(rendered).toContain("- Blocked validation gates: 6");
     expect(rendered).toContain("- Residual risks: 3");
   });
@@ -227,6 +227,11 @@ describe("release closeout evidence", () => {
           number: 877,
           status: "merged",
           url: "https://github.com/leonardwongly/agentic/pull/877"
+        }),
+        expect.objectContaining({
+          number: 903,
+          status: "merged",
+          url: "https://github.com/leonardwongly/agentic/pull/903"
         })
       ])
     );
@@ -236,6 +241,11 @@ describe("release closeout evidence", () => {
           kind: "github_action",
           ref: "https://github.com/leonardwongly/agentic/actions/runs/26201318000",
           status: "passed"
+        }),
+        expect.objectContaining({
+          kind: "github_action",
+          ref: "https://github.com/leonardwongly/agentic/actions/runs/26202597305",
+          status: "passed"
         })
       ])
     );
@@ -244,6 +254,26 @@ describe("release closeout evidence", () => {
         expect.objectContaining({
           kind: "runtime_blocker",
           ref: "2026-05-21T02:29Z github:app-sync:preflight:collect",
+          status: "blocked"
+        }),
+        expect.objectContaining({
+          kind: "runtime_blocker",
+          ref: "2026-05-21T03:10Z github:app-sync:preflight:collect",
+          status: "blocked"
+        })
+      ])
+    );
+  });
+
+  it("keeps the reopened stable-ingress blocker correction in the closeout package", () => {
+    const manifest = readCheckedInManifest();
+    const ingressGate = manifest.validationGates.find((gate) => gate.id === "deploy-ingress-check");
+
+    expect(ingressGate?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "https://github.com/leonardwongly/agentic/issues/141#issuecomment-4504440830",
           status: "blocked"
         })
       ])

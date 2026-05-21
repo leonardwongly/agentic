@@ -203,6 +203,11 @@
           "kind": "github_pr",
           "ref": "https://github.com/leonardwongly/agentic/pull/877",
           "note": "Workflow dependency update is merged and validated on origin/main without changing the live production blockers."
+        },
+        {
+          "kind": "github_pr",
+          "ref": "https://github.com/leonardwongly/agentic/pull/903",
+          "note": "Final blocker audit evidence refresh is merged and validated on origin/main without changing the live production blockers."
         }
       ],
       "validationGates": [
@@ -220,7 +225,7 @@
           {
             "kind": "github_issue",
             "ref": "#141",
-            "note": "Stable provider target and HTTPS ingress remain blocked externally; latest blocker refresh is issue comment 4503962701."
+            "note": "Stable provider target and HTTPS ingress remain blocked externally; latest correction refresh is issue comment 4504440830."
           },
           {
             "kind": "github_issue",
@@ -254,8 +259,23 @@
           },
           {
             "kind": "ci",
+            "ref": "https://github.com/leonardwongly/agentic/actions/runs/26202597305",
+            "note": "Post-PR #903 main CI passed on origin/main 75b13ba; repo-side validation is green while deployment proof remains blocked."
+          },
+          {
+            "kind": "ci",
             "ref": "github:app-sync:preflight:collect 2026-05-21T02:29Z",
             "note": "Final live preflight from a clean origin/main worktree still fails on temporary ingress, disabled workflow, missing runtime config, missing smoke key, missing allowlist, absent Render services, and need_payment_info."
+          },
+          {
+            "kind": "ci",
+            "ref": "github:app-sync:preflight:collect 2026-05-21T03:10Z",
+            "note": "Post-PR #903 live preflight from a clean origin/main worktree still fails on temporary ingress, disabled workflow, missing runtime config, missing smoke key, missing allowlist, absent Render services, and need_payment_info."
+          },
+          {
+            "kind": "github_issue",
+            "ref": "#141",
+            "note": "Stable ingress issue was reopened after accidental keyword closure; no deployed health or readiness proof exists yet."
           }
         ]
       },
