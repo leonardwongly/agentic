@@ -471,6 +471,40 @@ describe("GitHub App issue sync route", () => {
     expect(jobs).toHaveLength(0);
   });
 
+  it("fails closed when the configured GitHub API base URL is not HTTPS", async () => {
+    process.env.AGENTIC_GITHUB_APP_API_BASE_URL = "http://github.test";
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "AGENTIC_GITHUB_APP_API_BASE_URL must use https."
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("fails closed when the sync automation mode is not plan or work", async () => {
+    process.env.AGENTIC_GITHUB_APP_SYNC_AUTOMATION_MODE = "intake";
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "AGENTIC_GITHUB_APP_SYNC_AUTOMATION_MODE must be plan or work."
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
+  });
+
   it("fails closed when GitHub returns a repository outside the allowlist", async () => {
     fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : input.toString();
