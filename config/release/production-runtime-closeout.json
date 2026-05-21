@@ -440,6 +440,51 @@
         "npm run github:app-sync:preflight:collect -- --json"
       ],
       "hostedStatus": "PR #904 and post-merge main CI passed; merge commit 9bfdb8f89ce0e3a10a1cb80017057f0bd336a88b, CI https://github.com/leonardwongly/agentic/actions/runs/26203705829."
+    },
+    {
+      "number": 905,
+      "title": "test(release): refresh post-904 blocker evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/905",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run remediation:evidence-map -- --json",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check",
+        "npm audit --json",
+        "npm run github:app-sync:preflight:collect -- --json"
+      ],
+      "hostedStatus": "PR #905 and post-merge main CI passed; merge commit 89535f802fd426925f49efe8b27d90ea7e0c5b81, CI https://github.com/leonardwongly/agentic/actions/runs/26204947119."
+    },
+    {
+      "number": 906,
+      "title": "test(github): add issue sync completion audit",
+      "url": "https://github.com/leonardwongly/agentic/pull/906",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-issues-completion-audit.test.ts tests/github-app-sync-live-preflight.test.ts tests/github-app-sync-live-preflight-collector.test.ts",
+        "npm run github:issues:completion-audit -- --json (expected fail against open production-proof issues)",
+        "npm run typecheck",
+        "npm run format:check",
+        "git diff --check"
+      ],
+      "hostedStatus": "PR #906 and post-merge main CI passed; merge commit 8cdb222aaf78312a8a46b81e5ef811bf9df1e0d4, CI https://github.com/leonardwongly/agentic/actions/runs/26206287937."
+    },
+    {
+      "number": 907,
+      "title": "docs(github): map issue sync production closeout",
+      "url": "https://github.com/leonardwongly/agentic/pull/907",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/github-issue-autopilot-workflow.test.ts tests/github-issues-completion-audit.test.ts tests/github-app-sync-live-preflight.test.ts",
+        "npm run format:check",
+        "git diff --check",
+        "npm run typecheck",
+        "npm run github:issues:completion-audit -- --json (expected fail against open production-proof issues)"
+      ],
+      "hostedStatus": "PR #907 and post-merge main CI passed; merge commit 3bdefc75c14c5a1cf14a2a182375f7117f4c5aea, CI https://github.com/leonardwongly/agentic/actions/runs/26207505033."
     }
   ],
   "trackedIssues": [
@@ -936,6 +981,30 @@
           "ref": "2026-05-21T03:51Z github:app-sync:preflight:collect",
           "status": "blocked",
           "note": "Post-PR #904 clean origin/main preflight still fails on temporary sync host, missing deployed origin, disabled workflow, missing runtime config names, missing smoke key and allowlist, absent Render services, and Render need_payment_info."
+        },
+        {
+          "kind": "repo_path",
+          "ref": "scripts/github-issues-completion-audit.ts",
+          "status": "ready",
+          "note": "Merged completion audit maps #141, #142, #143, #144, #145, and #152 to live issue state and preflight evidence before roadmap closeout."
+        },
+        {
+          "kind": "repo_path",
+          "ref": "scripts/lib/github-issues-completion-audit.ts",
+          "status": "ready",
+          "note": "Library gate fails until tracked production-proof issues are closed and required live preflight checks pass."
+        },
+        {
+          "kind": "runtime_blocker",
+          "ref": "2026-05-21T05:50Z github:app-sync:preflight:collect",
+          "status": "blocked",
+          "note": "Post-PR #907 clean origin/main preflight still fails on temporary trycloudflare sync host, missing deployed origin, disabled workflow, missing runtime config names, missing smoke key and allowlist, absent Render services, and Render need_payment_info."
+        },
+        {
+          "kind": "runtime_blocker",
+          "ref": "2026-05-21T05:50Z github:issues:completion-audit",
+          "status": "blocked",
+          "note": "Completion audit still fails because #141, #142, #143, #144, #145, and #152 remain open and twelve production-proof criteria are not satisfied."
         }
       ],
       "blockerIssues": [141, 142, 143, 144, 145],
@@ -990,6 +1059,24 @@
           "ref": "https://github.com/leonardwongly/agentic/actions/runs/26203705829",
           "status": "passed",
           "note": "Post-merge main CI passed after PR #904 on origin/main 9bfdb8f, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26204947119",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #905 on origin/main 89535f8, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26206287937",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #906 on origin/main 8cdb222, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26207505033",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #907 on origin/main 3bdefc7, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
         }
       ],
       "notes": "Run on implementation branches before PR review; hosted CI remains the merge gate when available."
@@ -1120,6 +1207,7 @@
       "npm run test:smoke:deployment-confidence",
       "npm run telemetry:rollout-gate -- --dir \"${AGENTIC_TELEMETRY_RETENTION_DIR:-.agentic/telemetry}\"",
       "npm run github:app-sync:preflight:collect",
+      "npm run github:issues:completion-audit -- --json",
       "npm run release:closeout:evidence"
     ]
   }
