@@ -47,4 +47,25 @@ describe("GitHub Actions artifact cleanup", () => {
     );
     expect((staging.match(/retention-days:\s*7(?!\d)/g) || []).length).toBe(2);
   });
+
+  it("attests each supply-chain evidence set with a single OIDC-backed action call", () => {
+    const ci = readRepoFile(".github/workflows/ci.yml");
+    const staging = readRepoFile(".github/workflows/staging-manual-deploy.yml");
+
+    expect(ci).toContain("name: Attest supply-chain evidence");
+    expect(ci).not.toContain("name: Attest security evidence");
+    expect(ci).not.toContain("name: Attest deployable build artifacts");
+    expect((ci.match(/uses: actions\/attest-build-provenance@[a-f0-9]{40} # v\d+/g) || []).length).toBe(1);
+    expect(ci).toMatch(
+      /subject-path:\s*\|\s*artifacts\/security\/agentic-sbom\.spdx\.json\s*artifacts\/build\/agentic-runtime-bundle\.tgz\s*artifacts\/build\/agentic-image\.tar/u
+    );
+
+    expect(staging).toContain("name: Attest staging supply-chain evidence");
+    expect(staging).not.toContain("name: Attest staging security evidence");
+    expect(staging).not.toContain("name: Attest staging deployable build artifacts");
+    expect((staging.match(/uses: actions\/attest-build-provenance@[a-f0-9]{40} # v\d+/g) || []).length).toBe(1);
+    expect(staging).toMatch(
+      /subject-path:\s*\|\s*artifacts\/security\/agentic-sbom\.spdx\.json\s*artifacts\/build\/agentic-runtime-bundle\.tgz\s*artifacts\/build\/agentic-image\.tar/u
+    );
+  });
 });

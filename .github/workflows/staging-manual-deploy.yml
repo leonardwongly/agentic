@@ -185,17 +185,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Attest staging security evidence
-        if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
-        with:
-          subject-path: artifacts/security/agentic-sbom.spdx.json
-
-      - name: Attest staging deployable build artifacts
+      - name: Attest staging supply-chain evidence
         if: (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test') && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
+            artifacts/security/agentic-sbom.spdx.json
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
 

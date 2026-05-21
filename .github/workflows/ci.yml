@@ -228,17 +228,12 @@ jobs:
           echo "Generated supply-chain evidence locally for PR validation."
           echo "Skipping artifact upload on pull_request events to avoid quota-bound CI failures."
 
-      - name: Attest security evidence
-        if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
-        with:
-          subject-path: artifacts/security/agentic-sbom.spdx.json
-
-      - name: Attest deployable build artifacts
+      - name: Attest supply-chain evidence
         if: github.event_name != 'pull_request' && (!github.event.repository.private || github.event.repository.owner.type == 'Organization' || vars.ENABLE_ATTESTATIONS == 'true')
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
+            artifacts/security/agentic-sbom.spdx.json
             artifacts/build/agentic-runtime-bundle.tgz
             artifacts/build/agentic-image.tar
 
