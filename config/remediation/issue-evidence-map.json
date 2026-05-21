@@ -193,6 +193,16 @@
           "kind": "config",
           "ref": "config/release/production-runtime-closeout.json",
           "note": "Release closeout evidence now requires the GitHub App sync preflight gate before live sync proof can close."
+        },
+        {
+          "kind": "github_pr",
+          "ref": "https://github.com/leonardwongly/agentic/pull/902",
+          "note": "Latest tracker evidence refresh is merged into origin/main before final production-proof audit."
+        },
+        {
+          "kind": "github_pr",
+          "ref": "https://github.com/leonardwongly/agentic/pull/877",
+          "note": "Workflow dependency update is merged and validated on origin/main without changing the live production blockers."
         }
       ],
       "validationGates": [
@@ -236,6 +246,16 @@
             "kind": "github_issue",
             "ref": "#152",
             "note": "Latest roadmap evidence refresh at issue comment 4503966874 records current origin/main, release/remediation validation, live preflight collection, and remaining external deployment/runtime prerequisites."
+          },
+          {
+            "kind": "ci",
+            "ref": "https://github.com/leonardwongly/agentic/actions/runs/26201318000",
+            "note": "Post-PR #877 main CI passed on origin/main dd7a28e; repo-side validation is green while deployment proof remains blocked."
+          },
+          {
+            "kind": "ci",
+            "ref": "github:app-sync:preflight:collect 2026-05-21T02:29Z",
+            "note": "Final live preflight from a clean origin/main worktree still fails on temporary ingress, disabled workflow, missing runtime config, missing smoke key, missing allowlist, absent Render services, and need_payment_info."
           }
         ]
       },
