@@ -81,7 +81,7 @@ jobs:
 
       - name: Resolve staging execution mode
         id: inspect
-        run: npx tsx scripts/staging-execution-plan.ts
+        run: npm run deploy:staging:plan
 
       - name: Validate stable ingress readiness
         if: steps.inspect.outputs.mode == 'external'
