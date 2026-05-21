@@ -28,7 +28,7 @@ Live evidence checked:
 - GitHub App sync live preflight collection and checks
 - Release closeout evidence manifest
 
-This command fails closed until stable ingress, runtime configuration, deployed Render services, workflow activation, deployment smoke evidence, async worker canary evidence, GitHub App sync canary evidence, and issue closeout are all proven.
+This command fails closed until stable ingress, runtime configuration, deployed provider services, workflow activation, deployment smoke evidence, async worker canary evidence, GitHub App sync canary evidence, and issue closeout are all proven.
 
 Run npm run github:app-sync:preflight:collect -- --json first to inspect the live preflight blockers without closing issues.
 `;

@@ -47,8 +47,8 @@ export type GitHubAppSyncLivePreflightCheck = {
     | "runtime_secret_shape"
     | "smoke_canary_inventory"
     | "repository_allowlist"
-    | "render_services"
-    | "render_blueprint"
+    | "provider_services"
+    | "provider_configuration"
     | "deployment_smoke"
     | "deployment_async_canary"
     | "github_app_sync_canary";
@@ -430,82 +430,202 @@ function serviceName(value: unknown): string | null {
   return typeof candidate === "string" ? candidate.trim() : null;
 }
 
-function buildRenderServicesCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
-  const raw = trim(env.AGENTIC_RENDER_SERVICES_JSON);
-
-  if (!raw) {
-    return fail(
-      "render_services",
-      "AGENTIC_RENDER_SERVICES_JSON is not set; live preflight cannot prove deployed web and worker services exist."
-    );
+function serviceRole(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
   }
 
-  let parsed: unknown;
+  const record = value as Record<string, unknown>;
+  const candidates = [record.role, record.type, record.kind, record.serviceType];
+  const candidate = candidates.find((item) => typeof item === "string" && item.trim());
 
-  try {
-    parsed = parseJsonObject(raw);
-  } catch {
-    return fail("render_services", "AGENTIC_RENDER_SERVICES_JSON must contain JSON from `render services list --output json`.");
-  }
-
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    return fail("render_services", "Render services list must include deployed Agentic services.");
-  }
-
-  const names = parsed.map(serviceName).filter((name): name is string => Boolean(name));
-  const missing = ["agentic-web", "agentic-worker"].filter(
-    (expected) => !names.some((name) => name === expected || name.includes(expected))
-  );
-
-  if (missing.length > 0) {
-    return fail("render_services", "Render services list is missing required Agentic services.", {
-      missingNames: missing.join(",")
-    });
-  }
-
-  return pass("render_services", "Render services list includes web and worker services.", {
-    serviceCount: parsed.length
-  });
+  return typeof candidate === "string" ? candidate.trim().toLowerCase() : null;
 }
 
-function buildRenderBlueprintCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
-  const raw = trim(env.AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON);
+function isTruthyRecordFlag(record: Record<string, unknown>, key: string): boolean {
+  return record[key] === true;
+}
 
-  if (!raw) {
-    return fail(
-      "render_blueprint",
-      "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON is not set; live preflight cannot prove Render Blueprint validation passes."
-    );
-  }
+type AlternateProviderEvidence = {
+  ok: boolean;
+  provider: string | null;
+  environment: string | null;
+  serviceCount: number;
+  errors: string[];
+};
 
+function buildAlternateProviderEvidence(raw: string): AlternateProviderEvidence {
   let parsed: unknown;
 
   try {
     parsed = parseJsonObject(raw);
   } catch {
-    return fail(
-      "render_blueprint",
-      "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON must contain JSON from `render blueprints validate deploy/render/render.yaml --output json`."
-    );
+    return {
+      ok: false,
+      provider: null,
+      environment: null,
+      serviceCount: 0,
+      errors: ["AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON must be valid JSON."]
+    };
   }
 
-  if (!parsed || typeof parsed !== "object") {
-    return fail("render_blueprint", "Render Blueprint validation JSON must be an object.");
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      ok: false,
+      provider: null,
+      environment: null,
+      serviceCount: 0,
+      errors: ["AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON must be a JSON object."]
+    };
   }
 
   const record = parsed as Record<string, unknown>;
-  const errors = Array.isArray(record.errors) ? record.errors : [];
+  const provider = stringValue(record, "provider");
+  const environment = stringValue(record, "environment");
+  const services = arrayValue(record, "services");
+  const serviceNames = services.map(serviceName).filter((name): name is string => Boolean(name));
+  const serviceRoles = services.map(serviceRole).filter((role): role is string => Boolean(role));
+  const hasWebService =
+    serviceRoles.some((role) => role === "web") || serviceNames.some((name) => name === "agentic-web" || name.includes("agentic-web"));
+  const hasWorkerService =
+    serviceRoles.some((role) => role === "worker") ||
+    serviceNames.some((name) => name === "agentic-worker" || name.includes("agentic-worker"));
+  const database = record.database && typeof record.database === "object" ? (record.database as Record<string, unknown>) : null;
+  const databaseEngine = database
+    ? [database.engine, database.type, database.kind].find((value) => typeof value === "string" && value.trim())
+    : null;
+  const postgres =
+    record.postgres === true ||
+    (typeof databaseEngine === "string" && databaseEngine.toLowerCase().includes("postgres") && database.configured === true);
+  const errors = [
+    provider ? null : "provider must be set.",
+    environment ? null : "environment must be set.",
+    hasWebService ? null : "services must include a web service.",
+    hasWorkerService ? null : "services must include a worker service.",
+    postgres ? null : "postgres or a configured Postgres database must be proven.",
+    isTruthyRecordFlag(record, "stableHttpsIngress") ? null : "stableHttpsIngress must be true.",
+    isTruthyRecordFlag(record, "secretManagement") ? null : "secretManagement must be true.",
+    stringValue(record, "rollbackAuthority") ? null : "rollbackAuthority must be set."
+  ].filter((error): error is string => Boolean(error));
 
-  if (record.valid === false || errors.length > 0) {
-    const firstError = errors.find((error) => error && typeof error === "object") as Record<string, unknown> | undefined;
-    const errorCode = typeof firstError?.error === "string" ? firstError.error : "unknown";
-    return fail("render_blueprint", "Render Blueprint validation must pass before live sync validation.", {
-      errorCount: errors.length,
-      firstError: errorCode
+  return {
+    ok: errors.length === 0,
+    provider,
+    environment,
+    serviceCount: services.length,
+    errors
+  };
+}
+
+function buildProviderServicesCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const alternateRaw = trim(env.AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON);
+  const raw = trim(env.AGENTIC_RENDER_SERVICES_JSON);
+  const alternate = alternateRaw ? buildAlternateProviderEvidence(alternateRaw) : null;
+
+  if (alternate?.ok) {
+    return pass("provider_services", "Alternate provider evidence proves deployed web and worker services.", {
+      provider: alternate.provider,
+      environment: alternate.environment,
+      serviceCount: alternate.serviceCount
     });
   }
 
-  return pass("render_blueprint", "Render Blueprint validation passed.", { valid: true });
+  if (raw) {
+    let parsed: unknown;
+
+    try {
+      parsed = parseJsonObject(raw);
+    } catch {
+      return fail("provider_services", "AGENTIC_RENDER_SERVICES_JSON must contain JSON from `render services list --output json`.");
+    }
+
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return fail("provider_services", "Provider services evidence must include deployed Agentic web and worker services.", {
+        provider: "render",
+        alternateProviderErrors: alternate?.errors.join("; ") ?? null
+      });
+    }
+
+    const names = parsed.map(serviceName).filter((name): name is string => Boolean(name));
+    const missing = ["agentic-web", "agentic-worker"].filter(
+      (expected) => !names.some((name) => name === expected || name.includes(expected))
+    );
+
+    if (missing.length > 0) {
+      return fail("provider_services", "Provider services evidence is missing required Agentic services.", {
+        provider: "render",
+        missingNames: missing.join(","),
+        alternateProviderErrors: alternate?.errors.join("; ") ?? null
+      });
+    }
+
+    return pass("provider_services", "Render services list includes web and worker services.", {
+      provider: "render",
+      serviceCount: parsed.length
+    });
+  }
+
+  return fail(
+    "provider_services",
+    "Set AGENTIC_RENDER_SERVICES_JSON or AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON to prove deployed web and worker services exist.",
+    {
+      alternateProviderErrors: alternate?.errors.join("; ") ?? null
+    }
+  );
+}
+
+function buildProviderConfigurationCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePreflightCheck {
+  const alternateRaw = trim(env.AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON);
+  const raw = trim(env.AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON);
+  const alternate = alternateRaw ? buildAlternateProviderEvidence(alternateRaw) : null;
+
+  if (alternate?.ok) {
+    return pass("provider_configuration", "Alternate provider evidence proves Postgres, stable ingress controls, secret management, and rollback authority.", {
+      provider: alternate.provider,
+      environment: alternate.environment
+    });
+  }
+
+  if (raw) {
+    let parsed: unknown;
+
+    try {
+      parsed = parseJsonObject(raw);
+    } catch {
+      return fail(
+        "provider_configuration",
+        "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON must contain JSON from `render blueprints validate deploy/render/render.yaml --output json`."
+      );
+    }
+
+    if (!parsed || typeof parsed !== "object") {
+      return fail("provider_configuration", "Render Blueprint validation JSON must be an object.");
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const errors = Array.isArray(record.errors) ? record.errors : [];
+
+    if (record.valid === false || errors.length > 0) {
+      const firstError = errors.find((error) => error && typeof error === "object") as Record<string, unknown> | undefined;
+      const errorCode = typeof firstError?.error === "string" ? firstError.error : "unknown";
+      return fail("provider_configuration", "Provider configuration validation must pass before live sync validation.", {
+        provider: "render",
+        errorCount: errors.length,
+        firstError: errorCode,
+        alternateProviderErrors: alternate?.errors.join("; ") ?? null
+      });
+    }
+
+    return pass("provider_configuration", "Render Blueprint validation passed.", { provider: "render", valid: true });
+  }
+
+  return fail(
+    "provider_configuration",
+    "Set AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON or AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON to prove provider configuration.",
+    {
+      alternateProviderErrors: alternate?.errors.join("; ") ?? null
+    }
+  );
 }
 
 function recordValue(record: Record<string, unknown>, key: string): unknown {
@@ -724,8 +844,8 @@ export function validateGitHubAppSyncLivePreflight(env: NodeJS.ProcessEnv): GitH
     buildRuntimeShapeCheck(env),
     buildSmokeCanaryInventoryCheck(env),
     buildAllowlistCheck(env),
-    buildRenderServicesCheck(env),
-    buildRenderBlueprintCheck(env),
+    buildProviderServicesCheck(env),
+    buildProviderConfigurationCheck(env),
     buildDeploymentSmokeCheck(env),
     buildDeploymentAsyncCanaryCheck(env),
     buildGitHubAppSyncCanaryCheck(env)
