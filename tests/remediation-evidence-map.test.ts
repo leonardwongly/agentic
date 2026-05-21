@@ -102,6 +102,22 @@ describe("remediation evidence map", () => {
       expect.arrayContaining([
         expect.objectContaining({
           kind: "github_issue",
+          ref: "#141"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#142"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#143"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
+          ref: "#144"
+        }),
+        expect.objectContaining({
+          kind: "github_issue",
           ref: "#145"
         }),
         expect.objectContaining({
