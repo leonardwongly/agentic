@@ -146,6 +146,9 @@ inputs:
 - `AGENTIC_GITHUB_ACTIONS_SECRETS_JSON`
 - `AGENTIC_RENDER_SERVICES_JSON`
 - `AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON`
+- `AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON` when an approved non-Render
+  target supplies equivalent web, worker, Postgres, stable ingress, secret
+  management, and rollback evidence
 
 ```bash
 export AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE="$(gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq .state)"
@@ -154,6 +157,8 @@ export AGENTIC_GITHUB_ACTIONS_SECRETS_JSON="$(gh secret list --repo leonardwongl
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-the-runtime-access-key
 export AGENTIC_RENDER_SERVICES_JSON="$(render services list --output json)"
 export AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON="$(render blueprints validate deploy/render/render.yaml --output json)"
+# For an approved non-Render target, set AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON
+# instead of the Render-specific evidence above.
 npm run github:app-sync:preflight
 ```
 
@@ -190,7 +195,7 @@ The ordered closeout sequence is:
 
 | Issue | Proof required before closing | Evidence command or source |
 | --- | --- | --- |
-| #141 | Stable HTTPS ingress exists, Render web and worker services exist, provider Blueprint validation passes, `/api/health` and `/api/ready` pass, proxy-header overwrite behavior and rollback authority are documented. | `render services list --output json`, `render blueprints validate deploy/render/render.yaml --output json`, `npm run deploy:ingress:check`, `npm run test:smoke:deployment` |
+| #141 | Stable HTTPS ingress exists, provider web and worker services exist, provider validation passes, `/api/health` and `/api/ready` pass, proxy-header overwrite behavior and rollback authority are documented. | `render services list --output json`, `render blueprints validate deploy/render/render.yaml --output json`, `AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON` for an approved alternate provider, `npm run deploy:ingress:check`, `npm run test:smoke:deployment` |
 | #142 | Runtime-only GitHub App credentials, sync secret, and allowlist are configured in the provider; GitHub Actions has only the route caller secret and stable sync URL; invalid bearer auth returns `401`. | `gh secret list --repo leonardwongly/agentic --json name`, `gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo leonardwongly/agentic`, `npm run github:app-sync:preflight:collect`, `npm run test:smoke:github-app-sync` |
 | #143 | Target Postgres exists, migrations apply idempotently, schema readiness passes, shared-auth state is required, and deployed readiness proves Postgres-backed state. | `npm run db:migrate`, `npm run db:status -- --require-ready`, `npm run production:bootstrap:check`, `npm run test:smoke:deployment` |
 | #144 | Deployed worker is running against the same durable store as web/API, worker heartbeat is fresh, and a harmless job reaches completed or sanitized failed state without secret leakage. | provider worker logs, `/api/ready`, `npm run test:smoke:deployment-async`, job status evidence |
@@ -221,9 +226,9 @@ The closeout is intentionally sequential. Do not enable scheduled sync or run a
 live manual dispatch before #141 stable ingress, #142 runtime/repo
 configuration, #143 Postgres/shared-auth bootstrap, and #144 worker proof are
 complete. If any command returns a blocker such as `need_payment_info`,
-`disabled_manually`, a temporary tunnel URL, missing runtime config, or absent
-Render services, record that blocker on the relevant issue instead of marking
-the proof complete.
+`disabled_manually`, a temporary tunnel URL, missing runtime config, absent
+Render services, or missing alternate-provider evidence, record that blocker on
+the relevant issue instead of marking the proof complete.
 
 Do not waive `need_payment_info` by rewriting the production Blueprint to a
 free-only shape. Render supports free web services and free Postgres databases

@@ -13,7 +13,7 @@ Read-only inventory collected:
 - Render service list
 - Render Blueprint validation result for deploy/render/render.yaml
 
-Runtime-only secrets are not fetched by this command. Provide deployment runtime configuration through the environment before using the collected report as production-proof evidence.
+Runtime-only secrets and alternate-provider evidence are not fetched by this command. Provide deployment runtime configuration and, for a non-Render target, AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON through the environment before using the collected report as production-proof evidence.
 `;
 
 function printHumanSummary(report: GitHubAppSyncLivePreflightCollectionReport) {

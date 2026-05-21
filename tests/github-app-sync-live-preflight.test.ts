@@ -81,12 +81,53 @@ describe("GitHub App sync live preflight", () => {
       ["runtime_secret_shape", "pass"],
       ["smoke_canary_inventory", "pass"],
       ["repository_allowlist", "pass"],
-      ["render_services", "pass"],
-      ["render_blueprint", "pass"],
+      ["provider_services", "pass"],
+      ["provider_configuration", "pass"],
       ["deployment_smoke", "pass"],
       ["deployment_async_canary", "pass"],
       ["github_app_sync_canary", "pass"]
     ]);
+  });
+
+  it("accepts an approved alternate provider evidence package when Render inventory is not used", () => {
+    const { AGENTIC_RENDER_SERVICES_JSON, AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON, ...envWithoutRenderEvidence } = BASE_ENV;
+    const report = validateGitHubAppSyncLivePreflight({
+      ...envWithoutRenderEvidence,
+      AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON: JSON.stringify({
+        provider: "railway",
+        environment: "production-like",
+        services: [
+          { name: "agentic-web", role: "web" },
+          { name: "agentic-worker", role: "worker" }
+        ],
+        database: { engine: "postgres", configured: true },
+        stableHttpsIngress: true,
+        secretManagement: true,
+        rollbackAuthority: "platform-operator"
+      })
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "provider_services",
+        status: "pass",
+        message: "Alternate provider evidence proves deployed web and worker services.",
+        details: expect.objectContaining({
+          provider: "railway",
+          environment: "production-like",
+          serviceCount: 2
+        })
+      })
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "provider_configuration",
+        status: "pass",
+        message:
+          "Alternate provider evidence proves Postgres, stable ingress controls, secret management, and rollback authority."
+      })
+    );
   });
 
   it("rejects temporary tunnel sync URLs and disabled workflows", () => {
@@ -278,16 +319,16 @@ describe("GitHub App sync live preflight", () => {
     expect(report.ok).toBe(false);
     expect(report.checks).toContainEqual(
       expect.objectContaining({
-        name: "render_services",
+        name: "provider_services",
         status: "fail",
-        message: "Render services list must include deployed Agentic services."
+        message: "Provider services evidence must include deployed Agentic web and worker services."
       })
     );
     expect(report.checks).toContainEqual(
       expect.objectContaining({
-        name: "render_blueprint",
+        name: "provider_configuration",
         status: "fail",
-        message: "Render Blueprint validation must pass before live sync validation."
+        message: "Provider configuration validation must pass before live sync validation."
       })
     );
     expect(serialized).not.toContain(BASE_ENV.AGENTIC_GITHUB_APP_SYNC_SECRET);
@@ -302,16 +343,18 @@ describe("GitHub App sync live preflight", () => {
     expect(report.ok).toBe(false);
     expect(report.checks).toContainEqual(
       expect.objectContaining({
-        name: "render_services",
+        name: "provider_services",
         status: "fail",
-        message: "AGENTIC_RENDER_SERVICES_JSON is not set; live preflight cannot prove deployed web and worker services exist."
+        message:
+          "Set AGENTIC_RENDER_SERVICES_JSON or AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON to prove deployed web and worker services exist."
       })
     );
     expect(report.checks).toContainEqual(
       expect.objectContaining({
-        name: "render_blueprint",
+        name: "provider_configuration",
         status: "fail",
-        message: "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON is not set; live preflight cannot prove Render Blueprint validation passes."
+        message:
+          "Set AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON or AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON to prove provider configuration."
       })
     );
   });

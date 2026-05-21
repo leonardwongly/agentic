@@ -187,7 +187,7 @@ describe("GitHub issue-sync completion audit", () => {
         issue: 145,
         status: "fail",
         evidence: expect.arrayContaining([
-          "render_blueprint: fail - Render Blueprint validation must pass before live sync validation."
+          "provider_configuration: fail - Provider configuration validation must pass before live sync validation."
         ])
       })
     );

@@ -95,7 +95,8 @@ describe("GitHub App sync live preflight collector", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: npm run github:app-sync:preflight:collect -- [--json]");
     expect(result.stdout).toContain("GitHub App Issue Sync workflow state");
-    expect(result.stdout).toContain("Runtime-only secrets are not fetched");
+    expect(result.stdout).toContain("Runtime-only secrets and alternate-provider evidence are not fetched");
+    expect(result.stdout).toContain("AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON");
     expect(result.stderr).toBe("");
   });
 
@@ -176,7 +177,7 @@ describe("GitHub App sync live preflight collector", () => {
     );
     expect(report.preflight.checks).toContainEqual(
       expect.objectContaining({
-        name: "render_blueprint",
+        name: "provider_configuration",
         status: "fail",
         details: expect.objectContaining({
           firstError: "need_payment_info"
@@ -240,7 +241,7 @@ describe("GitHub App sync live preflight collector", () => {
     );
     expect(report.preflight.checks).toContainEqual(
       expect.objectContaining({
-        name: "render_services",
+        name: "provider_services",
         status: "fail"
       })
     );
