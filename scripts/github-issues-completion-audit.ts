@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
 import {
   buildGitHubIssueSyncCompletionAudit,
+  buildGitHubIssueSyncRemediationPlan,
   githubIssueSyncCompletionAuditTrackedIssues,
   type GitHubIssueSyncCompletionAuditReport,
-  type GitHubIssueSyncCompletionIssueState
+  type GitHubIssueSyncCompletionIssueState,
+  type GitHubIssueSyncCompletionRemediationPlan
 } from "./lib/github-issues-completion-audit";
 import { collectGitHubAppSyncLivePreflight } from "./lib/github-app-sync-live-preflight-collector";
 import {
@@ -19,7 +21,7 @@ type CommandResult = {
   error?: Error;
 };
 
-const HELP_TEXT = `Usage: npm run github:issues:completion-audit -- [--json]
+const HELP_TEXT = `Usage: npm run github:issues:completion-audit -- [--json] [--remediation-plan]
 
 Audits whether the GitHub issue-sync production-proof issue tree is complete.
 
@@ -31,6 +33,7 @@ Live evidence checked:
 This command fails closed until stable ingress, runtime configuration, deployed provider services, workflow activation, deployment smoke evidence, async worker canary evidence, GitHub App sync canary evidence, and issue closeout are all proven.
 
 Run npm run github:app-sync:preflight:collect -- --json first to inspect the live preflight blockers without closing issues.
+Use --remediation-plan to print a deterministic read-only operator checklist derived from failed audit criteria.
 `;
 
 function runCommand(command: string, args: string[]): Promise<CommandResult> {
@@ -123,6 +126,33 @@ function printHumanSummary(report: GitHubIssueSyncCompletionAuditReport) {
   }
 }
 
+function printRemediationPlan(plan: GitHubIssueSyncCompletionRemediationPlan) {
+  console.log(plan.ok ? "GitHub issue-sync remediation plan is empty." : "GitHub issue-sync remediation plan:");
+  console.log(`Checked issues: ${plan.generatedFrom.checkedIssues}`);
+  console.log(`Failed criteria: ${plan.generatedFrom.failedCriteria}`);
+
+  for (const item of plan.items) {
+    console.log(`- #${item.issue} ${item.open ? "open" : "closed"}: ${item.title}`);
+
+    if (item.failedChecks.length > 0) {
+      console.log(`  Failed checks: ${item.failedChecks.join(", ")}`);
+    }
+
+    for (const action of item.actions) {
+      console.log(`  - ${action}`);
+    }
+
+    for (const validation of item.validation) {
+      console.log(`  validation: ${validation}`);
+    }
+  }
+
+  console.log("Commands:");
+  for (const command of plan.commands) {
+    console.log(`- ${command}`);
+  }
+}
+
 async function main() {
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
     console.log(HELP_TEXT);
@@ -130,6 +160,7 @@ async function main() {
   }
 
   const json = process.argv.includes("--json");
+  const remediationPlan = process.argv.includes("--remediation-plan");
   const [issues, preflight] = await Promise.all([collectIssueStates(), collectGitHubAppSyncLivePreflight(process.env)]);
   const releaseCloseoutEvidence = validateReleaseCloseoutEvidenceManifest(
     readReleaseCloseoutEvidenceManifest(DEFAULT_RELEASE_CLOSEOUT_EVIDENCE_PATH),
@@ -137,7 +168,15 @@ async function main() {
   );
   const report = buildGitHubIssueSyncCompletionAudit({ issues, preflight, releaseCloseoutEvidence });
 
-  if (json) {
+  if (remediationPlan) {
+    const plan = buildGitHubIssueSyncRemediationPlan(report);
+
+    if (json) {
+      console.log(JSON.stringify(plan, null, 2));
+    } else {
+      printRemediationPlan(plan);
+    }
+  } else if (json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
     printHumanSummary(report);
