@@ -485,6 +485,37 @@
         "npm run github:issues:completion-audit -- --json (expected fail against open production-proof issues)"
       ],
       "hostedStatus": "PR #907 and post-merge main CI passed; merge commit 3bdefc75c14c5a1cf14a2a182375f7117f4c5aea, CI https://github.com/leonardwongly/agentic/actions/runs/26207505033."
+    },
+    {
+      "number": 911,
+      "title": "docs(release): require issue sync canary closeout evidence",
+      "url": "https://github.com/leonardwongly/agentic/pull/911",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts",
+        "npm run release:closeout:evidence -- --json",
+        "npm run remediation:evidence-map -- --json",
+        "npm run docs:validate",
+        "npm run typecheck",
+        "npm run format:check -- scripts/lib/release-closeout-evidence.ts scripts/lib/remediation-evidence-map.ts tests/release-closeout-evidence.test.ts tests/remediation-evidence-map.test.ts docs/runbooks/release-closeout-evidence.md docs/security/validation-matrix.md config/release/production-runtime-closeout.json config/remediation/issue-evidence-map.json",
+        "git diff --check",
+        "npm run github:issues:completion-audit -- --json (expected fail-closed on live production blockers)"
+      ],
+      "hostedStatus": "PR #911 and post-merge main CI passed after the user explicitly waived Snyk quota status errors; merge commit b825798c9cf85cad1a583d6d90d548913ff655c5, CI https://github.com/leonardwongly/agentic/actions/runs/26216692067."
+    },
+    {
+      "number": 912,
+      "title": "docs(env): document issue sync production proof variables",
+      "url": "https://github.com/leonardwongly/agentic/pull/912",
+      "status": "merged",
+      "localValidation": [
+        "npm test -- tests/env-example.test.ts",
+        "npm test -- tests/env-example.test.ts tests/github-app-sync-live-preflight.test.ts tests/github-issues-completion-audit.test.ts",
+        "npm run format:check -- .env.example tests/env-example.test.ts",
+        "npm run typecheck",
+        "git diff --check"
+      ],
+      "hostedStatus": "PR #912 and post-merge main CI passed; merge commit 390c6415ee29946654c2cdc45b3232a7d11154f3, CI https://github.com/leonardwongly/agentic/actions/runs/26218512794."
     }
   ],
   "trackedIssues": [
@@ -1104,6 +1135,18 @@
           "ref": "https://github.com/leonardwongly/agentic/actions/runs/26207505033",
           "status": "passed",
           "note": "Post-merge main CI passed after PR #907 on origin/main 3bdefc7, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26216692067",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #911 on origin/main b825798, after explicit Snyk quota status waiver, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
+        },
+        {
+          "kind": "github_action",
+          "ref": "https://github.com/leonardwongly/agentic/actions/runs/26218512794",
+          "status": "passed",
+          "note": "Post-merge main CI passed after PR #912 on origin/main 390c641, including validate, security regression, route tests, browser E2E, container build, artifact packaging, and attestations."
         }
       ],
       "notes": "Run on implementation branches before PR review; hosted CI remains the merge gate when available."
