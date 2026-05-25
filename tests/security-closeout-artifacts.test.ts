@@ -46,8 +46,8 @@ describe("security closeout artifacts", () => {
     expect(workflow).toContain("security-events: write");
     expect(workflow).toContain("contents: read");
     expect(workflow).toContain("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6");
-    expect(workflow).toContain("github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4");
-    expect(workflow).toContain("github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4");
+    expect(workflow).toContain("github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4");
+    expect(workflow).toContain("github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4");
     expect(workflow).toContain("languages: javascript-typescript");
     expect(workflow).toContain("queries: security-extended,security-and-quality");
     expect(workflow).toContain('cron: "41 3 * * 2"');
