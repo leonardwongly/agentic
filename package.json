@@ -108,7 +108,7 @@
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^6.0.2",
     "tsx": "^4.22.3",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.7"
   }
 }
