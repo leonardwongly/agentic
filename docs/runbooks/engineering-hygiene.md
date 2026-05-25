@@ -113,6 +113,19 @@ npm run db:migrate
 npm run db:status -- --require-ready
 ```
 
+## Postgres Repository Parity
+
+The repository parity suite is opt-in so default `npm test` never connects to an ambient local or production database. Run it only against an isolated local, CI, or disposable test database that has the checked-in migrations applied:
+
+```bash
+export DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5432/agentic"
+npm run db:migrate
+npm run db:status -- --require-ready
+AGENTIC_REPOSITORY_PARITY_DATABASE_URL="$DATABASE_URL" npm run test:repository:parity
+```
+
+When `AGENTIC_REPOSITORY_PARITY_DATABASE_URL` is unset, `tests/repository-parity.test.ts` skips cleanly. Do not point this variable at shared production state. The suite writes isolated test IDs, but it is still a mutating integration test intended for migrated test databases only.
+
 ## Rollback
 
 These gates are repository-local and have no external side effects. Roll back by reverting the commit that changed scripts, workflow wiring, docs, or the evidence map. If CI blocks unexpectedly, use the failing gate output to decide whether the issue is a real hygiene failure or whether the contract needs a narrowly scoped adjustment.
