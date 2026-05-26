@@ -8,6 +8,7 @@ COPY apps/worker/package.json apps/worker/package.json
 COPY packages/agents/package.json packages/agents/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/db/package.json packages/db/package.json
+COPY packages/docs-runtime/package.json packages/docs-runtime/package.json
 COPY packages/execution/package.json packages/execution/package.json
 COPY packages/integrations/package.json packages/integrations/package.json
 COPY packages/memory/package.json packages/memory/package.json
