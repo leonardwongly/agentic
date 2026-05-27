@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { sendNotification } from "@agentic/integrations";
 import {
   createActionLog,
@@ -116,17 +116,17 @@ describe("observability", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
     const job = await enqueueGoalCreateJob({
       repository,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Prepare a durable weekly planning workflow with observability.",
       workspaceId: null,
       agentId: null,
-      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       idempotencyKey: "observability-worker-job"
     });
 
@@ -172,7 +172,7 @@ describe("observability", () => {
         jobId: job.id,
         jobKind: "goal_create",
         runnerId: "worker-observability-test",
-        userId: SYSTEM_USER_ID
+        userId: DEFAULT_OWNER_USER_ID
       }
     });
     expect(workerCompletedLog).toMatchObject({
@@ -259,7 +259,7 @@ describe("observability", () => {
           goalId: "goal-telemetry",
           taskId: "task-telemetry",
           workflowId: "workflow-telemetry",
-          actor: SYSTEM_USER_ID,
+          actor: DEFAULT_OWNER_USER_ID,
           kind: "artifact.created",
           message: "Created deployment evidence artifact.",
           details: {

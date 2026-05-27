@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
@@ -28,14 +28,14 @@ async function main() {
   process.env.AGENTIC_TELEMETRY_CONSOLE = "off";
   resetTelemetrySnapshot();
   await Promise.all([
-    repository.seedDefaults(SYSTEM_USER_ID),
+    repository.seedDefaults(DEFAULT_OWNER_USER_ID),
     selfImprovementRepository.seed()
   ]);
 
   const job = createJobRecord({
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     kind: "goal_create",
-    actorContext: createSystemActorContext(SYSTEM_USER_ID),
+    actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
     maxAttempts: 1,
     payload: {
       type: "goal_create",
@@ -66,7 +66,7 @@ async function main() {
     maxJobs: 1,
     pollIntervalMs: 50
   });
-  const storedJob = await repository.getJob(job.id, SYSTEM_USER_ID);
+  const storedJob = await repository.getJob(job.id, DEFAULT_OWNER_USER_ID);
   const snapshot = getTelemetrySnapshot();
   const serialized = JSON.stringify(snapshot);
 

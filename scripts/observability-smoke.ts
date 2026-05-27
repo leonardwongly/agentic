@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { sendNotification } from "@agentic/integrations";
 import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
@@ -60,7 +60,7 @@ async function main() {
   });
 
   await Promise.all([
-    repository.seedDefaults(SYSTEM_USER_ID),
+    repository.seedDefaults(DEFAULT_OWNER_USER_ID),
     selfImprovementRepository.seed()
   ]);
 

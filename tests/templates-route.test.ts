@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { GoalTemplateSchema, SYSTEM_USER_ID, createHumanActorContext, createSystemActorContext, nowIso } from "@agentic/contracts";
+import { GoalTemplateSchema, DEFAULT_OWNER_USER_ID, createHumanActorContext, createSystemActorContext, nowIso } from "@agentic/contracts";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -66,7 +66,7 @@ describe("templates routes", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
@@ -116,7 +116,7 @@ describe("templates routes", () => {
     };
 
     expect(createResponse.status).toBe(200);
-    expect(createPayload.template.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(createPayload.template.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expectNoStoreHeaders(createResponse);
 
     const runResponse = await runTemplateRoute(
@@ -181,7 +181,7 @@ describe("templates routes", () => {
     };
     const persisted = persistedListPayload.templates.find((template) => template.id === createPayload.template.id);
 
-    expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(persisted?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(persisted?.schedule.lastRunAt).toBeTruthy();
   });
 
@@ -227,7 +227,7 @@ describe("templates routes", () => {
     expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
     expect(secondPayload.job.templateId).toBe(firstPayload.job.templateId);
     expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(1);
   });
 
   it("derives deterministic idempotency keys for duplicate template runs without a client key", async () => {
@@ -264,7 +264,7 @@ describe("templates routes", () => {
       statusUrl: string;
     };
     const repository = createRouteTestRepository();
-    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+    const jobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(202);
@@ -280,11 +280,11 @@ describe("templates routes", () => {
     const repository = createRouteTestRepository();
     const futureDueAt = new Date(Date.now() + 60 * 60_000).toISOString();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveTemplate(
       GoalTemplateSchema.parse({
         id: "template-manual-run-before-schedule",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "Manual review before schedule",
         description: "Keep manual execution separate from scheduled autopilot due checks.",
         request: "Review the inbox now even though the scheduled run is later.",
@@ -311,7 +311,7 @@ describe("templates routes", () => {
       job: { kind: string; templateId: string; status: string };
       statusUrl: string;
     };
-    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+    const jobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(response.status).toBe(202);
     expect(payload.job).toMatchObject({
@@ -322,7 +322,7 @@ describe("templates routes", () => {
     expect(payload.statusUrl).toContain("/api/templates/jobs/");
     expect(jobs).toHaveLength(1);
     expect(jobs[0]?.kind).toBe("template_run");
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
   });
 
   it("rate limits template runs with a route-scoped abuse key", async () => {
@@ -421,7 +421,7 @@ describe("templates routes", () => {
             schedule: {
               enabled: true,
               cron: "0 11 * * *",
-              timezone: "Asia/Singapore"
+              timezone: "UTC"
             }
           },
           { ifMatch: savedTemplate.updatedAt }
@@ -446,11 +446,11 @@ describe("templates routes", () => {
   it("rejects template schedule updates without an If-Match precondition", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveTemplate(
       GoalTemplateSchema.parse({
         id: "template-missing-precondition",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "Missing precondition",
         description: "",
         request: "Review the inbox.",
@@ -488,11 +488,11 @@ describe("templates routes", () => {
   it("rejects stale template schedule preconditions", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveTemplate(
       GoalTemplateSchema.parse({
         id: "template-stale-precondition",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "Stale precondition",
         description: "",
         request: "Review the inbox.",
@@ -535,11 +535,11 @@ describe("templates routes", () => {
   it("requires an If-Match precondition when deleting templates", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveTemplate(
       GoalTemplateSchema.parse({
         id: "template-delete-precondition",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "Delete precondition",
         description: "",
         request: "Review the inbox.",

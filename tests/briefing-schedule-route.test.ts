@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, briefingTypeValues, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, briefingTypeValues, createSystemActorContext } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { GET as briefingScheduleGetRoute, POST as briefingSchedulePostRoute } from "../apps/web/app/api/briefing/schedule/route";
@@ -46,7 +46,7 @@ describe("briefing schedule route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await briefingSchedulePostRoute(
@@ -84,7 +84,7 @@ describe("briefing schedule route", () => {
       timezone: "America/Los_Angeles",
       focus: "deep"
     });
-    expect(payload.preferences.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.preferences.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(payload.preferences.schedules.find((schedule) => schedule.type === "midday")).toMatchObject({
       enabled: true,
       time: "12:15"
@@ -97,8 +97,8 @@ describe("briefing schedule route", () => {
     const reloadedRepository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const persisted = await reloadedRepository.getBriefingPreferences(SYSTEM_USER_ID);
-    expect(persisted.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    const persisted = await reloadedRepository.getBriefingPreferences(DEFAULT_OWNER_USER_ID);
+    expect(persisted.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
   });
 
   it("rejects incomplete schedule payloads", async () => {

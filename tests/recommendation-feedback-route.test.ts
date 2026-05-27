@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createSystemActorContext, SYSTEM_USER_ID } from "@agentic/contracts";
+import { createSystemActorContext, DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
@@ -97,8 +97,8 @@ describe("recommendation feedback route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a reviewed outbound reply for a customer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Prepare a reviewed outbound reply for a customer.");
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     const response = await recommendationFeedbackRoute(
@@ -119,7 +119,7 @@ describe("recommendation feedback route", () => {
     };
     const reloaded = await repository.getGoalBundle(bundle.goal.id);
     const feedbackLog = reloaded?.actionLogs.find((log) => log.kind === "goal.recommendation_feedback");
-    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: SYSTEM_USER_ID });
+    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: DEFAULT_OWNER_USER_ID });
     const snapshot = getTelemetrySnapshot();
     const feedbackCountMetric = snapshot.metrics.find(
       (entry) =>
@@ -151,7 +151,7 @@ describe("recommendation feedback route", () => {
       skill: "communications",
       outcome: "success",
       provenance: {
-        ownerUserId: SYSTEM_USER_ID,
+        ownerUserId: DEFAULT_OWNER_USER_ID,
         source: "feedback",
         recommendationKeys: [buildRecommendation().key]
       },
@@ -163,7 +163,7 @@ describe("recommendation feedback route", () => {
     });
     expect(episodes[0].metadata?.learningPrivacy).toMatchObject({
       datasetId: "learning-capture-records",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: bundle.goal.workspaceId ?? null,
       captureSource: "recommendation_feedback",
       captureAllowed: true,
@@ -178,13 +178,13 @@ describe("recommendation feedback route", () => {
     });
     await expect(
       selfImprovementRepository.exportLearningEpisodes!({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: bundle.goal.workspaceId ?? null
       })
     ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ id: episodes[0].id })]));
     await expect(
       selfImprovementRepository.deleteLearningEpisodes!({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: bundle.goal.workspaceId ?? null
       })
     ).resolves.toMatchObject({
@@ -213,8 +213,8 @@ describe("recommendation feedback route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a reviewed outbound reply for a customer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Prepare a reviewed outbound reply for a customer.");
     Reflect.set(globalThis, "__agenticRepository", repository);
     const recommendation = buildRecommendation();
 
@@ -235,7 +235,7 @@ describe("recommendation feedback route", () => {
         params: Promise.resolve({ id: bundle.goal.id })
       }
     );
-    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: SYSTEM_USER_ID });
+    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: DEFAULT_OWNER_USER_ID });
     const serializedEpisode = JSON.stringify(episodes[0]);
 
     expect(response.status).toBe(200);
@@ -264,11 +264,11 @@ describe("recommendation feedback route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const workspaceId = dashboard.activeWorkspace?.id;
     expect(workspaceId).toBeTruthy();
-    const governance = await repository.getWorkspaceGovernance(workspaceId!, SYSTEM_USER_ID);
+    const governance = await repository.getWorkspaceGovernance(workspaceId!, DEFAULT_OWNER_USER_ID);
     expect(governance).toBeTruthy();
     await repository.saveWorkspaceGovernance(
       {
@@ -279,11 +279,11 @@ describe("recommendation feedback route", () => {
         },
         updatedAt: "2026-04-20T00:00:00.000Z"
       },
-      createSystemActorContext(SYSTEM_USER_ID)
+      createSystemActorContext(DEFAULT_OWNER_USER_ID)
     );
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Prepare a reviewed outbound reply for a customer.",
       workspaceId!
     );
@@ -310,7 +310,7 @@ describe("recommendation feedback route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const bundle = await createGoalForUser(repository, "another-user", "Prepare a reviewed outbound reply for a customer.");
     Reflect.set(globalThis, "__agenticRepository", repository);
 
@@ -337,8 +337,8 @@ describe("recommendation feedback route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a reviewed outbound reply for a customer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Prepare a reviewed outbound reply for a customer.");
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     const response = await recommendationFeedbackRoute(
@@ -363,8 +363,8 @@ describe("recommendation feedback route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a reviewed outbound reply for a customer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Prepare a reviewed outbound reply for a customer.");
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     const response = await recommendationFeedbackRoute(
@@ -377,7 +377,7 @@ describe("recommendation feedback route", () => {
         params: Promise.resolve({ id: bundle.goal.id })
       }
     );
-    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: SYSTEM_USER_ID });
+    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: DEFAULT_OWNER_USER_ID });
     const snapshot = getTelemetrySnapshot();
     const feedbackCountMetric = snapshot.metrics.find(
       (entry) =>
@@ -412,8 +412,8 @@ describe("recommendation feedback route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a reviewed outbound reply for a customer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Prepare a reviewed outbound reply for a customer.");
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     for (const decision of ["suppressed", "expired"] as const) {
@@ -431,7 +431,7 @@ describe("recommendation feedback route", () => {
       expect(response.status).toBe(200);
     }
 
-    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: SYSTEM_USER_ID });
+    const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: DEFAULT_OWNER_USER_ID });
     const suppressedEpisode = episodes.find((episode) => episode.metadata?.decision === "suppressed");
     const expiredEpisode = episodes.find((episode) => episode.metadata?.decision === "expired");
     const snapshot = getTelemetrySnapshot();

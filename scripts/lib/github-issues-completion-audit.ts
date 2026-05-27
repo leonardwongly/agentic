@@ -109,7 +109,8 @@ const PREFLIGHT_REMEDIATION_ACTIONS: Record<GitHubAppSyncLivePreflightCheck["nam
   runtime_secret_shape:
     "Fix provider runtime variable shapes so IDs, private key, sync secret, database URL, access key, and repository allowlist validate.",
   smoke_canary_inventory: "Configure `AGENTIC_SMOKE_ACCESS_KEY` for live deployment smoke and canary execution.",
-  repository_allowlist: "Set `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=leonardwongly/agentic` in the provider runtime.",
+  repository_allowlist:
+    "Set `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=<your-org>/<your-repo>` in the provider runtime for the repositories this installation should sync.",
   provider_services:
     "Provision or sync deployed Agentic web and worker services, or provide alternate provider evidence JSON for the selected target.",
   provider_configuration:

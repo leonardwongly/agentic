@@ -1,6 +1,6 @@
 import {
   DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   briefingTypeValues,
   createHumanActorContext,
   nowIso,
@@ -15,7 +15,7 @@ import { buildSlackApprovalToken } from "../apps/web/lib/slack-approvals";
 
 function buildAutopilotSettings() {
   return {
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     mode: "notify_only" as const,
     debounceMinutes: 15,
     reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
@@ -103,7 +103,7 @@ function createFakeJobStore() {
     }) {
       return filterJobs(params);
     },
-    async getJob(jobId: string, userId = SYSTEM_USER_ID) {
+    async getJob(jobId: string, userId = DEFAULT_OWNER_USER_ID) {
       return getOwnedJob(jobId, userId);
     },
     async enqueueJob(job: JobRecord) {
@@ -129,7 +129,7 @@ function createFakeJobStore() {
     }) {
       const now = params.now ?? nowIso();
       const candidate = filterJobs({
-        userId: params.userId ?? SYSTEM_USER_ID,
+        userId: params.userId ?? DEFAULT_OWNER_USER_ID,
         kinds: params.kinds,
         statuses: ["queued", "retrying"]
       })
@@ -265,7 +265,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
   const timestamp = "2024-01-01T00:00:00.000Z";
   const workspace = {
     id: "workspace-personal-system-user",
-    ownerUserId: SYSTEM_USER_ID,
+    ownerUserId: DEFAULT_OWNER_USER_ID,
     slug: "personal-system-user",
     name: "Personal Workspace",
     description: "Default workspace for test coverage.",
@@ -293,9 +293,9 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     saveWorkspace: async (candidate) => candidate,
     listWorkspaceMembers: async () => [
       {
-        id: `workspace-member-${workspace.id}-${SYSTEM_USER_ID}`,
+        id: `workspace-member-${workspace.id}-${DEFAULT_OWNER_USER_ID}`,
         workspaceId: workspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -303,7 +303,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     ],
     saveWorkspaceMember: async (member) => member,
     getWorkspaceSelection: async () => ({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.id,
       selectedAt: timestamp,
       updatedAt: timestamp
@@ -317,7 +317,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       externalSendRequiresApproval: true,
       calendarWriteRequiresApproval: true,
       retentionDays: 365,
-      updatedBy: SYSTEM_USER_ID,
+      updatedBy: DEFAULT_OWNER_USER_ID,
       createdAt: timestamp,
       updatedAt: timestamp
     }),
@@ -339,8 +339,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       generatedAt: timestamp
     }),
     getBriefingPreferences: async () => ({
-      userId: SYSTEM_USER_ID,
-      timezone: "Asia/Singapore",
+      userId: DEFAULT_OWNER_USER_ID,
+      timezone: "UTC",
       focus: "balanced",
       schedules: briefingTypeValues.map((type, index) => ({
         type,
@@ -389,16 +389,16 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       workspaces: [workspace],
       activeWorkspace: workspace,
       workspaceSelection: {
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: workspace.id,
         selectedAt: timestamp,
         updatedAt: timestamp
       },
       workspaceMembers: [
         {
-          id: `workspace-member-${workspace.id}-${SYSTEM_USER_ID}`,
+          id: `workspace-member-${workspace.id}-${DEFAULT_OWNER_USER_ID}`,
           workspaceId: workspace.id,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           role: "owner",
           joinedAt: timestamp,
           updatedAt: timestamp
@@ -412,7 +412,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
         retentionDays: 365,
-        updatedBy: SYSTEM_USER_ID,
+        updatedBy: DEFAULT_OWNER_USER_ID,
         createdAt: timestamp,
         updatedAt: timestamp
       },
@@ -510,8 +510,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       goalShares: [],
       privacyOperations: [],
       briefingPreferences: {
-        userId: SYSTEM_USER_ID,
-        timezone: "Asia/Singapore",
+        userId: DEFAULT_OWNER_USER_ID,
+        timezone: "UTC",
         focus: "balanced",
         schedules: briefingTypeValues.map((type, index) => ({
           type,
@@ -1199,7 +1199,7 @@ describe("slack webhook route", () => {
           goal: {
             id: "goal-1",
             workflowId: "workflow-1",
-            userId: SYSTEM_USER_ID,
+            userId: DEFAULT_OWNER_USER_ID,
             title: "Handle shared approval",
             request: "Review shared team approval.",
             status: "active",
@@ -1209,7 +1209,7 @@ describe("slack webhook route", () => {
           },
           workflow: {
             id: "workflow-1",
-            userId: SYSTEM_USER_ID,
+            userId: DEFAULT_OWNER_USER_ID,
             status: "running",
             currentStep: "approval",
             checkpoint: "approval-safe",

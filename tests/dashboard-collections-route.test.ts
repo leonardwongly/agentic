@@ -4,7 +4,7 @@ import path from "node:path";
 import { createJobRecord } from "@agentic/execution";
 import { createMemoryRecord } from "@agentic/memory";
 import { processUserRequest } from "@agentic/orchestrator";
-import { SYSTEM_USER_ID, nowIso } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, nowIso } from "@agentic/contracts";
 import { createRepository, type AgenticRepository } from "@agentic/repository";
 import { GET as dashboardActivityRoute } from "../apps/web/app/api/dashboard/activity/route";
 import { GET as dashboardApprovalsRoute } from "../apps/web/app/api/dashboard/approvals/route";
@@ -61,8 +61,8 @@ describe("dashboard collection routes", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     await repository.seedDefaults("user-secondary");
     await createGoalForUser(repository, "user-secondary", "Keep this private planning goal out of the summary.");
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -95,12 +95,12 @@ describe("dashboard collection routes", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Review my inbox and send one external reply for the dashboard collections.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
     const approval = bundle.approvals[0];
     expect(approval).toBeDefined();
@@ -136,7 +136,7 @@ describe("dashboard collection routes", () => {
     });
     await repository.saveCommitment({
       id: "commitment-dashboard-low-confidence",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       title: "Dashboard low confidence commitment",
       summary: "Needs operator review before execution.",
       status: "pending",
@@ -161,7 +161,7 @@ describe("dashboard collection routes", () => {
     });
     await repository.saveMemory(
       createMemoryRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "dashboard-seed-memory",
         memoryType: "confirmed",
         content: "Dashboard collection searchable memory.",
@@ -173,7 +173,7 @@ describe("dashboard collection routes", () => {
     );
     await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "goal_create",
         payload: {
           type: "goal_create",
@@ -262,9 +262,9 @@ describe("dashboard collection routes", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults("user-secondary");
-    await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a visible dashboard collection goal.");
+    await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Prepare a visible dashboard collection goal.");
     const privateBundle = await createGoalForUser(
       repository,
       "user-secondary",
@@ -307,11 +307,11 @@ describe("dashboard collection routes", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const token = "DEEP_DASHBOARD_COLLECTION_TOKEN";
     const oldestBundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       `${token} send one external reply that needs a retained approval.`
     );
     const approval = oldestBundle.approvals[0];
@@ -345,7 +345,7 @@ describe("dashboard collection routes", () => {
     await new Promise((resolve) => setTimeout(resolve, 2));
 
     for (let index = 0; index < 45; index += 1) {
-      await createGoalForUser(repository, SYSTEM_USER_ID, `Prepare newer dashboard filler goal ${index}.`);
+      await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, `Prepare newer dashboard filler goal ${index}.`);
     }
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -371,13 +371,13 @@ describe("dashboard collection routes", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults("user-secondary");
 
     for (let index = 0; index < 80; index += 1) {
       await repository.saveMemory(
         createMemoryRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: `bulk-dashboard-memory-${index.toString().padStart(2, "0")}`,
           memoryType: "observed",
           content: `Bulk dashboard collection memory ${index}`,
@@ -437,10 +437,10 @@ describe("dashboard collection routes", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Prepare a dashboard collection fixture that exercises bounded repository reads."
     );
     const createdAt = nowIso();
@@ -476,7 +476,7 @@ describe("dashboard collection routes", () => {
     });
     await repository.saveMemory(
       createMemoryRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "bounded-dashboard-contract-memory",
         memoryType: "observed",
         content: "Bounded dashboard collection memory.",
@@ -488,7 +488,7 @@ describe("dashboard collection routes", () => {
     );
     await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "goal_create",
         payload: {
           type: "goal_create",

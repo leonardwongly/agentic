@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, type ApprovalRequest, type AgentDefinition, type Task } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, type ApprovalRequest, type AgentDefinition, type Task } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { deriveCalibrationInsights } from "../packages/repository/src/calibration-insights";
@@ -11,7 +11,7 @@ describe("deriveCalibrationInsights", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-calibration-insights-"));
     const repository = createRepository({ storePath: path.join(tempDir, "runtime-store.json") });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     return repository;
   }
 
@@ -29,7 +29,7 @@ describe("deriveCalibrationInsights", () => {
   }
 
   async function loadCommunicationsAgent(repository: ReturnType<typeof createRepository>): Promise<AgentDefinition> {
-    const agent = (await repository.listAgents(SYSTEM_USER_ID)).find((candidate) => candidate.name === "communications");
+    const agent = (await repository.listAgents(DEFAULT_OWNER_USER_ID)).find((candidate) => candidate.name === "communications");
 
     expect(agent).toBeDefined();
     return agent!;
@@ -52,7 +52,7 @@ describe("deriveCalibrationInsights", () => {
   it("flags post-approval failures and corrections as review-worthy calibration evidence", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const templateTask = bundle.tasks[0];
     const templateApproval = bundle.approvals[0];
     const createdAt = new Date().toISOString();
@@ -87,7 +87,7 @@ describe("deriveCalibrationInsights", () => {
       evidenceRecords: [
         {
           id: "evidence-approved-failure",
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           goalId: bundle.goal.id,
           taskId: failedTask.id,
           approvalId: approvedRequest.id,
@@ -112,7 +112,7 @@ describe("deriveCalibrationInsights", () => {
         },
         {
           id: "evidence-rejected",
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           goalId: bundle.goal.id,
           taskId: failedTask.id,
           approvalId: approvedRequest.id,
@@ -170,7 +170,7 @@ describe("deriveCalibrationInsights", () => {
   it("filters events to the requested period window", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const templateTask = bundle.tasks[0];
     const templateApproval = bundle.approvals[0];
     const now = new Date();
@@ -193,7 +193,7 @@ describe("deriveCalibrationInsights", () => {
       respondedAt: currentAt
     });
     const baseEvidence = {
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goalId: bundle.goal.id,
       taskId: completedTask.id,
       approvalId: approval.id,
@@ -258,7 +258,7 @@ describe("deriveCalibrationInsights", () => {
   it("includes tasks that reached an outcome inside the requested period", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const templateTask = bundle.tasks[0];
     const now = new Date();
     const currentAt = now.toISOString();
@@ -329,7 +329,7 @@ describe("deriveCalibrationInsights", () => {
       name: "calendar",
       displayName: "Colliding Calendar Agent"
     };
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const templateTask = bundle.tasks[0];
     const createdAt = new Date().toISOString();
 
@@ -372,7 +372,7 @@ describe("deriveCalibrationInsights", () => {
       name: "calendar",
       displayName: "Colliding Calendar Agent"
     };
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const templateTask = bundle.tasks[0];
     const createdAt = new Date().toISOString();
 
@@ -411,7 +411,7 @@ describe("deriveCalibrationInsights", () => {
   it("keeps pending-only work as insufficient data", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const templateTask = bundle.tasks[0];
     const templateApproval = bundle.approvals[0];
     const createdAt = new Date().toISOString();
@@ -453,7 +453,7 @@ describe("deriveCalibrationInsights", () => {
   it("does not penalize healthy non-approval task periods", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const templateTask = bundle.tasks[0];
     const createdAt = new Date().toISOString();
 

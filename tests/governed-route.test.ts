@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { createGovernedMutationRoute } from "../apps/web/lib/governed-route";
 import { authenticatedJson } from "../apps/web/lib/api-response";
 import {
@@ -98,7 +98,7 @@ describe("governed mutation route wrapper", () => {
 
     expect(response.status).toBe(200);
     expect(payload).toMatchObject({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       actorKind: "system",
       body: {
         name: "Ada"
@@ -209,7 +209,7 @@ describe("governed mutation route wrapper", () => {
     expect(payload.error).toBe("Too many test mutation requests.");
     expect(response.headers.get("retry-after")).toBe("42");
     expect(seenKeys).toHaveLength(1);
-    expect(seenKeys[0]).toContain(`test-governed-mutation:user:${SYSTEM_USER_ID}:`);
+    expect(seenKeys[0]).toContain(`test-governed-mutation:user:${DEFAULT_OWNER_USER_ID}:`);
     expectNoStoreHeaders(response);
   });
 });

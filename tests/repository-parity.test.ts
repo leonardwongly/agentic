@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   MemoryRecordSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   WorkspaceSchema,
   createSystemActorContext,
   nowIso
@@ -21,7 +21,7 @@ parityDescribe("repository Postgres parity", () => {
   let tempDir: string;
 
   const unique = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const actor = createSystemActorContext(SYSTEM_USER_ID);
+  const actor = createSystemActorContext(DEFAULT_OWNER_USER_ID);
 
   beforeAll(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repository-parity-"));
@@ -32,8 +32,8 @@ parityDescribe("repository Postgres parity", () => {
       databaseUrl: PARITY_DATABASE_URL
     });
 
-    await fileRepository.seedDefaults(SYSTEM_USER_ID);
-    await postgresRepository.seedDefaults(SYSTEM_USER_ID);
+    await fileRepository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    await postgresRepository.seedDefaults(DEFAULT_OWNER_USER_ID);
   });
 
   afterAll(async () => {
@@ -51,7 +51,7 @@ parityDescribe("repository Postgres parity", () => {
       name: "Repository Parity Workspace",
       slug: `repository-parity-${unique}`,
       isPersonal: false,
-      ownerUserId: SYSTEM_USER_ID,
+      ownerUserId: DEFAULT_OWNER_USER_ID,
       createdAt: nowIso(),
       updatedAt: nowIso()
     });
@@ -59,10 +59,10 @@ parityDescribe("repository Postgres parity", () => {
     await fileRepository.saveWorkspace(workspace, actor);
     await postgresRepository.saveWorkspace(workspace, actor);
 
-    const fileWorkspace = (await fileRepository.listWorkspaces(SYSTEM_USER_ID)).find(
+    const fileWorkspace = (await fileRepository.listWorkspaces(DEFAULT_OWNER_USER_ID)).find(
       (candidate) => candidate.id === workspace.id
     );
-    const postgresWorkspace = (await postgresRepository.listWorkspaces(SYSTEM_USER_ID)).find(
+    const postgresWorkspace = (await postgresRepository.listWorkspaces(DEFAULT_OWNER_USER_ID)).find(
       (candidate) => candidate.id === workspace.id
     );
 
@@ -70,7 +70,7 @@ parityDescribe("repository Postgres parity", () => {
       id: workspace.id,
       name: workspace.name,
       slug: workspace.slug,
-      ownerUserId: SYSTEM_USER_ID
+      ownerUserId: DEFAULT_OWNER_USER_ID
     });
     expect(postgresWorkspace).toMatchObject({
       id: workspace.id,
@@ -83,7 +83,7 @@ parityDescribe("repository Postgres parity", () => {
   it("persists memory records consistently", async () => {
     const memory = MemoryRecordSchema.parse({
       id: `mem-parity-${unique}`,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "core",
       memoryType: "observed",
       content: "Repository parity validation memory.",
@@ -104,10 +104,10 @@ parityDescribe("repository Postgres parity", () => {
     await fileRepository.saveMemory(memory);
     await postgresRepository.saveMemory(memory);
 
-    const fileMemory = (await fileRepository.listMemory(SYSTEM_USER_ID)).find(
+    const fileMemory = (await fileRepository.listMemory(DEFAULT_OWNER_USER_ID)).find(
       (candidate) => candidate.id === memory.id
     );
-    const postgresMemory = (await postgresRepository.listMemory(SYSTEM_USER_ID)).find(
+    const postgresMemory = (await postgresRepository.listMemory(DEFAULT_OWNER_USER_ID)).find(
       (candidate) => candidate.id === memory.id
     );
 
@@ -128,7 +128,7 @@ parityDescribe("repository Postgres parity", () => {
   it("persists durable jobs consistently", async () => {
     const job = createJobRecord({
       id: `job-parity-${unique}`,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "goal_create",
       payload: {
         type: "goal_create",
@@ -144,12 +144,12 @@ parityDescribe("repository Postgres parity", () => {
     await fileRepository.enqueueJob(job);
     await postgresRepository.enqueueJob(job);
 
-    const fileJob = await fileRepository.getJob(job.id, SYSTEM_USER_ID);
-    const postgresJob = await postgresRepository.getJob(job.id, SYSTEM_USER_ID);
+    const fileJob = await fileRepository.getJob(job.id, DEFAULT_OWNER_USER_ID);
+    const postgresJob = await postgresRepository.getJob(job.id, DEFAULT_OWNER_USER_ID);
 
     expect(fileJob).toMatchObject({
       id: job.id,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "goal_create",
       status: "queued"
     });

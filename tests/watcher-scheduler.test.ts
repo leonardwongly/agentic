@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, WatcherSchema, createSystemActorContext, nowIso } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, WatcherSchema, createSystemActorContext, nowIso } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { runWatcherSchedulerLoop, runWatcherSchedulerOnce } from "@agentic/worker-runtime";
@@ -12,12 +12,12 @@ async function createSchedulerFixture() {
   const repository = createRepository({
     storePath: path.join(tempDir, "runtime-store.json")
   });
-  await repository.seedDefaults(SYSTEM_USER_ID);
+  await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
   const bundle = await processUserRequest({
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     request: "Watch for VIP client replies and prepare safe follow-up drafts.",
-    memories: await repository.listMemory(SYSTEM_USER_ID),
-    integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+    integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
   });
   await repository.saveGoalBundle(bundle);
 
@@ -40,7 +40,7 @@ function buildWatcher(goalId: string, overrides: Partial<ReturnType<typeof Watch
     sourceSystems: ["gmail"],
     status: "active",
     expiryAt: null,
-    actorContext: createSystemActorContext(SYSTEM_USER_ID),
+    actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
     createdAt: timestamp,
     updatedAt: timestamp,
     ...overrides
@@ -60,7 +60,7 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator: async () => ({
         wouldTrigger: true,
@@ -69,7 +69,7 @@ describe("watcher scheduler", () => {
       })
     });
 
-    const persisted = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find((candidate) => candidate.id === watcher.id);
+    const persisted = (await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID })).find((candidate) => candidate.id === watcher.id);
 
     expect(result.decisions).toEqual([
       {
@@ -111,7 +111,7 @@ describe("watcher scheduler", () => {
     await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator: async () => ({
         wouldTrigger: false,
@@ -119,7 +119,7 @@ describe("watcher scheduler", () => {
         cursor: null
       })
     });
-    const persisted = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find((candidate) => candidate.id === watcher.id);
+    const persisted = (await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID })).find((candidate) => candidate.id === watcher.id);
 
     expect(persisted?.schedule.cursor).toBeNull();
   });
@@ -132,7 +132,7 @@ describe("watcher scheduler", () => {
     await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       leaseMs: 10,
       evaluator: async () => {
@@ -158,7 +158,7 @@ describe("watcher scheduler", () => {
     const loop = runWatcherSchedulerLoop({
       repository,
       runnerId: "scheduler-loop-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       intervalMs: 1,
       timeoutMs: 1_000,
       signal: controller.signal,
@@ -204,7 +204,7 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       leaseMs: 10,
       evaluator: async () => {
@@ -215,7 +215,7 @@ describe("watcher scheduler", () => {
         };
       }
     });
-    const persisted = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find((candidate) => candidate.id === watcher.id);
+    const persisted = (await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID })).find((candidate) => candidate.id === watcher.id);
 
     expect(result.decisions).toEqual([
       {
@@ -246,7 +246,7 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator: async () => ({
         wouldTrigger: true,
@@ -255,7 +255,7 @@ describe("watcher scheduler", () => {
       })
     });
 
-    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const events = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     expect(result.decisions[0]).toMatchObject({
       watcherId: watcher.id,
@@ -301,7 +301,7 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator: async () => ({
         wouldTrigger: true,
@@ -309,7 +309,7 @@ describe("watcher scheduler", () => {
         cursor: "gmail-cursor-2"
       })
     });
-    const persisted = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find((candidate) => candidate.id === watcher.id);
+    const persisted = (await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID })).find((candidate) => candidate.id === watcher.id);
 
     expect(result.decisions).toEqual([
       {
@@ -320,7 +320,7 @@ describe("watcher scheduler", () => {
       }
     ]);
     expect(claimSpy).not.toHaveBeenCalled();
-    expect(await repository.listAutopilotEvents(SYSTEM_USER_ID)).toHaveLength(0);
+    expect(await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).toHaveLength(0);
     expect(persisted?.schedule.cursor).toBe("gmail-cursor-2");
     expect(persisted?.lastEvaluation?.sideEffectsSuppressed).toBe(true);
   });
@@ -347,7 +347,7 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-2",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:01:00.000Z"
     });
 
@@ -379,7 +379,7 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:30.123Z"
     });
 
@@ -391,7 +391,7 @@ describe("watcher scheduler", () => {
         idempotencyKey: "watcher:watcher-scheduler-1:2026-04-20T00:00:30.123Z"
       }
     ]);
-    expect(await repository.listAutopilotEvents(SYSTEM_USER_ID)).toHaveLength(0);
+    expect(await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).toHaveLength(0);
   });
 
   it("uses sub-minute idempotency keys for realtime watcher evaluations", async () => {
@@ -418,7 +418,7 @@ describe("watcher scheduler", () => {
     const first = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator: async () => ({
         wouldTrigger: true,
@@ -429,7 +429,7 @@ describe("watcher scheduler", () => {
     const second = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:30.000Z",
       evaluator: async () => ({
         wouldTrigger: true,
@@ -452,7 +452,7 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-2",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator
     });
@@ -476,13 +476,13 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator: async () => {
         throw new Error("Evaluator unavailable.");
       }
     });
-    const [updatedWatcher] = await repository.listWatchers({ userId: SYSTEM_USER_ID });
+    const [updatedWatcher] = await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(result.decisions).toEqual([
       {
@@ -524,7 +524,7 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator: async () => ({
         wouldTrigger: true,
@@ -532,7 +532,7 @@ describe("watcher scheduler", () => {
         cursor: "gmail-cursor-1"
       })
     });
-    const persisted = await repository.listWatchers({ userId: SYSTEM_USER_ID });
+    const persisted = await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(result.decisions).toEqual([
       {
@@ -590,7 +590,7 @@ describe("watcher scheduler", () => {
     const result = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator: async () => ({
         wouldTrigger: true,
@@ -598,7 +598,7 @@ describe("watcher scheduler", () => {
         cursor: "gmail-cursor-1"
       })
     });
-    const persisted = await repository.listWatchers({ userId: SYSTEM_USER_ID });
+    const persisted = await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(result.decisions).toEqual([
       {
@@ -651,7 +651,7 @@ describe("watcher scheduler", () => {
     await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:00:00.000Z",
       evaluator: async () => ({
         wouldTrigger: true,
@@ -662,7 +662,7 @@ describe("watcher scheduler", () => {
     const second = await runWatcherSchedulerOnce({
       repository,
       runnerId: "scheduler-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       now: "2026-04-20T00:05:00.000Z",
       evaluator: async () => ({
         wouldTrigger: true,
@@ -676,6 +676,6 @@ describe("watcher scheduler", () => {
       action: "trigger_suppressed",
       reason: "Budget watcher:watcher-scheduler-1:hourly exhausted in the active window."
     });
-    expect(await repository.listAutopilotEvents(SYSTEM_USER_ID)).toHaveLength(2);
+    expect(await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).toHaveLength(2);
   });
 });

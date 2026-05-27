@@ -36,7 +36,7 @@ describe("deployment GitHub App sync canary", () => {
           automationMode: "work",
           repositories: [
             {
-              fullName: "leonardwongly/agentic",
+              fullName: "octo-org/demo-agentic",
               openIssuesSeen: 1,
               skippedPullRequests: 1
             }
@@ -46,7 +46,7 @@ describe("deployment GitHub App sync canary", () => {
               id: "job-sync-1",
               kind: "github_issue_intake",
               status: "queued",
-              repository: "leonardwongly/agentic",
+              repository: "octo-org/demo-agentic",
               issueNumber: 203,
               automationMode: "work",
               goalId: "goal-sync-1",
@@ -61,7 +61,7 @@ describe("deployment GitHub App sync canary", () => {
             id: "job-sync-1",
             kind: "github_issue_intake",
             status: "running",
-            repository: "leonardwongly/agentic",
+            repository: "octo-org/demo-agentic",
             issueNumber: 203,
             automationMode: "work",
             goalId: "goal-sync-1"
@@ -76,7 +76,7 @@ describe("deployment GitHub App sync canary", () => {
             id: "job-sync-1",
             kind: "github_issue_intake",
             status: "completed",
-            repository: "leonardwongly/agentic",
+            repository: "octo-org/demo-agentic",
             issueNumber: 203,
             automationMode: "work",
             goalId: "goal-sync-1"
@@ -109,7 +109,7 @@ describe("deployment GitHub App sync canary", () => {
       automationMode: "work",
       repositories: [
         {
-          fullName: "leonardwongly/agentic",
+          fullName: "octo-org/demo-agentic",
           openIssuesSeen: 1,
           skippedPullRequests: 1
         }
@@ -117,7 +117,7 @@ describe("deployment GitHub App sync canary", () => {
       jobs: [
         {
           id: "job-sync-1",
-          repository: "leonardwongly/agentic",
+          repository: "octo-org/demo-agentic",
           issueNumber: 203,
           automationMode: "work",
           goalId: "goal-sync-1",
@@ -180,7 +180,7 @@ describe("deployment GitHub App sync canary", () => {
           ok: true,
           repositories: [
             {
-              fullName: "leonardwongly/agentic",
+              fullName: "octo-org/demo-agentic",
               openIssuesSeen: 0,
               skippedPullRequests: 0
             }
@@ -210,7 +210,7 @@ describe("deployment GitHub App sync canary", () => {
               id: "job-sync-2",
               kind: "github_issue_intake",
               status: "queued",
-              repository: "leonardwongly/agentic",
+              repository: "octo-org/demo-agentic",
               issueNumber: 204,
               automationMode: "work"
             }
@@ -251,7 +251,7 @@ describe("deployment GitHub App sync canary", () => {
               kind: "github_issue_intake",
               status: "queued",
               statusUrl: "https://metadata.internal/api/jobs/job-sync-unsafe",
-              repository: "leonardwongly/agentic",
+              repository: "octo-org/demo-agentic",
               issueNumber: 205,
               automationMode: "work"
             }

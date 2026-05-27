@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository, type AgenticRepository } from "@agentic/repository";
@@ -59,8 +59,8 @@ describe("core loop telemetry route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare the approval queue for operations.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Prepare the approval queue for operations.");
     await repository.saveGoalBundle({
       ...bundle,
       goal: {
@@ -99,7 +99,7 @@ describe("core loop telemetry route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await coreLoopRoute(
@@ -167,7 +167,7 @@ describe("core loop telemetry route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await coreLoopRoute(
@@ -252,7 +252,7 @@ describe("core loop telemetry route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await coreLoopRoute(

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   AgentDefinitionSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   createHumanActorContext,
   createSystemActorContext,
   nowIso,
@@ -115,12 +115,12 @@ describe("agents routes", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const persisted = await repository.getAgent(payload.agent.id, SYSTEM_USER_ID);
+    const persisted = await repository.getAgent(payload.agent.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(200);
     expectNoStoreHeaders(response);
-    expect(payload.agent.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
-    expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.agent.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
+    expect(persisted?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
   });
 
   it("quarantines newly created custom agents with side-effect capabilities", async () => {
@@ -141,7 +141,7 @@ describe("agents routes", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const persisted = await repository.getAgent(payload.agent.id, SYSTEM_USER_ID);
+    const persisted = await repository.getAgent(payload.agent.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(200);
     expect(payload.agent.status).toBe("draft");
@@ -201,9 +201,9 @@ describe("agents routes", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveAgent(
-      buildCustomAgent(SYSTEM_USER_ID, "agent-side-effect-draft", "side-effect-draft", {
+      buildCustomAgent(DEFAULT_OWNER_USER_ID, "agent-side-effect-draft", "side-effect-draft", {
         allowedCapabilities: ["read", "search", "send"],
         maxRiskClass: "R3",
         status: "draft"
@@ -225,7 +225,7 @@ describe("agents routes", () => {
       { params: Promise.resolve({ id: "agent-side-effect-draft" }) }
     );
     const blockedPayload = (await blocked.json()) as { error?: string };
-    const afterBlocked = await repository.getAgent("agent-side-effect-draft", SYSTEM_USER_ID);
+    const afterBlocked = await repository.getAgent("agent-side-effect-draft", DEFAULT_OWNER_USER_ID);
 
     expect(blocked.status).toBe(409);
     expect(blockedPayload.error).toBe("Side-effect agent activation requires explicit owner review confirmation.");
@@ -246,7 +246,7 @@ describe("agents routes", () => {
       { params: Promise.resolve({ id: "agent-side-effect-draft" }) }
     );
     const activatedPayload = (await activated.json()) as { agent: { status: string; version: number } };
-    const afterActivated = await repository.getAgent("agent-side-effect-draft", SYSTEM_USER_ID);
+    const afterActivated = await repository.getAgent("agent-side-effect-draft", DEFAULT_OWNER_USER_ID);
 
     expect(activated.status).toBe(200);
     expect(activatedPayload.agent.status).toBe("active");
@@ -259,8 +259,8 @@ describe("agents routes", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    await repository.saveAgent(buildCustomAgent(SYSTEM_USER_ID, "agent-capability-upgrade", "capability-upgrade"));
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    await repository.saveAgent(buildCustomAgent(DEFAULT_OWNER_USER_ID, "agent-capability-upgrade", "capability-upgrade"));
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await updateAgentRoute(
@@ -278,7 +278,7 @@ describe("agents routes", () => {
       { params: Promise.resolve({ id: "agent-capability-upgrade" }) }
     );
     const payload = (await response.json()) as { agent: { status: string; allowedCapabilities: string[] } };
-    const persisted = await repository.getAgent("agent-capability-upgrade", SYSTEM_USER_ID);
+    const persisted = await repository.getAgent("agent-capability-upgrade", DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(200);
     expect(payload.agent.status).toBe("draft");
@@ -291,8 +291,8 @@ describe("agents routes", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    await repository.saveAgent(buildCustomAgent(SYSTEM_USER_ID, "agent-permission-update", "permission-update"));
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    await repository.saveAgent(buildCustomAgent(DEFAULT_OWNER_USER_ID, "agent-permission-update", "permission-update"));
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await updateAgentRoute(
@@ -322,7 +322,7 @@ describe("agents routes", () => {
       { params: Promise.resolve({ id: "agent-permission-update" }) }
     );
     const payload = (await response.json()) as { error?: string };
-    const persisted = await repository.getAgent("agent-permission-update", SYSTEM_USER_ID);
+    const persisted = await repository.getAgent("agent-permission-update", DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(400);
     expect(payload.error).toMatch(/unrecognized key/i);
@@ -434,12 +434,12 @@ describe("agents routes", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const persisted = await repository.getAgent(payload.agent.id, SYSTEM_USER_ID);
+    const persisted = await repository.getAgent(payload.agent.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(200);
-    expect(payload.agent.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.agent.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(payload.agent.parentAgentId).toBe("marketplace-agent-1");
-    expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(persisted?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(persisted?.integrationPermissions).toEqual([]);
     expect(persisted?.memoryPermissions).toEqual([]);
   });
@@ -469,7 +469,7 @@ describe("agents routes", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
     const agent = AgentDefinitionSchema.parse({
-      ...buildCustomAgent(SYSTEM_USER_ID, "agent-export-permissions", "export-permissions"),
+      ...buildCustomAgent(DEFAULT_OWNER_USER_ID, "agent-export-permissions", "export-permissions"),
       integrationPermissions: [
         {
           integrationId: "gmail",
@@ -486,7 +486,7 @@ describe("agents routes", () => {
       ]
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveAgent(agent);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 

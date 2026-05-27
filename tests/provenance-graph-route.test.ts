@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import { createMemoryRecord } from "@agentic/memory";
 import { processUserRequest } from "@agentic/orchestrator";
@@ -37,7 +37,7 @@ describe("provenance graph route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
     const userBundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Prepare my update.",
       memories: [],
       integrations: []
@@ -53,7 +53,7 @@ describe("provenance graph route", () => {
     await repository.saveGoalBundle(otherBundle);
     await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "goal_create",
         payload: {
           type: "goal_create",
@@ -79,7 +79,7 @@ describe("provenance graph route", () => {
     expectNoStoreHeaders(response);
     expect(payload.graph.nodes.some((node) => node.id === `goal:${userBundle.goal.id}`)).toBe(true);
     expect(payload.graph.nodes.some((node) => node.id === `goal:${otherBundle.goal.id}`)).toBe(false);
-    expect(payload.graph.nodes.every((node) => node.ownerUserId === SYSTEM_USER_ID)).toBe(true);
+    expect(payload.graph.nodes.every((node) => node.ownerUserId === DEFAULT_OWNER_USER_ID)).toBe(true);
   });
 
   it("rejects invalid traversal limits", async () => {
@@ -95,7 +95,7 @@ describe("provenance graph route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Prepare a job-root provenance graph.",
       memories: [],
       integrations: []
@@ -103,7 +103,7 @@ describe("provenance graph route", () => {
     await repository.saveGoalBundle(bundle);
     for (let index = 0; index < 3; index += 1) {
       const newerBundle = await processUserRequest({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         request: `Prepare newer goal ${index}.`,
         memories: [],
         integrations: []
@@ -113,7 +113,7 @@ describe("provenance graph route", () => {
     const rootJob = await repository.enqueueJob(
       createJobRecord({
         id: "older-root-job",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "goal_create",
         payload: {
           type: "goal_create",
@@ -131,7 +131,7 @@ describe("provenance graph route", () => {
       await repository.enqueueJob(
         createJobRecord({
           id: `newer-job-${index}`,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           kind: "goal_create",
           payload: {
             type: "goal_create",
@@ -164,7 +164,7 @@ describe("provenance graph route", () => {
 
     for (let index = 0; index < 125; index += 1) {
       const bundle = await processUserRequest({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         request: `Prepare paged provenance goal ${index}.`,
         memories: [],
         integrations: []
@@ -177,9 +177,9 @@ describe("provenance graph route", () => {
     const response = await graphRoute(buildAuthorizedGetRequest("http://localhost/api/provenance/graph?limit=125"));
 
     expect(response.status).toBe(200);
-    expect(listGoalsPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 100 }));
+    expect(listGoalsPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: DEFAULT_OWNER_USER_ID, limit: 100 }));
     expect(listGoalsPageSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 25, cursor: expect.any(String) })
+      expect.objectContaining({ userId: DEFAULT_OWNER_USER_ID, limit: 25, cursor: expect.any(String) })
     );
   }, 15_000);
 
@@ -190,7 +190,7 @@ describe("provenance graph route", () => {
     const longMemoryId = `memory-${"root-".repeat(60)}`;
     const rootMemory = createMemoryRecord({
       id: longMemoryId,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "audit",
       memoryType: "confirmed",
       content: "Older memory root with a long upstream identifier.",
@@ -204,7 +204,7 @@ describe("provenance graph route", () => {
       await repository.saveMemory(
         createMemoryRecord({
           id: `newer-memory-${index}`,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "audit",
           memoryType: "observed",
           content: `Newer memory ${index}.`,
@@ -227,7 +227,7 @@ describe("provenance graph route", () => {
     expect(response.status).toBe(200);
     expect(payload.graph.nodes.some((node) => node.id === `context_packet:ctx_${longMemoryId}`)).toBe(true);
     expect(listMemorySpy).not.toHaveBeenCalled();
-    expect(listMemoryPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 100 }));
+    expect(listMemoryPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: DEFAULT_OWNER_USER_ID, limit: 100 }));
   });
 
   it("includes restricted owner memories in audit provenance graphs", async () => {
@@ -236,7 +236,7 @@ describe("provenance graph route", () => {
     });
     const restrictedMemory = createMemoryRecord({
       id: "restricted-owner-memory",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "audit",
       memoryType: "confirmed",
       content: "Restricted owner-only audit context.",
@@ -274,7 +274,7 @@ describe("provenance graph route", () => {
     const response = await graphRoute(buildAuthorizedGetRequest("http://localhost/api/provenance/graph?limit=10"));
 
     expect(response.status).toBe(200);
-    expect(listMemoryPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: SYSTEM_USER_ID, limit: 10 }));
+    expect(listMemoryPageSpy).toHaveBeenCalledWith(expect.objectContaining({ userId: DEFAULT_OWNER_USER_ID, limit: 10 }));
     expect(listMemorySpy).not.toHaveBeenCalled();
   });
 
@@ -286,7 +286,7 @@ describe("provenance graph route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Prepare recommendation-linked provenance.",
       memories: [],
       integrations: []
@@ -341,7 +341,7 @@ describe("provenance graph route", () => {
           notes: null
         },
         provenance: {
-          ownerUserId: SYSTEM_USER_ID,
+          ownerUserId: DEFAULT_OWNER_USER_ID,
           workspaceId: bundle.goal.workspaceId,
           source: "execution",
           memoryIds: [],
@@ -448,7 +448,7 @@ describe("provenance graph route", () => {
       await repository.saveMemory(
         createMemoryRecord({
           id: `memory-scale-${padded}`,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "scale",
           memoryType: "observed",
           content: `Scale memory ${padded}.`,

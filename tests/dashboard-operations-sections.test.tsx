@@ -164,7 +164,7 @@ function buildDashboardData(): DashboardData {
     commitments: [],
     briefingPreferences: {
       userId: "workspace-editor",
-      timezone: "Asia/Singapore",
+      timezone: "UTC",
       focus: "balanced",
       schedules: [],
       createdAt: "2026-04-22T00:00:00.000Z",

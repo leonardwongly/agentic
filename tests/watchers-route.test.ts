@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   WatcherSchema,
   WorkspaceMemberSchema,
   WorkspaceSchema,
@@ -146,7 +146,7 @@ describe("watchers route", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Watch someone else's private workflow.");
@@ -180,9 +180,9 @@ describe("watchers route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Watch my inbox for urgent replies.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Watch my inbox for urgent replies.");
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await watchersRoute(
@@ -204,13 +204,13 @@ describe("watchers route", () => {
     const payload = (await response.json()) as {
       watcher: { id: string; actorContext: unknown };
     };
-    const savedWatcher = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find(
+    const savedWatcher = (await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID })).find(
       (watcher) => watcher.id === payload.watcher.id
     );
 
     expect(response.status).toBe(200);
-    expect(payload.watcher.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
-    expect(savedWatcher?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.watcher.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
+    expect(savedWatcher?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
   });
 
   it("stamps the human actor when creating a watcher from a session principal", async () => {
@@ -219,7 +219,7 @@ describe("watchers route", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const bundle = await createGoalForUser(repository, secondaryUserId, "Watch my own inbox for escalation risk.");
@@ -270,15 +270,15 @@ describe("watchers route", () => {
     });
     const editorUserId = "user-editor";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(editorUserId);
 
-    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, editorUserId);
+    const workspace = await createSharedWorkspace(repository, DEFAULT_OWNER_USER_ID, editorUserId);
     await workspace.addMember("editor");
 
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Watch shared inbox escalations for the team.",
       workspace.workspaceId
     );
@@ -329,12 +329,12 @@ describe("watchers route", () => {
 
     expect(response.status).toBe(200);
     expect(payload.watcher.actorContext).toEqual(createHumanActorContext(editorUserId, "session-editor"));
-    expect(payload.watcher.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(payload.watcher.responsibility.owner.userId).toBe(DEFAULT_OWNER_USER_ID);
     expect(payload.watcher.responsibility.delegate).toMatchObject({
       kind: "workspace_role",
       workspaceRole: "editor"
     });
-    expect(savedWatcher?.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(savedWatcher?.responsibility.owner.userId).toBe(DEFAULT_OWNER_USER_ID);
     expect(savedWatcher?.responsibility.delegate).toMatchObject({
       kind: "workspace_role",
       workspaceRole: "editor"
@@ -347,15 +347,15 @@ describe("watchers route", () => {
     });
     const viewerUserId = "user-viewer";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(viewerUserId);
 
-    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    const workspace = await createSharedWorkspace(repository, DEFAULT_OWNER_USER_ID, viewerUserId);
     await workspace.addMember("viewer");
 
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Watch shared workspace inbox escalations.",
       workspace.workspaceId
     );
@@ -412,10 +412,10 @@ describe("watchers route", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
-    const primaryBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Watch my calendar for conflicts.");
+    const primaryBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Watch my calendar for conflicts.");
     const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Watch another user's inbox.");
 
     await repository.saveWatcher(
@@ -474,10 +474,10 @@ describe("watchers route", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
-    const primaryBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Watch my calendar for conflicts.");
+    const primaryBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Watch my calendar for conflicts.");
     const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Watch my own inbox.");
 
     await repository.saveWatcher(
@@ -552,9 +552,9 @@ describe("watchers route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Watch my inbox for priority threads.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Watch my inbox for priority threads.");
     const watcher = WatcherSchema.parse({
       id: "watcher-active",
       goalId: bundle.goal.id,
@@ -579,7 +579,7 @@ describe("watchers route", () => {
       watcher: { id: string; status: string; actorContext: unknown };
       dashboard: { watchers: Array<{ id: string; status: string }> };
     };
-    const savedWatcher = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find(
+    const savedWatcher = (await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID })).find(
       (candidate) => candidate.id === watcher.id
     );
 
@@ -588,8 +588,8 @@ describe("watchers route", () => {
       id: watcher.id,
       status: "paused"
     });
-    expect(payload.watcher.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
-    expect(savedWatcher?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.watcher.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
+    expect(savedWatcher?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(payload.dashboard.watchers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -606,7 +606,7 @@ describe("watchers route", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Watch another user's inbox.");
@@ -642,15 +642,15 @@ describe("watchers route", () => {
     });
     const viewerUserId = "user-viewer";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(viewerUserId);
 
-    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    const workspace = await createSharedWorkspace(repository, DEFAULT_OWNER_USER_ID, viewerUserId);
     await workspace.addMember("viewer");
 
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Watch shared inbox escalations for the team.",
       workspace.workspaceId
     );
@@ -665,7 +665,7 @@ describe("watchers route", () => {
         sourceSystems: ["email"],
         status: "active",
         expiryAt: null,
-        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
         createdAt: nowIso(),
         updatedAt: nowIso()
       })
@@ -699,7 +699,7 @@ describe("watchers route", () => {
       requireApiSessionSpy.mockRestore();
     }
 
-    const persisted = (await repository.listWatchers({ userId: SYSTEM_USER_ID })).find((candidate) => candidate.id === watcher.id);
+    const persisted = (await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID })).find((candidate) => candidate.id === watcher.id);
 
     expect(response.status).toBe(403);
     expect(payload.error).toBe(

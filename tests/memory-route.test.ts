@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
 import { createRepository } from "@agentic/repository";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -42,10 +42,10 @@ describe("memory update route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const expiredMemory = createMemoryRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "preferences",
       memoryType: "observed",
       content: "Prefers concise follow-up drafts.",
@@ -80,7 +80,7 @@ describe("memory update route", () => {
     expect(response.status).toBe(200);
     expect(payload.memory.id).toBe(expiredMemory.id);
     expect(payload.memory.memoryType).toBe("observed");
-    expect(payload.memory.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.memory.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(payload.memory.expiryAt).toBeNull();
     expect(payload.memory.reviewAt).not.toBeNull();
     expect(Date.parse(payload.memory.reviewAt ?? "")).toBeGreaterThan(before);
@@ -89,8 +89,8 @@ describe("memory update route", () => {
     const reloadedRepository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const persisted = (await reloadedRepository.listMemory(SYSTEM_USER_ID)).find((memory) => memory.id === expiredMemory.id);
-    expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    const persisted = (await reloadedRepository.listMemory(DEFAULT_OWNER_USER_ID)).find((memory) => memory.id === expiredMemory.id);
+    expect(persisted?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
   });
 
   it("returns 404 when updating another user's memory", async () => {
@@ -99,7 +99,7 @@ describe("memory update route", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const otherUserMemory = createMemoryRecord({

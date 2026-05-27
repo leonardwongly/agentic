@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ProviderCredentialSchema, SYSTEM_USER_ID, createSystemActorContext, nowIso } from "@agentic/contracts";
+import { ProviderCredentialSchema, DEFAULT_OWNER_USER_ID, createSystemActorContext, nowIso } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import { processUserRequest } from "@agentic/orchestrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -44,16 +44,16 @@ describe("dashboard events route", () => {
 
   it("streams scoped dashboard events without leaking another user's jobs", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Review my inbox and draft an external response.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
     await repository.saveGoalBundle(bundle);
     const job = createJobRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "docs_render",
       payload: {
         type: "docs_render",
@@ -75,7 +75,7 @@ describe("dashboard events route", () => {
     await repository.saveProviderCredential(
       ProviderCredentialSchema.parse({
         id: "google:global:dashboard-events",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: null,
         provider: "google",
         accountId: "dashboard-events",
@@ -86,7 +86,7 @@ describe("dashboard events route", () => {
         lastValidatedAt: nowIso(),
         lastRefreshFailureAt: nowIso(),
         metadata: {},
-        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
         createdAt: nowIso(),
         updatedAt: nowIso()
       })
@@ -112,11 +112,11 @@ describe("dashboard events route", () => {
 
   it("bounds burst batches with monotonic sequence ids for client dedupe", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const jobs = Array.from({ length: 125 }, (_, index) =>
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "docs_render",
         payload: {
           type: "docs_render",
@@ -129,7 +129,7 @@ describe("dashboard events route", () => {
     const batch = buildDashboardEventBatch({
       dashboard,
       jobs,
-      principalUserId: SYSTEM_USER_ID,
+      principalUserId: DEFAULT_OWNER_USER_ID,
       lastEventId: 9,
       observedAt: "2026-05-06T01:00:00.000Z",
       limit: 25

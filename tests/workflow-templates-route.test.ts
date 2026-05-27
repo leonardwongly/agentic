@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createHumanActorContext, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createHumanActorContext, createSystemActorContext } from "@agentic/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import { DELETE, GET as getWorkflowTemplateRoute, PUT } from "../apps/web/app/api/workflow-templates/[id]/route";
@@ -98,7 +98,7 @@ describe("workflow templates routes", () => {
 
     expect(createResponse.status).toBe(201);
     expect(createdPayload.template.name).toBe("Daily triage");
-    expect(createdPayload.template.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(createdPayload.template.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expectNoStoreHeaders(createResponse);
 
     const listResponse = await listWorkflowTemplatesRoute(buildAuthorizedGetRequest("http://localhost/api/workflow-templates"));
@@ -148,7 +148,7 @@ describe("workflow templates routes", () => {
     };
 
     expect(updatePayload.template.description).toBe("Review only urgent and blocked signals before noon.");
-    expect(updatePayload.template.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(updatePayload.template.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
 
     const deleteResponse = await DELETE(
       buildAuthorizedJsonRequestWithIfMatch(

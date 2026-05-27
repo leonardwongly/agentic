@@ -186,7 +186,7 @@ function buildDashboardData(role: "editor" | "viewer"): DashboardData {
     commitments: [],
     briefingPreferences: {
       userId: `workspace-${role}`,
-      timezone: "Asia/Singapore",
+      timezone: "UTC",
       focus: "balanced",
       schedules: briefingTypeValues.map((type) => ({
         type,

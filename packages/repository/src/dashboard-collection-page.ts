@@ -6,7 +6,7 @@ import {
   CommitmentSchema,
   JobRecordSchema,
   MemoryRecordSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   clone,
   nowIso,
   type ActionLog,
@@ -369,7 +369,7 @@ export async function listDashboardApprovalsPage(
   repository: AgenticRepository,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<ApprovalRequest>> {
-  const userId = params?.userId ?? SYSTEM_USER_ID;
+  const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
   const bundles = await collectDashboardGoalBundles(repository, userId);
   const approvals = bundles.flatMap((bundle) => bundle.approvals).filter(
     (approval) =>
@@ -384,7 +384,7 @@ export async function listDashboardCommitmentsPage(
   repository: AgenticRepository,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<Commitment>> {
-  const userId = params?.userId ?? SYSTEM_USER_ID;
+  const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
   const [goals, persisted] = await Promise.all([
     collectDashboardGoalBundles(repository, userId),
     repository.listCommitments(userId)
@@ -419,7 +419,7 @@ export async function listDashboardMemoryPage(
   repository: AgenticRepository,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<MemoryRecord>> {
-  const memories = (await collectDashboardMemories(repository, params?.userId ?? SYSTEM_USER_ID)).filter(
+  const memories = (await collectDashboardMemories(repository, params?.userId ?? DEFAULT_OWNER_USER_ID)).filter(
     (memory) => !params?.kind || memory.memoryType === params.kind
   );
   return buildDashboardMemoryPage(memories, params);
@@ -429,7 +429,7 @@ export async function listDashboardActionLogsPage(
   repository: AgenticRepository,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<ActionLog>> {
-  const goals = await collectDashboardGoalBundles(repository, params?.userId ?? SYSTEM_USER_ID);
+  const goals = await collectDashboardGoalBundles(repository, params?.userId ?? DEFAULT_OWNER_USER_ID);
   const logs = goals.flatMap((bundle) => bundle.actionLogs).filter((log) => !params?.kind || log.kind === params.kind);
   return buildDashboardActionLogsPage(logs, params);
 }
@@ -438,7 +438,7 @@ export async function listDashboardArtifactsPage(
   repository: AgenticRepository,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<Artifact>> {
-  const goals = await collectDashboardGoalBundles(repository, params?.userId ?? SYSTEM_USER_ID);
+  const goals = await collectDashboardGoalBundles(repository, params?.userId ?? DEFAULT_OWNER_USER_ID);
   const artifacts = goals.flatMap((bundle) => bundle.artifacts).filter((artifact) => !params?.kind || artifact.artifactType === params.kind);
   return buildDashboardArtifactsPage(artifacts, params);
 }

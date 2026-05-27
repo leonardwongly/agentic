@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,7 +63,7 @@ describe("docs render route", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
@@ -168,13 +168,13 @@ describe("docs render route", () => {
     };
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(202);
     expect(firstPayload.job.id).toBe(secondPayload.job.id);
     expect(firstPayload.statusUrl).toBe(secondPayload.statusUrl);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(1);
   });
 
   it("does not leak raw docs-build internals after worker failure", async () => {

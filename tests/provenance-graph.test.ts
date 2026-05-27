@@ -1,4 +1,4 @@
-import { JobRecordSchema, SYSTEM_USER_ID } from "@agentic/contracts";
+import { JobRecordSchema, DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import { createMemoryRecord } from "@agentic/memory";
 import { buildExecutionProvenanceGraph } from "@agentic/repository";
@@ -7,13 +7,13 @@ import { processUserRequest } from "@agentic/orchestrator";
 describe("execution provenance graph", () => {
   it("connects goals, jobs, memory-derived packets, outputs, and failures without raw payload leakage", async () => {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Draft a concise project update that needs review.",
       memories: [],
       integrations: []
     });
     const job = createJobRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "goal_create",
       payload: {
         type: "goal_create",
@@ -36,7 +36,7 @@ describe("execution provenance graph", () => {
     });
     const memory = createMemoryRecord({
       id: "memory-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "preferences",
       memoryType: "observed",
       content: "Prefers short updates.",
@@ -46,7 +46,7 @@ describe("execution provenance graph", () => {
     });
 
     const graph = buildExecutionProvenanceGraph({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goals: [bundle],
       jobs: [deadLetter],
       memories: [memory],
@@ -82,13 +82,13 @@ describe("execution provenance graph", () => {
 
   it("bounds traversal from a root node", async () => {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Create an artifact-rich planning brief.",
       memories: [],
       integrations: []
     });
     const job = createJobRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "goal_create",
       payload: {
         type: "goal_create",
@@ -102,7 +102,7 @@ describe("execution provenance graph", () => {
     });
     const memory = createMemoryRecord({
       id: "outside-root-memory",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "outside",
       memoryType: "observed",
       content: "This packet is disconnected from the root goal.",
@@ -111,7 +111,7 @@ describe("execution provenance graph", () => {
     });
 
     const graph = buildExecutionProvenanceGraph({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goals: [bundle],
       jobs: [job],
       memories: [memory],
@@ -182,7 +182,7 @@ describe("execution provenance graph", () => {
     const longMemoryId = `memory-${"a".repeat(260)}`;
     const memory = createMemoryRecord({
       id: longMemoryId,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "long-id",
       memoryType: "observed",
       content: "Memory with a valid long upstream identifier.",
@@ -191,7 +191,7 @@ describe("execution provenance graph", () => {
     });
 
     const graph = buildExecutionProvenanceGraph({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goals: [],
       jobs: [],
       memories: [memory],
@@ -216,14 +216,14 @@ describe("execution provenance graph", () => {
 
   it("keeps large graph projections bounded for traversal performance", async () => {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Prepare a bounded provenance graph.",
       memories: [],
       integrations: []
     });
     const jobs = Array.from({ length: 180 }, (_, index) =>
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "goal_create",
         payload: {
           type: "goal_create",
@@ -239,7 +239,7 @@ describe("execution provenance graph", () => {
     const memories = Array.from({ length: 180 }, (_, index) =>
       createMemoryRecord({
         id: `memory-${index}`,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "performance",
         memoryType: "observed",
         content: `Memory ${index}`,
@@ -249,7 +249,7 @@ describe("execution provenance graph", () => {
     );
 
     const graph = buildExecutionProvenanceGraph({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goals: [bundle],
       jobs,
       memories,

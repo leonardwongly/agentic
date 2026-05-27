@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { GET as agentMetricsRoute } from "../apps/web/app/api/agents/[id]/metrics/route";
@@ -57,9 +57,9 @@ describe("agent metrics route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const startedAt = Date.now() - bundle.tasks.length * 45_000;
 
     await repository.saveGoalBundle({
@@ -110,7 +110,7 @@ describe("agent metrics route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await agentMetricsRoute(buildAuthorizedGetRequest("http://localhost/api/agents/missing-agent/metrics"), {
@@ -128,7 +128,7 @@ describe("agent metrics route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await agentMetricsRoute(

@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GET as jobEventsRoute } from "../apps/web/app/api/jobs/[id]/events/route";
@@ -44,10 +44,10 @@ describe("job event stream route", () => {
 
   it("streams an authenticated terminal job snapshot and closes", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const now = "2026-04-29T00:00:00.000Z";
     const queuedJob = createJobRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "docs_render",
       payload: {
         type: "docs_render",
@@ -82,7 +82,7 @@ describe("job event stream route", () => {
 
   it("does not stream jobs that are absent or outside the authenticated scope", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const response = await jobEventsRoute(
       buildAuthorizedGetRequest("http://localhost/api/jobs/missing-job/events?timeoutMs=1000"),

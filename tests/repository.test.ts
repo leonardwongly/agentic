@@ -10,7 +10,7 @@ import {
   ProviderCredentialSchema,
   GoalTemplateSchema,
   IntegrationAccountSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   WatcherSchema,
   WorkspaceGovernanceSchema,
   WorkspaceMemberSchema,
@@ -28,7 +28,7 @@ import { generateBriefing, processUserRequest } from "@agentic/orchestrator";
 import { createMemoryRecord } from "@agentic/memory";
 
 describe("repository", () => {
-  const systemActor = createSystemActorContext(SYSTEM_USER_ID);
+  const systemActor = createSystemActorContext(DEFAULT_OWNER_USER_ID);
 
   function buildProviderCredential(params: {
     userId: string;
@@ -93,9 +93,9 @@ describe("repository", () => {
     repository: ReturnType<typeof createRepository>,
     decision: "approved" | "rejected"
   ) {
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const approval = bundle.approvals[0];
 
     expect(approval).toBeDefined();
@@ -111,7 +111,7 @@ describe("repository", () => {
           : "This needs manual review before any external message is sent."
     });
     const evidenceRecords = await repository.listEvidenceRecords({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval!.id
     });
     const invisibleEvidence = await repository.listEvidenceRecords({
@@ -130,7 +130,7 @@ describe("repository", () => {
 
     expect(resultingTask).toBeDefined();
     expect(evidence).toMatchObject({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goalId: bundle.goal.id,
       taskId: approval!.taskId,
       approvalId: approval!.id,
@@ -433,8 +433,8 @@ describe("repository", () => {
       storePath: path.join(await mkdtemp(path.join(os.tmpdir(), "agentic-repository-append-logs-")), "runtime-store.json")
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Record public-share audit logs append-only.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Record public-share audit logs append-only.");
     const firstLog = {
       id: "share-audit-append-1",
       goalId: bundle.goal.id,
@@ -511,9 +511,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan my week around focus time and meetings.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Plan my week around focus time and meetings.");
 
     const reloaded = await repository.getGoalBundle(bundle.goal.id);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
@@ -544,14 +544,14 @@ describe("repository", () => {
         id: "scheduling-execution-v1"
       }
     });
-    expect(reloaded?.goal.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(reloaded?.goal.responsibility.owner.userId).toBe(DEFAULT_OWNER_USER_ID);
     expect(reloaded?.goal.responsibility.reviewer?.label).toBe("Goal reviewer");
-    expect(reloaded?.tasks[0]?.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(reloaded?.tasks[0]?.responsibility.owner.userId).toBe(DEFAULT_OWNER_USER_ID);
     expect(reloaded?.tasks[0]?.responsibility.delegate?.kind).toBe("system_actor");
     expect(reloaded?.tasks[0]?.responsibility.delegate?.label).toContain("execution lane");
 
     if (reloaded?.approvals.length) {
-      expect(reloaded.approvals[0].responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+      expect(reloaded.approvals[0].responsibility.owner.userId).toBe(DEFAULT_OWNER_USER_ID);
       expect(reloaded.approvals[0].responsibility.reviewer?.label).toBe("Approval reviewer");
     }
   }, 15_000);
@@ -563,9 +563,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const approval = bundle.approvals[0];
 
     expect(approval).toBeDefined();
@@ -607,9 +607,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const approval = bundle.approvals[0];
 
     expect(approval).toBeDefined();
@@ -623,7 +623,7 @@ describe("repository", () => {
       rationale: "Approved for this exact reply.",
       buildJob: (updatedBundle) =>
         createJobRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           kind: "approval_follow_up",
           actorContext: systemActor,
           maxAttempts: 1,
@@ -642,10 +642,10 @@ describe("repository", () => {
           }
         })
     });
-    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
-    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, DEFAULT_OWNER_USER_ID);
+    const jobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID, kinds: ["approval_follow_up"] });
     const evidenceRecords = await repository.listEvidenceRecords({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval!.id
     });
 
@@ -678,10 +678,10 @@ describe("repository", () => {
     });
     const mismatchedUserId = "user-approval-job-owner-mismatch";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(mismatchedUserId);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const approval = bundle.approvals[0];
 
     expect(approval).toBeDefined();
@@ -716,11 +716,11 @@ describe("repository", () => {
       })
     ).rejects.toThrow(/job owner must match/i);
 
-    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
-    const ownerJobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, DEFAULT_OWNER_USER_ID);
+    const ownerJobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID, kinds: ["approval_follow_up"] });
     const mismatchedJobs = await repository.listJobs({ userId: mismatchedUserId, kinds: ["approval_follow_up"] });
     const evidenceRecords = await repository.listEvidenceRecords({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval!.id
     });
 
@@ -737,9 +737,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const approval = bundle.approvals[0];
 
     expect(approval).toBeDefined();
@@ -757,10 +757,10 @@ describe("repository", () => {
       })
     ).rejects.toThrow("simulated follow-up job construction failure");
 
-    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
-    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["approval_follow_up"] });
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, DEFAULT_OWNER_USER_ID);
+    const jobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID, kinds: ["approval_follow_up"] });
     const evidenceRecords = await repository.listEvidenceRecords({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval!.id
     });
 
@@ -777,7 +777,7 @@ describe("repository", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const bundle = await createGoalForUser(repository, secondaryUserId, "Review my inbox and send one external reply.");
@@ -796,7 +796,7 @@ describe("repository", () => {
     ).rejects.toThrow(/was not found/);
 
     const hiddenEvidence = await repository.listEvidenceRecords({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval!.id
     });
     const visibleBundle = await repository.getGoalBundleForUser(bundle.goal.id, secondaryUserId);
@@ -821,13 +821,13 @@ describe("repository", () => {
     const viewerUserId = "user-viewer";
     const timestamp = nowIso();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(editorUserId);
     await repository.seedDefaults(viewerUserId);
 
     const sharedWorkspace = WorkspaceSchema.parse({
       id: "workspace-owner-boundary",
-      ownerUserId: SYSTEM_USER_ID,
+      ownerUserId: DEFAULT_OWNER_USER_ID,
       slug: "owner-boundary",
       name: "Owner Boundary",
       description: "Shared approvals stay with the workspace owner.",
@@ -841,7 +841,7 @@ describe("repository", () => {
       WorkspaceMemberSchema.parse({
         id: "workspace-owner-boundary-owner",
         workspaceId: sharedWorkspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -873,7 +873,7 @@ describe("repository", () => {
 
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Review my inbox and send one external reply.",
       sharedWorkspace.id
     );
@@ -902,7 +902,7 @@ describe("repository", () => {
       })
     ).rejects.toThrow("Only the workspace owner can respond to shared approvals.");
 
-    const pendingBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const pendingBundle = await repository.getGoalBundleForUser(bundle.goal.id, DEFAULT_OWNER_USER_ID);
     const pendingApproval = pendingBundle?.approvals.find((candidate) => candidate.id === approval!.id);
 
     expect(pendingApproval).toMatchObject({
@@ -913,7 +913,7 @@ describe("repository", () => {
     expect(pendingApproval?.history).toEqual([]);
     await expect(
       repository.listEvidenceRecords({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         approvalId: approval!.id
       })
     ).resolves.toEqual([]);
@@ -927,7 +927,7 @@ describe("repository", () => {
     });
     const approvedApproval = approvedBundle.approvals.find((candidate) => candidate.id === approval!.id);
     const ownerEvidence = await repository.listEvidenceRecords({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval!.id
     });
 
@@ -951,9 +951,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and draft responses.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and draft responses.");
     const approval = bundle.approvals[0];
 
     expect(approval).toBeDefined();
@@ -967,7 +967,7 @@ describe("repository", () => {
     });
     const queuedJob = await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "approval_follow_up",
         actorContext: systemActor,
         maxAttempts: 1,
@@ -985,7 +985,7 @@ describe("repository", () => {
       })
     );
     const claimedJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["approval_follow_up"],
       runnerId: "worker-dashboard-approval-replay",
       leaseMs: 30_000,
@@ -1001,9 +1001,9 @@ describe("repository", () => {
       error: "approval follow-up replay test failure"
     });
 
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const asyncIssue = dashboard.operations?.asyncExecution.items.find((item) => item.jobId === queuedJob.id);
-    const storedJob = await repository.getJob(queuedJob.id, SYSTEM_USER_ID);
+    const storedJob = await repository.getJob(queuedJob.id, DEFAULT_OWNER_USER_ID);
 
     expect(storedJob?.journal).toMatchObject({
       lifecycleState: "dead_letter",
@@ -1050,12 +1050,12 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const autopilotEvent = await repository.saveAutopilotEvent(
       AutopilotEventSchema.parse({
         id: "autopilot-event-dashboard-replay",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "watcher_triggered",
         sourceId: "watcher-dashboard-replay",
         idempotencyKey: "watcher-dashboard-replay",
@@ -1076,7 +1076,7 @@ describe("repository", () => {
     );
     const queuedJob = await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "autopilot_process",
         actorContext: systemActor,
         maxAttempts: 1,
@@ -1091,7 +1091,7 @@ describe("repository", () => {
       })
     );
     const claimedJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["autopilot_process"],
       runnerId: "worker-dashboard-autopilot-replay",
       leaseMs: 30_000,
@@ -1107,9 +1107,9 @@ describe("repository", () => {
       error: "autopilot replay test failure"
     });
 
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const asyncIssue = dashboard.operations?.asyncExecution.items.find((item) => item.jobId === queuedJob.id);
-    const storedJob = await repository.getJob(queuedJob.id, SYSTEM_USER_ID);
+    const storedJob = await repository.getJob(queuedJob.id, DEFAULT_OWNER_USER_ID);
 
     expect(storedJob?.journal).toMatchObject({
       lifecycleState: "dead_letter",
@@ -1156,9 +1156,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const approval = bundle.approvals[0];
 
     expect(approval).toBeDefined();
@@ -1202,9 +1202,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const approval = bundle.approvals[0];
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       approvals?: Array<{ id: string; action_intent?: unknown }>;
@@ -1317,7 +1317,7 @@ describe("repository", () => {
       storePath
     });
     const job = createGoalCreateJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Validate cross-process file store locking.",
       idempotencyKey: "file-lock-validation"
     });
@@ -1341,7 +1341,7 @@ describe("repository", () => {
     const saved = await enqueuePromise;
 
     expect(saved.id).toBe(job.id);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(1);
   });
 
   it("reclaims expired job leases ahead of later work in the file-backed store", async () => {
@@ -1447,13 +1447,13 @@ describe("repository", () => {
     const goalId = `goal-fixed-${Date.now()}`;
     const workflowId = `workflow-fixed-${Date.now()}`;
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const firstBundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Draft a weekly planning workflow.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID),
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID),
       goalId,
       workflowId
     });
@@ -1461,10 +1461,10 @@ describe("repository", () => {
     await repository.saveGoalBundle(firstBundle);
 
     const replacementBundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Prepare travel readiness coordination.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID),
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID),
       goalId,
       workflowId
     });
@@ -1513,31 +1513,31 @@ describe("repository", () => {
       keyVersion: "test-v1"
     });
     const credential = buildProviderCredential({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: "workspace-alpha",
       accountId: "acct-alpha",
       accountEmail: "owner@example.com"
     });
     const refreshToken = "refresh-token-alpha";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveProviderCredential(credential);
     await repository.saveProviderCredentialSecret({
       credentialId: credential.id,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "oauth_refresh_token",
       secret: secretStore.encrypt(refreshToken),
       createdAt: nowIso(),
       updatedAt: nowIso()
     });
 
-    const listedCredentials = await repository.listProviderCredentials(SYSTEM_USER_ID);
+    const listedCredentials = await repository.listProviderCredentials(DEFAULT_OWNER_USER_ID);
     const storedSecret = await repository.getProviderCredentialSecret(
       credential.id,
       "oauth_refresh_token",
-      SYSTEM_USER_ID
+      DEFAULT_OWNER_USER_ID
     );
-    const integrations = await repository.listIntegrations(SYSTEM_USER_ID);
+    const integrations = await repository.listIntegrations(DEFAULT_OWNER_USER_ID);
     const rawStore = await readFile(storePath, "utf8");
 
     expect(listedCredentials).toEqual([credential]);
@@ -1572,9 +1572,9 @@ describe("repository", () => {
       storePath: path.join(tempDir, "runtime-store.json")
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const reserved = await repository.reserveProviderSideEffect({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: null,
       goalId: "goal-side-effect",
       taskId: "task-side-effect",
@@ -1588,7 +1588,7 @@ describe("repository", () => {
       now: "2026-05-17T00:00:00.000Z"
     });
     const duplicateReservation = await repository.reserveProviderSideEffect({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: null,
       goalId: "goal-side-effect",
       taskId: "task-side-effect",
@@ -1606,7 +1606,7 @@ describe("repository", () => {
       now: "2026-05-17T00:02:00.000Z"
     });
     const completedReservation = await repository.reserveProviderSideEffect({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: null,
       goalId: "goal-side-effect",
       taskId: "task-side-effect",
@@ -1749,12 +1749,12 @@ describe("repository", () => {
       keyVersion: "test-v1"
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     await expect(
       repository.saveProviderCredentialSecret({
         credentialId: "google:missing:acct-404",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "oauth_refresh_token",
         secret: secretStore.encrypt("refresh-token-missing"),
         createdAt: nowIso(),
@@ -1791,12 +1791,12 @@ describe("repository", () => {
       databaseUrl
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, `Prepare a travel plan with approvals ${Date.now()}.`);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, `Prepare a travel plan with approvals ${Date.now()}.`);
 
     const reloaded = await repository.getGoalBundle(bundle.goal.id);
-    const goals = await repository.listGoals(SYSTEM_USER_ID);
+    const goals = await repository.listGoals(DEFAULT_OWNER_USER_ID);
 
     expect(reloaded?.goal.id).toBe(bundle.goal.id);
     expect(goals.some((goalBundle) => goalBundle.goal.id === bundle.goal.id)).toBe(true);
@@ -1807,14 +1807,14 @@ describe("repository", () => {
       databaseUrl
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     for (let index = 0; index < 6; index += 1) {
-      await createGoalForUser(repository, SYSTEM_USER_ID, `Measure paged Postgres hydration ${Date.now()}-${index}.`);
+      await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, `Measure paged Postgres hydration ${Date.now()}-${index}.`);
     }
 
     const { result: firstPage, queryCount } = await countPostgresQueries(repository, () =>
-      repository.listGoalsPage({ userId: SYSTEM_USER_ID, limit: 3 })
+      repository.listGoalsPage({ userId: DEFAULT_OWNER_USER_ID, limit: 3 })
     );
 
     expect(firstPage.items).toHaveLength(3);
@@ -1828,13 +1828,13 @@ describe("repository", () => {
     const goalId = `goal-fixed-postgres-${Date.now()}`;
     const workflowId = `workflow-fixed-postgres-${Date.now()}`;
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const firstBundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Draft a weekly planning workflow.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID),
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID),
       goalId,
       workflowId
     });
@@ -1842,10 +1842,10 @@ describe("repository", () => {
     await repository.saveGoalBundle(firstBundle);
 
     const replacementBundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Prepare travel readiness coordination.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID),
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID),
       goalId,
       workflowId
     });
@@ -1944,13 +1944,13 @@ describe("repository", () => {
     const createdAt = nowIso();
     const agentId = `agent-actor-${Date.now()}`;
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const agent = await repository.saveAgent(
       AgentDefinitionSchema.parse({
         id: agentId,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "private-ops-postgres",
         displayName: "Private Ops Postgres",
         description: "Handles private operational workflows.",
@@ -1987,14 +1987,14 @@ describe("repository", () => {
     const reloadedRepository = createRepository({
       databaseUrl
     });
-    const visible = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+    const visible = await reloadedRepository.getAgent(agent.id, DEFAULT_OWNER_USER_ID);
     const hidden = await reloadedRepository.getAgent(agent.id, secondaryUserId);
 
     await reloadedRepository.deleteAgent(agent.id, secondaryUserId);
-    const stillVisible = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+    const stillVisible = await reloadedRepository.getAgent(agent.id, DEFAULT_OWNER_USER_ID);
 
-    await reloadedRepository.deleteAgent(agent.id, SYSTEM_USER_ID);
-    const deleted = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+    await reloadedRepository.deleteAgent(agent.id, DEFAULT_OWNER_USER_ID);
+    const deleted = await reloadedRepository.getAgent(agent.id, DEFAULT_OWNER_USER_ID);
 
     expect(visible).toMatchObject({
       id: agent.id,
@@ -2092,12 +2092,12 @@ describe("repository", () => {
     const unique = Date.now();
     const timestamp = nowIso();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const workspace = await repository.saveWorkspace(
       WorkspaceSchema.parse({
         id: `workspace-scale-postgres-${unique}`,
-        ownerUserId: SYSTEM_USER_ID,
+        ownerUserId: DEFAULT_OWNER_USER_ID,
         slug: `scale-postgres-${unique}`,
         name: "Scale Postgres",
         description: "Workspace for dashboard scale validation.",
@@ -2111,7 +2111,7 @@ describe("repository", () => {
       WorkspaceMemberSchema.parse({
         id: `workspace-member-scale-postgres-${unique}`,
         workspaceId: workspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -2120,24 +2120,24 @@ describe("repository", () => {
     );
     await repository.saveWorkspaceSelection(
       WorkspaceSelectionSchema.parse({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: workspace.id,
         selectedAt: timestamp,
         updatedAt: timestamp
       })
     );
-    const initialMemoryCount = (await repository.listMemory(SYSTEM_USER_ID)).length;
-    const initialIntegrationCount = (await repository.listIntegrations(SYSTEM_USER_ID)).length;
+    const initialMemoryCount = (await repository.listMemory(DEFAULT_OWNER_USER_ID)).length;
+    const initialIntegrationCount = (await repository.listIntegrations(DEFAULT_OWNER_USER_ID)).length;
 
     for (let index = 0; index < 41; index += 1) {
-      await createGoalForUser(repository, SYSTEM_USER_ID, `Bounded dashboard goal ${unique}-${index}.`, workspace.id);
+      await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, `Bounded dashboard goal ${unique}-${index}.`, workspace.id);
     }
 
     for (let index = 0; index < 25; index += 1) {
       await repository.saveAutopilotEvent(
         AutopilotEventSchema.parse({
           id: `autopilot-scale-postgres-${unique}-${index}`,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           kind: "watcher_triggered",
           sourceId: `calendar-scale-postgres-${index}`,
           idempotencyKey: null,
@@ -2154,7 +2154,7 @@ describe("repository", () => {
       );
       await repository.saveMemory(
         createMemoryRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "preferences",
           memoryType: "observed",
           content: `Scale memory ${unique}-${index}`,
@@ -2166,7 +2166,7 @@ describe("repository", () => {
       await repository.upsertIntegration(
         IntegrationAccountSchema.parse({
           id: `integration-scale-postgres-${unique}-${index}`,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           name: `Scale Integration ${index}`,
           system: `system-${index}`,
           status: "ready",
@@ -2181,7 +2181,7 @@ describe("repository", () => {
     }
 
     const { result: dashboard, queryCount } = await countPostgresQueries(repository, () =>
-      repository.getDashboardData(SYSTEM_USER_ID)
+      repository.getDashboardData(DEFAULT_OWNER_USER_ID)
     );
 
     expect(dashboard.activeWorkspace?.id).toBe(workspace.id);
@@ -2203,13 +2203,13 @@ describe("repository", () => {
     const timestamp = nowIso();
     const collaboratorUserId = `workspace-collaborator-${unique}`;
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(collaboratorUserId);
 
     const workspace = await repository.saveWorkspace(
       WorkspaceSchema.parse({
         id: `workspace-member-upsert-${unique}`,
-        ownerUserId: SYSTEM_USER_ID,
+        ownerUserId: DEFAULT_OWNER_USER_ID,
         slug: `member-upsert-${unique}`,
         name: "Workspace Member Upsert",
         description: "Ensures workspace membership is keyed by workspace and user.",
@@ -2224,7 +2224,7 @@ describe("repository", () => {
       WorkspaceMemberSchema.parse({
         id: `workspace-member-owner-${unique}`,
         workspaceId: workspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -2256,7 +2256,7 @@ describe("repository", () => {
       systemActor
     );
 
-    const members = await repository.listWorkspaceMembers(workspace.id, SYSTEM_USER_ID);
+    const members = await repository.listWorkspaceMembers(workspace.id, DEFAULT_OWNER_USER_ID);
     const collaboratorMembers = members.filter((member) => member.userId === collaboratorUserId);
 
     expect(collaboratorMembers).toHaveLength(1);
@@ -2273,9 +2273,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const startedAt = Date.now() - bundle.tasks.length * 60_000;
 
     await repository.saveGoalBundle({
@@ -2319,9 +2319,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const rejectedBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const rejectedBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const rejectedApproval = rejectedBundle.approvals[0];
     const rejectedTask = rejectedBundle.tasks.find((task) => task.id === rejectedApproval?.taskId);
 
@@ -2350,7 +2350,7 @@ describe("repository", () => {
 
     await repository.saveEvidenceRecord({
       id: "evidence-scorecard-rejected",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goalId: rejectedBundle.goal.id,
       taskId: rejectedTask!.id,
       approvalId: rejectedApproval!.id,
@@ -2374,7 +2374,7 @@ describe("repository", () => {
       updatedAt: rejectedAt
     });
 
-    const failedBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const failedBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const failedApproval = failedBundle.approvals[0];
     const failedTask = failedBundle.tasks.find((task) => task.id === failedApproval?.taskId);
 
@@ -2403,7 +2403,7 @@ describe("repository", () => {
 
     await repository.saveEvidenceRecord({
       id: "evidence-scorecard-post-approval-failure",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goalId: failedBundle.goal.id,
       taskId: failedTask!.id,
       approvalId: failedApproval!.id,
@@ -2446,10 +2446,10 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const products = await repository.listOperatorProducts(SYSTEM_USER_ID);
-    const selection = await repository.getOperatorProductSelection(SYSTEM_USER_ID);
+    const products = await repository.listOperatorProducts(DEFAULT_OWNER_USER_ID);
+    const selection = await repository.getOperatorProductSelection(DEFAULT_OWNER_USER_ID);
 
     expect(products.some((product) => product.slug === "communications-operator")).toBe(true);
     expect(selection).not.toBeNull();
@@ -2467,14 +2467,14 @@ describe("repository", () => {
 
     await repository.saveOperatorProduct(customProduct);
     await repository.saveOperatorProductSelection({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       operatorProductId: customProduct.id,
       actorContext: systemActor,
       selectedAt: nowIso(),
       updatedAt: nowIso()
     });
 
-    const persistedSelection = await repository.getOperatorProductSelection(SYSTEM_USER_ID);
+    const persistedSelection = await repository.getOperatorProductSelection(DEFAULT_OWNER_USER_ID);
 
     expect(persistedSelection?.operatorProductId).toBe(customProduct.id);
     expect(persistedSelection?.actorContext).toEqual(systemActor);
@@ -2487,7 +2487,7 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     await expect(
       repository.saveWatcher(
@@ -2517,12 +2517,12 @@ describe("repository", () => {
     const editorUserId = "user-editor";
     const timestamp = nowIso();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(editorUserId);
 
     const sharedWorkspace = WorkspaceSchema.parse({
       id: "workspace-watcher-responsibility",
-      ownerUserId: SYSTEM_USER_ID,
+      ownerUserId: DEFAULT_OWNER_USER_ID,
       slug: "watcher-responsibility",
       name: "Watcher Responsibility",
       description: "Shared watcher ownership should remain explicit.",
@@ -2536,7 +2536,7 @@ describe("repository", () => {
       WorkspaceMemberSchema.parse({
         id: "workspace-watcher-responsibility-owner",
         workspaceId: sharedWorkspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -2557,7 +2557,7 @@ describe("repository", () => {
 
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Watch the shared inbox for escalation risk.",
       sharedWorkspace.id
     );
@@ -2582,7 +2582,7 @@ describe("repository", () => {
     const reloaded = await repository.getGoalBundleForUser(bundle.goal.id, editorUserId);
     const watcher = reloaded?.watchers.find((candidate) => candidate.id === "watcher-shared-responsibility");
 
-    expect(watcher?.responsibility.owner.userId).toBe(SYSTEM_USER_ID);
+    expect(watcher?.responsibility.owner.userId).toBe(DEFAULT_OWNER_USER_ID);
     expect(watcher?.responsibility.delegate).toMatchObject({
       kind: "workspace_role",
       workspaceRole: "editor"
@@ -2601,10 +2601,10 @@ describe("repository", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
-    const primaryBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Protect my calendar planning workflow.");
+    const primaryBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Protect my calendar planning workflow.");
     const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Track another user's inbox automation.");
 
     await repository.saveWatcher(
@@ -2641,10 +2641,10 @@ describe("repository", () => {
       })
     );
 
-    const primaryWatchers = await repository.listWatchers({ userId: SYSTEM_USER_ID });
-    const primaryDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const primaryWatchers = await repository.listWatchers({ userId: DEFAULT_OWNER_USER_ID });
+    const primaryDashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const unauthorizedGoalLookup = await repository.listWatchers({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goalId: secondaryBundle.goal.id
     });
 
@@ -2667,12 +2667,12 @@ describe("repository", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Keep this planning workflow private.");
 
-    const hiddenBundle = await repository.getGoalBundleForUser(secondaryBundle.goal.id, SYSTEM_USER_ID);
+    const hiddenBundle = await repository.getGoalBundleForUser(secondaryBundle.goal.id, DEFAULT_OWNER_USER_ID);
     const visibleBundle = await repository.getGoalBundleForUser(secondaryBundle.goal.id, secondaryUserId);
 
     expect(hiddenBundle).toBeNull();
@@ -2686,20 +2686,20 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const workspaces = await repository.listWorkspaces(SYSTEM_USER_ID);
-    const selection = await repository.getWorkspaceSelection(SYSTEM_USER_ID);
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const workspaces = await repository.listWorkspaces(DEFAULT_OWNER_USER_ID);
+    const selection = await repository.getWorkspaceSelection(DEFAULT_OWNER_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
 
     expect(workspaces).toHaveLength(1);
     expect(workspaces[0]).toMatchObject({
-      ownerUserId: SYSTEM_USER_ID,
+      ownerUserId: DEFAULT_OWNER_USER_ID,
       isPersonal: true,
       name: "Personal Workspace"
     });
     expect(selection).toMatchObject({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspaces[0]?.id
     });
     expect(dashboard.activeWorkspace?.id).toBe(workspaces[0]?.id);
@@ -2707,7 +2707,7 @@ describe("repository", () => {
       expect.arrayContaining([
         expect.objectContaining({
           workspaceId: workspaces[0]?.id,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           role: "owner"
         })
       ])
@@ -2737,16 +2737,16 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     for (let index = 0; index < 6; index += 1) {
-      await createGoalForUser(repository, SYSTEM_USER_ID, `Paged file goal ${Date.now()}-${index}.`);
+      await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, `Paged file goal ${Date.now()}-${index}.`);
     }
 
-    const fullList = await repository.listGoals(SYSTEM_USER_ID);
-    const firstPage = await repository.listGoalsPage({ userId: SYSTEM_USER_ID, limit: 3 });
+    const fullList = await repository.listGoals(DEFAULT_OWNER_USER_ID);
+    const firstPage = await repository.listGoalsPage({ userId: DEFAULT_OWNER_USER_ID, limit: 3 });
     const secondPage = await repository.listGoalsPage({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       limit: 3,
       cursor: firstPage.nextCursor
     });
@@ -2756,7 +2756,7 @@ describe("repository", () => {
     expect(secondPage.items.some((bundle) => firstPage.items.some((prior) => prior.goal.id === bundle.goal.id))).toBe(false);
     expect(secondPage.nextCursor).toBeNull();
 
-    await expect(repository.listGoalsPage({ userId: SYSTEM_USER_ID, cursor: "not-base64" })).rejects.toMatchObject({
+    await expect(repository.listGoalsPage({ userId: DEFAULT_OWNER_USER_ID, cursor: "not-base64" })).rejects.toMatchObject({
       code: "invalid_cursor"
     });
   }, 10_000);
@@ -2769,12 +2769,12 @@ describe("repository", () => {
     });
     const timestamp = nowIso();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const workspace = await repository.saveWorkspace(
       WorkspaceSchema.parse({
         id: "workspace-scale-file",
-        ownerUserId: SYSTEM_USER_ID,
+        ownerUserId: DEFAULT_OWNER_USER_ID,
         slug: "scale-file",
         name: "Scale File",
         description: "Workspace for bounded file-backed dashboard validation.",
@@ -2788,7 +2788,7 @@ describe("repository", () => {
       WorkspaceMemberSchema.parse({
         id: "workspace-member-scale-file",
         workspaceId: workspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -2797,24 +2797,24 @@ describe("repository", () => {
     );
     await repository.saveWorkspaceSelection(
       WorkspaceSelectionSchema.parse({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: workspace.id,
         selectedAt: timestamp,
         updatedAt: timestamp
       })
     );
-    const initialMemoryCount = (await repository.listMemory(SYSTEM_USER_ID)).length;
-    const initialIntegrationCount = (await repository.listIntegrations(SYSTEM_USER_ID)).length;
+    const initialMemoryCount = (await repository.listMemory(DEFAULT_OWNER_USER_ID)).length;
+    const initialIntegrationCount = (await repository.listIntegrations(DEFAULT_OWNER_USER_ID)).length;
 
     for (let index = 0; index < 41; index += 1) {
-      await createGoalForUser(repository, SYSTEM_USER_ID, `Bounded file goal ${Date.now()}-${index}.`, workspace.id);
+      await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, `Bounded file goal ${Date.now()}-${index}.`, workspace.id);
     }
 
     for (let index = 0; index < 25; index += 1) {
       await repository.saveAutopilotEvent(
         AutopilotEventSchema.parse({
           id: `autopilot-scale-file-${index}`,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           kind: "watcher_triggered",
           sourceId: `calendar-scale-file-${index}`,
           idempotencyKey: null,
@@ -2831,7 +2831,7 @@ describe("repository", () => {
       );
       await repository.saveMemory(
         createMemoryRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "preferences",
           memoryType: "observed",
           content: `Scale file memory ${index}`,
@@ -2843,7 +2843,7 @@ describe("repository", () => {
       await repository.upsertIntegration(
         IntegrationAccountSchema.parse({
           id: `integration-scale-file-${index}`,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           name: `Scale File Integration ${index}`,
           system: `scale-file-system-${index}`,
           status: "ready",
@@ -2858,10 +2858,10 @@ describe("repository", () => {
     }
 
     for (let index = 0; index < 2; index += 1) {
-      await createGoalForUser(repository, SYSTEM_USER_ID, `Out-of-scope goal ${Date.now()}-${index}.`);
+      await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, `Out-of-scope goal ${Date.now()}-${index}.`);
     }
 
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
 
     expect(dashboard.activeWorkspace?.id).toBe(workspace.id);
     expect(dashboard.goals).toHaveLength(40);
@@ -2880,12 +2880,12 @@ describe("repository", () => {
     const collaboratorUserId = "user-collaborator";
     const timestamp = nowIso();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(collaboratorUserId);
 
     const sharedWorkspace = WorkspaceSchema.parse({
       id: "workspace-shared-team",
-      ownerUserId: SYSTEM_USER_ID,
+      ownerUserId: DEFAULT_OWNER_USER_ID,
       slug: "shared-team",
       name: "Shared Team",
       description: "Shared execution surface for collaborators.",
@@ -2899,7 +2899,7 @@ describe("repository", () => {
       WorkspaceMemberSchema.parse({
         id: "workspace-member-owner",
         workspaceId: sharedWorkspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -2926,7 +2926,7 @@ describe("repository", () => {
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
         retentionDays: 180,
-        updatedBy: SYSTEM_USER_ID,
+        updatedBy: DEFAULT_OWNER_USER_ID,
         createdAt: timestamp,
         updatedAt: timestamp
       }),
@@ -2934,7 +2934,7 @@ describe("repository", () => {
     );
     await repository.saveWorkspaceSelection(
       WorkspaceSelectionSchema.parse({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: sharedWorkspace.id,
         selectedAt: timestamp,
         updatedAt: timestamp
@@ -2951,13 +2951,13 @@ describe("repository", () => {
 
     const sharedBundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Coordinate a shared launch checklist with the team.",
       sharedWorkspace.id
     );
     const privateBundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Keep a personal planning note private."
     );
 
@@ -2966,7 +2966,7 @@ describe("repository", () => {
     const collaboratorPrivateGoal = await repository.getGoalBundleForUser(privateBundle.goal.id, collaboratorUserId);
     const sharedJob = await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "goal_refine",
         actorContext: systemActor,
         payload: {
@@ -2981,7 +2981,7 @@ describe("repository", () => {
     );
     const privateJob = await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "goal_refine",
         actorContext: systemActor,
         payload: {
@@ -3033,10 +3033,10 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const goalCommitment = dashboard.commitments.find((commitment) => commitment.sourceKind === "goal");
     const approvalCommitment = dashboard.commitments.find((commitment) => commitment.sourceKind === "approval");
 
@@ -3101,10 +3101,10 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
-    const initialDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
+    const initialDashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const goalCommitment = initialDashboard.commitments.find((commitment) => commitment.sourceKind === "goal");
 
     expect(goalCommitment).toBeDefined();
@@ -3115,14 +3115,14 @@ describe("repository", () => {
       updatedAt: nowIso()
     });
 
-    const completedDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const completedDashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     expect(
       completedDashboard.commitments.find((commitment) => commitment.id === goalCommitment?.id)?.status
     ).toBe("completed");
 
-    await repository.deleteCommitment(goalCommitment!.id, SYSTEM_USER_ID);
+    await repository.deleteCommitment(goalCommitment!.id, DEFAULT_OWNER_USER_ID);
 
-    const reopenedDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const reopenedDashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     expect(
       reopenedDashboard.commitments.find((commitment) => commitment.id === goalCommitment?.id)?.status
     ).toBe("needs-review");
@@ -3138,12 +3138,12 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     await repository.saveCommitment({
       id: "commitment-manual-low-confidence",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       title: "Follow up on a fuzzy obligation",
       summary: "Persisted-only commitment for bucket coverage",
       status: "pending",
@@ -3165,7 +3165,7 @@ describe("repository", () => {
     });
     await repository.saveCommitment({
       id: "commitment-manual-waiting",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       title: "Waiting on a vendor response",
       summary: "Persisted-only waiting commitment",
       status: "blocked",
@@ -3187,7 +3187,7 @@ describe("repository", () => {
     });
     await repository.saveCommitment({
       id: "commitment-manual-completed",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       title: "Already done",
       summary: "Persisted-only completed commitment",
       status: "completed",
@@ -3209,28 +3209,28 @@ describe("repository", () => {
     });
 
     const firstPage = await repository.listCommitmentInbox({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       bucket: "unresolved",
       limit: 1
     });
     const secondPage = await repository.listCommitmentInbox({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       bucket: "unresolved",
       limit: 1,
       cursor: firstPage.nextCursor
     });
     const lowConfidence = await repository.listCommitmentInbox({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       bucket: "low_confidence",
       limit: 5
     });
     const waiting = await repository.listCommitmentInbox({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       bucket: "waiting_on_others",
       limit: 5
     });
     const completed = await repository.listCommitmentInbox({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       bucket: "completed",
       limit: 5
     });
@@ -3261,11 +3261,11 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     await expect(
       repository.listCommitmentInbox({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         bucket: "all",
         cursor: "not-a-valid-cursor"
       })
@@ -3279,11 +3279,11 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const defaults = await repository.getAutopilotSettings(SYSTEM_USER_ID);
+    const defaults = await repository.getAutopilotSettings(DEFAULT_OWNER_USER_ID);
     expect(defaults).toMatchObject({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       mode: "notify_only",
       debounceMinutes: 15,
       reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
@@ -3303,8 +3303,8 @@ describe("repository", () => {
       updatedAt: nowIso()
     });
 
-    const reloaded = await repository.getAutopilotSettings(SYSTEM_USER_ID);
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const reloaded = await repository.getAutopilotSettings(DEFAULT_OWNER_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
 
     expect(updated).toMatchObject({
       mode: "auto_run",
@@ -3348,10 +3348,10 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const firstClaim = await repository.claimAutopilotEvent({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-vip-thread",
       idempotencyKey: "watcher-vip-thread-1",
@@ -3373,7 +3373,7 @@ describe("repository", () => {
     });
 
     const duplicateClaim = await repository.claimAutopilotEvent({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-vip-thread",
       idempotencyKey: "watcher-vip-thread-1",
@@ -3385,7 +3385,7 @@ describe("repository", () => {
     });
 
     const debouncedClaim = await repository.claimAutopilotEvent({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-vip-thread",
       mode: "draft_goal",
@@ -3395,7 +3395,7 @@ describe("repository", () => {
       reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS
     });
 
-    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const events = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     expect(firstClaim.outcome).toBe("claimed");
     expect(firstClaim.event).toMatchObject({
@@ -3457,7 +3457,7 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const budget = {
       key: "watcher:vip-inbox",
@@ -3467,7 +3467,7 @@ describe("repository", () => {
     };
 
     const firstClaim = await repository.claimAutopilotEvent({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-vip-budget",
       idempotencyKey: "watcher-vip-budget-1",
@@ -3489,7 +3489,7 @@ describe("repository", () => {
     });
 
     const secondClaim = await repository.claimAutopilotEvent({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-vip-budget",
       idempotencyKey: "watcher-vip-budget-2",
@@ -3510,7 +3510,7 @@ describe("repository", () => {
       debounceMinutes: 15
     });
 
-    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const events = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     expect(firstClaim.outcome).toBe("claimed");
     expect(secondClaim.outcome).toBe("ignored");
@@ -3537,10 +3537,10 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const firstClaim = await repository.claimAutopilotEvent({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-backlog-1",
       mode: "draft_goal",
@@ -3555,7 +3555,7 @@ describe("repository", () => {
       }
     });
     const secondClaim = await repository.claimAutopilotEvent({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-backlog-2",
       mode: "draft_goal",
@@ -3570,7 +3570,7 @@ describe("repository", () => {
       }
     });
 
-    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const events = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     expect(firstClaim.outcome).toBe("claimed");
     expect(secondClaim.outcome).toBe("suppressed");
@@ -3592,11 +3592,11 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     for (const sourceId of ["watcher-budget-1", "watcher-budget-2"]) {
       const claim = await repository.claimAutopilotEvent({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "watcher_triggered",
         sourceId,
         mode: "draft_goal",
@@ -3615,7 +3615,7 @@ describe("repository", () => {
     }
 
     const suppressedClaim = await repository.claimAutopilotEvent({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-budget-3",
       mode: "draft_goal",
@@ -3648,12 +3648,12 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     await repository.saveAutopilotEvent(
       AutopilotEventSchema.parse({
         id: "autopilot-failure-1",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "watcher_triggered",
         sourceId: "watcher-failure-circuit-1",
         idempotencyKey: null,
@@ -3671,7 +3671,7 @@ describe("repository", () => {
     await repository.saveAutopilotEvent(
       AutopilotEventSchema.parse({
         id: "autopilot-failure-2",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "watcher_triggered",
         sourceId: "watcher-failure-circuit-2",
         idempotencyKey: null,
@@ -3688,7 +3688,7 @@ describe("repository", () => {
     );
 
     const suppressedClaim = await repository.claimAutopilotEvent({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-failure-circuit-3",
       mode: "draft_goal",
@@ -3724,9 +3724,9 @@ describe("repository", () => {
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const blockedBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Draft a risky outbound response for a client.");
+    const blockedBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Draft a risky outbound response for a client.");
     await repository.saveGoalBundle({
       ...blockedBundle,
       goal: {
@@ -3787,7 +3787,7 @@ describe("repository", () => {
       ]
     });
 
-    const completedBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Complete a passive monitoring workflow.");
+    const completedBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Complete a passive monitoring workflow.");
     await repository.saveGoalBundle({
       ...completedBundle,
       goal: {
@@ -3822,7 +3822,7 @@ describe("repository", () => {
       ]
     });
 
-    const stalledBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Keep a planning workflow moving.");
+    const stalledBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Keep a planning workflow moving.");
     await repository.saveGoalBundle({
       ...stalledBundle,
       goal: {
@@ -3843,7 +3843,7 @@ describe("repository", () => {
     });
 
     const reviewDueMemory = createMemoryRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "preferences",
       memoryType: "observed",
       content: "Prefers morning reviews for outbound drafts.",
@@ -3852,7 +3852,7 @@ describe("repository", () => {
       reviewAt: oneHourAgo
     });
     const lowConfidenceMemory = createMemoryRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "preferences",
       memoryType: "observed",
       content: "Sometimes skips lunch when in a hurry.",
@@ -3864,7 +3864,7 @@ describe("repository", () => {
     await repository.saveMemory(lowConfidenceMemory);
     const asyncIssueJob = await repository.enqueueJob(
       createGoalCreateJob({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         request: "Recover a degraded queue path.",
         goalId: blockedBundle.goal.id,
         availableAt: "2026-04-17T08:00:00.000Z",
@@ -3872,7 +3872,7 @@ describe("repository", () => {
       })
     );
     const claimedAsyncIssueJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       runnerId: "worker-dashboard",
       leaseMs: 30_000,
       now: "2026-04-17T08:00:00.000Z"
@@ -3889,14 +3889,14 @@ describe("repository", () => {
 
     await repository.saveProviderCredential(
       buildProviderCredential({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         status: "refresh_failed",
         lastValidatedAt: "2026-04-08T09:00:00.000Z",
         lastRefreshFailureAt: timestamp
       })
     );
 
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const expiredApprovals = dashboard.diagnostics.items.find((item) => item.kind === "expired_approvals");
     const staleMemories = dashboard.diagnostics.items.find((item) => item.kind === "stale_memories");
     const stuckWorkflows = dashboard.diagnostics.items.find((item) => item.kind === "stuck_workflows");
@@ -4353,9 +4353,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const primary = createMemoryRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "travel",
       memoryType: "confirmed",
       content: "Seat preference is aisle.",
@@ -4364,7 +4364,7 @@ describe("repository", () => {
       updatedAt: "2026-04-17T08:00:00.000Z"
     });
     const conflicting = createMemoryRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "travel",
       memoryType: "observed",
       content: "Seat preference is window.",
@@ -4376,7 +4376,7 @@ describe("repository", () => {
     await repository.saveMemory(primary);
     await repository.saveMemory(conflicting);
 
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const conflictDiagnostic = dashboard.diagnostics.items.find((item) => item.kind === "context_conflicts");
 
     expect(conflictDiagnostic).toMatchObject({
@@ -4413,11 +4413,11 @@ describe("repository", () => {
     });
     const timestamp = nowIso();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const workspace = WorkspaceSchema.parse({
       id: "workspace-governed-team",
-      ownerUserId: SYSTEM_USER_ID,
+      ownerUserId: DEFAULT_OWNER_USER_ID,
       slug: "governed-team",
       name: "Governed Team",
       description: "Workspace for governance and audit coverage.",
@@ -4431,7 +4431,7 @@ describe("repository", () => {
       WorkspaceMemberSchema.parse({
         id: "workspace-member-governed-owner",
         workspaceId: workspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -4457,7 +4457,7 @@ describe("repository", () => {
           maximumFailureCostRate: 0.15
         },
         retentionDays: 90,
-        updatedBy: SYSTEM_USER_ID,
+        updatedBy: DEFAULT_OWNER_USER_ID,
         createdAt: timestamp,
         updatedAt: timestamp
       }),
@@ -4465,7 +4465,7 @@ describe("repository", () => {
     );
     await repository.saveWorkspaceSelection(
       WorkspaceSelectionSchema.parse({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: workspace.id,
         selectedAt: timestamp,
         updatedAt: timestamp
@@ -4474,11 +4474,11 @@ describe("repository", () => {
 
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Prepare a governed external response.",
       workspace.id
     );
-    const audit = await repository.exportWorkspaceAudit(workspace.id, SYSTEM_USER_ID);
+    const audit = await repository.exportWorkspaceAudit(workspace.id, DEFAULT_OWNER_USER_ID);
     const parsedAudit = JSON.parse(audit.content) as {
       generatedAt: string;
       workspace: { id: string };
@@ -4569,7 +4569,7 @@ describe("repository", () => {
     });
     expect(Array.isArray(auditedGoal?.approvals)).toBe(true);
     expect(auditedGoal?.actionLogs.some((log) => log.kind === "goal.created")).toBe(true);
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
 
     expect(dashboard.operatingSections.teamWorkflow.auditCoverage).toMatchObject({
       required: true,
@@ -4589,7 +4589,7 @@ describe("repository", () => {
       storePath
     });
 
-    await expect(repository.listGoals(SYSTEM_USER_ID)).rejects.toThrow(/Runtime store .* is corrupted/);
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).rejects.toThrow(/Runtime store .* is corrupted/);
   });
 
   it("uses unique temp files for concurrent file-backed writes across repository instances", async () => {
@@ -4602,8 +4602,8 @@ describe("repository", () => {
       storePath
     });
 
-    await repositoryA.seedDefaults(SYSTEM_USER_ID);
-    const existingSelection = await repositoryA.getWorkspaceSelection(SYSTEM_USER_ID);
+    await repositoryA.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const existingSelection = await repositoryA.getWorkspaceSelection(DEFAULT_OWNER_USER_ID);
 
     expect(existingSelection).not.toBeNull();
 
@@ -4612,7 +4612,7 @@ describe("repository", () => {
 
       return (index % 2 === 0 ? repositoryA : repositoryB).saveWorkspaceSelection(
         WorkspaceSelectionSchema.parse({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           workspaceId: existingSelection!.workspaceId,
           actorContext: systemActor,
           selectedAt: timestamp,
@@ -4626,19 +4626,19 @@ describe("repository", () => {
     const reloadedRepository = createRepository({
       storePath
     });
-    const reloadedSelection = await reloadedRepository.getWorkspaceSelection(SYSTEM_USER_ID);
+    const reloadedSelection = await reloadedRepository.getWorkspaceSelection(DEFAULT_OWNER_USER_ID);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       workspaceSelections: Array<{ userId: string; workspaceId: string; selectedAt: string }>;
     };
     const leftoverTempFiles = (await readdir(tempDir)).filter((name) => name.startsWith("runtime-store.json.") && name.endsWith(".tmp"));
 
     expect(reloadedSelection).toMatchObject({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: existingSelection!.workspaceId
     });
     expect(persisted.workspaceSelections).toContainEqual(
       expect.objectContaining({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: existingSelection!.workspaceId
       })
     );
@@ -4652,9 +4652,9 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const defaults = await repository.getBriefingPreferences(SYSTEM_USER_ID);
+    const defaults = await repository.getBriefingPreferences(DEFAULT_OWNER_USER_ID);
     expect(defaults.schedules).toHaveLength(briefingTypeValues.length);
 
     const updatedPreferences = await repository.saveBriefingPreferences({
@@ -4676,9 +4676,9 @@ describe("repository", () => {
 
     const briefingBundle = await generateBriefing({
       type: "midday",
-      userId: SYSTEM_USER_ID,
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID),
+      userId: DEFAULT_OWNER_USER_ID,
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID),
       pendingApprovals: [],
       activeWatchers: [],
       preferences: updatedPreferences
@@ -4689,8 +4689,8 @@ describe("repository", () => {
     const reloadedRepository = createRepository({
       storePath
     });
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
-    const reloadedPreferences = await reloadedRepository.getBriefingPreferences(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
+    const reloadedPreferences = await reloadedRepository.getBriefingPreferences(DEFAULT_OWNER_USER_ID);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       briefingPreferences: Array<{ userId: string; actorContext: unknown }>;
     };
@@ -4714,7 +4714,7 @@ describe("repository", () => {
     expect(
       persisted.briefingPreferences.some(
         (candidate) =>
-          candidate.userId === SYSTEM_USER_ID &&
+          candidate.userId === DEFAULT_OWNER_USER_ID &&
           JSON.stringify(candidate.actorContext) === JSON.stringify(systemActor)
       )
     ).toBe(true);
@@ -4727,11 +4727,11 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const workspace = WorkspaceSchema.parse({
       id: "workspace-collab",
-      ownerUserId: SYSTEM_USER_ID,
+      ownerUserId: DEFAULT_OWNER_USER_ID,
       slug: "collab",
       name: "Collab",
       description: "Shared planning workspace.",
@@ -4745,7 +4745,7 @@ describe("repository", () => {
       WorkspaceMemberSchema.parse({
         id: "workspace-member-collab-owner",
         workspaceId: workspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: nowIso(),
         updatedAt: nowIso()
@@ -4754,7 +4754,7 @@ describe("repository", () => {
     );
     await repository.saveWorkspaceSelection(
       WorkspaceSelectionSchema.parse({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: workspace.id,
         actorContext: systemActor,
         selectedAt: nowIso(),
@@ -4765,20 +4765,20 @@ describe("repository", () => {
     const reloadedRepository = createRepository({
       storePath
     });
-    const reloadedSelection = await reloadedRepository.getWorkspaceSelection(SYSTEM_USER_ID);
+    const reloadedSelection = await reloadedRepository.getWorkspaceSelection(DEFAULT_OWNER_USER_ID);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       workspaceSelections: Array<{ userId: string; actorContext: unknown; workspaceId: string }>;
     };
 
     expect(reloadedSelection).toMatchObject({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.id,
       actorContext: systemActor
     });
     expect(
       persisted.workspaceSelections.some(
         (candidate) =>
-          candidate.userId === SYSTEM_USER_ID &&
+          candidate.userId === DEFAULT_OWNER_USER_ID &&
           candidate.workspaceId === workspace.id &&
           JSON.stringify(candidate.actorContext) === JSON.stringify(systemActor)
       )
@@ -4792,10 +4792,10 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const memory = createMemoryRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "preferences",
       memoryType: "observed",
       content: "Prefers concise approval summaries.",
@@ -4809,7 +4809,7 @@ describe("repository", () => {
     const reloadedRepository = createRepository({
       storePath
     });
-    const listed = await reloadedRepository.listMemory(SYSTEM_USER_ID);
+    const listed = await reloadedRepository.listMemory(DEFAULT_OWNER_USER_ID);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       memories: Array<{ id: string; actorContext: unknown }>;
     };
@@ -4834,10 +4834,10 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
-    const seededIntegrations = await repository.listIntegrations(SYSTEM_USER_ID);
-    const expectedSeededId = buildDefaultIntegrationAccounts(SYSTEM_USER_ID)[0]?.id;
+    const seededIntegrations = await repository.listIntegrations(DEFAULT_OWNER_USER_ID);
+    const expectedSeededId = buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID)[0]?.id;
     const seededIntegration = seededIntegrations.find((candidate) => candidate.id === expectedSeededId);
 
     expect(seededIntegration).toMatchObject({
@@ -4855,7 +4855,7 @@ describe("repository", () => {
     const reloadedRepository = createRepository({
       storePath
     });
-    const listed = await reloadedRepository.listIntegrations(SYSTEM_USER_ID);
+    const listed = await reloadedRepository.listIntegrations(DEFAULT_OWNER_USER_ID);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       integrations: Array<{ id: string; actorContext: unknown; status: string }>;
     };
@@ -4887,11 +4887,11 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const commitment = await repository.saveCommitment({
       id: "commitment-actor-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       title: "Verify actor attribution",
       summary: "Ensure commitments persist who updated them.",
       status: "completed",
@@ -4916,7 +4916,7 @@ describe("repository", () => {
     const reloadedRepository = createRepository({
       storePath
     });
-    const listed = await reloadedRepository.listCommitments(SYSTEM_USER_ID);
+    const listed = await reloadedRepository.listCommitments(DEFAULT_OWNER_USER_ID);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       commitments: Array<{ id: string; actorContext: unknown }>;
     };
@@ -4944,13 +4944,13 @@ describe("repository", () => {
     const createdAt = nowIso();
     const agentId = `agent-actor-${Date.now()}`;
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const agent = await repository.saveAgent(
       AgentDefinitionSchema.parse({
         id: agentId,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "private-ops",
         displayName: "Private Ops",
         description: "Handles private operational workflows.",
@@ -4987,17 +4987,17 @@ describe("repository", () => {
     const reloadedRepository = createRepository({
       storePath
     });
-    const visible = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+    const visible = await reloadedRepository.getAgent(agent.id, DEFAULT_OWNER_USER_ID);
     const hidden = await reloadedRepository.getAgent(agent.id, secondaryUserId);
     const persistedBeforeDelete = JSON.parse(await readFile(storePath, "utf8")) as {
       agents: Array<{ id: string; actorContext: unknown }>;
     };
 
     await reloadedRepository.deleteAgent(agent.id, secondaryUserId);
-    const stillVisible = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+    const stillVisible = await reloadedRepository.getAgent(agent.id, DEFAULT_OWNER_USER_ID);
 
-    await reloadedRepository.deleteAgent(agent.id, SYSTEM_USER_ID);
-    const deleted = await reloadedRepository.getAgent(agent.id, SYSTEM_USER_ID);
+    await reloadedRepository.deleteAgent(agent.id, DEFAULT_OWNER_USER_ID);
+    const deleted = await reloadedRepository.getAgent(agent.id, DEFAULT_OWNER_USER_ID);
 
     expect(visible).toMatchObject({
       id: agent.id,
@@ -5024,12 +5024,12 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const createdAt = nowIso();
     const template = await repository.saveWorkflowTemplate({
       id: "workflow-template-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       name: "Morning ops sweep",
       description: "Review overnight alerts before the day starts.",
       nodes: [
@@ -5067,7 +5067,7 @@ describe("repository", () => {
           type: "schedule",
           config: {
             cron: "0 8 * * *",
-            timezone: "Asia/Singapore"
+            timezone: "UTC"
           }
         }
       ],
@@ -5080,8 +5080,8 @@ describe("repository", () => {
       storePath
     });
     const [listed, loaded] = await Promise.all([
-      reloadedRepository.listWorkflowTemplates(SYSTEM_USER_ID),
-      reloadedRepository.getWorkflowTemplate(template.id, SYSTEM_USER_ID)
+      reloadedRepository.listWorkflowTemplates(DEFAULT_OWNER_USER_ID),
+      reloadedRepository.getWorkflowTemplate(template.id, DEFAULT_OWNER_USER_ID)
     ]);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       workflowTemplates: Array<{ id: string }>;
@@ -5112,13 +5112,13 @@ describe("repository", () => {
       storePath
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
 
     const createdAt = nowIso();
     const template = await repository.saveTemplate(
       GoalTemplateSchema.parse({
         id: "goal-template-actor-1",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "Daily inbox review",
         description: "Review priority inbox items.",
         request: "Review my inbox and prepare the next response plan.",
@@ -5139,7 +5139,7 @@ describe("repository", () => {
     const reloadedRepository = createRepository({
       storePath
     });
-    const listed = await reloadedRepository.listTemplates(SYSTEM_USER_ID);
+    const listed = await reloadedRepository.listTemplates(DEFAULT_OWNER_USER_ID);
     const persisted = JSON.parse(await readFile(storePath, "utf8")) as {
       templates: Array<{ id: string; actorContext: unknown }>;
     };

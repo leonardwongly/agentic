@@ -23,7 +23,7 @@ const BASE_ENV = {
   AGENTIC_GITHUB_APP_INSTALLATION_ID: "654321",
   AGENTIC_GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY,
   AGENTIC_GITHUB_APP_SYNC_SECRET: "github-app-sync-secret-with-at-least-32-characters",
-  AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "leonardwongly/agentic",
+  AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "octo-org/demo-agentic",
   AGENTIC_RENDER_SERVICES_JSON: JSON.stringify([{ name: "agentic-web" }, { name: "agentic-worker" }]),
   AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON: JSON.stringify({ valid: true, errors: [] }),
   AGENTIC_DEPLOYMENT_SMOKE_JSON: JSON.stringify({
@@ -46,8 +46,8 @@ const BASE_ENV = {
   AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: JSON.stringify({
     ok: true,
     negativeAuthStatus: 401,
-    repositories: [{ fullName: "leonardwongly/agentic", openIssuesSeen: 1, skippedPullRequests: 1 }],
-    jobs: [{ id: "job-sync-1", repository: "leonardwongly/agentic", issueNumber: 145, attempts: 2 }]
+    repositories: [{ fullName: "octo-org/demo-agentic", openIssuesSeen: 1, skippedPullRequests: 1 }],
+    jobs: [{ id: "job-sync-1", repository: "octo-org/demo-agentic", issueNumber: 145, attempts: 2 }]
   })
 };
 
@@ -272,7 +272,7 @@ describe("GitHub issue-sync completion audit", () => {
         actions: expect.arrayContaining([
           "Re-enable the GitHub App Issue Sync workflow only after stable deployment and runtime proof are ready.",
           "Configure provider runtime variables for database access, runtime access key, GitHub App credentials, sync secret, and repository allowlist.",
-          "Set `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=leonardwongly/agentic` in the provider runtime."
+          "Set `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=<your-org>/<your-repo>` in the provider runtime for the repositories this installation should sync."
         ])
       })
     );

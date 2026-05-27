@@ -1,4 +1,4 @@
-import { SYSTEM_USER_ID, WatcherSchema, createSystemActorContext, nowIso, type Watcher } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, WatcherSchema, createSystemActorContext, nowIso, type Watcher } from "@agentic/contracts";
 import { claimWatcherLeaseWithPostgresClient } from "../packages/repository/src/watcher-lease-helpers";
 
 function buildWatcher(overrides: Partial<Watcher> = {}): Watcher {
@@ -14,7 +14,7 @@ function buildWatcher(overrides: Partial<Watcher> = {}): Watcher {
     sourceSystems: ["gmail"],
     status: "active",
     expiryAt: null,
-    actorContext: createSystemActorContext(SYSTEM_USER_ID),
+    actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
     createdAt: timestamp,
     updatedAt: timestamp,
     ...overrides
@@ -73,10 +73,10 @@ describe("watcher lease helpers", () => {
 
     const leased = await claimWatcherLeaseWithPostgresClient({
       client,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       lease: {
         watcherId: watcher.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         runnerId: "scheduler-2",
         acquiredAt: "2026-04-20T00:00:00.000Z",
         expiresAt: "2026-04-20T00:01:00.000Z"

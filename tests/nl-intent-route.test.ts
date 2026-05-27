@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
@@ -29,16 +29,16 @@ describe("nl intent route", () => {
   async function buildRepository() {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     return repository;
   }
 
   async function createApprovalBundle(repository: ReturnType<typeof createRepository>) {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Review my inbox and draft responses.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
     const approval = bundle.approvals[0];
 
@@ -72,7 +72,7 @@ describe("nl intent route", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
@@ -202,8 +202,8 @@ describe("nl intent route", () => {
       };
       dashboard: { approvals: Array<{ id: string; decision: string; riskClass: string }> };
     };
-    const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
-    const reloaded = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const queuedJobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID });
+    const reloaded = await repository.getGoalBundleForUser(bundle.goal.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(202);
     expect(payload.message).toBe("Approved 1 R2 approval and queued 1 follow-up job.");
@@ -304,8 +304,8 @@ describe("nl intent route", () => {
     expect(payload.job.status).toBe("queued");
     expect(payload.job.goalId).toBe(payload.data.goalId);
     expect(payload.statusUrl).toBe(`/api/goals/jobs/${payload.job.id}`);
-    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(1);
     expect(queuedStatusResponse.status).toBe(202);
     expect(queuedStatusPayload.job.id).toBe(payload.job.id);
     expect(queuedStatusPayload.job.status).toBe("queued");
@@ -345,8 +345,8 @@ describe("nl intent route", () => {
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
     expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
-    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
-    expect(await repository.getGoalBundleForUser(payload.job.goalId, SYSTEM_USER_ID)).toEqual(
+    expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(1);
+    expect(await repository.getGoalBundleForUser(payload.job.goalId, DEFAULT_OWNER_USER_ID)).toEqual(
       expect.objectContaining({
         goal: expect.objectContaining({
           id: payload.job.goalId
@@ -409,8 +409,8 @@ describe("nl intent route", () => {
     expect(payload.job.goalId).toBe(payload.data.goalId);
     expect(payload.job.briefingType).toBe("startup");
     expect(payload.statusUrl).toBe(`/api/briefing/jobs/${payload.job.id}`);
-    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(1);
     expect(queuedStatusResponse.status).toBe(202);
     expect(queuedStatusPayload.job.id).toBe(payload.job.id);
     expect(queuedStatusPayload.job.status).toBe("queued");
@@ -439,7 +439,7 @@ describe("nl intent route", () => {
       };
       error: null;
     };
-    const persistedBundle = await repository.getGoalBundleForUser(payload.job.goalId, SYSTEM_USER_ID);
+    const persistedBundle = await repository.getGoalBundleForUser(payload.job.goalId, DEFAULT_OWNER_USER_ID);
 
     expect(workerResult).toEqual({
       processedCount: 1,
@@ -454,7 +454,7 @@ describe("nl intent route", () => {
     expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
     expect(persistedBundle?.goal.intent).toBe("briefing:startup");
-    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
+    expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(1);
     expectNoStoreHeaders(response);
   });
 
@@ -545,8 +545,8 @@ describe("nl intent route", () => {
     expect(secondPayload.job.id).toBe(firstPayload.job.id);
     expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
     expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
-    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(1);
     expectNoStoreHeaders(firstResponse);
     expectNoStoreHeaders(secondResponse);
   });

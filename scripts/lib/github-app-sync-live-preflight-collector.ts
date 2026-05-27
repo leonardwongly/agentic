@@ -41,38 +41,57 @@ type CollectionCommand = {
   args: string[];
 };
 
-const COLLECTION_COMMANDS: CollectionCommand[] = [
-  {
-    name: "workflow_state",
-    envName: "AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE",
-    command: "gh",
-    args: ["api", "repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml", "--jq", ".state"]
-  },
-  {
-    name: "sync_url",
-    envName: "AGENTIC_GITHUB_APP_ISSUE_SYNC_URL",
-    command: "gh",
-    args: ["variable", "get", "AGENTIC_GITHUB_APP_ISSUE_SYNC_URL", "--repo", "leonardwongly/agentic"]
-  },
-  {
-    name: "github_actions_secret_inventory",
-    envName: "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON",
-    command: "gh",
-    args: ["secret", "list", "--repo", "leonardwongly/agentic", "--json", "name"]
-  },
-  {
-    name: "render_services",
-    envName: "AGENTIC_RENDER_SERVICES_JSON",
-    command: "render",
-    args: ["services", "list", "--output", "json"]
-  },
-  {
-    name: "render_blueprint",
-    envName: "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON",
-    command: "render",
-    args: ["blueprints", "validate", "deploy/render/render.yaml", "--output", "json"]
+const GITHUB_REPOSITORY_FULL_NAME_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
+
+function resolveGitHubRepositoryFullName(env: NodeJS.ProcessEnv): string | null {
+  const configured = env.AGENTIC_REPOSITORY?.trim() || env.GITHUB_REPOSITORY?.trim();
+  return configured && GITHUB_REPOSITORY_FULL_NAME_PATTERN.test(configured) ? configured : null;
+}
+
+function buildCollectionCommands(env: NodeJS.ProcessEnv): CollectionCommand[] {
+  const repository = resolveGitHubRepositoryFullName(env);
+  const commands: CollectionCommand[] = [];
+
+  if (repository) {
+    commands.push(
+      {
+        name: "workflow_state",
+        envName: "AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE",
+        command: "gh",
+        args: ["api", `repos/${repository}/actions/workflows/github-app-issue-sync.yml`, "--jq", ".state"]
+      },
+      {
+        name: "sync_url",
+        envName: "AGENTIC_GITHUB_APP_ISSUE_SYNC_URL",
+        command: "gh",
+        args: ["variable", "get", "AGENTIC_GITHUB_APP_ISSUE_SYNC_URL", "--repo", repository]
+      },
+      {
+        name: "github_actions_secret_inventory",
+        envName: "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON",
+        command: "gh",
+        args: ["secret", "list", "--repo", repository, "--json", "name"]
+      }
+    );
   }
-];
+
+  commands.push(
+    {
+      name: "render_services",
+      envName: "AGENTIC_RENDER_SERVICES_JSON",
+      command: "render",
+      args: ["services", "list", "--output", "json"]
+    },
+    {
+      name: "render_blueprint",
+      envName: "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON",
+      command: "render",
+      args: ["blueprints", "validate", "deploy/render/render.yaml", "--output", "json"]
+    }
+  );
+
+  return commands;
+}
 const MAX_COMMAND_OUTPUT_BYTES = 1_048_576;
 
 export function runGitHubAppSyncLivePreflightCommand(
@@ -207,8 +226,20 @@ export async function collectGitHubAppSyncLivePreflight(
 ): Promise<GitHubAppSyncLivePreflightCollectionReport> {
   const collectedEnv: NodeJS.ProcessEnv = { ...env };
   const collection: GitHubAppSyncLivePreflightCollectionStep[] = [];
+  const collectionCommands = buildCollectionCommands(env);
 
-  for (const command of COLLECTION_COMMANDS) {
+  if (!resolveGitHubRepositoryFullName(env)) {
+    collection.push({
+      name: "repository",
+      envName: "AGENTIC_REPOSITORY",
+      status: "failed",
+      message:
+        "Set AGENTIC_REPOSITORY to the target GitHub repository full name, for example `<your-org>/<your-repo>`, before collecting GitHub App sync evidence.",
+      exitCode: null
+    });
+  }
+
+  for (const command of collectionCommands) {
     const result = await runCommand(command.command, command.args);
     const { envValue, step } = buildCollectionStep(command, result);
 

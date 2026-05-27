@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import { createSystemActorContext, nowIso, SYSTEM_USER_ID, type ProviderCredential } from "@agentic/contracts";
+import { createSystemActorContext, nowIso, DEFAULT_OWNER_USER_ID, type ProviderCredential } from "@agentic/contracts";
 import { createProviderCredentialSecretStore, decryptProviderCredentialSecret } from "@agentic/integrations";
 import { createRepository, type AgenticRepository } from "@agentic/repository";
 import { buildOAuthStateToken, parseAuthorizedOAuthStateToken } from "../apps/web/lib/auth";
@@ -83,13 +83,13 @@ describe("google provider routes", () => {
   const originalProviderSecretKey = process.env.AGENTIC_PROVIDER_SECRET_KEY;
   const originalProviderSecretKeyVersion = process.env.AGENTIC_PROVIDER_SECRET_KEY_VERSION;
   const originalPublicBaseUrl = process.env.AGENTIC_PUBLIC_BASE_URL;
-  const personalWorkspaceId = `workspace-personal-${SYSTEM_USER_ID}`;
+  const personalWorkspaceId = `workspace-personal-${DEFAULT_OWNER_USER_ID}`;
 
   function createGoogleCredential(params?: Partial<ProviderCredential>): ProviderCredential {
     const timestamp = nowIso();
     return {
       id: params?.id ?? `google:${personalWorkspaceId}:acct-123`,
-      userId: params?.userId ?? SYSTEM_USER_ID,
+      userId: params?.userId ?? DEFAULT_OWNER_USER_ID,
       workspaceId: params?.workspaceId ?? personalWorkspaceId,
       provider: "google",
       accountId: params?.accountId ?? "acct-123",
@@ -105,7 +105,7 @@ describe("google provider routes", () => {
       revokedAt: params?.revokedAt ?? null,
       expiresAt: params?.expiresAt ?? null,
       metadata: params?.metadata ?? {},
-      actorContext: params?.actorContext ?? createSystemActorContext(SYSTEM_USER_ID),
+      actorContext: params?.actorContext ?? createSystemActorContext(DEFAULT_OWNER_USER_ID),
       createdAt: params?.createdAt ?? timestamp,
       updatedAt: params?.updatedAt ?? timestamp
     };
@@ -147,7 +147,7 @@ describe("google provider routes", () => {
 
   it("starts Google OAuth with a signed workspace-scoped state and login hint", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveProviderCredential(
       createGoogleCredential({
         accountEmail: "hint@example.com"
@@ -170,10 +170,10 @@ describe("google provider routes", () => {
 
     const redirectUrl = new URL(location!);
     const state = redirectUrl.searchParams.get("state");
-    const parsedState = parseAuthorizedOAuthStateToken(state, SYSTEM_USER_ID);
+    const parsedState = parseAuthorizedOAuthStateToken(state, DEFAULT_OWNER_USER_ID);
 
     expect(parsedState).toMatchObject({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: personalWorkspaceId
     });
   });
@@ -181,7 +181,7 @@ describe("google provider routes", () => {
   it("uses the configured public base URL for production Google OAuth redirects", async () => {
     process.env.AGENTIC_PUBLIC_BASE_URL = "https://agentic.example.com";
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
     process.env.NODE_ENV = "production";
 
@@ -205,7 +205,7 @@ describe("google provider routes", () => {
 
   it("persists tenant-scoped Google credentials, the encrypted refresh token, and managed integrations", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
     exchangeGoogleAuthorizationCodeMock.mockResolvedValue({
       accessToken: "google-access-token",
@@ -225,7 +225,7 @@ describe("google provider routes", () => {
     });
 
     const state = buildOAuthStateToken({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: personalWorkspaceId
     });
     const response = await googleCallbackRoute(
@@ -233,13 +233,13 @@ describe("google provider routes", () => {
         `http://localhost/api/integrations/google/callback?state=${encodeURIComponent(state)}&code=oauth-code-123`
       )
     );
-    const credential = await repository.getProviderCredential(`google:${personalWorkspaceId}:acct-123`, SYSTEM_USER_ID);
+    const credential = await repository.getProviderCredential(`google:${personalWorkspaceId}:acct-123`, DEFAULT_OWNER_USER_ID);
     const secretRecord = await repository.getProviderCredentialSecret(
       `google:${personalWorkspaceId}:acct-123`,
       "oauth_refresh_token",
-      SYSTEM_USER_ID
+      DEFAULT_OWNER_USER_ID
     );
-    const integrations = await repository.listIntegrations(SYSTEM_USER_ID);
+    const integrations = await repository.listIntegrations(DEFAULT_OWNER_USER_ID);
     const gmail = integrations.find((integration) => integration.id === "gmail");
     const calendar = integrations.find((integration) => integration.id === "google-calendar");
 
@@ -256,7 +256,7 @@ describe("google provider routes", () => {
     expect(
       decryptGoogleRefreshToken({
         credentialId: credential!.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         secret: secretRecord!.secret
       })
     ).toBe("google-refresh-token");
@@ -280,7 +280,7 @@ describe("google provider routes", () => {
 
   it("reuses the previously stored refresh token when Google omits a new one", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const existingCredential = createGoogleCredential({
       lastRotatedAt: "2026-04-15T00:00:00.000Z",
       scopes: ["https://www.googleapis.com/auth/gmail.modify"]
@@ -288,7 +288,7 @@ describe("google provider routes", () => {
     await repository.saveProviderCredential(existingCredential);
     await repository.saveProviderCredentialSecret({
       credentialId: existingCredential.id,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "oauth_refresh_token",
       secret: createProviderCredentialSecretStore().encrypt("persisted-refresh-token"),
       createdAt: existingCredential.createdAt,
@@ -309,7 +309,7 @@ describe("google provider routes", () => {
     });
 
     const state = buildOAuthStateToken({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: personalWorkspaceId
     });
     const response = await googleCallbackRoute(
@@ -320,16 +320,16 @@ describe("google provider routes", () => {
     const secretRecord = await repository.getProviderCredentialSecret(
       existingCredential.id,
       "oauth_refresh_token",
-      SYSTEM_USER_ID
+      DEFAULT_OWNER_USER_ID
     );
-    const updatedCredential = await repository.getProviderCredential(existingCredential.id, SYSTEM_USER_ID);
+    const updatedCredential = await repository.getProviderCredential(existingCredential.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("http://localhost/?integration=google&status=connected");
     expect(
       decryptGoogleRefreshToken({
         credentialId: existingCredential.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         secret: secretRecord!.secret
       })
     ).toBe("persisted-refresh-token");
@@ -343,7 +343,7 @@ describe("google provider routes", () => {
 
   it("fails closed when the callback state is invalid", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     const response = await googleCallbackRoute(
@@ -359,7 +359,7 @@ describe("google provider routes", () => {
 
   it("fails closed when the callback state was signed for another user", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     const state = buildOAuthStateToken({
@@ -381,7 +381,7 @@ describe("google provider routes", () => {
 
   it("fails closed when Google omits the refresh token and no stored credential exists", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
     exchangeGoogleAuthorizationCodeMock.mockResolvedValue({
       accessToken: "google-access-token",
@@ -397,7 +397,7 @@ describe("google provider routes", () => {
     });
 
     const state = buildOAuthStateToken({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: personalWorkspaceId
     });
     const response = await googleCallbackRoute(
@@ -410,13 +410,13 @@ describe("google provider routes", () => {
     expect(response.headers.get("location")).toBe("http://localhost/?integration=google&status=error&reason=oauth_failed");
     expectNoStoreHeaders(response);
     expect(
-      await repository.getProviderCredential(`google:${personalWorkspaceId}:acct-123`, SYSTEM_USER_ID)
+      await repository.getProviderCredential(`google:${personalWorkspaceId}:acct-123`, DEFAULT_OWNER_USER_ID)
     ).toBeNull();
   });
 
   it("blocks manual toggles for Google-managed integrations", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveProviderCredential(createGoogleCredential());
     Reflect.set(globalThis, "__agenticRepository", repository);
 
@@ -435,7 +435,7 @@ describe("google provider routes", () => {
 
   it("returns a JSON authorization URL when the dashboard checks Google OAuth readiness before redirecting", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     const response = await googleConnectRoute(
@@ -452,7 +452,7 @@ describe("google provider routes", () => {
 
   it("keeps unconfigured Google OAuth as a safe JSON setup error", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     isGoogleOAuthConfiguredMock.mockReturnValue(false);
     Reflect.set(globalThis, "__agenticRepository", repository);
 
@@ -470,25 +470,25 @@ describe("google provider routes", () => {
 
   it("reports managed Google readiness per integration based on provider scopes and refresh state", async () => {
     const repository = await buildRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const credential = createGoogleCredential({
       scopes: ["https://www.googleapis.com/auth/gmail.modify"]
     });
     await repository.saveProviderCredential(credential);
     await repository.saveProviderCredentialSecret({
       credentialId: credential.id,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "oauth_refresh_token",
       secret: encryptGoogleRefreshToken({
         credentialId: credential.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         refreshToken: "persisted-refresh-token"
       }),
       createdAt: credential.createdAt,
       updatedAt: credential.updatedAt
     });
     await repository.upsertIntegration({
-      ...(await repository.listIntegrations(SYSTEM_USER_ID)).find((integration) => integration.id === "gmail")!,
+      ...(await repository.listIntegrations(DEFAULT_OWNER_USER_ID)).find((integration) => integration.id === "gmail")!,
       status: "ready",
       metadata: {
         provider: "google",
@@ -497,7 +497,7 @@ describe("google provider routes", () => {
       }
     });
     await repository.upsertIntegration({
-      ...(await repository.listIntegrations(SYSTEM_USER_ID)).find((integration) => integration.id === "google-calendar")!,
+      ...(await repository.listIntegrations(DEFAULT_OWNER_USER_ID)).find((integration) => integration.id === "google-calendar")!,
       status: "ready",
       metadata: {
         provider: "google",

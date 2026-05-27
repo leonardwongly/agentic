@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
@@ -43,7 +43,7 @@ describe("governance route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const actor = createSystemActorContext(SYSTEM_USER_ID);
+    const actor = createSystemActorContext(DEFAULT_OWNER_USER_ID);
 
     await repository.seedDefaults();
     const dashboard = await repository.getDashboardData();
@@ -207,7 +207,7 @@ describe("governance route", () => {
         } | null;
       };
     };
-    const persisted = await repository.getWorkspaceGovernance(dashboard.activeWorkspace!.id, SYSTEM_USER_ID);
+    const persisted = await repository.getWorkspaceGovernance(dashboard.activeWorkspace!.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(200);
     expect(response.headers.get("etag")).toBe(`"${payload.governance.updatedAt}"`);
@@ -306,7 +306,7 @@ describe("governance route", () => {
       )
     );
     const payload = (await response.json()) as { error?: string };
-    const persisted = await repository.getWorkspaceGovernance(dashboard.activeWorkspace!.id, SYSTEM_USER_ID);
+    const persisted = await repository.getWorkspaceGovernance(dashboard.activeWorkspace!.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(412);
     expect(payload.error).toContain("record changed");

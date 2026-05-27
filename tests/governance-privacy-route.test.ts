@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -67,7 +67,7 @@ describe("governance privacy route", () => {
 
   it("queues a new retention-enforcement operation with owner-scoped governance defaults", async () => {
     const repository = createRouteTestRepository();
-    const actor = createSystemActorContext(SYSTEM_USER_ID);
+    const actor = createSystemActorContext(DEFAULT_OWNER_USER_ID);
 
     await repository.seedDefaults();
     const dashboard = await repository.getDashboardData();
@@ -98,7 +98,7 @@ describe("governance privacy route", () => {
       reused: boolean;
     };
     const operations = await repository.listPrivacyOperations({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: dashboard.activeWorkspace!.id
     });
 
@@ -118,7 +118,7 @@ describe("governance privacy route", () => {
         operation: expect.objectContaining({
           id: payload.operation.id,
           workspaceId: dashboard.activeWorkspace!.id,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           kind: "retention_enforcement"
         })
       })
@@ -175,11 +175,11 @@ describe("governance privacy route", () => {
     await repository.savePrivacyOperation({
       id: "privacy-existing-export",
       workspaceId: dashboard.activeWorkspace!.id,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "workspace_export",
       status: "queued",
-      requestedBy: SYSTEM_USER_ID,
-      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      requestedBy: DEFAULT_OWNER_USER_ID,
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       jobId: "job-existing-export",
       details: {},
       result: {},

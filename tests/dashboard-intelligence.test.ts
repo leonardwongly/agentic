@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ProviderCredentialSchema, SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { ProviderCredentialSchema, DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
 import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -60,12 +60,12 @@ describe("dashboard intelligence", () => {
 
   it("keeps automation advisory when stale memory or connector degradation blocks promotion", async () => {
     const repository = createRouteTestRepository();
-    const actor = createSystemActorContext(SYSTEM_USER_ID);
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    const actor = createSystemActorContext(DEFAULT_OWNER_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveMemory(
       createMemoryRecord({
         id: "confirmed-stale-memory",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "operating-context",
         memoryType: "confirmed",
         content: "Use this connector for customer follow-up.",
@@ -79,7 +79,7 @@ describe("dashboard intelligence", () => {
     await repository.saveProviderCredential(
       ProviderCredentialSchema.parse({
         id: "google:global:dashboard-intelligence",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: null,
         provider: "google",
         accountId: "dashboard-intelligence",
@@ -97,7 +97,7 @@ describe("dashboard intelligence", () => {
     );
 
     const report = buildDashboardIntelligenceReport(
-      await repository.getDashboardData(SYSTEM_USER_ID),
+      await repository.getDashboardData(DEFAULT_OWNER_USER_ID),
       Date.parse("2026-05-06T00:00:00.000Z")
     );
 
@@ -115,7 +115,7 @@ describe("dashboard intelligence", () => {
 
   it("returns authenticated recommendation reports and records operator feedback telemetry", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     const reportResponse = await dashboardRecommendationsRoute(

@@ -10,15 +10,15 @@ describe("memory ranking", () => {
   const fixedNow = Date.parse("2026-04-01T00:00:00.000Z");
   const records = [
     createMemoryRecord({
-      userId: "user-primary",
+      userId: "test-owner",
       category: "travel",
       memoryType: "confirmed",
-      content: "Leonard prefers aisle seats and keeps passport scans in notes.",
+      content: "Test owner prefers aisle seats and keeps passport scans in notes.",
       confidence: 0.98,
       source: "test"
     }),
     createMemoryRecord({
-      userId: "user-primary",
+      userId: "test-owner",
       category: "calendar",
       memoryType: "observed",
       content: "Weekly planning usually happens on Monday morning.",
@@ -26,7 +26,7 @@ describe("memory ranking", () => {
       source: "test"
     }),
     createMemoryRecord({
-      userId: "user-primary",
+      userId: "test-owner",
       category: "email",
       memoryType: "inferred",
       content: "VIP inbox threads should be answered the same day.",
@@ -45,7 +45,7 @@ describe("memory ranking", () => {
   it("stays bounded instead of returning the full set", () => {
     const many = Array.from({ length: 25 }, (_, index) =>
       createMemoryRecord({
-        userId: "user-primary",
+        userId: "test-owner",
         category: `category-${index}`,
         memoryType: "observed",
         content: `Synthetic memory ${index}`,
@@ -62,7 +62,7 @@ describe("memory ranking", () => {
       "travel passport checklist",
       [
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "confirmed",
           content: "Passport scans are stored in notes.",
@@ -72,7 +72,7 @@ describe("memory ranking", () => {
           expiryAt: "2026-04-02T00:00:00.000Z"
         }),
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "confirmed",
           content: "Old passport note that should not be reused.",
@@ -82,7 +82,7 @@ describe("memory ranking", () => {
           expiryAt: "2026-03-31T23:59:59.000Z"
         }),
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "observed",
           content: "Travel checklist should include passport scans.",
@@ -105,7 +105,7 @@ describe("memory ranking", () => {
 
   it("classifies memory freshness explicitly", () => {
     const fresh = createMemoryRecord({
-      userId: "user-primary",
+      userId: "test-owner",
       category: "travel",
       memoryType: "confirmed",
       content: "Fresh travel preference.",
@@ -113,7 +113,7 @@ describe("memory ranking", () => {
       source: "test"
     });
     const reviewDue = createMemoryRecord({
-      userId: "user-primary",
+      userId: "test-owner",
       category: "travel",
       memoryType: "confirmed",
       content: "Needs review.",
@@ -122,7 +122,7 @@ describe("memory ranking", () => {
       reviewAt: "2026-03-31T23:59:59.000Z"
     });
     const lowConfidence = createMemoryRecord({
-      userId: "user-primary",
+      userId: "test-owner",
       category: "travel",
       memoryType: "inferred",
       content: "Maybe prefers red-eye flights.",
@@ -130,7 +130,7 @@ describe("memory ranking", () => {
       source: "test"
     });
     const expired = createMemoryRecord({
-      userId: "user-primary",
+      userId: "test-owner",
       category: "travel",
       memoryType: "confirmed",
       content: "Expired note.",
@@ -150,7 +150,7 @@ describe("memory ranking", () => {
       "travel seat preference",
       [
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "inferred",
           content: "Seat preference might be aisle.",
@@ -158,7 +158,7 @@ describe("memory ranking", () => {
           source: "test"
         }),
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "confirmed",
           content: "Seat preference is aisle.",
@@ -179,7 +179,7 @@ describe("memory ranking", () => {
     const conflicts = detectMemoryConflicts(
       [
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "confirmed",
           content: "Seat preference is aisle.",
@@ -188,7 +188,7 @@ describe("memory ranking", () => {
           updatedAt: "2026-04-01T00:00:00.000Z"
         }),
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "observed",
           content: "Seat preference is window.",
@@ -197,7 +197,7 @@ describe("memory ranking", () => {
           updatedAt: "2026-03-31T00:00:00.000Z"
         }),
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "confirmed",
           content: "Passport scans are stored in notes.",
@@ -224,7 +224,7 @@ describe("memory ranking", () => {
       query: "book travel with the right seat preference",
       records: [
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "confirmed",
           content: "Seat preference is aisle.",
@@ -233,7 +233,7 @@ describe("memory ranking", () => {
           updatedAt: "2026-04-01T00:00:00.000Z"
         }),
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "observed",
           content: "Seat preference is window.",
@@ -242,7 +242,7 @@ describe("memory ranking", () => {
           updatedAt: "2026-03-31T00:00:00.000Z"
         }),
         createMemoryRecord({
-          userId: "user-primary",
+          userId: "test-owner",
           category: "travel",
           memoryType: "observed",
           content: "Hotel check-in usually happens on Sunday evening.",

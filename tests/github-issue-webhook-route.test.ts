@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import type { AgenticRepository } from "@agentic/repository";
 import { expect, vi } from "vitest";
 import {
@@ -163,7 +163,7 @@ describe("GitHub issue webhook route", () => {
     delete process.env.AGENTIC_GITHUB_ISSUE_PLAN_LABEL;
 
     repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
   });
 
@@ -230,7 +230,7 @@ describe("GitHub issue webhook route", () => {
     const response = await githubIssueWebhookRoute(buildSignedRequest(buildIssuePayload()));
     const payload = await response.json();
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -279,7 +279,7 @@ describe("GitHub issue webhook route", () => {
     const firstPayload = await first.json();
     const secondPayload = await second.json();
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -296,7 +296,7 @@ describe("GitHub issue webhook route", () => {
       })
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -319,7 +319,7 @@ describe("GitHub issue webhook route", () => {
       })
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -342,7 +342,7 @@ describe("GitHub issue webhook route", () => {
 
     const response = await githubIssueWebhookRoute(request);
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -359,7 +359,7 @@ describe("GitHub issue webhook route", () => {
       })
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -376,7 +376,7 @@ describe("GitHub issue webhook route", () => {
       })
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -392,7 +392,7 @@ describe("GitHub issue webhook route", () => {
   it("acknowledges non-opened issue actions without enqueueing work", async () => {
     const response = await githubIssueWebhookRoute(buildSignedRequest(buildIssuePayload({ action: "edited" })));
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -421,7 +421,7 @@ describe("GitHub issue webhook route", () => {
     );
     const payload = await response.json();
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -460,7 +460,7 @@ describe("GitHub issue webhook route", () => {
       }))
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -479,7 +479,7 @@ describe("GitHub issue webhook route", () => {
     );
     const payload = await response.json();
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -550,7 +550,7 @@ describe("GitHub issue webhook route", () => {
       }), { event: "issue_comment", deliveryId: "bot-comment" })
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -587,7 +587,7 @@ describe("GitHub issue webhook route", () => {
       }), { event: "issue_comment" })
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -612,7 +612,7 @@ describe("GitHub issue webhook route", () => {
       }))
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -631,7 +631,7 @@ describe("GitHub issue webhook route", () => {
       }))
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -650,7 +650,7 @@ describe("GitHub issue webhook route", () => {
       }))
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -664,7 +664,7 @@ describe("GitHub issue webhook route", () => {
 
     const response = await githubIssueWebhookRoute(buildSignedRequest(buildIssuePayload()));
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 

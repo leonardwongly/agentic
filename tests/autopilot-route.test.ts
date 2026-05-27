@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   GoalTemplateSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   WatcherSchema,
   WorkspaceMemberSchema,
   WorkspaceSchema,
@@ -60,7 +60,7 @@ describe("autopilot events route", () => {
     });
   }
 
-  async function createGoalForUser(request: string, userId = SYSTEM_USER_ID, workspaceId?: string | null) {
+  async function createGoalForUser(request: string, userId = DEFAULT_OWNER_USER_ID, workspaceId?: string | null) {
     const repository = createRouteTestRepository();
 
     await repository.seedDefaults(userId);
@@ -142,13 +142,13 @@ describe("autopilot events route", () => {
       maxJobs: 1,
       pollIntervalMs: 10,
       claim: {
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kinds: ["autopilot_process"]
       }
     });
   }
 
-  async function getAutopilotEvent(repository: ReturnType<typeof createRepository>, eventId: string, userId = SYSTEM_USER_ID) {
+  async function getAutopilotEvent(repository: ReturnType<typeof createRepository>, eventId: string, userId = DEFAULT_OWNER_USER_ID) {
     const events = await repository.listAutopilotEvents(userId);
     return events.find((event) => event.id === eventId) ?? null;
   }
@@ -209,7 +209,7 @@ describe("autopilot events route", () => {
     expect(response.status).toBe(200);
     expect(payload.simulated).toBe(true);
     expect(payload.event.status).toBe("simulated");
-    expect(payload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.event.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(payload.event.details).toMatchObject({
       eventEnvelope: {
         family: "watcher",
@@ -220,14 +220,14 @@ describe("autopilot events route", () => {
         outcome: "allowed"
       }
     });
-    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(1);
+    await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
   });
 
   it("simulates connector-failure events without persisting execution state", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await autopilotEventsRoute(
@@ -275,7 +275,7 @@ describe("autopilot events route", () => {
         outcome: "allowed"
       }
     });
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
   });
 
   it.each([
@@ -418,7 +418,7 @@ describe("autopilot events route", () => {
       expect(payload.event.details.goalId).toBe(bundle.goal.id);
       expect(payload.event.details.workflowId).toBe(bundle.workflow.id);
       expect(payload.event.details.workspaceId).toBe(bundle.workflow.workspaceId);
-      await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+      await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
     }
   );
 
@@ -568,7 +568,7 @@ describe("autopilot events route", () => {
         label: bundle.goal.title,
         actionLabel: expectedActionLabel
       });
-      await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(2);
+      await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(2);
     }
   );
 
@@ -675,25 +675,25 @@ describe("autopilot events route", () => {
       queued: boolean;
     };
     const queuedJobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["autopilot_process"]
     });
     const workerResult = await runAutopilotWorker(repository);
     const completedEvent = await getAutopilotEvent(repository, firstPayload.event.id);
-    const persistedEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
-    const completedJob = await repository.getJob(firstPayload.job.id, SYSTEM_USER_ID);
+    const persistedEvents = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
+    const completedJob = await repository.getJob(firstPayload.job.id, DEFAULT_OWNER_USER_ID);
 
     expect(firstResponse.status).toBe(202);
     expect(firstPayload.queued).toBe(true);
     expect(firstPayload.event.status).toBe("pending");
     expect(firstPayload.event.resultGoalId).toBeNull();
-    expect(firstPayload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(firstPayload.event.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(firstPayload.job.status).toBe("queued");
     expect(secondResponse.status).toBe(202);
     expect(secondPayload.queued).toBe(true);
     expect(secondPayload.duplicate).toBe(true);
     expect(secondPayload.event.id).toBe(firstPayload.event.id);
-    expect(secondPayload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(secondPayload.event.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(secondPayload.job.id).toBe(firstPayload.job.id);
     expect(queuedJobs).toHaveLength(1);
     expect(workerResult).toEqual({
@@ -711,9 +711,9 @@ describe("autopilot events route", () => {
       status: "completed",
       attemptCount: 1
     });
-    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(2);
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(2);
     expect(persistedEvents).toHaveLength(1);
-    expect(persistedEvents[0]?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(persistedEvents[0]?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(persistedEvents[0]?.status).toBe("executed");
   });
 
@@ -761,15 +761,15 @@ describe("autopilot events route", () => {
     };
     const workerResult = await runAutopilotWorker(repository);
     const failedEvent = await getAutopilotEvent(repository, payload.event.id);
-    const failedJob = await repository.getJob(payload.job.id, SYSTEM_USER_ID);
-    const autopilotEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const failedJob = await repository.getJob(payload.job.id, DEFAULT_OWNER_USER_ID);
+    const autopilotEvents = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     repository.saveGoalBundle = originalSaveGoalBundle;
 
     expect(response.status).toBe(202);
     expect(payload.queued).toBe(true);
     expect(payload.event.status).toBe("pending");
-    expect(payload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.event.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(workerResult).toEqual({
       processedCount: 1,
       stopReason: "max_jobs"
@@ -786,22 +786,22 @@ describe("autopilot events route", () => {
     expect(failedJob?.status).toBe("retrying");
     expect(autopilotEvents).toHaveLength(1);
     expect(autopilotEvents[0]?.status).toBe("failed");
-    expect(autopilotEvents[0]?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
-    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
+    expect(autopilotEvents[0]?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(1);
   });
 
   it("uses the session principal when resolving watcher-triggered autopilot sources", async () => {
     const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const primaryBundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Watch my inbound queue for VIP customer issues.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
     await repository.saveGoalBundle(primaryBundle);
 
@@ -854,18 +854,18 @@ describe("autopilot events route", () => {
     const repository = createRouteTestRepository();
     const viewerUserId = "user-viewer";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(viewerUserId);
 
-    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    const workspace = await createSharedWorkspace(repository, DEFAULT_OWNER_USER_ID, viewerUserId);
     await workspace.addMember("viewer");
 
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.workspaceId,
       request: "Watch the shared escalation inbox for VIP issues.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
     await repository.saveGoalBundle(bundle);
 
@@ -924,18 +924,18 @@ describe("autopilot events route", () => {
     const repository = createRouteTestRepository();
     const editorUserId = "user-editor";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(editorUserId);
 
-    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, editorUserId);
+    const workspace = await createSharedWorkspace(repository, DEFAULT_OWNER_USER_ID, editorUserId);
     await workspace.addMember("editor");
 
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.workspaceId,
       request: "Watch the shared escalation inbox for VIP issues.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
     await repository.saveGoalBundle(bundle);
 
@@ -1030,7 +1030,7 @@ describe("autopilot events route", () => {
     expect(response.status).toBe(409);
     expect(payload.error).toMatch(/requires Postgres-backed persistence/i);
     expect(payload.backend).toBe("file");
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
   });
 
   it("debounces repeated watcher-triggered events from the same source", async () => {
@@ -1074,22 +1074,22 @@ describe("autopilot events route", () => {
       };
     };
     const workerResult = await runAutopilotWorker(repository);
-    const persistedEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const persistedEvents = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(200);
     expect(secondPayload.debounced).toBe(true);
     expect(secondPayload.event.status).toBe("debounced");
-    expect(secondPayload.event.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(secondPayload.event.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(workerResult).toEqual({
       processedCount: 1,
       stopReason: "max_jobs"
     });
-    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(2);
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(2);
     expect(persistedEvents).toHaveLength(2);
     expect(persistedEvents.some((event) => event.status === "executed")).toBe(true);
     expect(persistedEvents.some((event) => event.status === "debounced")).toBe(true);
-    expect(persistedEvents.every((event) => event.actorContext?.subjectUserId === SYSTEM_USER_ID)).toBe(true);
+    expect(persistedEvents.every((event) => event.actorContext?.subjectUserId === DEFAULT_OWNER_USER_ID)).toBe(true);
   });
 
   it("suppresses watcher-triggered events when the source budget is exhausted", async () => {
@@ -1154,10 +1154,10 @@ describe("autopilot events route", () => {
       };
     };
     const queuedJobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["autopilot_process"]
     });
-    const persistedEvents = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const persistedEvents = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(200);
@@ -1208,7 +1208,7 @@ describe("autopilot events route", () => {
 
     await repository.saveWatcher(watcherOne);
     await repository.saveWatcher(watcherTwo);
-    const currentSettings = await repository.getAutopilotSettings(SYSTEM_USER_ID);
+    const currentSettings = await repository.getAutopilotSettings(DEFAULT_OWNER_USER_ID);
     await repository.saveAutopilotSettings({
       ...currentSettings,
       reliabilityControls: {
@@ -1248,10 +1248,10 @@ describe("autopilot events route", () => {
       };
     };
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["autopilot_process"]
     });
-    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const events = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(200);
@@ -1367,11 +1367,11 @@ describe("autopilot events route", () => {
   it("executes scheduled templates and advances their schedule window", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveTemplate(
       GoalTemplateSchema.parse({
         id: "template-autopilot-run",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "Daily inbox review",
         description: "Generate the morning inbox plan.",
         request: "Review my inbox and generate a focused response plan.",
@@ -1408,10 +1408,10 @@ describe("autopilot events route", () => {
       queued: boolean;
     };
     const workerResult = await runAutopilotWorker(repository);
-    const updatedTemplate = (await repository.listTemplates(SYSTEM_USER_ID)).find(
+    const updatedTemplate = (await repository.listTemplates(DEFAULT_OWNER_USER_ID)).find(
       (template) => template.id === "template-autopilot-run"
     );
-    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const events = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(202);
     expect(payload.queued).toBe(true);
@@ -1423,20 +1423,20 @@ describe("autopilot events route", () => {
     });
     expect(events[0]?.status).toBe("executed");
     expect(events[0]?.resultGoalId).toBeTruthy();
-    expect(updatedTemplate?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(updatedTemplate?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(updatedTemplate?.schedule.lastRunAt).toBeTruthy();
     expect(updatedTemplate?.schedule.nextRunAt).toBeTruthy();
-    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(1);
   });
 
   it("rejects scheduled template events that are missing a due time", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveTemplate(
       GoalTemplateSchema.parse({
         id: "template-missing-due-time",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "Missing due time template",
         description: "Should not run without an explicit due window.",
         request: "Generate a plan only when the schedule is due.",
@@ -1465,18 +1465,18 @@ describe("autopilot events route", () => {
 
     expect(response.status).toBe(409);
     expect(payload.error).toContain("requires an ISO dueAt timestamp");
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
-    await expect(repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
+    await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listJobs({ userId: DEFAULT_OWNER_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
   });
 
   it("rejects scheduled template events before their due time", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveTemplate(
       GoalTemplateSchema.parse({
         id: "template-future-due-time",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "Future due time template",
         description: "Should wait until the scheduled window.",
         request: "Generate a plan only when the schedule is due.",
@@ -1505,14 +1505,14 @@ describe("autopilot events route", () => {
 
     expect(response.status).toBe(409);
     expect(payload.error).toContain("is not due yet");
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
-    await expect(repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
+    await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listJobs({ userId: DEFAULT_OWNER_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
   });
 
   it("executes scheduled briefings and records the resulting goal", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await autopilotEventsRoute(
@@ -1537,8 +1537,8 @@ describe("autopilot events route", () => {
       queued: boolean;
     };
     const workerResult = await runAutopilotWorker(repository);
-    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const events = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(202);
     expect(payload.queued).toBe(true);
@@ -1551,13 +1551,13 @@ describe("autopilot events route", () => {
     expect(events[0]?.status).toBe("executed");
     expect(events[0]?.resultGoalId).toBeTruthy();
     expect(dashboard.briefingHistory.some((entry) => entry.goalId === events[0]?.resultGoalId)).toBe(true);
-    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(1);
   });
 
   it("rejects scheduled briefings without a due time", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await autopilotEventsRoute(
@@ -1571,14 +1571,14 @@ describe("autopilot events route", () => {
 
     expect(response.status).toBe(409);
     expect(payload.error).toContain("requires an ISO dueAt timestamp");
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
-    await expect(repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
+    await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listJobs({ userId: DEFAULT_OWNER_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
   });
 
   it("rejects scheduled briefings before their due time", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await autopilotEventsRoute(
@@ -1595,14 +1595,14 @@ describe("autopilot events route", () => {
 
     expect(response.status).toBe(409);
     expect(payload.error).toContain("is not due yet");
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
-    await expect(repository.listJobs({ userId: SYSTEM_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
+    await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listJobs({ userId: DEFAULT_OWNER_USER_ID, kinds: ["autopilot_process"] })).resolves.toHaveLength(0);
   });
 
   it("executes approval-sla-breached events and records the resulting goal", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await autopilotEventsRoute(
@@ -1637,7 +1637,7 @@ describe("autopilot events route", () => {
       queued: boolean;
     };
     const workerResult = await runAutopilotWorker(repository);
-    const events = await repository.listAutopilotEvents(SYSTEM_USER_ID);
+    const events = await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(202);
     expect(payload.queued).toBe(true);
@@ -1656,7 +1656,7 @@ describe("autopilot events route", () => {
     expect(events[0]?.status).toBe("executed");
     expect(events[0]?.resultGoalId).toBeTruthy();
     expect(events[0]?.summary).toBe("Approval SLA breached: Security review for outbound send");
-    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(1);
   });
 
   it("normalizes workflow-stalled dry runs into the shared event fabric envelope", async () => {
@@ -1715,7 +1715,7 @@ describe("autopilot events route", () => {
         workflowId: bundle.workflow.id
       }
     });
-    await expect(repository.listAutopilotEvents(SYSTEM_USER_ID)).resolves.toHaveLength(0);
-    await expect(repository.listGoals(SYSTEM_USER_ID)).resolves.toHaveLength(1);
+    await expect(repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(0);
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toHaveLength(1);
   });
 });

@@ -57,7 +57,7 @@ import {
   ProviderCredentialSecretRecordSchema,
   ProviderSideEffectRecordSchema,
   RiskClassSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   TaskSchema,
   WatcherSchema,
   WatcherPageSchema,
@@ -647,7 +647,7 @@ function personalWorkspaceIdForUser(userId: string): string {
 }
 
 function personalWorkspaceSlugForUser(userId: string): string {
-  return userId === SYSTEM_USER_ID ? "personal" : `personal-${userId.toLowerCase()}`;
+  return userId === DEFAULT_OWNER_USER_ID ? "personal" : `personal-${userId.toLowerCase()}`;
 }
 
 function defaultWorkspace(userId: string): Workspace {
@@ -912,7 +912,7 @@ function isGoalShareVisibleToUser(store: RuntimeStore, share: GoalShareRecord, u
 
 function normalizeGoalShareFilters(filters?: GoalShareListFilters): GoalShareListFilters {
   return {
-    userId: filters?.userId ?? SYSTEM_USER_ID,
+    userId: filters?.userId ?? DEFAULT_OWNER_USER_ID,
     goalId: filters?.goalId,
     workspaceId: filters?.workspaceId,
     statuses: filters?.statuses?.map((status) => GoalShareStatusSchema.parse(status))
@@ -921,7 +921,7 @@ function normalizeGoalShareFilters(filters?: GoalShareListFilters): GoalShareLis
 
 function normalizePrivacyOperationFilters(filters?: PrivacyOperationListFilters): PrivacyOperationListFilters {
   return {
-    userId: filters?.userId ?? SYSTEM_USER_ID,
+    userId: filters?.userId ?? DEFAULT_OWNER_USER_ID,
     workspaceId: filters?.workspaceId,
     kinds: filters?.kinds?.map((kind) => PrivacyOperationKindSchema.parse(kind)),
     statuses: filters?.statuses?.map((status) => PrivacyOperationStatusSchema.parse(status))
@@ -1024,7 +1024,7 @@ class FileRepository implements AgenticRepository {
     }
   }
 
-  async seedDefaults(userId = SYSTEM_USER_ID): Promise<void> {
+  async seedDefaults(userId = DEFAULT_OWNER_USER_ID): Promise<void> {
     await this.withMutationLock(async () => {
       const store = await this.readStore();
       const personalWorkspace = defaultWorkspace(userId);
@@ -1114,7 +1114,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listWorkspaces(userId = SYSTEM_USER_ID): Promise<Workspace[]> {
+  async listWorkspaces(userId = DEFAULT_OWNER_USER_ID): Promise<Workspace[]> {
     const store = await this.readStore();
     return listWorkspacesForUserFromStore(store, userId);
   }
@@ -1161,7 +1161,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listWorkspaceMembers(workspaceId: string, userId = SYSTEM_USER_ID): Promise<WorkspaceMember[]> {
+  async listWorkspaceMembers(workspaceId: string, userId = DEFAULT_OWNER_USER_ID): Promise<WorkspaceMember[]> {
     const store = await this.readStore();
     assertWorkspaceMember(store, workspaceId, userId);
     return listWorkspaceMembersForWorkspaceFromStore(store, workspaceId);
@@ -1189,7 +1189,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async getWorkspaceSelection(userId = SYSTEM_USER_ID): Promise<WorkspaceSelection | null> {
+  async getWorkspaceSelection(userId = DEFAULT_OWNER_USER_ID): Promise<WorkspaceSelection | null> {
     const store = await this.readStore();
     return normalizeWorkspaceSelectionForUser(store, userId);
   }
@@ -1205,7 +1205,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async getWorkspaceGovernance(workspaceId: string, userId = SYSTEM_USER_ID): Promise<WorkspaceGovernance | null> {
+  async getWorkspaceGovernance(workspaceId: string, userId = DEFAULT_OWNER_USER_ID): Promise<WorkspaceGovernance | null> {
     const store = await this.readStore();
     assertWorkspaceMember(store, workspaceId, userId);
     const governance = store.workspaceGovernance.find((candidate) => candidate.workspaceId === workspaceId) ?? null;
@@ -1218,7 +1218,7 @@ class FileRepository implements AgenticRepository {
 
     return [...store.goalShares]
       .filter((share) => {
-        if (!isGoalShareVisibleToUser(store, share, normalized.userId ?? SYSTEM_USER_ID)) {
+        if (!isGoalShareVisibleToUser(store, share, normalized.userId ?? DEFAULT_OWNER_USER_ID)) {
           return false;
         }
 
@@ -1240,7 +1240,7 @@ class FileRepository implements AgenticRepository {
       .map((share) => GoalShareRecordSchema.parse(clone(share)));
   }
 
-  async getGoalShare(shareId: string, userId = SYSTEM_USER_ID): Promise<GoalShareRecord | null> {
+  async getGoalShare(shareId: string, userId = DEFAULT_OWNER_USER_ID): Promise<GoalShareRecord | null> {
     const store = await this.readStore();
     const share = store.goalShares.find((candidate) => candidate.id === shareId);
 
@@ -1291,7 +1291,7 @@ class FileRepository implements AgenticRepository {
 
     return [...store.privacyOperations]
       .filter((operation) => {
-        if (!getWorkspaceMemberFromStore(store, operation.workspaceId, normalized.userId ?? SYSTEM_USER_ID)) {
+        if (!getWorkspaceMemberFromStore(store, operation.workspaceId, normalized.userId ?? DEFAULT_OWNER_USER_ID)) {
           return false;
         }
 
@@ -1313,7 +1313,7 @@ class FileRepository implements AgenticRepository {
       .map((operation) => PrivacyOperationSchema.parse(clone(operation)));
   }
 
-  async getPrivacyOperation(operationId: string, userId = SYSTEM_USER_ID): Promise<PrivacyOperation | null> {
+  async getPrivacyOperation(operationId: string, userId = DEFAULT_OWNER_USER_ID): Promise<PrivacyOperation | null> {
     const store = await this.readStore();
     const operation = store.privacyOperations.find((candidate) => candidate.id === operationId);
 
@@ -1554,7 +1554,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async exportWorkspaceAudit(workspaceId: string, userId = SYSTEM_USER_ID): Promise<WorkspaceAuditExport> {
+  async exportWorkspaceAudit(workspaceId: string, userId = DEFAULT_OWNER_USER_ID): Promise<WorkspaceAuditExport> {
     const store = await this.readStore();
     const workspace = assertWorkspaceExistsInStore(store, workspaceId);
     assertWorkspaceMember(store, workspaceId, userId);
@@ -1749,7 +1749,7 @@ class FileRepository implements AgenticRepository {
     return bundle ? GoalBundleSchema.parse(clone(bundle)) : null;
   }
 
-  async getGoalBundleForUser(goalId: string, userId = SYSTEM_USER_ID): Promise<GoalBundle | null> {
+  async getGoalBundleForUser(goalId: string, userId = DEFAULT_OWNER_USER_ID): Promise<GoalBundle | null> {
     const store = await this.readStore();
     const bundle = bundleFromStore(store, goalId);
 
@@ -1766,7 +1766,7 @@ class FileRepository implements AgenticRepository {
     return GoalBundleSchema.parse(clone(bundle));
   }
 
-  async listGoals(userId = SYSTEM_USER_ID): Promise<GoalBundle[]> {
+  async listGoals(userId = DEFAULT_OWNER_USER_ID): Promise<GoalBundle[]> {
     const store = await this.readStore();
 
     return sortByCreatedDesc(visibleGoalsForUser(store, userId))
@@ -1776,7 +1776,7 @@ class FileRepository implements AgenticRepository {
   }
 
   async listGoalsPage(params?: GoalPageParams): Promise<GoalBundlePage> {
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const store = await this.readStore();
     const workspaceIds = workspaceIdsForUser(store, userId);
     const visibleGoals = store.goals.filter((goal) => {
@@ -1807,7 +1807,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listApprovals(userId = SYSTEM_USER_ID): Promise<ApprovalRequest[]> {
+  async listApprovals(userId = DEFAULT_OWNER_USER_ID): Promise<ApprovalRequest[]> {
     const store = await this.readStore();
     const goalIds = goalIdsForUser(store, userId);
 
@@ -1817,7 +1817,7 @@ class FileRepository implements AgenticRepository {
   }
 
   async listEvidenceRecords(params?: { userId?: string; goalId?: string; approvalId?: string; limit?: number }): Promise<EvidenceRecord[]> {
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const store = await this.readStore();
     const goalIds = goalIdsForUser(store, userId);
     const limit = normalizeProvenanceCollectionLimit(params?.limit);
@@ -1843,7 +1843,7 @@ class FileRepository implements AgenticRepository {
     return (limit === null ? records : records.slice(0, limit)).map((record) => EvidenceRecordSchema.parse(clone(record)));
   }
 
-  async listCommitments(userId = SYSTEM_USER_ID): Promise<Commitment[]> {
+  async listCommitments(userId = DEFAULT_OWNER_USER_ID): Promise<Commitment[]> {
     const store = await this.readStore();
     return sortCommitments(
       store.commitments
@@ -1858,7 +1858,7 @@ class FileRepository implements AgenticRepository {
     limit?: number;
     cursor?: string | null;
   }): Promise<CommitmentInboxPage> {
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const [goals, approvals, persisted] = await Promise.all([
       this.listGoals(userId),
       this.listApprovals(userId),
@@ -1878,7 +1878,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async getCommitment(commitmentId: string, userId = SYSTEM_USER_ID): Promise<Commitment | null> {
+  async getCommitment(commitmentId: string, userId = DEFAULT_OWNER_USER_ID): Promise<Commitment | null> {
     const dashboard = await this.getDashboardData(userId);
     const commitment = dashboard.commitments.find((candidate) => candidate.id === commitmentId);
     return commitment ? CommitmentSchema.parse(clone(commitment)) : null;
@@ -1894,7 +1894,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async deleteCommitment(commitmentId: string, userId = SYSTEM_USER_ID): Promise<void> {
+  async deleteCommitment(commitmentId: string, userId = DEFAULT_OWNER_USER_ID): Promise<void> {
     await this.withMutationLock(async () => {
       const store = await this.readStore();
       store.commitments = store.commitments.filter(
@@ -1904,7 +1904,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async getBriefingPreferences(userId = SYSTEM_USER_ID): Promise<BriefingPreferences> {
+  async getBriefingPreferences(userId = DEFAULT_OWNER_USER_ID): Promise<BriefingPreferences> {
     const store = await this.readStore();
     const preferences = store.briefingPreferences.find((candidate) => candidate.userId === userId);
     return BriefingPreferencesSchema.parse(clone(preferences ?? defaultBriefingPreferences(userId)));
@@ -1920,7 +1920,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async getAutopilotSettings(userId = SYSTEM_USER_ID): Promise<AutopilotSettings> {
+  async getAutopilotSettings(userId = DEFAULT_OWNER_USER_ID): Promise<AutopilotSettings> {
     const store = await this.readStore();
     const settings = store.autopilotSettings.find((candidate) => candidate.userId === userId);
     return AutopilotSettingsSchema.parse(clone(settings ?? defaultAutopilotSettings(userId)));
@@ -1936,7 +1936,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listAutopilotEvents(userId = SYSTEM_USER_ID): Promise<AutopilotEvent[]> {
+  async listAutopilotEvents(userId = DEFAULT_OWNER_USER_ID): Promise<AutopilotEvent[]> {
     const store = await this.readStore();
     return sortByCreatedDesc(store.autopilotEvents.filter((event) => event.userId === userId)).map((event) =>
       AutopilotEventSchema.parse(clone(event))
@@ -1944,7 +1944,7 @@ class FileRepository implements AgenticRepository {
   }
 
   async listAutopilotEventsPage(params?: CollectionPageParams): Promise<AutopilotEventPage> {
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const store = await this.readStore();
     const events = store.autopilotEvents
       .filter((event) => event.userId === userId)
@@ -1975,7 +1975,7 @@ class FileRepository implements AgenticRepository {
     reliabilityControls?: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim> {
     return this.withMutationLock(async () => {
-      const userId = params.userId ?? SYSTEM_USER_ID;
+      const userId = params.userId ?? DEFAULT_OWNER_USER_ID;
       const store = await this.readStore();
       const trimmedKey = params.idempotencyKey?.trim() || null;
       const normalizedDetails = normalizeAutopilotEventDetails(params.details);
@@ -2187,7 +2187,7 @@ class FileRepository implements AgenticRepository {
     return (limit === null ? jobs : jobs.slice(0, limit)).map((job) => JobRecordSchema.parse(clone(job)));
   }
 
-  async getJob(jobId: string, userId = SYSTEM_USER_ID): Promise<JobRecord | null> {
+  async getJob(jobId: string, userId = DEFAULT_OWNER_USER_ID): Promise<JobRecord | null> {
     const store = await this.readStore();
     const workspaceIds = workspaceIdsForUser(store, userId);
     const job = store.jobs.find(
@@ -2358,7 +2358,7 @@ class FileRepository implements AgenticRepository {
       return JobRecordSchema.parse(clone(deadLettered));
     });
   }
-  async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
+  async listMemory(userId = DEFAULT_OWNER_USER_ID): Promise<MemoryRecord[]> {
     const store = await this.readStore();
     return sortByCreatedDesc(store.memories.filter((memory) => memory.userId === userId)).map((memory) =>
       MemoryRecordSchema.parse(clone(memory))
@@ -2379,7 +2379,7 @@ class FileRepository implements AgenticRepository {
   }
 
   async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const store = await this.readStore();
     const memories = store.memories
       .filter((memory) => memory.userId === userId)
@@ -2431,7 +2431,7 @@ class FileRepository implements AgenticRepository {
 
   async listWatchers(filters?: WatcherListFilters): Promise<Watcher[]> {
     const store = await this.readStore();
-    const userId = filters?.userId ?? SYSTEM_USER_ID;
+    const userId = filters?.userId ?? DEFAULT_OWNER_USER_ID;
     const goalIds = goalIdsForUser(store, userId);
     const watchers = store.watchers.filter((watcher) => {
       if (!goalIds.has(watcher.goalId)) {
@@ -2452,7 +2452,7 @@ class FileRepository implements AgenticRepository {
 
   async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
     const store = await this.readStore();
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const goalIds = goalIdsForUser(store, userId);
     const watchers = store.watchers
       .filter((watcher) => {
@@ -2485,7 +2485,7 @@ class FileRepository implements AgenticRepository {
   async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const leased = claimWatcherLeaseInRuntimeStore({ watchers: store.watchers, visibleGoalIds: goalIdsForUser(store, params.userId ?? SYSTEM_USER_ID), lease: params, normalizeWatcher: (watcher) => {
+      const leased = claimWatcherLeaseInRuntimeStore({ watchers: store.watchers, visibleGoalIds: goalIdsForUser(store, params.userId ?? DEFAULT_OWNER_USER_ID), lease: params, normalizeWatcher: (watcher) => {
         const goal = goalByIdFromStore(store, watcher.goalId);
         return goal ? normalizeWatcherForGoal(goal, watcher) : WatcherSchema.parse(clone(watcher));
       } });
@@ -2513,7 +2513,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listIntegrations(userId = SYSTEM_USER_ID): Promise<IntegrationAccount[]> {
+  async listIntegrations(userId = DEFAULT_OWNER_USER_ID): Promise<IntegrationAccount[]> {
     const store = await this.readStore();
     return sortByCreatedDesc(store.integrations.filter((integration) => integration.userId === userId)).map((integration) =>
       IntegrationAccountSchema.parse(clone(integration))
@@ -2521,7 +2521,7 @@ class FileRepository implements AgenticRepository {
   }
 
   async listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage> {
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const store = await this.readStore();
     const integrations = store.integrations
       .filter((integration) => integration.userId === userId)
@@ -2549,7 +2549,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listProviderCredentials(userId = SYSTEM_USER_ID): Promise<ProviderCredential[]> {
+  async listProviderCredentials(userId = DEFAULT_OWNER_USER_ID): Promise<ProviderCredential[]> {
     const store = await this.readStore();
     return [...store.providerCredentials]
       .filter((credential) => credential.userId === userId)
@@ -2557,7 +2557,7 @@ class FileRepository implements AgenticRepository {
       .map((credential) => ProviderCredentialSchema.parse(clone(credential)));
   }
 
-  async getProviderCredential(credentialId: string, userId = SYSTEM_USER_ID): Promise<ProviderCredential | null> {
+  async getProviderCredential(credentialId: string, userId = DEFAULT_OWNER_USER_ID): Promise<ProviderCredential | null> {
     const store = await this.readStore();
     const credential = store.providerCredentials.find((candidate) => candidate.id === credentialId && candidate.userId === userId);
     return credential ? ProviderCredentialSchema.parse(clone(credential)) : null;
@@ -2577,7 +2577,7 @@ class FileRepository implements AgenticRepository {
   async getProviderCredentialSecret(
     credentialId: string,
     kind: ProviderCredentialSecretKind,
-    userId = SYSTEM_USER_ID
+    userId = DEFAULT_OWNER_USER_ID
   ): Promise<ProviderCredentialSecretRecord | null> {
     const store = await this.readStore();
     const record = store.providerCredentialSecrets.find(
@@ -2626,7 +2626,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listTemplates(userId = SYSTEM_USER_ID): Promise<GoalTemplate[]> {
+  async listTemplates(userId = DEFAULT_OWNER_USER_ID): Promise<GoalTemplate[]> {
     const store = await this.readStore();
     return sortByCreatedDesc(store.templates.filter((template) => template.userId === userId)).map((template) =>
       GoalTemplateSchema.parse(clone(template))
@@ -2651,7 +2651,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listWorkflowTemplates(userId = SYSTEM_USER_ID): Promise<WorkflowCanvasTemplate[]> {
+  async listWorkflowTemplates(userId = DEFAULT_OWNER_USER_ID): Promise<WorkflowCanvasTemplate[]> {
     const store = await this.readStore();
     return [...store.workflowTemplates]
       .filter((template) => template.userId === userId)
@@ -2659,7 +2659,7 @@ class FileRepository implements AgenticRepository {
       .map((template) => WorkflowCanvasTemplateSchema.parse(clone(template)));
   }
 
-  async getWorkflowTemplate(templateId: string, userId = SYSTEM_USER_ID): Promise<WorkflowCanvasTemplate | null> {
+  async getWorkflowTemplate(templateId: string, userId = DEFAULT_OWNER_USER_ID): Promise<WorkflowCanvasTemplate | null> {
     const store = await this.readStore();
     const template = store.workflowTemplates.find((candidate) => candidate.id === templateId && candidate.userId === userId);
     return template ? WorkflowCanvasTemplateSchema.parse(clone(template)) : null;
@@ -2675,7 +2675,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async deleteWorkflowTemplate(templateId: string, userId = SYSTEM_USER_ID): Promise<void> {
+  async deleteWorkflowTemplate(templateId: string, userId = DEFAULT_OWNER_USER_ID): Promise<void> {
     await this.withMutationLock(async () => {
       const store = await this.readStore();
       store.workflowTemplates = store.workflowTemplates.filter(
@@ -2685,7 +2685,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listOperatorProducts(userId = SYSTEM_USER_ID): Promise<OperatorProduct[]> {
+  async listOperatorProducts(userId = DEFAULT_OWNER_USER_ID): Promise<OperatorProduct[]> {
     const store = await this.readStore();
     const products = uniqueById([
       ...defaultOperatorProducts(userId),
@@ -2694,7 +2694,7 @@ class FileRepository implements AgenticRepository {
     return products.map((product) => OperatorProductSchema.parse(clone(product)));
   }
 
-  async getOperatorProductSelection(userId = SYSTEM_USER_ID): Promise<OperatorProductSelection | null> {
+  async getOperatorProductSelection(userId = DEFAULT_OWNER_USER_ID): Promise<OperatorProductSelection | null> {
     const store = await this.readStore();
     const selection = store.operatorProductSelections.find((candidate) => candidate.userId === userId);
     return selection ? OperatorProductSelectionSchema.parse(clone(selection)) : null;
@@ -2733,13 +2733,13 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async listAgents(userId = SYSTEM_USER_ID): Promise<AgentDefinition[]> {
+  async listAgents(userId = DEFAULT_OWNER_USER_ID): Promise<AgentDefinition[]> {
     const store = await this.readStore();
     const agents = store.agents.filter((agent) => agent.userId === userId || agent.isBuiltIn);
     return agents.map((agent) => AgentDefinitionSchema.parse(clone(agent)));
   }
 
-  async getAgent(agentId: string, userId = SYSTEM_USER_ID): Promise<AgentDefinition | null> {
+  async getAgent(agentId: string, userId = DEFAULT_OWNER_USER_ID): Promise<AgentDefinition | null> {
     const store = await this.readStore();
     const agent = resolveAgentFromDefinitions(store.agents, agentId, userId);
     return agent ? AgentDefinitionSchema.parse(clone(agent)) : null;
@@ -2755,7 +2755,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async deleteAgent(agentId: string, userId = SYSTEM_USER_ID): Promise<void> {
+  async deleteAgent(agentId: string, userId = DEFAULT_OWNER_USER_ID): Promise<void> {
     await this.withMutationLock(async () => {
       const store = await this.readStore();
       const agent = resolveAgentFromDefinitions(store.agents, agentId, userId);
@@ -2777,7 +2777,7 @@ class FileRepository implements AgenticRepository {
   async getAgentMetrics(
     agentId: string,
     period: "day" | "week" | "month" | "all" = "all",
-    userId = SYSTEM_USER_ID
+    userId = DEFAULT_OWNER_USER_ID
   ): Promise<AgentMetrics | null> {
     const store = await this.readStore();
     const agent = resolveAgentFromDefinitions(store.agents, agentId, userId);
@@ -2823,7 +2823,7 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async getDashboardData(userId = SYSTEM_USER_ID): Promise<DashboardData> {
+  async getDashboardData(userId = DEFAULT_OWNER_USER_ID): Promise<DashboardData> {
     const store = await this.readStore();
     const { activeWorkspace, workspaceSelection } = resolveActiveWorkspaceFromStore(store, userId);
     const workspaces = listWorkspacesForUserFromStore(store, userId);
@@ -4282,7 +4282,7 @@ class PostgresRepository implements AgenticRepository {
     filters?: GoalShareListFilters
   ): Promise<GoalShareRecord[]> {
     const normalized = normalizeGoalShareFilters(filters);
-    const values: unknown[] = [normalized.userId ?? SYSTEM_USER_ID];
+    const values: unknown[] = [normalized.userId ?? DEFAULT_OWNER_USER_ID];
     const predicates = [
       `(
         (g.workspace_id is null and g.user_id = $1)
@@ -4327,7 +4327,7 @@ class PostgresRepository implements AgenticRepository {
   private async getGoalShareWithClient(
     client: Pick<PoolClient, "query">,
     shareId: string,
-    userId = SYSTEM_USER_ID
+    userId = DEFAULT_OWNER_USER_ID
   ): Promise<GoalShareRecord | null> {
     const result = await client.query(
       `
@@ -4373,7 +4373,7 @@ class PostgresRepository implements AgenticRepository {
     filters?: PrivacyOperationListFilters
   ): Promise<PrivacyOperation[]> {
     const normalized = normalizePrivacyOperationFilters(filters);
-    const values: unknown[] = [normalized.userId ?? SYSTEM_USER_ID];
+    const values: unknown[] = [normalized.userId ?? DEFAULT_OWNER_USER_ID];
     const predicates = ["wm.user_id is not null"];
 
     if (normalized.workspaceId) {
@@ -4408,7 +4408,7 @@ class PostgresRepository implements AgenticRepository {
   private async getPrivacyOperationWithClient(
     client: Pick<PoolClient, "query">,
     operationId: string,
-    userId = SYSTEM_USER_ID
+    userId = DEFAULT_OWNER_USER_ID
   ): Promise<PrivacyOperation | null> {
     const result = await client.query(
       `
@@ -5076,7 +5076,7 @@ class PostgresRepository implements AgenticRepository {
     }
   }
 
-  async seedDefaults(userId = SYSTEM_USER_ID): Promise<void> {
+  async seedDefaults(userId = DEFAULT_OWNER_USER_ID): Promise<void> {
     await this.withTransaction(async (client) => {
       const user = defaultUser(userId);
       const personalWorkspace = defaultWorkspace(userId);
@@ -5208,7 +5208,7 @@ class PostgresRepository implements AgenticRepository {
     });
   }
 
-  async listWorkspaces(userId = SYSTEM_USER_ID): Promise<Workspace[]> {
+  async listWorkspaces(userId = DEFAULT_OWNER_USER_ID): Promise<Workspace[]> {
     await this.ready;
     const client = await this.pool.connect();
 
@@ -5271,7 +5271,7 @@ class PostgresRepository implements AgenticRepository {
     return WorkspaceSchema.parse(clone(validated));
   }
 
-  async listWorkspaceMembers(workspaceId: string, userId = SYSTEM_USER_ID): Promise<WorkspaceMember[]> {
+  async listWorkspaceMembers(workspaceId: string, userId = DEFAULT_OWNER_USER_ID): Promise<WorkspaceMember[]> {
     await this.ready;
     const client = await this.pool.connect();
 
@@ -5316,7 +5316,7 @@ class PostgresRepository implements AgenticRepository {
     return WorkspaceMemberSchema.parse(clone(validated));
   }
 
-  async getWorkspaceSelection(userId = SYSTEM_USER_ID): Promise<WorkspaceSelection | null> {
+  async getWorkspaceSelection(userId = DEFAULT_OWNER_USER_ID): Promise<WorkspaceSelection | null> {
     await this.ready;
     const client = await this.pool.connect();
 
@@ -5339,7 +5339,7 @@ class PostgresRepository implements AgenticRepository {
     return WorkspaceSelectionSchema.parse(clone(validated));
   }
 
-  async getWorkspaceGovernance(workspaceId: string, userId = SYSTEM_USER_ID): Promise<WorkspaceGovernance | null> {
+  async getWorkspaceGovernance(workspaceId: string, userId = DEFAULT_OWNER_USER_ID): Promise<WorkspaceGovernance | null> {
     await this.ready;
     const client = await this.pool.connect();
 
@@ -5363,7 +5363,7 @@ class PostgresRepository implements AgenticRepository {
     }
   }
 
-  async getGoalShare(shareId: string, userId = SYSTEM_USER_ID): Promise<GoalShareRecord | null> {
+  async getGoalShare(shareId: string, userId = DEFAULT_OWNER_USER_ID): Promise<GoalShareRecord | null> {
     await this.ready;
     const client = await this.pool.connect();
 
@@ -5435,7 +5435,7 @@ class PostgresRepository implements AgenticRepository {
     }
   }
 
-  async getPrivacyOperation(operationId: string, userId = SYSTEM_USER_ID): Promise<PrivacyOperation | null> {
+  async getPrivacyOperation(operationId: string, userId = DEFAULT_OWNER_USER_ID): Promise<PrivacyOperation | null> {
     await this.ready;
     const client = await this.pool.connect();
 
@@ -5820,7 +5820,7 @@ class PostgresRepository implements AgenticRepository {
     return WorkspaceGovernanceSchema.parse(clone(validated));
   }
 
-  async exportWorkspaceAudit(workspaceId: string, userId = SYSTEM_USER_ID): Promise<WorkspaceAuditExport> {
+  async exportWorkspaceAudit(workspaceId: string, userId = DEFAULT_OWNER_USER_ID): Promise<WorkspaceAuditExport> {
     await this.ready;
     const client = await this.pool.connect();
 
@@ -6111,7 +6111,7 @@ class PostgresRepository implements AgenticRepository {
     return bundle ? GoalBundleSchema.parse(clone(bundle)) : null;
   }
 
-  async getGoalBundleForUser(goalId: string, userId = SYSTEM_USER_ID): Promise<GoalBundle | null> {
+  async getGoalBundleForUser(goalId: string, userId = DEFAULT_OWNER_USER_ID): Promise<GoalBundle | null> {
     await this.ready;
     const result = await this.pool.query(
       `
@@ -6136,7 +6136,7 @@ class PostgresRepository implements AgenticRepository {
     return bundle ? GoalBundleSchema.parse(clone(bundle)) : null;
   }
 
-  async listGoals(userId = SYSTEM_USER_ID): Promise<GoalBundle[]> {
+  async listGoals(userId = DEFAULT_OWNER_USER_ID): Promise<GoalBundle[]> {
     await this.ready;
     const client = await this.pool.connect();
 
@@ -6167,7 +6167,7 @@ class PostgresRepository implements AgenticRepository {
 
   async listGoalsPage(params?: GoalPageParams): Promise<GoalBundlePage> {
     await this.ready;
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const limit = normalizeCollectionPageLimit(params?.limit);
     const cursor = decodeCollectionCursor(params?.cursor ?? null);
     const client = await this.pool.connect();
@@ -6239,7 +6239,7 @@ class PostgresRepository implements AgenticRepository {
     }
   }
 
-  async listApprovals(userId = SYSTEM_USER_ID): Promise<ApprovalRequest[]> {
+  async listApprovals(userId = DEFAULT_OWNER_USER_ID): Promise<ApprovalRequest[]> {
     await this.ready;
     const result = await this.pool.query(
       `
@@ -6259,7 +6259,7 @@ class PostgresRepository implements AgenticRepository {
 
   async listEvidenceRecords(params?: { userId?: string; goalId?: string; approvalId?: string; limit?: number }): Promise<EvidenceRecord[]> {
     await this.ready;
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const values: unknown[] = [userId];
     let index = values.length + 1;
     let filters = "";
@@ -6300,7 +6300,7 @@ class PostgresRepository implements AgenticRepository {
     return result.rows.map((row) => this.mapEvidenceRecordRow(row));
   }
 
-  async listCommitments(userId = SYSTEM_USER_ID): Promise<Commitment[]> {
+  async listCommitments(userId = DEFAULT_OWNER_USER_ID): Promise<Commitment[]> {
     await this.ready;
     const result = await this.pool.query(
       `
@@ -6341,7 +6341,7 @@ class PostgresRepository implements AgenticRepository {
     limit?: number;
     cursor?: string | null;
   }): Promise<CommitmentInboxPage> {
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const [goals, approvals, persisted] = await Promise.all([
       this.listGoals(userId),
       this.listApprovals(userId),
@@ -6361,7 +6361,7 @@ class PostgresRepository implements AgenticRepository {
     });
   }
 
-  async getCommitment(commitmentId: string, userId = SYSTEM_USER_ID): Promise<Commitment | null> {
+  async getCommitment(commitmentId: string, userId = DEFAULT_OWNER_USER_ID): Promise<Commitment | null> {
     const dashboard = await this.getDashboardData(userId);
     const commitment = dashboard.commitments.find((candidate) => candidate.id === commitmentId);
     return commitment ? CommitmentSchema.parse(clone(commitment)) : null;
@@ -6415,13 +6415,13 @@ class PostgresRepository implements AgenticRepository {
     return CommitmentSchema.parse(clone(validated));
   }
 
-  async deleteCommitment(commitmentId: string, userId = SYSTEM_USER_ID): Promise<void> {
+  async deleteCommitment(commitmentId: string, userId = DEFAULT_OWNER_USER_ID): Promise<void> {
     await this.withTransaction(async (client) => {
       await client.query("delete from commitments where id = $1 and user_id = $2", [commitmentId, userId]);
     });
   }
 
-  async getBriefingPreferences(userId = SYSTEM_USER_ID): Promise<BriefingPreferences> {
+  async getBriefingPreferences(userId = DEFAULT_OWNER_USER_ID): Promise<BriefingPreferences> {
     await this.ready;
     const result = await this.pool.query("select * from briefing_preferences where user_id = $1 limit 1", [userId]);
 
@@ -6447,7 +6447,7 @@ class PostgresRepository implements AgenticRepository {
     return BriefingPreferencesSchema.parse(clone(validated));
   }
 
-  async getAutopilotSettings(userId = SYSTEM_USER_ID): Promise<AutopilotSettings> {
+  async getAutopilotSettings(userId = DEFAULT_OWNER_USER_ID): Promise<AutopilotSettings> {
     await this.ready;
     const result = await this.pool.query("select * from autopilot_settings where user_id = $1 limit 1", [userId]);
 
@@ -6472,7 +6472,7 @@ class PostgresRepository implements AgenticRepository {
     return AutopilotSettingsSchema.parse(clone(validated));
   }
 
-  async listAutopilotEvents(userId = SYSTEM_USER_ID): Promise<AutopilotEvent[]> {
+  async listAutopilotEvents(userId = DEFAULT_OWNER_USER_ID): Promise<AutopilotEvent[]> {
     await this.ready;
     const result = await this.pool.query(
       "select * from autopilot_events where user_id = $1 order by created_at desc, id desc",
@@ -6484,7 +6484,7 @@ class PostgresRepository implements AgenticRepository {
 
   async listAutopilotEventsPage(params?: CollectionPageParams): Promise<AutopilotEventPage> {
     await this.ready;
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const limit = normalizeCollectionPageLimit(params?.limit);
     const cursor = decodeCollectionCursor(params?.cursor ?? null);
     const values: unknown[] = [userId];
@@ -6538,7 +6538,7 @@ class PostgresRepository implements AgenticRepository {
     debounceMinutes: number;
     reliabilityControls?: AutopilotSettings["reliabilityControls"];
   }): Promise<AutopilotEventClaim> {
-    const userId = params.userId ?? SYSTEM_USER_ID;
+    const userId = params.userId ?? DEFAULT_OWNER_USER_ID;
     const trimmedKey = params.idempotencyKey?.trim() || null;
     const normalizedDetails = normalizeAutopilotEventDetails(params.details);
     const reliabilityControls = params.reliabilityControls ?? DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS;
@@ -6827,7 +6827,7 @@ class PostgresRepository implements AgenticRepository {
     return result.rows.map((row) => this.mapJobRow(row));
   }
 
-  async getJob(jobId: string, userId = SYSTEM_USER_ID): Promise<JobRecord | null> {
+  async getJob(jobId: string, userId = DEFAULT_OWNER_USER_ID): Promise<JobRecord | null> {
     await this.ready;
     const result = await this.pool.query(
       `
@@ -7036,7 +7036,7 @@ class PostgresRepository implements AgenticRepository {
     });
   }
 
-  async listMemory(userId = SYSTEM_USER_ID): Promise<MemoryRecord[]> {
+  async listMemory(userId = DEFAULT_OWNER_USER_ID): Promise<MemoryRecord[]> {
     await this.ready;
     const result = await this.pool.query("select * from memory_records where user_id = $1 order by created_at desc, id desc", [userId]);
     return result.rows.map(mapMemoryRow);
@@ -7057,7 +7057,7 @@ class PostgresRepository implements AgenticRepository {
 
   async listMemoryPage(params?: CollectionPageParams): Promise<MemoryRecordPage> {
     await this.ready;
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const limit = normalizeCollectionPageLimit(params?.limit);
     const cursor = decodeCollectionCursor(params?.cursor ?? null);
     const values: unknown[] = [userId];
@@ -7134,7 +7134,7 @@ class PostgresRepository implements AgenticRepository {
 
   async listWatchers(filters?: WatcherListFilters): Promise<Watcher[]> {
     await this.ready;
-    const userId = filters?.userId ?? SYSTEM_USER_ID;
+    const userId = filters?.userId ?? DEFAULT_OWNER_USER_ID;
     const values: string[] = [userId];
     let goalClause = "";
 
@@ -7163,7 +7163,7 @@ class PostgresRepository implements AgenticRepository {
 
   async listWatchersPage(params?: WatcherPageParams): Promise<WatcherPage> {
     await this.ready;
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const limit = normalizeCollectionPageLimit(params?.limit);
     const cursor = decodeCollectionCursor(params?.cursor ?? null);
     const values: unknown[] = [userId];
@@ -7219,7 +7219,7 @@ class PostgresRepository implements AgenticRepository {
 
   async claimWatcherLease(params: WatcherLeaseClaimParams): Promise<Watcher | null> {
     await this.ready;
-    return this.withTransaction((client) => claimWatcherLeaseWithPostgresClient({ client, userId: params.userId ?? SYSTEM_USER_ID, lease: params, mapWatcherRow: (row) => this.mapWatcherRow(row) }));
+    return this.withTransaction((client) => claimWatcherLeaseWithPostgresClient({ client, userId: params.userId ?? DEFAULT_OWNER_USER_ID, lease: params, mapWatcherRow: (row) => this.mapWatcherRow(row) }));
   }
 
   async saveWatcher(watcher: Watcher): Promise<Watcher> {
@@ -7286,7 +7286,7 @@ class PostgresRepository implements AgenticRepository {
     return WatcherSchema.parse(clone(normalized));
   }
 
-  async listIntegrations(userId = SYSTEM_USER_ID): Promise<IntegrationAccount[]> {
+  async listIntegrations(userId = DEFAULT_OWNER_USER_ID): Promise<IntegrationAccount[]> {
     await this.ready;
     const result = await this.pool.query("select * from integration_accounts where user_id = $1 order by created_at desc, id desc", [userId]);
 
@@ -7309,7 +7309,7 @@ class PostgresRepository implements AgenticRepository {
 
   async listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage> {
     await this.ready;
-    const userId = params?.userId ?? SYSTEM_USER_ID;
+    const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
     const limit = normalizeCollectionPageLimit(params?.limit);
     const cursor = decodeCollectionCursor(params?.cursor ?? null);
     const values: unknown[] = [userId];
@@ -7370,7 +7370,7 @@ class PostgresRepository implements AgenticRepository {
     return IntegrationAccountSchema.parse(clone(account));
   }
 
-  async listProviderCredentials(userId = SYSTEM_USER_ID): Promise<ProviderCredential[]> {
+  async listProviderCredentials(userId = DEFAULT_OWNER_USER_ID): Promise<ProviderCredential[]> {
     await this.ready;
     const result = await this.pool.query(
       "select * from provider_credentials where user_id = $1 order by updated_at desc, created_at desc",
@@ -7403,7 +7403,7 @@ class PostgresRepository implements AgenticRepository {
     );
   }
 
-  async getProviderCredential(credentialId: string, userId = SYSTEM_USER_ID): Promise<ProviderCredential | null> {
+  async getProviderCredential(credentialId: string, userId = DEFAULT_OWNER_USER_ID): Promise<ProviderCredential | null> {
     await this.ready;
     const result = await this.pool.query("select * from provider_credentials where user_id = $1 and id = $2 limit 1", [
       userId,
@@ -7473,7 +7473,7 @@ class PostgresRepository implements AgenticRepository {
   async getProviderCredentialSecret(
     credentialId: string,
     kind: ProviderCredentialSecretKind,
-    userId = SYSTEM_USER_ID
+    userId = DEFAULT_OWNER_USER_ID
   ): Promise<ProviderCredentialSecretRecord | null> {
     await this.ready;
     const result = await this.pool.query(
@@ -7521,7 +7521,7 @@ class PostgresRepository implements AgenticRepository {
     return this.withTransaction((client) => updateProviderSideEffectWithClient(client, params));
   }
 
-  async listTemplates(userId = SYSTEM_USER_ID): Promise<GoalTemplate[]> {
+  async listTemplates(userId = DEFAULT_OWNER_USER_ID): Promise<GoalTemplate[]> {
     await this.ready;
     const result = await this.pool.query(
       "select * from goal_templates where user_id = $1 order by created_at desc",
@@ -7543,7 +7543,7 @@ class PostgresRepository implements AgenticRepository {
     });
   }
 
-  async listWorkflowTemplates(userId = SYSTEM_USER_ID): Promise<WorkflowCanvasTemplate[]> {
+  async listWorkflowTemplates(userId = DEFAULT_OWNER_USER_ID): Promise<WorkflowCanvasTemplate[]> {
     await this.ready;
     const result = await this.pool.query(
       "select * from workflow_templates where user_id = $1 order by updated_at desc, created_at desc",
@@ -7553,7 +7553,7 @@ class PostgresRepository implements AgenticRepository {
     return result.rows.map((row) => this.mapWorkflowTemplateRow(row));
   }
 
-  async getWorkflowTemplate(templateId: string, userId = SYSTEM_USER_ID): Promise<WorkflowCanvasTemplate | null> {
+  async getWorkflowTemplate(templateId: string, userId = DEFAULT_OWNER_USER_ID): Promise<WorkflowCanvasTemplate | null> {
     await this.ready;
     const result = await this.pool.query(
       "select * from workflow_templates where id = $1 and user_id = $2 limit 1",
@@ -7568,13 +7568,13 @@ class PostgresRepository implements AgenticRepository {
     return WorkflowCanvasTemplateSchema.parse(clone(validated));
   }
 
-  async deleteWorkflowTemplate(templateId: string, userId = SYSTEM_USER_ID): Promise<void> {
+  async deleteWorkflowTemplate(templateId: string, userId = DEFAULT_OWNER_USER_ID): Promise<void> {
     await this.withTransaction(async (client) => {
       await client.query("delete from workflow_templates where id = $1 and user_id = $2", [templateId, userId]);
     });
   }
 
-  async listOperatorProducts(userId = SYSTEM_USER_ID): Promise<OperatorProduct[]> {
+  async listOperatorProducts(userId = DEFAULT_OWNER_USER_ID): Promise<OperatorProduct[]> {
     await this.ready;
     const result = await this.pool.query(
       `
@@ -7593,7 +7593,7 @@ class PostgresRepository implements AgenticRepository {
     return merged.map((product) => OperatorProductSchema.parse(clone(product)));
   }
 
-  async getOperatorProductSelection(userId = SYSTEM_USER_ID): Promise<OperatorProductSelection | null> {
+  async getOperatorProductSelection(userId = DEFAULT_OWNER_USER_ID): Promise<OperatorProductSelection | null> {
     await this.ready;
     const result = await this.pool.query(
       `
@@ -7641,7 +7641,7 @@ class PostgresRepository implements AgenticRepository {
     return OperatorProductSelectionSchema.parse(clone(validated));
   }
 
-  async listAgents(userId = SYSTEM_USER_ID): Promise<AgentDefinition[]> {
+  async listAgents(userId = DEFAULT_OWNER_USER_ID): Promise<AgentDefinition[]> {
     await this.ready;
     const result = await this.pool.query(
       `
@@ -7660,7 +7660,7 @@ class PostgresRepository implements AgenticRepository {
     return merged.map((agent) => AgentDefinitionSchema.parse(clone(agent)));
   }
 
-  async getAgent(agentId: string, userId = SYSTEM_USER_ID): Promise<AgentDefinition | null> {
+  async getAgent(agentId: string, userId = DEFAULT_OWNER_USER_ID): Promise<AgentDefinition | null> {
     const agents = await this.listAgents(userId);
     const agent = resolveAgentFromDefinitions(agents, agentId, userId);
     return agent ? AgentDefinitionSchema.parse(clone(agent)) : null;
@@ -7672,7 +7672,7 @@ class PostgresRepository implements AgenticRepository {
     return AgentDefinitionSchema.parse(clone(validated));
   }
 
-  async deleteAgent(agentId: string, userId = SYSTEM_USER_ID): Promise<void> {
+  async deleteAgent(agentId: string, userId = DEFAULT_OWNER_USER_ID): Promise<void> {
     const agent = await this.getAgent(agentId, userId);
 
     if (agent?.isBuiltIn) {
@@ -7692,7 +7692,7 @@ class PostgresRepository implements AgenticRepository {
   async getAgentMetrics(
     agentId: string,
     period: "day" | "week" | "month" | "all" = "all",
-    userId = SYSTEM_USER_ID
+    userId = DEFAULT_OWNER_USER_ID
   ): Promise<AgentMetrics | null> {
     const agent = await this.getAgent(agentId, userId);
 
@@ -7731,7 +7731,7 @@ class PostgresRepository implements AgenticRepository {
     return AgentMetricsSchema.parse(clone(validated));
   }
 
-  async getDashboardData(userId = SYSTEM_USER_ID): Promise<DashboardData> {
+  async getDashboardData(userId = DEFAULT_OWNER_USER_ID): Promise<DashboardData> {
     const [
       commitments,
       briefingPreferences,
