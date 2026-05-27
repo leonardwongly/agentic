@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import {
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
@@ -514,7 +514,7 @@ export async function POST(request: Request) {
 
       assertRepositoryAllowed(selected.repository.full_name);
 
-      const userId = readBoundedRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID", 120) ?? SYSTEM_USER_ID;
+      const userId = readBoundedRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID", 120) ?? DEFAULT_OWNER_USER_ID;
       const workspaceId = readBoundedRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_WORKSPACE_ID", 160);
       const repository = await getSeededRepository();
       const job = await enqueueGitHubIssueIntakeJob({

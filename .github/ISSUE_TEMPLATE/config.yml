@@ -2,4 +2,4 @@ blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability privately
     url: https://github.com/leonardwongly/agentic/security/advisories/new
-    about: Do not open public issues for vulnerabilities, exploit details, secrets, or sensitive logs.
+    about: Canonical upstream security reports only. Do not open public issues for vulnerabilities, exploit details, secrets, or sensitive logs.

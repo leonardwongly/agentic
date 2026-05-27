@@ -26,7 +26,7 @@ function buildIssuePayload(overrides: Record<string, unknown> = {}) {
       node_id: "I_kwDOAgenticIssue74",
       title: "Fix flaky GitHub issue automation",
       body: "The issue intake should enqueue a governed Agentic job.",
-      html_url: "https://github.com/leonardwongly/agentic/issues/74",
+      html_url: "https://github.com/octo-org/demo-agentic/issues/74",
       user: {
         login: "issue-author"
       },
@@ -42,8 +42,8 @@ function buildIssuePayload(overrides: Record<string, unknown> = {}) {
       updated_at: "2026-05-07T01:00:00.000Z"
     },
     repository: {
-      full_name: "leonardwongly/agentic",
-      html_url: "https://github.com/leonardwongly/agentic",
+      full_name: "octo-org/demo-agentic",
+      html_url: "https://github.com/octo-org/demo-agentic",
       default_branch: "main",
       private: true
     },
@@ -72,7 +72,7 @@ function buildIssueCommentPayload(overrides: Record<string, unknown> = {}) {
         login: "repo-member",
         type: "User"
       },
-      html_url: "https://github.com/leonardwongly/agentic/issues/74#issuecomment-9901"
+      html_url: "https://github.com/octo-org/demo-agentic/issues/74#issuecomment-9901"
     },
     repository: buildIssuePayload().repository,
     sender: {
@@ -154,7 +154,7 @@ describe("GitHub issue webhook route", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-github-issue-webhook-"));
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(tempDir, "runtime-store.json");
     process.env.AGENTIC_GITHUB_WEBHOOK_SECRET = WEBHOOK_SECRET;
-    process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES = "leonardwongly/agentic";
+    process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES = "octo-org/demo-agentic";
     delete process.env.AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID;
     delete process.env.AGENTIC_GITHUB_ISSUE_INTAKE_WORKSPACE_ID;
     delete process.env.AGENTIC_GITHUB_ISSUE_COMMAND_AUTHOR_ASSOCIATIONS;
@@ -241,7 +241,7 @@ describe("GitHub issue webhook route", () => {
       job: {
         kind: "github_issue_intake",
         status: "queued",
-        repository: "leonardwongly/agentic",
+        repository: "octo-org/demo-agentic",
         issueNumber: 74,
         automationMode: "intake"
       }
@@ -255,7 +255,7 @@ describe("GitHub issue webhook route", () => {
       type: "github_issue_intake",
       automationMode: "intake",
       repository: {
-        fullName: "leonardwongly/agentic",
+        fullName: "octo-org/demo-agentic",
         private: true
       },
       issue: {
@@ -428,7 +428,7 @@ describe("GitHub issue webhook route", () => {
     expect(response.status).toBe(202);
     expect(payload.job).toMatchObject({
       kind: "github_issue_intake",
-      repository: "leonardwongly/agentic",
+      repository: "octo-org/demo-agentic",
       issueNumber: 74,
       automationMode: "work"
     });
@@ -486,7 +486,7 @@ describe("GitHub issue webhook route", () => {
     expect(response.status).toBe(202);
     expect(payload.job).toMatchObject({
       kind: "github_issue_intake",
-      repository: "leonardwongly/agentic",
+      repository: "octo-org/demo-agentic",
       issueNumber: 74,
       automationMode: "work"
     });
@@ -581,7 +581,7 @@ describe("GitHub issue webhook route", () => {
         issue: {
           ...buildIssueCommentPayload().issue,
           pull_request: {
-            url: "https://api.github.com/repos/leonardwongly/agentic/pulls/74"
+            url: "https://api.github.com/repos/octo-org/demo-agentic/pulls/74"
           }
         }
       }), { event: "issue_comment" })

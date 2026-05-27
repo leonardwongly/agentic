@@ -105,6 +105,7 @@ export type RepoHygieneReport = {
 
 const DEFAULT_RELEASE_FORBIDDEN_PREFIXES = [
   ".agentic/",
+  ".antigravitycli/",
   ".next/",
   "apps/web/.next/",
   "apps/web/out/",
@@ -157,6 +158,7 @@ const REQUIRED_ROOT_SCRIPTS = [
   "typecheck",
   "format:check",
   "release:check-context",
+  "test:oss:ownership",
   "setup:check",
   "docs:validate",
   "ci:validate-provenance",
@@ -357,6 +359,7 @@ export function lintWorkspaceContracts(options: {
     "npm run typecheck",
     "npm run format:check",
     "npm run release:check-context",
+    "npm run test:oss:ownership",
     "npm run docs:validate"
   ]) {
     if (!options.ciWorkflow.includes(command)) {

@@ -135,6 +135,9 @@ jobs:
       - name: Check release context
         run: npm run release:check-context
 
+      - name: Validate OSS ownership defaults
+        run: npm run test:oss:ownership
+
       - name: Validate docs inventory
         run: |
           npm run docs:render

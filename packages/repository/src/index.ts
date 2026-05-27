@@ -413,11 +413,19 @@ function defaultBriefingSchedules() {
   );
 }
 
+function resolveDefaultOwnerTimezone() {
+  return process.env.AGENTIC_DEFAULT_TIMEZONE?.trim() || process.env.TZ || "UTC";
+}
+
+function resolveDefaultOwnerDisplayName() {
+  return process.env.AGENTIC_BOOTSTRAP_DISPLAY_NAME?.trim() || "Instance Owner";
+}
+
 function defaultBriefingPreferences(userId: string): BriefingPreferences {
   const timestamp = nowIso();
   return BriefingPreferencesSchema.parse({
     userId,
-    timezone: process.env.TZ ?? "Asia/Singapore",
+    timezone: resolveDefaultOwnerTimezone(),
     focus: "balanced",
     schedules: defaultBriefingSchedules(),
     createdAt: timestamp,
@@ -428,8 +436,8 @@ function defaultBriefingPreferences(userId: string): BriefingPreferences {
 function defaultUser(userId: string) {
   return UserRecordSchema.parse({
     id: userId,
-    name: "Leonard",
-    timezone: process.env.TZ ?? "Asia/Singapore",
+    name: resolveDefaultOwnerDisplayName(),
+    timezone: resolveDefaultOwnerTimezone(),
     createdAt: nowIso()
   });
 }
@@ -465,7 +473,7 @@ function defaultMemories(userId: string): MemoryRecord[] {
       userId,
       category: "working-style",
       memoryType: "confirmed",
-      content: "Leonard prefers concise, auditable plans with explicit trade-offs and exact run commands.",
+      content: "The instance owner prefers concise, auditable plans with explicit trade-offs and exact run commands.",
       confidence: 0.99,
       source: "project-default",
       sensitivity: "internal",

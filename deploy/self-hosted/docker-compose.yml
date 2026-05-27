@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agentic
+      POSTGRES_PASSWORD: agentic
+      POSTGRES_DB: agentic
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentic -d agentic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - agentic-postgres-data:/var/lib/postgresql/data
+
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "npm run db:migrate && npm run start:web:prod -- --hostname 0.0.0.0 --port 3000"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:-postgres://agentic:agentic@postgres:5432/agentic}
+      AGENTIC_ACCESS_KEY: ${AGENTIC_ACCESS_KEY:?AGENTIC_ACCESS_KEY is required}
+      AGENTIC_BOOTSTRAP_USER_ID: ${AGENTIC_BOOTSTRAP_USER_ID:-owner}
+      AGENTIC_BOOTSTRAP_DISPLAY_NAME: ${AGENTIC_BOOTSTRAP_DISPLAY_NAME:-Instance Owner}
+      AGENTIC_DEFAULT_TIMEZONE: ${AGENTIC_DEFAULT_TIMEZONE:-UTC}
+      AGENTIC_PUBLIC_BASE_URL: ${AGENTIC_PUBLIC_BASE_URL:-http://localhost:3000}
+      AGENTIC_REQUIRE_SHARED_AUTH_STATE: "true"
+      AGENTIC_SHARED_AUTH_STATE: "true"
+      AGENTIC_WORKER_HEALTH_PATH: /var/lib/agentic/worker-health.json
+      AGENTIC_TRUST_PROXY_HEADERS: ${AGENTIC_TRUST_PROXY_HEADERS:-false}
+      AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED: ${AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED:-false}
+      AGENTIC_TRUSTED_CLIENT_IP_HEADER: ${AGENTIC_TRUSTED_CLIENT_IP_HEADER:-x-forwarded-for}
+      AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: ${AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES:-}
+      AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID: ${AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID:-owner}
+    ports:
+      - "3000:3000"
+    volumes:
+      - agentic-worker-health:/var/lib/agentic
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["npm", "run", "start:worker:prod"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:-postgres://agentic:agentic@postgres:5432/agentic}
+      AGENTIC_ACCESS_KEY: ${AGENTIC_ACCESS_KEY:?AGENTIC_ACCESS_KEY is required}
+      AGENTIC_BOOTSTRAP_USER_ID: ${AGENTIC_BOOTSTRAP_USER_ID:-owner}
+      AGENTIC_BOOTSTRAP_DISPLAY_NAME: ${AGENTIC_BOOTSTRAP_DISPLAY_NAME:-Instance Owner}
+      AGENTIC_DEFAULT_TIMEZONE: ${AGENTIC_DEFAULT_TIMEZONE:-UTC}
+      AGENTIC_REQUIRE_SHARED_AUTH_STATE: "true"
+      AGENTIC_SHARED_AUTH_STATE: "true"
+      AGENTIC_WORKER_HEALTH_PATH: /var/lib/agentic/worker-health.json
+      AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: ${AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES:-}
+      AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID: ${AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID:-owner}
+    volumes:
+      - agentic-worker-health:/var/lib/agentic
+
+volumes:
+  agentic-postgres-data:
+  agentic-worker-health:

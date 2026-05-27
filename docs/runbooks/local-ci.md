@@ -16,6 +16,7 @@ This runs:
 - `npm run ci:validate-provenance`
 - `npm run ci:issue-theme-gates -- --assert-workflow`
 - `npm run compliance:validate-registry`
+- `npm run test:oss:ownership`
 - `npm run test:architecture:fitness`
 - `npm run test:performance:fitness`
 - `npm test`

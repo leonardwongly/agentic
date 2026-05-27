@@ -8,6 +8,11 @@ Use GitHub issues for reproducible problems, documentation gaps, and focused sup
 
 https://github.com/leonardwongly/agentic/issues
 
+That issue tracker is the canonical upstream support channel. Fork owners should
+direct users of fork-specific deployments to their own repository, provider, or
+operations channel when the issue depends on fork-only code, credentials,
+databases, or infrastructure.
+
 Before opening an issue, include:
 
 - what you were trying to do

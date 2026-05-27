@@ -1,4 +1,4 @@
-# Agentic Render Blueprint template.
+# Agentic Render Blueprint example.
 #
 # This file intentionally lives outside the repository root so it cannot be
 # picked up as Render's default Blueprint path accidentally. During provider
@@ -15,8 +15,8 @@
 # - the web service owns the additive database migration pre-deploy step; the
 #   worker validates schema readiness at startup but does not race migrations.
 #
-# Do not sync this Blueprint to a production workspace until #141 has an
-# approved provider, owner, hostname, and rollback authority.
+# Copy and review this example before syncing it to a production workspace. The
+# installer owns the provider account, hostname, secrets, and rollback authority.
 
 previews:
   generation: off
@@ -61,6 +61,12 @@ services:
         value: x-forwarded-for
       - key: AGENTIC_ACCESS_KEY
         sync: false
+      - key: AGENTIC_BOOTSTRAP_USER_ID
+        sync: false
+      - key: AGENTIC_BOOTSTRAP_DISPLAY_NAME
+        sync: false
+      - key: AGENTIC_DEFAULT_TIMEZONE
+        value: UTC
       - key: AGENTIC_GITHUB_APP_ID
         sync: false
       - key: AGENTIC_GITHUB_APP_INSTALLATION_ID
@@ -96,6 +102,12 @@ services:
         value: "true"
       - key: AGENTIC_ACCESS_KEY
         sync: false
+      - key: AGENTIC_BOOTSTRAP_USER_ID
+        sync: false
+      - key: AGENTIC_BOOTSTRAP_DISPLAY_NAME
+        sync: false
+      - key: AGENTIC_DEFAULT_TIMEZONE
+        value: UTC
       - key: AGENTIC_GITHUB_APP_ID
         sync: false
       - key: AGENTIC_GITHUB_APP_INSTALLATION_ID
