@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -70,11 +70,11 @@ describe("commitments route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     await repository.saveCommitment({
       id: "commitment-manual-low-confidence",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       title: "Follow up later",
       summary: "Needs explicit confirmation",
       status: "pending",
@@ -131,8 +131,8 @@ describe("commitments route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await commitmentInboxRoute(buildGetRequest("cursor=not-a-valid-cursor"));
@@ -147,9 +147,9 @@ describe("commitments route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
-    const initialDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
+    const initialDashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const commitment = initialDashboard.commitments.find((candidate) => candidate.goalId === bundle.goal.id);
 
     expect(commitment).toBeDefined();
@@ -172,7 +172,7 @@ describe("commitments route", () => {
       id: commitment!.id,
       status: "completed"
     });
-    expect(payload.commitment.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.commitment.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(payload.dashboard.commitments).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -185,10 +185,10 @@ describe("commitments route", () => {
     const reloadedRepository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const persisted = (await reloadedRepository.listCommitments(SYSTEM_USER_ID)).find(
+    const persisted = (await reloadedRepository.listCommitments(DEFAULT_OWNER_USER_ID)).find(
       (candidate) => candidate.id === commitment!.id
     );
-    expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(persisted?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
   });
 
   it("reopens a completed commitment by dropping the persisted override", async () => {
@@ -196,9 +196,9 @@ describe("commitments route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
-    const initialDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
+    const initialDashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const commitment = initialDashboard.commitments.find((candidate) => candidate.goalId === bundle.goal.id);
 
     expect(commitment).toBeDefined();
@@ -243,7 +243,7 @@ describe("commitments route", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
     await repository.saveCommitment({
       id: "commitment-secondary-only",
@@ -287,9 +287,9 @@ describe("commitments route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
-    const initialDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
+    const initialDashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const commitment = initialDashboard.commitments.find((candidate) => candidate.goalId === bundle.goal.id);
 
     expect(commitment).toBeDefined();
@@ -313,9 +313,9 @@ describe("commitments route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
-    const initialDashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
+    const initialDashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const commitment = initialDashboard.commitments.find((candidate) => candidate.goalId === bundle.goal.id);
 
     expect(commitment).toBeDefined();

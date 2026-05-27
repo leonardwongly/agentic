@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   briefingTypeValues,
   createHumanActorContext,
   createSystemActorContext
@@ -25,7 +25,7 @@ import { createRouteTestRepository, expectNoStoreHeaders } from "./route-test-he
 
 function buildAutopilotSettings() {
   return {
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     mode: "notify_only" as const,
     debounceMinutes: 15,
     reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
@@ -38,7 +38,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
   const timestamp = "2024-01-01T00:00:00.000Z";
   const workspace = {
     id: "workspace-personal-system-user",
-    ownerUserId: SYSTEM_USER_ID,
+    ownerUserId: DEFAULT_OWNER_USER_ID,
     slug: "personal-system-user",
     name: "Personal Workspace",
     description: "Default workspace for test coverage.",
@@ -67,9 +67,9 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     saveWorkspace: async (candidate) => candidate,
     listWorkspaceMembers: async () => [
       {
-        id: `workspace-member-${workspace.id}-${SYSTEM_USER_ID}`,
+        id: `workspace-member-${workspace.id}-${DEFAULT_OWNER_USER_ID}`,
         workspaceId: workspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -77,7 +77,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     ],
     saveWorkspaceMember: async (member) => member,
     getWorkspaceSelection: async () => ({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.id,
       selectedAt: timestamp,
       updatedAt: timestamp
@@ -94,7 +94,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       externalSendRequiresApproval: true,
       calendarWriteRequiresApproval: true,
       retentionDays: 90,
-      updatedBy: SYSTEM_USER_ID,
+      updatedBy: DEFAULT_OWNER_USER_ID,
       createdAt: timestamp,
       updatedAt: timestamp
     }),
@@ -116,8 +116,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       generatedAt: timestamp
     }),
     getBriefingPreferences: async () => ({
-      userId: SYSTEM_USER_ID,
-      timezone: "Asia/Singapore",
+      userId: DEFAULT_OWNER_USER_ID,
+      timezone: "UTC",
       focus: "balanced",
       schedules: briefingTypeValues.map((type, index) => ({
         type,
@@ -152,16 +152,16 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       workspaces: [workspace],
       activeWorkspace: workspace,
       workspaceSelection: {
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: workspace.id,
         selectedAt: timestamp,
         updatedAt: timestamp
       },
       workspaceMembers: [
         {
-          id: `workspace-member-${workspace.id}-${SYSTEM_USER_ID}`,
+          id: `workspace-member-${workspace.id}-${DEFAULT_OWNER_USER_ID}`,
           workspaceId: workspace.id,
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           role: "owner",
           joinedAt: timestamp,
           updatedAt: timestamp
@@ -178,7 +178,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
         retentionDays: 90,
-        updatedBy: SYSTEM_USER_ID,
+        updatedBy: DEFAULT_OWNER_USER_ID,
         createdAt: timestamp,
         updatedAt: timestamp
       },
@@ -276,8 +276,8 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       goalShares: [],
       privacyOperations: [],
       briefingPreferences: {
-        userId: SYSTEM_USER_ID,
-        timezone: "Asia/Singapore",
+        userId: DEFAULT_OWNER_USER_ID,
+        timezone: "UTC",
         focus: "balanced",
         schedules: briefingTypeValues.map((type, index) => ({
           type,
@@ -504,10 +504,10 @@ describe("goal share route", () => {
   it("returns a disclosure review before creating a public share link", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Share a vendor follow-up summary with reviewer@example.com before Friday."
     );
     await repository.saveGoalBundle({
@@ -532,7 +532,7 @@ describe("goal share route", () => {
         dataClasses: Array<{ id: string; disposition: string }>;
       };
     };
-    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: DEFAULT_OWNER_USER_ID });
     const reloadedBundle = await createRouteTestRepository().getGoalBundle(bundle.goal.id);
 
     expect(response.status).toBe(200);
@@ -562,8 +562,8 @@ describe("goal share route", () => {
   it("treats an empty JSON request as the default disclosure preview path", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a default preview with the workspace reviewer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Share a default preview with the workspace reviewer.");
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
@@ -583,7 +583,7 @@ describe("goal share route", () => {
       reviewRequired: boolean;
       disclosureReview: { confirmationRequired: boolean };
     };
-    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: DEFAULT_OWNER_USER_ID });
 
     expect(response.status).toBe(200);
     expect(payload).toMatchObject({
@@ -599,8 +599,8 @@ describe("goal share route", () => {
   it("creates a signed public share link and records a measurement log", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Triage my inbox and prepare replies for important clients.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Triage my inbox and prepare replies for important clients.");
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
@@ -614,7 +614,7 @@ describe("goal share route", () => {
     };
     const token = payload.shareUrl.split("/share/")[1];
     const reloadedBundle = await createRouteTestRepository().getGoalBundle(bundle.goal.id);
-    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: DEFAULT_OWNER_USER_ID });
     const createdLog = reloadedBundle?.actionLogs.find((log) => log.kind === "share.link_created");
 
     expect(response.status).toBe(200);
@@ -631,7 +631,7 @@ describe("goal share route", () => {
       goalId: bundle.goal.id
     });
     expect(createdLog).toBeDefined();
-    expect(createdLog?.details.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(createdLog?.details.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(createdLog?.details.disclosureReview).toMatchObject({
       sensitiveFindingCount: expect.any(Number),
       redactedFields: expect.arrayContaining(["goal.request", "artifacts.content"])
@@ -643,8 +643,8 @@ describe("goal share route", () => {
   it("rejects confirmation when the reviewed disclosure snapshot is stale", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a stable plan with a public reviewer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Share a stable plan with a public reviewer.");
     const staleFingerprint = buildReviewFingerprint(bundle);
 
     await repository.saveGoalBundle({
@@ -660,7 +660,7 @@ describe("goal share route", () => {
       params: Promise.resolve({ id: bundle.goal.id })
     });
     const payload = (await response.json()) as { error: string };
-    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: DEFAULT_OWNER_USER_ID });
 
     expect(response.status).toBe(409);
     expect(payload.error).toBe("Public share confirmation must match the latest reviewed disclosure snapshot.");
@@ -671,10 +671,10 @@ describe("goal share route", () => {
   it("rejects public share creation until workspace governance explicitly enables it", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Prepare a private board report that should not be shared by default.",
       undefined,
       { enablePublicSharing: false }
@@ -686,7 +686,7 @@ describe("goal share route", () => {
       params: Promise.resolve({ id: bundle.goal.id })
     });
     const payload = (await response.json()) as { error: string };
-    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: DEFAULT_OWNER_USER_ID });
 
     expect(response.status).toBe(403);
     expect(payload.error).toBe("Public sharing is disabled until workspace governance explicitly enables it.");
@@ -696,10 +696,10 @@ describe("goal share route", () => {
   it("uses active workspace governance for legacy null-workspace goals", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const governance = dashboard.activeWorkspace
-      ? await repository.getWorkspaceGovernance(dashboard.activeWorkspace.id, SYSTEM_USER_ID)
+      ? await repository.getWorkspaceGovernance(dashboard.activeWorkspace.id, DEFAULT_OWNER_USER_ID)
       : null;
     if (!governance) {
       throw new Error("Expected seeded personal workspace governance.");
@@ -708,14 +708,14 @@ describe("goal share route", () => {
       {
         ...governance,
         publicSharingEnabled: true,
-        updatedBy: SYSTEM_USER_ID,
+        updatedBy: DEFAULT_OWNER_USER_ID,
         updatedAt: new Date().toISOString()
       },
-      createSystemActorContext(SYSTEM_USER_ID)
+      createSystemActorContext(DEFAULT_OWNER_USER_ID)
     );
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Share a legacy null-scoped goal after enabling personal workspace governance.",
       null
     );
@@ -729,7 +729,7 @@ describe("goal share route", () => {
     const response = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, previewPayload.reviewFingerprint), {
       params: Promise.resolve({ id: bundle.goal.id })
     });
-    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: SYSTEM_USER_ID });
+    const shares = await createRouteTestRepository().listGoalShares({ goalId: bundle.goal.id, userId: DEFAULT_OWNER_USER_ID });
 
     expect(previewResponse.status).toBe(200);
     expect(response.status).toBe(200);
@@ -808,7 +808,7 @@ describe("goal share route", () => {
     const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Keep another user's planning private.");
@@ -835,11 +835,11 @@ describe("goal share route", () => {
 
   it("returns 500 when goal share persistence fails unexpectedly", async () => {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Triage my inbox and prepare replies for important clients.",
       workspaceId: "workspace-personal-system-user",
       memories: [],
-      integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
+      integrations: buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID)
     });
 
     Reflect.set(
@@ -968,8 +968,8 @@ describe("goal share route", () => {
   it("revokes an existing public share link and records a revoke log", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share the current planning context with a reviewer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Share the current planning context with a reviewer.");
     const shareResponse = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
       params: Promise.resolve({ id: bundle.goal.id })
     });
@@ -990,7 +990,7 @@ describe("goal share route", () => {
         params: Promise.resolve({ id: bundle.goal.id })
       }
     );
-    const revokedShare = await repository.getGoalShare(sharePayload.shareId, SYSTEM_USER_ID);
+    const revokedShare = await repository.getGoalShare(sharePayload.shareId, DEFAULT_OWNER_USER_ID);
     const reloadedBundle = await repository.getGoalBundle(bundle.goal.id);
     const revokedLog = reloadedBundle?.actionLogs.find((log) => log.kind === "share.link_revoked");
 
@@ -1006,7 +1006,7 @@ describe("goal share route", () => {
 
   it("returns 403 when a viewer tries to revoke a shared goal share link", async () => {
     const repository = createRouteTestRepository();
-    const ownerUserId = SYSTEM_USER_ID;
+    const ownerUserId = DEFAULT_OWNER_USER_ID;
     const viewerUserId = "workspace-viewer";
 
     await repository.seedDefaults(ownerUserId);

@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { createMemoryRecord } from "@agentic/memory";
 import { createRepository } from "@agentic/repository";
 import {
@@ -37,12 +37,12 @@ describe("context packets route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults("other-user");
     await repository.saveMemory(
       createMemoryRecord({
         id: "visible-memory",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "preferences",
         memoryType: "observed",
         content: "Visible context packet.",
@@ -68,7 +68,7 @@ describe("context packets route", () => {
     await repository.saveMemory(
       createMemoryRecord({
         id: "restricted-memory",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "preferences",
         memoryType: "observed",
         content: "Restricted context packet.",
@@ -95,7 +95,7 @@ describe("context packets route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await createContextPacket(
@@ -124,7 +124,7 @@ describe("context packets route", () => {
     expect(payload.packet.id).toBe(`ctx_${payload.memoryId}`);
     expect(payload.packet.consent).toMatchObject({
       basis: "explicit",
-      grantedBy: SYSTEM_USER_ID
+      grantedBy: DEFAULT_OWNER_USER_ID
     });
     expect(payload.packet.retention).toEqual({
       reviewAt: "2026-05-01T00:00:00.000Z",
@@ -137,7 +137,7 @@ describe("context packets route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const createResponse = await createContextPacket(

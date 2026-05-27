@@ -86,6 +86,11 @@ function parseIssueState(raw: string): GitHubIssueSyncCompletionIssueState {
 
 async function collectIssueStates(): Promise<GitHubIssueSyncCompletionIssueState[]> {
   const issues: GitHubIssueSyncCompletionIssueState[] = [];
+  const repository = process.env.AGENTIC_REPOSITORY?.trim() || process.env.GITHUB_REPOSITORY?.trim();
+
+  if (!repository) {
+    throw new Error("Set AGENTIC_REPOSITORY to `<your-org>/<your-repo>` before collecting GitHub issue states.");
+  }
 
   for (const issue of githubIssueSyncCompletionAuditTrackedIssues) {
     const result = await runCommand("gh", [
@@ -93,7 +98,7 @@ async function collectIssueStates(): Promise<GitHubIssueSyncCompletionIssueState
       "view",
       String(issue),
       "--repo",
-      "leonardwongly/agentic",
+      repository,
       "--json",
       "number,state,title"
     ]);

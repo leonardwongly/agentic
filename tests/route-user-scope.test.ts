@@ -3,7 +3,7 @@ import {
   DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
   AgentDefinitionSchema,
   AgentMetricsSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   WatcherSchema,
   briefingTypeValues,
   createSystemActorContext,
@@ -32,7 +32,7 @@ import { DELETE as deleteAgentRoute, GET as getAgentRoute, PUT as updateAgentRou
 
 function buildAutopilotSettings() {
   return {
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     mode: "notify_only" as const,
     debounceMinutes: 15,
     reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
@@ -90,7 +90,7 @@ function buildDashboardData(): DashboardData {
   const timestamp = "2024-01-01T00:00:00.000Z";
   const workspace = {
     id: "workspace-personal-system-user",
-    ownerUserId: SYSTEM_USER_ID,
+    ownerUserId: DEFAULT_OWNER_USER_ID,
     slug: "personal-system-user",
     name: "Personal Workspace",
     description: "Default workspace for test coverage.",
@@ -103,16 +103,16 @@ function buildDashboardData(): DashboardData {
     workspaces: [workspace],
     activeWorkspace: workspace,
     workspaceSelection: {
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.id,
       selectedAt: timestamp,
       updatedAt: timestamp
     },
     workspaceMembers: [
       {
-        id: `workspace-member-${workspace.id}-${SYSTEM_USER_ID}`,
+        id: `workspace-member-${workspace.id}-${DEFAULT_OWNER_USER_ID}`,
         workspaceId: workspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "owner",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -135,7 +135,7 @@ function buildDashboardData(): DashboardData {
         maximumFailureCostRate: 0.2
       },
       retentionDays: 365,
-      updatedBy: SYSTEM_USER_ID,
+      updatedBy: DEFAULT_OWNER_USER_ID,
       createdAt: timestamp,
       updatedAt: timestamp
     },
@@ -233,8 +233,8 @@ function buildDashboardData(): DashboardData {
     goalShares: [],
     privacyOperations: [],
     briefingPreferences: {
-      userId: SYSTEM_USER_ID,
-      timezone: "Asia/Singapore",
+      userId: DEFAULT_OWNER_USER_ID,
+      timezone: "UTC",
       focus: "balanced",
       schedules: briefingTypeValues.map((type, index) => ({
         type,
@@ -266,7 +266,7 @@ function buildAgentDefinition() {
 
   return AgentDefinitionSchema.parse({
     id: "agent-private-ops",
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     name: "private-ops",
     displayName: "Private Ops",
     description: "Handles private operational workflows.",
@@ -346,7 +346,7 @@ function createFakeJobStore() {
     }) {
       return filterJobs(params);
     },
-    async getJob(jobId: string, userId = SYSTEM_USER_ID) {
+    async getJob(jobId: string, userId = DEFAULT_OWNER_USER_ID) {
       return getOwnedJob(jobId, userId);
     },
     async enqueueJob(job: JobRecord) {
@@ -372,7 +372,7 @@ function createFakeJobStore() {
     }) {
       const now = params.now ?? nowIso();
       const candidate = filterJobs({
-        userId: params.userId ?? SYSTEM_USER_ID,
+        userId: params.userId ?? DEFAULT_OWNER_USER_ID,
         kinds: params.kinds,
         statuses: ["queued", "retrying"]
       })
@@ -640,7 +640,7 @@ describe("route user scoping", () => {
   });
 
   it("passes the system user explicitly when listing and updating integrations", async () => {
-    const integration = buildDefaultIntegrationAccounts(SYSTEM_USER_ID).find(
+    const integration = buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID).find(
       (candidate) => candidate.id === "local-notes"
     )!;
     const listIntegrationsCalls: Array<string | undefined> = [];
@@ -684,14 +684,14 @@ describe("route user scoping", () => {
 
     expect(listResponse.status).toBe(200);
     expect(updateResponse.status).toBe(200);
-    expect(listIntegrationsCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID]);
-    expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
+    expect(listIntegrationsCalls).toEqual([DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID]);
+    expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID]);
     expect(updatedStatuses).toEqual(["disabled"]);
     expect(savedAccounts).toEqual([
       {
-        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
         status: "disabled",
-        userId: SYSTEM_USER_ID
+        userId: DEFAULT_OWNER_USER_ID
       }
     ]);
     expect(listPayload.integrations).toEqual(
@@ -707,7 +707,7 @@ describe("route user scoping", () => {
     expect(updatePayload.integration).toEqual(
       expect.objectContaining({
         id: integration.id,
-        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
         readiness: expect.objectContaining({
           tier: "experimental"
         })
@@ -717,11 +717,11 @@ describe("route user scoping", () => {
 
   it("passes the system user explicitly when responding to approvals", async () => {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Review my inbox and draft responses.",
       memories: [
         createMemoryRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "style",
           memoryType: "confirmed",
           content: "Use concise approval summaries.",
@@ -729,7 +729,7 @@ describe("route user scoping", () => {
           source: "test"
         })
       ],
-      integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
+      integrations: buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID)
     });
     const approval = bundle.approvals[0];
     const approvalCalls: ActorContext[] = [];
@@ -772,8 +772,8 @@ describe("route user scoping", () => {
                         decision,
                         scope: scope ?? "once",
                         rationale: rationale ?? null,
-                        actor: SYSTEM_USER_ID,
-                        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+                        actor: DEFAULT_OWNER_USER_ID,
+                        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
                         createdAt: "2024-01-01T00:00:00.000Z"
                       }
                     ],
@@ -786,7 +786,7 @@ describe("route user scoping", () => {
         listEvidenceRecords: async () => [
           {
             id: "evidence-approval-1",
-            userId: SYSTEM_USER_ID,
+            userId: DEFAULT_OWNER_USER_ID,
             goalId: bundle.goal.id,
             taskId: approval.taskId,
             approvalId: approval.id,
@@ -806,7 +806,7 @@ describe("route user scoping", () => {
             actionLogIds: [],
             artifactIds: [],
             memoryIds: [],
-            actorContext: createSystemActorContext(SYSTEM_USER_ID),
+            actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
             createdAt: "2024-01-01T00:00:00.000Z",
             updatedAt: "2024-01-01T00:00:00.000Z"
           }
@@ -847,11 +847,11 @@ describe("route user scoping", () => {
       statusUrl: string;
     };
     const repository = Reflect.get(globalThis, "__agenticRepository") as AgenticRepository;
-    const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+    const queuedJobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(response.status).toBe(202);
-    expect(approvalCalls).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
-    expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
+    expect(approvalCalls).toEqual([createSystemActorContext(DEFAULT_OWNER_USER_ID)]);
+    expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID]);
     expect(resolvedDecisions).toEqual(["approved"]);
     expect(resolvedScopes).toEqual(["similar_24h"]);
     expect(resolvedRationales).toEqual(["This pattern is safe for similar outbound replies."]);
@@ -919,7 +919,7 @@ describe("route user scoping", () => {
     );
     const payload = (await response.json()) as { error?: string };
     const repository = Reflect.get(globalThis, "__agenticRepository") as AgenticRepository;
-    const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+    const queuedJobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(response.status).toBe(404);
     expect(payload.error).toContain("was not found");
@@ -949,7 +949,7 @@ describe("route user scoping", () => {
     );
     const payload = (await response.json()) as { error?: string };
     const repository = Reflect.get(globalThis, "__agenticRepository") as AgenticRepository;
-    const queuedJobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+    const queuedJobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(response.status).toBe(403);
     expect(payload.error).toBe("Only the workspace owner can respond to shared approvals.");
@@ -996,7 +996,7 @@ describe("route user scoping", () => {
 
   it("passes the system user explicitly when updating memories", async () => {
     const memory = createMemoryRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "preferences",
       memoryType: "observed",
       content: "Prefers concise follow-ups.",
@@ -1046,14 +1046,14 @@ describe("route user scoping", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(listMemoryCalls).toEqual([SYSTEM_USER_ID]);
-    expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
+    expect(listMemoryCalls).toEqual([DEFAULT_OWNER_USER_ID]);
+    expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID]);
     expect(savedMemories).toEqual([
       {
         id: memory.id,
         memoryType: "confirmed",
         confidence: 0.92,
-        actorContext: createSystemActorContext(SYSTEM_USER_ID)
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID)
       }
     ]);
   });
@@ -1114,10 +1114,10 @@ describe("route user scoping", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(listWatcherCalls).toEqual([SYSTEM_USER_ID]);
-    expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
+    expect(listWatcherCalls).toEqual([DEFAULT_OWNER_USER_ID]);
+    expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID]);
     expect(savedStatuses).toEqual(["paused"]);
-    expect(savedActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
+    expect(savedActors).toEqual([createSystemActorContext(DEFAULT_OWNER_USER_ID)]);
   });
 
   it("passes the system user explicitly when selecting operator products", async () => {
@@ -1179,9 +1179,9 @@ describe("route user scoping", () => {
     expect(response.status).toBe(200);
     expect(selectionCalls).toHaveLength(1);
     expect(selectionCalls[0]).toMatchObject({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       operatorProductId: "operator-product-custom",
-      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID)
     });
     expect(new Date(selectionCalls[0]!.selectedAt).toString()).not.toBe("Invalid Date");
     expect(dashboardCalls).toEqual([]);
@@ -1190,7 +1190,7 @@ describe("route user scoping", () => {
   it("passes the system user explicitly when updating commitments", async () => {
     const commitment = {
       id: "commitment-goal-1",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       title: "Close the goal loop",
       summary: "1 approval waiting",
       status: "pending" as const,
@@ -1268,17 +1268,17 @@ describe("route user scoping", () => {
     expect(completeResponse.status).toBe(200);
     expect(reopenResponse.status).toBe(200);
     expect(commitmentCalls).toEqual([
-      { id: commitment.id, userId: SYSTEM_USER_ID },
-      { id: commitment.id, userId: SYSTEM_USER_ID }
+      { id: commitment.id, userId: DEFAULT_OWNER_USER_ID },
+      { id: commitment.id, userId: DEFAULT_OWNER_USER_ID }
     ]);
     expect(savedCommitments).toEqual([
       {
         status: "completed",
-        actorContext: createSystemActorContext(SYSTEM_USER_ID)
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID)
       }
     ]);
-    expect(deletedCalls).toEqual([{ id: commitment.id, userId: SYSTEM_USER_ID }]);
-    expect(dashboardCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID]);
+    expect(deletedCalls).toEqual([{ id: commitment.id, userId: DEFAULT_OWNER_USER_ID }]);
+    expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID]);
   });
 
   it("passes the system user explicitly when reading, updating, deleting, and measuring agents", async () => {
@@ -1388,15 +1388,15 @@ describe("route user scoping", () => {
     expect(metricsResponse.status).toBe(200);
     expect(deleteResponse.status).toBe(200);
     expect(getAgentCalls).toEqual([
-      { id: agent.id, userId: SYSTEM_USER_ID },
-      { id: agent.id, userId: SYSTEM_USER_ID },
-      { id: agent.id, userId: SYSTEM_USER_ID },
-      { id: agent.id, userId: SYSTEM_USER_ID }
+      { id: agent.id, userId: DEFAULT_OWNER_USER_ID },
+      { id: agent.id, userId: DEFAULT_OWNER_USER_ID },
+      { id: agent.id, userId: DEFAULT_OWNER_USER_ID },
+      { id: agent.id, userId: DEFAULT_OWNER_USER_ID }
     ]);
     expect(savedAgents).toEqual([
       {
         version: 2,
-        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
         displayName: "Private Ops Updated"
       }
     ]);
@@ -1404,11 +1404,11 @@ describe("route user scoping", () => {
       {
         id: agent.id,
         period: "week",
-        userId: SYSTEM_USER_ID
+        userId: DEFAULT_OWNER_USER_ID
       }
     ]);
-    expect(deletedCalls).toEqual([{ id: agent.id, userId: SYSTEM_USER_ID }]);
-    expect(dashboardCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID]);
+    expect(deletedCalls).toEqual([{ id: agent.id, userId: DEFAULT_OWNER_USER_ID }]);
+    expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID]);
   });
 
   it("passes the system user explicitly when updating briefing preferences", async () => {
@@ -1448,9 +1448,9 @@ describe("route user scoping", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(preferencesCalls).toEqual([SYSTEM_USER_ID]);
-    expect(savedActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
-    expect(dashboardCalls).toEqual([SYSTEM_USER_ID]);
+    expect(preferencesCalls).toEqual([DEFAULT_OWNER_USER_ID]);
+    expect(savedActors).toEqual([createSystemActorContext(DEFAULT_OWNER_USER_ID)]);
+    expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID]);
   });
 
   it("passes the system user explicitly when listing and mutating workspaces", async () => {
@@ -1511,9 +1511,9 @@ describe("route user scoping", () => {
     expect(selectionCalls).toEqual([]);
     expect(memberCalls).toEqual([]);
     expect(governanceCalls).toEqual([]);
-    expect(savedWorkspaceActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
-    expect(savedMemberActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
-    expect(dashboardCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID]);
+    expect(savedWorkspaceActors).toEqual([createSystemActorContext(DEFAULT_OWNER_USER_ID)]);
+    expect(savedMemberActors).toEqual([createSystemActorContext(DEFAULT_OWNER_USER_ID)]);
+    expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID]);
   });
 
   it("stamps the system actor on workspace selection updates", async () => {
@@ -1548,9 +1548,9 @@ describe("route user scoping", () => {
     expect(response.status).toBe(200);
     expect(selectionCalls).toEqual([
       {
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: "workspace-personal-system-user",
-        actorContext: createSystemActorContext(SYSTEM_USER_ID)
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID)
       }
     ]);
   });
@@ -1605,13 +1605,13 @@ describe("route user scoping", () => {
     expect(getResponse.status).toBe(200);
     expect(postResponse.status).toBe(200);
     expect(auditResponse.status).toBe(200);
-    expect(governanceCalls).toEqual([SYSTEM_USER_ID]);
-    expect(savedGovernanceActors).toEqual([createSystemActorContext(SYSTEM_USER_ID)]);
-    expect(dashboardCalls).toEqual([SYSTEM_USER_ID, SYSTEM_USER_ID, SYSTEM_USER_ID, SYSTEM_USER_ID]);
+    expect(governanceCalls).toEqual([DEFAULT_OWNER_USER_ID]);
+    expect(savedGovernanceActors).toEqual([createSystemActorContext(DEFAULT_OWNER_USER_ID)]);
+    expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID]);
     expect(auditCalls).toEqual([
       {
         workspaceId: buildDashboardData().activeWorkspace!.id,
-        userId: SYSTEM_USER_ID
+        userId: DEFAULT_OWNER_USER_ID
       }
     ]);
   });

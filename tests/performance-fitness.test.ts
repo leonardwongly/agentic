@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { enqueueDocsRenderJob, runWorkerRuntime } from "@agentic/worker-runtime";
@@ -153,15 +153,15 @@ describe("performance fitness", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
     for (let index = 0; index < 5; index += 1) {
       await enqueueDocsRenderJob({
         repository,
-        userId: SYSTEM_USER_ID,
-        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        userId: DEFAULT_OWNER_USER_ID,
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
         idempotencyKey: `performance-docs-batch-${index}`
       });
     }
@@ -182,7 +182,7 @@ describe("performance fitness", () => {
     });
 
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["docs_render"]
     });
 
@@ -200,7 +200,7 @@ describe("performance fitness", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
@@ -214,8 +214,8 @@ describe("performance fitness", () => {
     for (let index = 0; index < 3; index += 1) {
       await enqueueDocsRenderJob({
         repository,
-        userId: SYSTEM_USER_ID,
-        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        userId: DEFAULT_OWNER_USER_ID,
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
         idempotencyKey: `performance-docs-retry-${index}`
       });
     }
@@ -241,7 +241,7 @@ describe("performance fitness", () => {
     });
 
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["docs_render"]
     });
 
@@ -262,7 +262,7 @@ describe("performance fitness", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
@@ -276,8 +276,8 @@ describe("performance fitness", () => {
 
     await enqueueDocsRenderJob({
       repository,
-      userId: SYSTEM_USER_ID,
-      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      userId: DEFAULT_OWNER_USER_ID,
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       idempotencyKey: "performance-duplicate-execution"
     });
 
@@ -305,7 +305,7 @@ describe("performance fitness", () => {
       ]);
 
       const jobs = await repository.listJobs({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kinds: ["docs_render"]
       });
 

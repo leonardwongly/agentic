@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext, nowIso } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext, nowIso } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { GET as operatorProductsRouteGet, POST as operatorProductsRoutePost } from "../apps/web/app/api/operator-products/route";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -52,7 +52,7 @@ describe("operator products route", () => {
     expectNoStoreHeaders(response);
     expect(payload.products.some((product) => product.slug === "communications-operator")).toBe(true);
     expect(payload.selection).not.toBeNull();
-    expect(payload.selection?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.selection?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(payload.agents.some((agent) => agent.id === "agent-builtin-communications")).toBe(true);
     expect(communicationsAgent).toMatchObject({
       allowedCapabilities: ["read", "search", "draft", "send"],
@@ -70,8 +70,8 @@ describe("operator products route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const [seededProduct] = await repository.listOperatorProducts(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const [seededProduct] = await repository.listOperatorProducts(DEFAULT_OWNER_USER_ID);
 
     await repository.saveOperatorProduct({
       ...seededProduct,
@@ -94,14 +94,14 @@ describe("operator products route", () => {
       selection: { operatorProductId: string; actorContext: unknown };
       products: Array<{ id: string }>;
     };
-    const persistedSelection = await repository.getOperatorProductSelection(SYSTEM_USER_ID);
+    const persistedSelection = await repository.getOperatorProductSelection(DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(200);
     expectNoStoreHeaders(response);
     expect(payload.selection.operatorProductId).toBe("operator-product-custom");
-    expect(payload.selection.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.selection.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(payload.products.some((product) => product.id === "operator-product-custom")).toBe(true);
-    expect(persistedSelection?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(persistedSelection?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
   });
 
   it("returns 404 when selecting another user's custom operator product", async () => {
@@ -110,7 +110,7 @@ describe("operator products route", () => {
     });
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const [seededProduct] = await repository.listOperatorProducts(secondaryUserId);

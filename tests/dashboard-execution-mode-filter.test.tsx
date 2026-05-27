@@ -208,7 +208,7 @@ function buildDashboardData(): DashboardData {
     commitments: [],
     briefingPreferences: {
       userId: "user-1",
-      timezone: "Asia/Singapore",
+      timezone: "UTC",
       focus: "balanced",
       schedules: briefingTypeValues.map((type) => ({
         type,

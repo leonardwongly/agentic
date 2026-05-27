@@ -3974,7 +3974,7 @@ export function buildSystemActorIdentity(options?: {
 }): ActorIdentity {
   return ActorIdentitySchema.parse({
     kind: "system",
-    userId: options?.userId ?? SYSTEM_USER_ID,
+    userId: options?.userId ?? DEFAULT_OWNER_USER_ID,
     label: options?.label ?? "system"
   });
 }
@@ -4004,7 +4004,7 @@ export function createHumanActorContext(subjectUserId: string, sessionId: string
   });
 }
 
-export function createSystemActorContext(subjectUserId = SYSTEM_USER_ID, sessionId: string | null = null): ActorContext {
+export function createSystemActorContext(subjectUserId = DEFAULT_OWNER_USER_ID, sessionId: string | null = null): ActorContext {
   const actor = buildSystemActorIdentity({
     userId: subjectUserId
   });

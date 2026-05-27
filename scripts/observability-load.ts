@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { getTelemetrySnapshot, resetTelemetrySnapshot } from "@agentic/observability";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
@@ -49,7 +49,7 @@ async function main() {
   process.env.AGENTIC_TELEMETRY_CONSOLE = "off";
   resetTelemetrySnapshot();
   await Promise.all([
-    repository.seedDefaults(SYSTEM_USER_ID),
+    repository.seedDefaults(DEFAULT_OWNER_USER_ID),
     selfImprovementRepository.seed()
   ]);
 
@@ -58,11 +58,11 @@ async function main() {
       const started = performance.now();
       await enqueueGoalCreateJob({
         repository,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         request: `Load test job ${round + 1}-${index + 1}: build a safe weekly execution plan.`,
         workspaceId: null,
         agentId: null,
-        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
         idempotencyKey: `observability-load-${round}-${index}`
       });
       enqueueDurations.push(performance.now() - started);

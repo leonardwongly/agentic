@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   AgentDefinitionSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   WorkspaceMemberSchema,
   WorkspaceSchema,
   createHumanActorContext,
@@ -109,7 +109,7 @@ describe("goal route", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
@@ -168,8 +168,8 @@ describe("goal route", () => {
     expect(createPayload.job.kind).toBe("goal_create");
     expect(createPayload.job.status).toBe("queued");
     expect(createPayload.statusUrl).toBe(`/api/goals/jobs/${createPayload.job.id}`);
-    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(1);
 
     const queuedStatusResponse = await goalJobRoute(
       new Request(`http://localhost${createPayload.statusUrl}`, {
@@ -227,7 +227,7 @@ describe("goal route", () => {
     expect(completedStatusPayload.result.taskCount).toBeGreaterThan(0);
     expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
-    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(1);
+    expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(1);
   });
 
   it("deduplicates retried goal submissions when the same idempotency key is reused", async () => {
@@ -262,8 +262,8 @@ describe("goal route", () => {
     expect(secondPayload.job.id).toBe(firstPayload.job.id);
     expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
     expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
-    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(1);
   });
 
   it("derives deterministic idempotency keys for duplicate goal submissions without a client key", async () => {
@@ -290,7 +290,7 @@ describe("goal route", () => {
       statusUrl: string;
     };
     const repository = createRouteTestRepository();
-    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+    const jobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(firstResponse.status).toBe(202);
     expect(secondResponse.status).toBe(202);
@@ -303,7 +303,7 @@ describe("goal route", () => {
 
   it("deduplicates retried goal refinements when the same idempotency key is reused", async () => {
     const repository = createRouteTestRepository();
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan a reviewer-safe follow-up workflow.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Plan a reviewer-safe follow-up workflow.");
     const idempotencyKey = "goal-refine-retry-1";
     const buildRequest = () =>
       new Request(`http://localhost/api/goals/${bundle.goal.id}/refine`, {
@@ -347,7 +347,7 @@ describe("goal route", () => {
     expect(secondPayload.job.id).toBe(firstPayload.job.id);
     expect(secondPayload.job.goalId).toBe(firstPayload.job.goalId);
     expect(secondPayload.statusUrl).toBe(firstPayload.statusUrl);
-    const jobs = await repository.listJobs({ userId: SYSTEM_USER_ID });
+    const jobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID });
 
     expect(jobs).toHaveLength(1);
     expect(jobs[0]?.payload).toMatchObject({
@@ -430,7 +430,7 @@ describe("goal route", () => {
     const repository = createRouteTestRepository();
     const timestamp = "2026-04-22T00:00:00.000Z";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults("user-secondary");
     await repository.saveAgent(
       AgentDefinitionSchema.parse({
@@ -450,7 +450,7 @@ describe("goal route", () => {
     await repository.saveAgent(
       AgentDefinitionSchema.parse({
         id: "agent-draft-goal",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         name: "draft-goal",
         displayName: "Draft Goal Agent",
         description: "Draft agent.",
@@ -487,14 +487,14 @@ describe("goal route", () => {
       expect(payload.error).toBe(expectedError);
     }
 
-    await expect(repository.listJobs({ userId: SYSTEM_USER_ID })).resolves.toHaveLength(0);
+    await expect(repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).resolves.toHaveLength(0);
   });
 
   it("returns 404 for a goal owned by another user", async () => {
     const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Keep another user's planning private.");
@@ -522,7 +522,7 @@ describe("goal route", () => {
     const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     const secondaryBundle = await createGoalForUser(repository, secondaryUserId, "Keep another user's planning private.");
@@ -554,14 +554,14 @@ describe("goal route", () => {
     const repository = createRouteTestRepository();
     const viewerUserId = "user-viewer";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(viewerUserId);
 
-    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    const workspace = await createSharedWorkspace(repository, DEFAULT_OWNER_USER_ID, viewerUserId);
     await workspace.addMember("viewer");
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Keep the shared planning lane current for the team.",
       workspace.workspaceId
     );
@@ -603,14 +603,14 @@ describe("goal route", () => {
     const repository = createRouteTestRepository();
     const editorUserId = "user-editor";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(editorUserId);
 
-    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, editorUserId);
+    const workspace = await createSharedWorkspace(repository, DEFAULT_OWNER_USER_ID, editorUserId);
     await workspace.addMember("editor");
     const bundle = await createGoalForUser(
       repository,
-      SYSTEM_USER_ID,
+      DEFAULT_OWNER_USER_ID,
       "Keep the shared launch workflow aligned with current operator guidance.",
       workspace.workspaceId
     );
@@ -706,9 +706,9 @@ describe("goal route", () => {
   it("returns a sanitized dead-letter failure message from the goal job status route", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const queued = await repository.enqueueJob(createJobRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "goal_create",
       payload: {
         type: "goal_create",
@@ -719,10 +719,10 @@ describe("goal route", () => {
         agentId: null,
         metadata: {}
       },
-      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID)
     }));
     const claimed = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       runnerId: "worker-dead-letter-test",
       leaseMs: 1_000,
       now: new Date(Date.parse(queued.availableAt) + 1_000).toISOString()
@@ -767,10 +767,10 @@ describe("goal route", () => {
   it("returns a sanitized dead-letter failure message for queued goal refinements", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Prepare a refined planning bundle.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Prepare a refined planning bundle.");
     const queued = await repository.enqueueJob(createJobRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "goal_refine",
       payload: {
         type: "goal_refine",
@@ -780,10 +780,10 @@ describe("goal route", () => {
         workspaceId: bundle.goal.workspaceId,
         metadata: {}
       },
-      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID)
     }));
     const claimed = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       runnerId: "worker-refine-dead-letter-test",
       leaseMs: 1_000,
       now: new Date(Date.parse(queued.availableAt) + 1_000).toISOString()
@@ -828,8 +828,8 @@ describe("goal route", () => {
   it("stamps access-key actor context onto goal refinement logs", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Plan follow-ups for my open client work.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Plan follow-ups for my open client work.");
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
@@ -857,7 +857,7 @@ describe("goal route", () => {
     expect(payload.job.status).toBe("queued");
 
     const workerResult = await processQueuedGoalJobs();
-    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const persistedBundle = await repository.getGoalBundleForUser(bundle.goal.id, DEFAULT_OWNER_USER_ID);
     const refinementLogs = persistedBundle?.actionLogs.filter((log) => log.kind === "goal.refined") ?? [];
 
     expect(workerResult).toEqual({
@@ -866,7 +866,7 @@ describe("goal route", () => {
     });
     expect(refinementLogs.length).toBeGreaterThanOrEqual(1);
     expect(refinementLogs.every((log) => log.details.actorContext)).toBe(true);
-    expect(refinementLogs[0]?.details.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(refinementLogs[0]?.details.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
   });
 
   it("stamps session actor context onto goal refinement logs", async () => {

@@ -120,7 +120,7 @@ function buildDatabaseStatus(
 function buildProviderCredential(overrides?: Partial<ProviderCredential>): ProviderCredential {
   return {
     id: "google:global:acct-123",
-    userId: "user-primary",
+    userId: "test-owner",
     workspaceId: null,
     provider: "google",
     accountId: "acct-123",

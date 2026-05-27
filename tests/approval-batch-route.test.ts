@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ApprovalRequestSchema, SYSTEM_USER_ID } from "@agentic/contracts";
+import { ApprovalRequestSchema, DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { POST as previewBatchRoute } from "../apps/web/app/api/approvals/batch/preview/route";
@@ -12,7 +12,7 @@ describe("approval batch routes", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 
-  async function createApproval(riskClass: "R1" | "R2" | "R3" | "R4", expiryAt?: string, userId = SYSTEM_USER_ID) {
+  async function createApproval(riskClass: "R1" | "R2" | "R3" | "R4", expiryAt?: string, userId = DEFAULT_OWNER_USER_ID) {
     const repository = createRouteTestRepository();
     const bundle = await processUserRequest({
       userId,
@@ -50,7 +50,7 @@ describe("approval batch routes", () => {
   });
 
   it("previews affected systems and blocks R4 batch approval by default", async () => {
-    await createRouteTestRepository().seedDefaults(SYSTEM_USER_ID);
+    await createRouteTestRepository().seedDefaults(DEFAULT_OWNER_USER_ID);
     const approval = await createApproval("R4");
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -79,7 +79,7 @@ describe("approval batch routes", () => {
   });
 
   it("does not expose another user's approval in a batch preview", async () => {
-    await createRouteTestRepository().seedDefaults(SYSTEM_USER_ID);
+    await createRouteTestRepository().seedDefaults(DEFAULT_OWNER_USER_ID);
     await createRouteTestRepository().seedDefaults("other-user");
     const otherApproval = await createApproval("R2", undefined, "other-user");
 
@@ -109,7 +109,7 @@ describe("approval batch routes", () => {
   });
 
   it("requires explicit confirmation for R3 approval batches", async () => {
-    await createRouteTestRepository().seedDefaults(SYSTEM_USER_ID);
+    await createRouteTestRepository().seedDefaults(DEFAULT_OWNER_USER_ID);
     const approval = await createApproval("R3");
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -145,12 +145,12 @@ describe("approval batch routes", () => {
     expectNoStoreHeaders(acceptedResponse);
 
     const repository = createRouteTestRepository();
-    const reloaded = await repository.getGoalBundleForUser(approval.goalId, SYSTEM_USER_ID);
+    const reloaded = await repository.getGoalBundleForUser(approval.goalId, DEFAULT_OWNER_USER_ID);
     expect(reloaded?.actionLogs.some((log) => log.kind === "approval.batch_response")).toBe(true);
   });
 
   it("returns partial-failure detail for stale or expired items", async () => {
-    await createRouteTestRepository().seedDefaults(SYSTEM_USER_ID);
+    await createRouteTestRepository().seedDefaults(DEFAULT_OWNER_USER_ID);
     const actionable = await createApproval("R2");
     const expired = await createApproval("R2", "2020-01-01T00:00:00.000Z");
 

@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   ProviderCredentialSchema,
   ProviderCredentialSecretRecordSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   WorkspaceMemberSchema,
   WorkspaceSchema,
   createSystemActorContext,
@@ -51,10 +51,10 @@ describe("operations recovery route", () => {
 
   it("rejects unauthenticated recovery requests before mutation", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const queued = await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "docs_render",
         payload: {
           type: "docs_render",
@@ -80,7 +80,7 @@ describe("operations recovery route", () => {
       })
     );
     const payload = (await response.json()) as { error: string };
-    const unchanged = await repository.getJob(queued.id, SYSTEM_USER_ID);
+    const unchanged = await repository.getJob(queued.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(401);
     expect(payload.error).toContain("Unauthorized");
@@ -118,15 +118,15 @@ describe("operations recovery route", () => {
     expect(payload.error).toBe("Too many operations recovery requests. Try again later.");
     expect(response.headers.get("retry-after")).toBe("30");
     expect(seenKeys).toHaveLength(1);
-    expect(seenKeys[0]).toContain(`operations-recovery:user:${SYSTEM_USER_ID}:`);
+    expect(seenKeys[0]).toContain(`operations-recovery:user:${DEFAULT_OWNER_USER_ID}:`);
     expectNoStoreHeaders(response);
   });
 
   it("releases an expired worker lease back to the retry queue", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const queued = createJobRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "docs_render",
       payload: {
         type: "docs_render",
@@ -167,9 +167,9 @@ describe("operations recovery route", () => {
 
   it("rejects lease release when the worker lease has not expired", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const queued = createJobRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "docs_render",
       payload: {
         type: "docs_render",
@@ -198,7 +198,7 @@ describe("operations recovery route", () => {
       })
     );
     const payload = (await response.json()) as { error: string };
-    const unchanged = await repository.getJob(queued.id, SYSTEM_USER_ID);
+    const unchanged = await repository.getJob(queued.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(409);
     expect(payload.error).toContain("does not have an expired worker lease");
@@ -211,24 +211,24 @@ describe("operations recovery route", () => {
 
   it("replays a dead-lettered approval follow-up through the operations recovery lane", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Review my inbox and draft responses.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
     await repository.saveGoalBundle(bundle);
     const approval = bundle.approvals[0]!;
     const queued = await enqueueApprovalFollowUpJob({
       repository,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval.id,
       goalId: bundle.goal.id,
       taskId: approval.taskId,
       decision: "rejected",
       workspaceId: null,
-      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       actionIntent: approval.actionIntent
     });
     const claimed = await repository.claimNextJob({
@@ -255,7 +255,7 @@ describe("operations recovery route", () => {
       job: { id: string; kind: string; status: string; actionId: string | null };
       statusUrl: string;
     };
-    const replayed = await repository.getJob(payload.job.id, SYSTEM_USER_ID);
+    const replayed = await repository.getJob(payload.job.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(202);
     expectNoStoreHeaders(response);
@@ -282,10 +282,10 @@ describe("operations recovery route", () => {
 
   it("cancels a queued job with an audit journal entry", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const queued = await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "docs_render",
         payload: {
           type: "docs_render",
@@ -320,7 +320,7 @@ describe("operations recovery route", () => {
 
   it("does not recover another user's queued job", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults("other-user");
     const queued = await repository.enqueueJob(
       createJobRecord({
@@ -351,12 +351,12 @@ describe("operations recovery route", () => {
 
   it("revalidates connector credentials without returning stored secrets", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const actor = createSystemActorContext(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const actor = createSystemActorContext(DEFAULT_OWNER_USER_ID);
     const credential = await repository.saveProviderCredential(
       ProviderCredentialSchema.parse({
         id: "google:global:operations-recovery",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: null,
         provider: "google",
         accountId: "operations-recovery",
@@ -375,7 +375,7 @@ describe("operations recovery route", () => {
     await repository.saveProviderCredentialSecret(
       ProviderCredentialSecretRecordSchema.parse({
         credentialId: credential.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "oauth_refresh_token",
         secret: createProviderCredentialSecretStore().encrypt("super-secret-refresh-token"),
         createdAt: nowIso(),
@@ -403,11 +403,11 @@ describe("operations recovery route", () => {
     expect(raw).not.toContain("super-secret-refresh-token");
     expect(raw).not.toContain("ciphertext");
 
-    const saved = await repository.getProviderCredential(credential.id, SYSTEM_USER_ID);
+    const saved = await repository.getProviderCredential(credential.id, DEFAULT_OWNER_USER_ID);
     expect(saved?.metadata.recoveryAudit).toEqual([
       expect.objectContaining({
         action: "revalidate_connector_credential",
-        actorUserId: SYSTEM_USER_ID,
+        actorUserId: DEFAULT_OWNER_USER_ID,
         reason: null
       })
     ]);
@@ -415,10 +415,10 @@ describe("operations recovery route", () => {
 
   it("rejects malformed recovery actions before mutation", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     const queued = await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "docs_render",
         payload: {
           type: "docs_render",
@@ -444,7 +444,7 @@ describe("operations recovery route", () => {
         extra: "ignored?"
       })
     );
-    const unchanged = await repository.getJob(queued.id, SYSTEM_USER_ID);
+    const unchanged = await repository.getJob(queued.id, DEFAULT_OWNER_USER_ID);
 
     expect(missingConfirm.status).toBe(400);
     expect(unknownField.status).toBe(400);
@@ -453,12 +453,12 @@ describe("operations recovery route", () => {
 
   it("fails closed when revalidating a revoked connector credential", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const actor = createSystemActorContext(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const actor = createSystemActorContext(DEFAULT_OWNER_USER_ID);
     const credential = await repository.saveProviderCredential(
       ProviderCredentialSchema.parse({
         id: "google:global:revoked-recovery",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: null,
         provider: "google",
         accountId: "revoked-recovery",
@@ -485,7 +485,7 @@ describe("operations recovery route", () => {
       })
     );
     const payload = (await response.json()) as { error: string };
-    const unchanged = await repository.getProviderCredential(credential.id, SYSTEM_USER_ID);
+    const unchanged = await repository.getProviderCredential(credential.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(409);
     expect(payload.error).toContain("requires reconnect");
@@ -495,12 +495,12 @@ describe("operations recovery route", () => {
 
   it("marks connector credentials as reconnect required with recovery audit metadata", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const actor = createSystemActorContext(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const actor = createSystemActorContext(DEFAULT_OWNER_USER_ID);
     const credential = await repository.saveProviderCredential(
       ProviderCredentialSchema.parse({
         id: "google:global:reconnect-recovery",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: null,
         provider: "google",
         accountId: "reconnect-recovery",
@@ -536,7 +536,7 @@ describe("operations recovery route", () => {
         };
       };
     };
-    const saved = await repository.getProviderCredential(credential.id, SYSTEM_USER_ID);
+    const saved = await repository.getProviderCredential(credential.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(200);
     expect(payload.recovery.action).toBe("mark_connector_reconnect_required");
@@ -545,7 +545,7 @@ describe("operations recovery route", () => {
     expect(saved?.metadata.recoveryAudit).toEqual([
       expect.objectContaining({
         action: "mark_connector_reconnect_required",
-        actorUserId: SYSTEM_USER_ID,
+        actorUserId: DEFAULT_OWNER_USER_ID,
         reason: "OAuth grant was revoked by the provider."
       })
     ]);
@@ -553,9 +553,9 @@ describe("operations recovery route", () => {
 
   it("denies connector recovery for workspace credentials when the actor is not an owner", async () => {
     const repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults("workspace-owner");
-    const actor = createSystemActorContext(SYSTEM_USER_ID);
+    const actor = createSystemActorContext(DEFAULT_OWNER_USER_ID);
     const timestamp = nowIso();
     const workspace = await repository.saveWorkspace(
       WorkspaceSchema.parse({
@@ -574,7 +574,7 @@ describe("operations recovery route", () => {
       WorkspaceMemberSchema.parse({
         id: "workspace-connector-recovery-editor",
         workspaceId: workspace.id,
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         role: "editor",
         joinedAt: timestamp,
         updatedAt: timestamp
@@ -584,7 +584,7 @@ describe("operations recovery route", () => {
     const credential = await repository.saveProviderCredential(
       ProviderCredentialSchema.parse({
         id: "google:workspace-connector-recovery:editor",
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         workspaceId: workspace.id,
         provider: "google",
         accountId: "workspace-connector-recovery",
@@ -610,7 +610,7 @@ describe("operations recovery route", () => {
       })
     );
     const payload = (await response.json()) as { error: string };
-    const unchanged = await repository.getProviderCredential(credential.id, SYSTEM_USER_ID);
+    const unchanged = await repository.getProviderCredential(credential.id, DEFAULT_OWNER_USER_ID);
 
     expect(response.status).toBe(403);
     expect(payload.error).toBe("Only workspace owners can perform operations recovery actions.");

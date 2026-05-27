@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { GET as calibrationRoute } from "../apps/web/app/api/calibration/route";
@@ -57,9 +57,9 @@ describe("calibration route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const agent = (await repository.listAgents(SYSTEM_USER_ID)).find((candidate) => candidate.name === "communications");
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const agent = (await repository.listAgents(DEFAULT_OWNER_USER_ID)).find((candidate) => candidate.name === "communications");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const task = bundle.tasks[0];
     const approval = bundle.approvals[0];
     const createdAt = new Date().toISOString();
@@ -92,7 +92,7 @@ describe("calibration route", () => {
     });
     await repository.saveEvidenceRecord({
       id: "route-evidence-approved-failure",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       goalId: bundle.goal.id,
       taskId: task!.id,
       approvalId: approval!.id,
@@ -145,7 +145,7 @@ describe("calibration route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const unknownField = await calibrationRoute(
@@ -164,7 +164,7 @@ describe("calibration route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await calibrationRoute(

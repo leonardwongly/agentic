@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { processUserRequest } from "@agentic/orchestrator";
 import type { AgenticRepository } from "@agentic/repository";
@@ -121,8 +121,8 @@ describe("public share view route", () => {
   it("queues share tracking and keeps repeated refreshes idempotent before the worker persists state", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share my planning context with a reviewer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Share my planning context with a reviewer.");
     const shareResponse = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
       params: Promise.resolve({ id: bundle.goal.id })
     });
@@ -164,10 +164,10 @@ describe("public share view route", () => {
     };
     const reloadedRepository = createRouteTestRepository();
     const queuedJobs = await reloadedRepository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["public_share_view"]
     });
-    const shareBeforeExecution = await reloadedRepository.getGoalShare(sharePayload.shareId, SYSTEM_USER_ID);
+    const shareBeforeExecution = await reloadedRepository.getGoalShare(sharePayload.shareId, DEFAULT_OWNER_USER_ID);
     const bundleBeforeExecution = await reloadedRepository.getGoalBundle(bundle.goal.id);
 
     expect(firstResponse.status).toBe(202);
@@ -198,7 +198,7 @@ describe("public share view route", () => {
       job: queuedJobs[0]!
     });
 
-    const viewedShare = await reloadedRepository.getGoalShare(sharePayload.shareId, SYSTEM_USER_ID);
+    const viewedShare = await reloadedRepository.getGoalShare(sharePayload.shareId, DEFAULT_OWNER_USER_ID);
     const reloadedBundle = await reloadedRepository.getGoalBundle(bundle.goal.id);
     const viewedLogs = reloadedBundle?.actionLogs.filter((log) => log.kind === "share.page_viewed") ?? [];
 
@@ -261,9 +261,9 @@ describe("public share view route", () => {
   it("returns accepted no-ops for revoked and expired signed share tracking without queueing jobs", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const revokedBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a context that will be revoked.");
-    const expiredBundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a context that will expire.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const revokedBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Share a context that will be revoked.");
+    const expiredBundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Share a context that will expire.");
 
     const revokedShareResponse = await goalShareRoute(buildConfirmedShareRequest(revokedBundle.goal.id, buildReviewFingerprint(revokedBundle)), {
       params: Promise.resolve({ id: revokedBundle.goal.id })
@@ -275,8 +275,8 @@ describe("public share view route", () => {
     const expiredPayload = (await expiredShareResponse.json()) as { shareId: string; shareUrl: string };
     const revokedToken = decodeURIComponent(revokedPayload.shareUrl.split("/share/")[1] ?? "");
     const expiredToken = decodeURIComponent(expiredPayload.shareUrl.split("/share/")[1] ?? "");
-    const revokedShare = await repository.getGoalShare(revokedPayload.shareId, SYSTEM_USER_ID);
-    const expiredShare = await repository.getGoalShare(expiredPayload.shareId, SYSTEM_USER_ID);
+    const revokedShare = await repository.getGoalShare(revokedPayload.shareId, DEFAULT_OWNER_USER_ID);
+    const expiredShare = await repository.getGoalShare(expiredPayload.shareId, DEFAULT_OWNER_USER_ID);
 
     await repository.saveGoalShare({
       ...revokedShare!,
@@ -296,7 +296,7 @@ describe("public share view route", () => {
     const expiredResult = (await expiredResponse.json()) as { accepted: boolean; tracked: boolean };
     const reloadedRepository = createRouteTestRepository();
     const queuedJobs = await reloadedRepository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["public_share_view"]
     });
     const reloadedRevokedBundle = await reloadedRepository.getGoalBundle(revokedBundle.goal.id);
@@ -427,8 +427,8 @@ describe("public share view route", () => {
 
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Share a goal with a reviewer.");
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Share a goal with a reviewer.");
     const shareResponse = await goalShareRoute(buildConfirmedShareRequest(bundle.goal.id, buildReviewFingerprint(bundle)), {
       params: Promise.resolve({ id: bundle.goal.id })
     });
@@ -454,7 +454,7 @@ describe("public share view route", () => {
     };
     const reloadedRepository = createRouteTestRepository();
     const queuedJobs = await reloadedRepository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["public_share_view"]
     });
 

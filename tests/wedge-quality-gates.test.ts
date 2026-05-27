@@ -1,4 +1,4 @@
-import { SYSTEM_USER_ID, type ApprovalRequest, type EvidenceRecord, type GoalBundle } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, type ApprovalRequest, type EvidenceRecord, type GoalBundle } from "@agentic/contracts";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord } from "@agentic/memory";
 import { createActionLog } from "@agentic/observability";
@@ -11,10 +11,10 @@ import {
 
 function buildContext() {
   return {
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     memories: [
       createMemoryRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "style",
         memoryType: "confirmed",
         content: "Use concise approval summaries.",
@@ -22,7 +22,7 @@ function buildContext() {
         source: "test"
       })
     ],
-    integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
+    integrations: buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID)
   };
 }
 
@@ -196,7 +196,7 @@ function buildEvidenceRecord(params: {
 
   return {
     id: params.id,
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     goalId: params.bundle.goal.id,
     taskId: params.approval.taskId,
     approvalId: params.approval.id,

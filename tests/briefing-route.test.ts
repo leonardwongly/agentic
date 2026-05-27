@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { vi } from "vitest";
@@ -27,7 +27,7 @@ describe("briefing route", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
@@ -61,8 +61,8 @@ describe("briefing route", () => {
   it("queues briefing creation, exposes a pollable status route, and completes through the worker runtime", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
-    const current = await repository.getBriefingPreferences(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const current = await repository.getBriefingPreferences(DEFAULT_OWNER_USER_ID);
     await repository.saveBriefingPreferences({
       ...current,
       focus: "urgent",
@@ -96,8 +96,8 @@ describe("briefing route", () => {
     expect(createPayload.job.status).toBe("queued");
     expect(createPayload.job.briefingType).toBe("midday");
     expect(createPayload.statusUrl).toBe(`/api/briefing/jobs/${createPayload.job.id}`);
-    expect(await repository.listGoals(SYSTEM_USER_ID)).toHaveLength(0);
-    expect(await repository.listJobs({ userId: SYSTEM_USER_ID })).toHaveLength(1);
+    expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(0);
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(1);
 
     const queuedStatusResponse = await briefingJobRoute(
       new Request(`http://localhost${createPayload.statusUrl}`, {
@@ -144,8 +144,8 @@ describe("briefing route", () => {
       };
       error: null;
     };
-    const persistedBundle = await repository.getGoalBundleForUser(createPayload.job.goalId, SYSTEM_USER_ID);
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const persistedBundle = await repository.getGoalBundleForUser(createPayload.job.goalId, DEFAULT_OWNER_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
 
     expect(workerResult).toEqual({
       processedCount: 1,
@@ -175,7 +175,7 @@ describe("briefing route", () => {
   it("defaults empty requests to a startup briefing job", async () => {
     const repository = createRouteTestRepository();
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await briefingRoute(
@@ -202,11 +202,11 @@ describe("briefing route", () => {
     const repository = createRouteTestRepository();
     const secondaryUserId = "user-secondary";
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(secondaryUserId);
 
     await repository.saveBriefingPreferences({
-      ...(await repository.getBriefingPreferences(SYSTEM_USER_ID)),
+      ...(await repository.getBriefingPreferences(DEFAULT_OWNER_USER_ID)),
       focus: "urgent"
     });
     await repository.saveBriefingPreferences({

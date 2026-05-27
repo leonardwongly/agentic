@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   AgentDefinitionSchema,
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
@@ -95,15 +95,15 @@ describe("agent memory route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const primaryAgent = buildCustomAgent(SYSTEM_USER_ID, "agent-memory-primary", "memory-primary");
-    const secondaryAgent = buildCustomAgent(SYSTEM_USER_ID, "agent-memory-secondary", "memory-secondary");
+    const primaryAgent = buildCustomAgent(DEFAULT_OWNER_USER_ID, "agent-memory-primary", "memory-primary");
+    const secondaryAgent = buildCustomAgent(DEFAULT_OWNER_USER_ID, "agent-memory-secondary", "memory-secondary");
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveAgent(primaryAgent);
     await repository.saveAgent(secondaryAgent);
     await repository.saveMemory(
       createMemoryRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "history",
         memoryType: "observed",
         content: "Primary agent observed an escalation.",
@@ -115,7 +115,7 @@ describe("agent memory route", () => {
     );
     await repository.saveMemory(
       createMemoryRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "history",
         memoryType: "observed",
         content: "Secondary agent handled a retry.",
@@ -127,7 +127,7 @@ describe("agent memory route", () => {
     );
     await repository.saveMemory(
       createMemoryRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "history",
         memoryType: "observed",
         content: "Global memory should stay out of the agent-scoped list.",
@@ -160,9 +160,9 @@ describe("agent memory route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const agent = buildCustomAgent(SYSTEM_USER_ID, "agent-memory-post", "memory-post");
+    const agent = buildCustomAgent(DEFAULT_OWNER_USER_ID, "agent-memory-post", "memory-post");
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveAgent(agent);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
@@ -190,7 +190,7 @@ describe("agent memory route", () => {
     const reloadedRepository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const persisted = (await reloadedRepository.listMemory(SYSTEM_USER_ID)).find(
+    const persisted = (await reloadedRepository.listMemory(DEFAULT_OWNER_USER_ID)).find(
       (memory) => memory.content === "Escalate repeat failures to the operations lead."
     );
 
@@ -198,11 +198,11 @@ describe("agent memory route", () => {
     expect(payload.memory.agentId).toBe(agent.id);
     expect(payload.memory.agentScope).toBe("agent-preferred");
     expect(payload.memory.confidence).toBe(0.92);
-    expect(payload.memory.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(payload.memory.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expect(payload.memories).toHaveLength(1);
     expect(persisted?.agentId).toBe(agent.id);
     expect(persisted?.agentScope).toBe("agent-preferred");
-    expect(persisted?.actorContext).toEqual(createSystemActorContext(SYSTEM_USER_ID));
+    expect(persisted?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
     expectNoStoreHeaders(response);
   });
 
@@ -210,9 +210,9 @@ describe("agent memory route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const agent = buildCustomAgent(SYSTEM_USER_ID, "agent-memory-validation", "memory-validation");
+    const agent = buildCustomAgent(DEFAULT_OWNER_USER_ID, "agent-memory-validation", "memory-validation");
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveAgent(agent);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
@@ -237,9 +237,9 @@ describe("agent memory route", () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
-    const agent = buildCustomAgent(SYSTEM_USER_ID, "agent-memory-global-scope", "memory-global-scope");
+    const agent = buildCustomAgent(DEFAULT_OWNER_USER_ID, "agent-memory-global-scope", "memory-global-scope");
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.saveAgent(agent);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
@@ -265,7 +265,7 @@ describe("agent memory route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults("user-secondary");
     await repository.saveAgent(buildCustomAgent("user-secondary", "agent-memory-private", "memory-private"));
     Reflect.set(globalThis, "__agenticRepository", undefined);

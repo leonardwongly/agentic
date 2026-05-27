@@ -114,13 +114,13 @@ describe("auth helpers", () => {
     process.env.NODE_ENV = "test";
 
     const token = buildOAuthStateToken({
-      userId: "user-primary",
+      userId: "test-owner",
       workspaceId: "workspace-123"
     });
-    const parsed = parseAuthorizedOAuthStateToken(token, "user-primary");
+    const parsed = parseAuthorizedOAuthStateToken(token, "test-owner");
 
     expect(parsed).toMatchObject({
-      userId: "user-primary",
+      userId: "test-owner",
       workspaceId: "workspace-123"
     });
     expect(parsed?.nonce).toBeTruthy();
@@ -131,13 +131,13 @@ describe("auth helpers", () => {
     process.env.NODE_ENV = "test";
 
     const token = buildOAuthStateToken({
-      userId: "user-primary",
+      userId: "test-owner",
       workspaceId: "workspace-123"
     });
     const [payload, signature] = token.split(".");
     const tampered = `${payload}.${signature.slice(0, -1)}${signature.endsWith("a") ? "b" : "a"}`;
 
-    expect(parseAuthorizedOAuthStateToken(tampered, "user-primary")).toBeNull();
+    expect(parseAuthorizedOAuthStateToken(tampered, "test-owner")).toBeNull();
   });
 
   it("rejects OAuth state tokens presented for the wrong user", () => {
@@ -145,7 +145,7 @@ describe("auth helpers", () => {
     process.env.NODE_ENV = "test";
 
     const token = buildOAuthStateToken({
-      userId: "user-primary",
+      userId: "test-owner",
       workspaceId: null
     });
 

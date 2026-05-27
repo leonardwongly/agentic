@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { vi } from "vitest";
 import {
   resetAuthSessionStateStoreForTesting,
@@ -79,10 +79,10 @@ describe("governance audit route", () => {
     const otherUserId = "tenant-b";
     const otherActor = createSystemActorContext(otherUserId);
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     await repository.seedDefaults(otherUserId);
 
-    const dashboard = await repository.getDashboardData(SYSTEM_USER_ID);
+    const dashboard = await repository.getDashboardData(DEFAULT_OWNER_USER_ID);
     const otherDashboard = await repository.getDashboardData(otherUserId);
 
     await repository.savePrivacyOperation({

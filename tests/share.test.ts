@@ -1,4 +1,4 @@
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord } from "@agentic/memory";
@@ -19,11 +19,11 @@ import { getGoalShareSuccessMessage } from "../apps/web/lib/share-client";
 
 async function buildBundle() {
   return processUserRequest({
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     request: "Triage my inbox and prepare replies for important clients.",
     memories: [
       createMemoryRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "style",
         memoryType: "confirmed",
         content: "Use concise approval summaries.",
@@ -31,7 +31,7 @@ async function buildBundle() {
         source: "test"
       })
     ],
-    integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
+    integrations: buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID)
   });
 }
 

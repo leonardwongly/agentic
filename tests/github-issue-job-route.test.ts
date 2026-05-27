@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import type { AgenticRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import {
@@ -14,6 +14,7 @@ import {
   createRouteTestRepository,
   expectNoStoreHeaders
 } from "./route-test-helpers";
+import { TEST_REPOSITORY_FULL_NAME, TEST_REPOSITORY_HTML_URL, testRepositoryIssueUrl } from "./fixtures/oss-fixtures";
 
 vi.mock("../apps/web/lib/server", () => ({
   getSeededRepository: async () => Reflect.get(globalThis, "__agenticRepository") as AgenticRepository
@@ -33,7 +34,7 @@ describe("GitHub issue intake job route", () => {
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(tempDir, "runtime-store.json");
     selfImprovementDir = path.join(tempDir, "self-improvement");
     repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
   });
 
@@ -61,13 +62,13 @@ describe("GitHub issue intake job route", () => {
   }) {
     return enqueueGitHubIssueIntakeJob({
       repository,
-      userId: overrides?.userId ?? SYSTEM_USER_ID,
-      actorContext: createSystemActorContext(overrides?.userId ?? SYSTEM_USER_ID),
+      userId: overrides?.userId ?? DEFAULT_OWNER_USER_ID,
+      actorContext: createSystemActorContext(overrides?.userId ?? DEFAULT_OWNER_USER_ID),
       payload: {
         automationMode: overrides?.automationMode ?? "work",
         repository: {
-          fullName: "leonardwongly/agentic",
-          htmlUrl: "https://github.com/leonardwongly/agentic",
+          fullName: TEST_REPOSITORY_FULL_NAME,
+          htmlUrl: TEST_REPOSITORY_HTML_URL,
           defaultBranch: "main",
           private: true
         },
@@ -76,7 +77,7 @@ describe("GitHub issue intake job route", () => {
           nodeId: "I_kwDOAgenticIssue203",
           title: "Prove deployed worker durability and live issue sync",
           body: "Use this issue as an untrusted worker-sync canary.",
-          url: `https://github.com/leonardwongly/agentic/issues/${overrides?.issueNumber ?? 203}`,
+          url: testRepositoryIssueUrl(overrides?.issueNumber ?? 203),
           authorLogin: "issue-author",
           labels: ["agentic:work"],
           assignees: [],
@@ -111,7 +112,7 @@ describe("GitHub issue intake job route", () => {
         id: queued.id,
         kind: "github_issue_intake",
         status: "queued",
-        repository: "leonardwongly/agentic",
+        repository: TEST_REPOSITORY_FULL_NAME,
         issueNumber: 203,
         automationMode: "work",
         goalId: queued.payload.goalId,
@@ -157,7 +158,7 @@ describe("GitHub issue intake job route", () => {
         id: queued.id,
         kind: "github_issue_intake",
         status: "completed",
-        repository: "leonardwongly/agentic",
+        repository: TEST_REPOSITORY_FULL_NAME,
         issueNumber: 204,
         goalId: queued.payload.goalId
       },

@@ -242,7 +242,7 @@ function buildWorkflowStateCheck(env: NodeJS.ProcessEnv): GitHubAppSyncLivePrefl
   if (!state) {
     return fail(
       "workflow_state",
-      "Set AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE from `gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq .state`."
+      "Set AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE from `gh api \"repos/$AGENTIC_REPOSITORY/actions/workflows/github-app-issue-sync.yml\" --jq .state`."
     );
   }
 
@@ -281,7 +281,7 @@ function buildGitHubActionsSecretInventoryCheck(env: NodeJS.ProcessEnv): GitHubA
   } catch {
     return fail(
       "github_actions_secret_inventory",
-      "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON must contain JSON from `gh secret list --repo leonardwongly/agentic --json name`."
+      "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON must contain JSON from `gh secret list --repo \"$AGENTIC_REPOSITORY\" --json name`."
     );
   }
 

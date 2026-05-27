@@ -33,7 +33,7 @@ describe("assembleDashboardData instrumentation", () => {
       commitments: [],
       briefingPreferences: {
         userId: "user-1",
-        timezone: "Asia/Singapore",
+        timezone: "UTC",
         focus: "balanced",
         schedules: [],
         createdAt: "2024-01-01T00:00:00.000Z",
@@ -160,7 +160,7 @@ describe("assembleDashboardData instrumentation", () => {
       commitments: [],
       briefingPreferences: {
         userId: "user-1",
-        timezone: "Asia/Singapore",
+        timezone: "UTC",
         focus: "balanced",
         schedules: [],
         createdAt: "2024-01-01T00:00:00.000Z",
@@ -289,7 +289,7 @@ describe("assembleDashboardData instrumentation", () => {
       commitments: [],
       briefingPreferences: {
         userId: "user-1",
-        timezone: "Asia/Singapore",
+        timezone: "UTC",
         focus: "balanced",
         schedules: [],
         createdAt: "2024-01-01T00:00:00.000Z",
@@ -625,7 +625,7 @@ describe("assembleDashboardData instrumentation", () => {
       commitments: [],
       briefingPreferences: {
         userId: "user-1",
-        timezone: "Asia/Singapore",
+        timezone: "UTC",
         focus: "balanced",
         schedules: [],
         createdAt: "2024-01-01T00:00:00.000Z",
@@ -730,7 +730,7 @@ describe("assembleDashboardData instrumentation", () => {
       commitments: [],
       briefingPreferences: {
         userId: "user-1",
-        timezone: "Asia/Singapore",
+        timezone: "UTC",
         focus: "balanced",
         schedules: [],
         createdAt: "2024-01-01T00:00:00.000Z",

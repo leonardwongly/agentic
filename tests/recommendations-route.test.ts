@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, WorkspaceGovernanceSchema } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, WorkspaceGovernanceSchema } from "@agentic/contracts";
 import { createSelfImprovementRepository, EpisodeRecordSchema } from "@agentic/self-improvement-memory";
 import { GET as recommendationsRoute } from "../apps/web/app/api/memory/recommendations/route";
 import { expectNoStoreHeaders, buildAuthorizedGetRequest } from "./route-test-helpers";
@@ -23,7 +23,7 @@ function buildReplayEpisode(
     relatedPatternId: null,
     userFeedback: null,
     provenance: {
-      ownerUserId: SYSTEM_USER_ID,
+      ownerUserId: DEFAULT_OWNER_USER_ID,
       workspaceId: "workspace-1",
       source: "execution",
       memoryIds: [`memory-${id}`],

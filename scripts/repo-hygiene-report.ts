@@ -87,13 +87,19 @@ function loadBranches(): BranchSnapshot[] {
 }
 
 function loadPullRequests(): PullRequestSnapshot[] {
+  const repository = process.env.AGENTIC_REPOSITORY?.trim() || process.env.GITHUB_REPOSITORY?.trim();
+
+  if (!repository) {
+    return [];
+  }
+
   const output = run(
     "gh",
     [
       "pr",
       "list",
       "--repo",
-      "leonardwongly/agentic",
+      repository,
       "--state",
       "open",
       "--json",

@@ -1,4 +1,4 @@
-import { SYSTEM_USER_ID, SubAgentPlanSchema, WorkspaceGovernanceSchema, createHumanActorContext, nowIso } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, SubAgentPlanSchema, WorkspaceGovernanceSchema, createHumanActorContext, nowIso } from "@agentic/contracts";
 import {
   generateBriefing,
   generateMorningBriefing,
@@ -11,10 +11,10 @@ import { createMemoryRecord } from "@agentic/memory";
 
 function buildContext() {
   return {
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     memories: [
       createMemoryRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "style",
         memoryType: "confirmed",
         content: "Use concise approval summaries.",
@@ -22,14 +22,14 @@ function buildContext() {
         source: "test"
       })
     ],
-    integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
+    integrations: buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID)
   };
 }
 
 function buildFreshApprovalMemories() {
   return Array.from({ length: 5 }, () =>
     createMemoryRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       category: "preferences",
       memoryType: "confirmed",
       content: "User approved send actions for customer follow-up and approved similar send tasks before.",
@@ -253,7 +253,7 @@ describe("orchestrator", () => {
       externalSendRequiresApproval: true,
       calendarWriteRequiresApproval: true,
       retentionDays: 365,
-      updatedBy: SYSTEM_USER_ID,
+      updatedBy: DEFAULT_OWNER_USER_ID,
       createdAt: nowIso(),
       updatedAt: nowIso()
     });
@@ -382,7 +382,7 @@ describe("orchestrator", () => {
       bundle,
       approvalId: approval.id,
       decision: "approved",
-      actor: createHumanActorContext(SYSTEM_USER_ID),
+      actor: createHumanActorContext(DEFAULT_OWNER_USER_ID),
       scope: "similar_24h",
       rationale: "Safe for the next batch of comparable replies."
     });
@@ -398,7 +398,7 @@ describe("orchestrator", () => {
       decision: "approved",
       scope: "similar_24h",
       rationale: "Safe for the next batch of comparable replies.",
-      actorContext: createHumanActorContext(SYSTEM_USER_ID)
+      actorContext: createHumanActorContext(DEFAULT_OWNER_USER_ID)
     });
     expect(updatedTask?.state).toBe("queued");
     expect(
@@ -407,7 +407,7 @@ describe("orchestrator", () => {
           log.kind === "task.state_changed" &&
           log.details?.scope === "similar_24h" &&
           log.details?.decision === "approved" &&
-          log.details?.actorContext?.subjectUserId === SYSTEM_USER_ID
+          log.details?.actorContext?.subjectUserId === DEFAULT_OWNER_USER_ID
       )
     ).toBe(true);
     expect(updated.actionLogs.at(-1)).toMatchObject({
@@ -415,7 +415,7 @@ describe("orchestrator", () => {
       details: {
         scope: "similar_24h",
         rationale: "Safe for the next batch of comparable replies.",
-        actorContext: createHumanActorContext(SYSTEM_USER_ID)
+        actorContext: createHumanActorContext(DEFAULT_OWNER_USER_ID)
       }
     });
   });
@@ -439,7 +439,7 @@ describe("orchestrator", () => {
         },
         approvalId: approval.id,
         decision: "approved",
-        actor: createHumanActorContext(SYSTEM_USER_ID)
+        actor: createHumanActorContext(DEFAULT_OWNER_USER_ID)
       })
     ).toThrow(/has expired/);
   });
@@ -464,11 +464,11 @@ describe("orchestrator", () => {
 
   it("only resolves relevant orchestrator-accessible memories into planning context", async () => {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Help me prepare for travel with my passport checklist.",
       memories: [
         createMemoryRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "travel",
           memoryType: "confirmed",
           content: "Passport scans are stored in the secure notes vault.",
@@ -477,7 +477,7 @@ describe("orchestrator", () => {
           permissions: ["orchestrator", "knowledge"]
         }),
         createMemoryRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "travel",
           memoryType: "confirmed",
           content: "This record is private to knowledge and should not affect orchestration.",
@@ -486,7 +486,7 @@ describe("orchestrator", () => {
           permissions: ["knowledge"]
         }),
         createMemoryRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "travel",
           memoryType: "confirmed",
           content: "Expired travel memory.",
@@ -496,7 +496,7 @@ describe("orchestrator", () => {
           expiryAt: "2026-03-01T00:00:00.000Z"
         })
       ],
-      integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
+      integrations: buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID)
     });
     const resolutionLog = bundle.actionLogs.find((log) => log.kind === "context.resolved");
 
@@ -515,11 +515,11 @@ describe("orchestrator", () => {
 
   it("keeps conflicting planning context visible in the resolution pack for operator review", async () => {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Help me prepare travel plans with the right seat preference.",
       memories: [
         createMemoryRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "travel",
           memoryType: "confirmed",
           content: "Seat preference is aisle.",
@@ -528,7 +528,7 @@ describe("orchestrator", () => {
           permissions: ["orchestrator"]
         }),
         createMemoryRecord({
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           category: "travel",
           memoryType: "observed",
           content: "Seat preference is window.",
@@ -537,7 +537,7 @@ describe("orchestrator", () => {
           permissions: ["orchestrator"]
         })
       ],
-      integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
+      integrations: buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID)
     });
     const resolutionLog = bundle.actionLogs.find((log) => log.kind === "context.resolved");
 
@@ -557,10 +557,10 @@ describe("orchestrator", () => {
 
   it("keeps the send path approval-gated when replay validation has not cleared a learned R3 flow", async () => {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Triage my inbox and prepare replies for important clients.",
       memories: buildFreshApprovalMemories(),
-      integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID),
+      integrations: buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID),
       resolveAgentMetrics: async (agentIdOrName) =>
         agentIdOrName === "communications" ? buildStrongScorecard() : null,
       resolvePolicyReplayValidation: async ({ capabilities }) =>
@@ -612,7 +612,7 @@ describe("orchestrator", () => {
     const context = buildContext();
     const bundle = await generateBriefing({
       type: "midday",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       memories: context.memories,
       integrations: context.integrations,
       pendingApprovals: [],
@@ -645,7 +645,7 @@ describe("orchestrator", () => {
   it("keeps the morning briefing wrapper mapped to startup briefings", async () => {
     const context = buildContext();
     const bundle = await generateMorningBriefing({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       memories: context.memories,
       integrations: context.integrations,
       pendingApprovals: [],

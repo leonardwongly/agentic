@@ -19,7 +19,7 @@ const BASE_ENV = {
   AGENTIC_GITHUB_APP_INSTALLATION_ID: "654321",
   AGENTIC_GITHUB_APP_PRIVATE_KEY: PRIVATE_KEY,
   AGENTIC_GITHUB_APP_SYNC_SECRET: "github-app-sync-secret-with-at-least-32-characters",
-  AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "leonardwongly/agentic",
+  AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "octo-org/demo-agentic",
   AGENTIC_RENDER_SERVICES_JSON: JSON.stringify([
     { name: "agentic-web" },
     { name: "agentic-worker" }
@@ -45,8 +45,8 @@ const BASE_ENV = {
   AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: JSON.stringify({
     ok: true,
     negativeAuthStatus: 401,
-    repositories: [{ fullName: "leonardwongly/agentic", openIssuesSeen: 1, skippedPullRequests: 1 }],
-    jobs: [{ id: "job-sync-1", repository: "leonardwongly/agentic", issueNumber: 145, attempts: 2 }]
+    repositories: [{ fullName: "octo-org/demo-agentic", openIssuesSeen: 1, skippedPullRequests: 1 }],
+    jobs: [{ id: "job-sync-1", repository: "octo-org/demo-agentic", issueNumber: 145, attempts: 2 }]
   })
 };
 

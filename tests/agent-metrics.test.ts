@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID, type ApprovalRequest, type AgentDefinition, type Task } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, type ApprovalRequest, type AgentDefinition, type Task } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { deriveAgentMetricsFromGoals } from "../packages/repository/src/agent-metrics";
@@ -27,12 +27,12 @@ describe("deriveAgentMetricsFromGoals", () => {
     const storePath = path.join(tempDir, "runtime-store.json");
     const repository = createRepository({ storePath });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     return repository;
   }
 
   async function loadCommunicationsAgent(repository: ReturnType<typeof createRepository>): Promise<AgentDefinition> {
-    const agent = (await repository.listAgents(SYSTEM_USER_ID)).find((candidate) => candidate.name === "communications");
+    const agent = (await repository.listAgents(DEFAULT_OWNER_USER_ID)).find((candidate) => candidate.name === "communications");
 
     expect(agent).toBeDefined();
     return agent!;
@@ -55,13 +55,15 @@ describe("deriveAgentMetricsFromGoals", () => {
   it("uses calendar day boundaries instead of a rolling 24-hour window", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const templateTask = bundle.tasks[0];
 
     expect(templateTask).toBeDefined();
 
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
+    const withinDayCreatedAtMs = Math.max(startOfToday.getTime(), Date.now() - 60_000);
+    const withinDayUpdatedAtMs = Math.max(withinDayCreatedAtMs, Date.now());
 
     const metrics = deriveAgentMetricsFromGoals({
       agent,
@@ -81,8 +83,8 @@ describe("deriveAgentMetricsFromGoals", () => {
               id: `${templateTask!.id}-within-day-boundary`,
               assignedAgent: agent.id,
               state: "completed",
-              createdAt: new Date(startOfToday.getTime() + 60_000).toISOString(),
-              updatedAt: new Date(startOfToday.getTime() + 120_000).toISOString()
+              createdAt: new Date(withinDayCreatedAtMs).toISOString(),
+              updatedAt: new Date(withinDayUpdatedAtMs).toISOString()
             })
           ],
           approvals: [],
@@ -101,7 +103,7 @@ describe("deriveAgentMetricsFromGoals", () => {
   it("counts user corrections and post-approval failures from approval evidence", async () => {
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
-    const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Review my inbox and send one external reply.");
     const templateTask = bundle.tasks[0];
     const templateApproval = bundle.approvals[0];
     const createdAt = new Date().toISOString();
@@ -138,7 +140,7 @@ describe("deriveAgentMetricsFromGoals", () => {
       evidenceRecords: [
         {
           id: "evidence-rejected",
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           goalId: bundle.goal.id,
           taskId: failedTask.id,
           approvalId: approvedRequest.id,
@@ -163,7 +165,7 @@ describe("deriveAgentMetricsFromGoals", () => {
         },
         {
           id: "evidence-approved-failure",
-          userId: SYSTEM_USER_ID,
+          userId: DEFAULT_OWNER_USER_ID,
           goalId: bundle.goal.id,
           taskId: failedTask.id,
           approvalId: approvedRequest.id,

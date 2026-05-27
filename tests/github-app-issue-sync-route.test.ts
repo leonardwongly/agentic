@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import type { AgenticRepository } from "@agentic/repository";
 import { expect, vi } from "vitest";
 import {
@@ -114,7 +114,7 @@ describe("GitHub App issue sync route", () => {
     delete process.env.AGENTIC_GITHUB_ISSUE_INTAKE_WORKSPACE_ID;
 
     repository = createRouteTestRepository();
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
 
     fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -232,7 +232,7 @@ describe("GitHub App issue sync route", () => {
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const payload = await response.json();
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -313,7 +313,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -329,7 +329,7 @@ describe("GitHub App issue sync route", () => {
     const firstPayload = await first.json();
     const secondPayload = await second.json();
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -348,7 +348,7 @@ describe("GitHub App issue sync route", () => {
       })
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -374,7 +374,7 @@ describe("GitHub App issue sync route", () => {
       })
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -406,7 +406,7 @@ describe("GitHub App issue sync route", () => {
       } as RequestInit & { duplex: "half" })
     );
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -423,7 +423,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -442,7 +442,7 @@ describe("GitHub App issue sync route", () => {
       secret: "too-short"
     }));
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -459,7 +459,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -476,7 +476,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -493,7 +493,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -528,7 +528,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -567,7 +567,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -583,7 +583,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -606,7 +606,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -655,7 +655,7 @@ describe("GitHub App issue sync route", () => {
 
     const response = await githubAppIssueSyncRoute(buildSyncRequest());
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 
@@ -675,7 +675,7 @@ describe("GitHub App issue sync route", () => {
       .map((call) => call[0] instanceof Request ? call[0].url : call[0].toString())
       .find((url) => url.startsWith("https://github.test/repos/octo-org/demo-agentic/issues?"));
     const jobs = await repository.listJobs({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["github_issue_intake"]
     });
 

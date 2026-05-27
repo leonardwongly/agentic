@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   WorkspaceMemberSchema,
   WorkspaceSchema,
   createHumanActorContext,
@@ -44,16 +44,16 @@ describe("approval job route", () => {
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
     });
 
-    await repository.seedDefaults(SYSTEM_USER_ID);
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     return repository;
   }
 
   async function createApprovalBundle(repository: ReturnType<typeof createRepository>) {
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       request: "Review my inbox and draft responses.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
 
     await repository.saveGoalBundle(bundle);
@@ -115,7 +115,7 @@ describe("approval job route", () => {
   async function createAutopilotReplayFixture(repository: ReturnType<typeof createRepository>) {
     const event = await repository.saveAutopilotEvent({
       id: "autopilot-event-replay-test",
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "watcher_triggered",
       sourceId: "watcher-autopilot-replay-test",
       idempotencyKey: "autopilot-replay-test",
@@ -127,7 +127,7 @@ describe("approval job route", () => {
         requiresReview: true,
         recoveryAction: "review_event_error"
       },
-      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       createdAt: nowIso(),
       processedAt: nowIso(),
       resultGoalId: null,
@@ -151,7 +151,7 @@ describe("approval job route", () => {
     });
 
     await Promise.all([
-      repository.seedDefaults(SYSTEM_USER_ID),
+      repository.seedDefaults(DEFAULT_OWNER_USER_ID),
       selfImprovementRepository.seed()
     ]);
 
@@ -339,11 +339,11 @@ describe("approval job route", () => {
 
     expect(response.status).toBe(202);
 
-    const queuedJob = await repository.getJob(payload.job.id, SYSTEM_USER_ID);
+    const queuedJob = await repository.getJob(payload.job.id, DEFAULT_OWNER_USER_ID);
     expect(queuedJob).not.toBeNull();
 
     const claimedJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["approval_follow_up"],
       runnerId: "worker-approval-job-replay-test",
       leaseMs: 30_000,
@@ -433,7 +433,7 @@ describe("approval job route", () => {
       };
       statusUrl: string;
     };
-    const replayedJob = await repository.getJob(replayPayload.job.id, SYSTEM_USER_ID);
+    const replayedJob = await repository.getJob(replayPayload.job.id, DEFAULT_OWNER_USER_ID);
 
     expect(replayResponse.status).toBe(202);
     expect(replayPayload.replayedFromJobId).toBe(payload.job.id);
@@ -472,7 +472,7 @@ describe("approval job route", () => {
       attempt: 0,
       summary: `Replay queued from job ${payload.job.id}.`
     });
-    const replayedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const replayedBundle = await repository.getGoalBundleForUser(bundle.goal.id, DEFAULT_OWNER_USER_ID);
 
     expect(replayedBundle?.actionLogs.at(-1)).toMatchObject({
       actor: "system",
@@ -500,9 +500,9 @@ describe("approval job route", () => {
 
     const legacyJob = await repository.enqueueJob(
       createJobRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         kind: "approval_follow_up",
-        actorContext: createSystemActorContext(SYSTEM_USER_ID),
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
         maxAttempts: 1,
         idempotencyKey: `legacy-approval-follow-up:${approval.id}:rejected`,
         payload: {
@@ -519,7 +519,7 @@ describe("approval job route", () => {
       })
     );
     const claimedJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["approval_follow_up"],
       runnerId: "worker-legacy-approval-job-replay-test",
       leaseMs: 30_000,
@@ -547,16 +547,16 @@ describe("approval job route", () => {
         actionId: string;
       };
     };
-    const replayedJob = await repository.getJob(replayPayload.job.id, SYSTEM_USER_ID);
+    const replayedJob = await repository.getJob(replayPayload.job.id, DEFAULT_OWNER_USER_ID);
     const withoutCurrentActionIntent = await enqueueApprovalFollowUpJob({
       repository,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval.id,
       goalId: bundle.goal.id,
       taskId: approval.taskId,
       decision: "rejected",
       workspaceId: bundle.goal.workspaceId,
-      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       actionIntent: null,
       replayedFromJobId: "legacy-fallback-control"
     });
@@ -599,7 +599,7 @@ describe("approval job route", () => {
     expect(response.status).toBe(202);
 
     const claimedJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["approval_follow_up"],
       runnerId: "worker-approval-job-cross-user-test",
       leaseMs: 30_000,
@@ -654,21 +654,21 @@ describe("approval job route", () => {
 
     await repository.seedDefaults(viewerUserId);
 
-    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    const workspace = await createSharedWorkspace(repository, DEFAULT_OWNER_USER_ID, viewerUserId);
     await workspace.addMember("viewer");
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.workspaceId,
       request: "Review my inbox and draft responses.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
     await repository.saveGoalBundle(bundle);
     const approval = bundle.approvals[0]!;
 
     const queuedJob = await enqueueApprovalNotificationJob({
       repository,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval.id,
       goalId: bundle.goal.id,
       taskId: approval.taskId,
@@ -677,10 +677,10 @@ describe("approval job route", () => {
       slackChannelId: "C123",
       slackMessageTs: "1710000000.000100",
       workspaceId: bundle.goal.workspaceId,
-      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID)
     });
     const claimedJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["approval_notification"],
       runnerId: "worker-shared-job-replay-viewer-test",
       leaseMs: 30_000,
@@ -724,7 +724,7 @@ describe("approval job route", () => {
         }
       );
       const replayPayload = (await replayResponse.json()) as { error?: string };
-      const persistedJob = await repository.getJob(queuedJob.id, SYSTEM_USER_ID);
+      const persistedJob = await repository.getJob(queuedJob.id, DEFAULT_OWNER_USER_ID);
 
       expect(statusResponse.status).toBe(200);
       expect(statusPayload.job).toMatchObject({
@@ -750,21 +750,21 @@ describe("approval job route", () => {
 
     await repository.seedDefaults(editorUserId);
 
-    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, editorUserId);
+    const workspace = await createSharedWorkspace(repository, DEFAULT_OWNER_USER_ID, editorUserId);
     await workspace.addMember("editor");
     const bundle = await processUserRequest({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.workspaceId,
       request: "Review my inbox and draft responses.",
-      memories: await repository.listMemory(SYSTEM_USER_ID),
-      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+      memories: await repository.listMemory(DEFAULT_OWNER_USER_ID),
+      integrations: await repository.listIntegrations(DEFAULT_OWNER_USER_ID)
     });
     await repository.saveGoalBundle(bundle);
     const approval = bundle.approvals[0]!;
 
     const queuedJob = await enqueueApprovalNotificationJob({
       repository,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval.id,
       goalId: bundle.goal.id,
       taskId: approval.taskId,
@@ -773,10 +773,10 @@ describe("approval job route", () => {
       slackChannelId: "C123",
       slackMessageTs: "1710000000.000100",
       workspaceId: bundle.goal.workspaceId,
-      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID)
     });
     const claimedJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["approval_notification"],
       runnerId: "worker-shared-job-replay-editor-test",
       leaseMs: 30_000,
@@ -863,7 +863,7 @@ describe("approval job route", () => {
 
     const queuedJob = await enqueueApprovalNotificationJob({
       repository,
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       approvalId: approval.id,
       goalId: bundle.goal.id,
       taskId: approval.taskId,
@@ -872,7 +872,7 @@ describe("approval job route", () => {
       slackChannelId: "C123",
       slackMessageTs: "1710000000.000100",
       workspaceId: bundle.goal.workspaceId,
-      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID)
     });
 
     const queuedStatusResponse = await genericJobRoute(
@@ -922,7 +922,7 @@ describe("approval job route", () => {
     expectNoStoreHeaders(queuedStatusResponse);
 
     const claimedJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["approval_notification"],
       runnerId: "worker-approval-notification-job-replay-test",
       leaseMs: 30_000,
@@ -1000,8 +1000,8 @@ describe("approval job route", () => {
       };
       statusUrl: string;
     };
-    const replayedJob = await repository.getJob(replayPayload.job.id, SYSTEM_USER_ID);
-    const replayedBundle = await repository.getGoalBundleForUser(bundle.goal.id, SYSTEM_USER_ID);
+    const replayedJob = await repository.getJob(replayPayload.job.id, DEFAULT_OWNER_USER_ID);
+    const replayedBundle = await repository.getGoalBundleForUser(bundle.goal.id, DEFAULT_OWNER_USER_ID);
 
     expect(replayResponse.status).toBe(202);
     expect(replayPayload).toMatchObject({
@@ -1063,7 +1063,7 @@ describe("approval job route", () => {
     const { event, job } = await createAutopilotReplayFixture(repository);
 
     const claimedJob = await repository.claimNextJob({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kinds: ["autopilot_process"],
       runnerId: "worker-autopilot-job-replay-test",
       leaseMs: 30_000,
@@ -1098,8 +1098,8 @@ describe("approval job route", () => {
       };
       statusUrl: string;
     };
-    const replayedJob = await repository.getJob(replayPayload.job.id, SYSTEM_USER_ID);
-    const replayedEvent = (await repository.listAutopilotEvents(SYSTEM_USER_ID)).find(
+    const replayedJob = await repository.getJob(replayPayload.job.id, DEFAULT_OWNER_USER_ID);
+    const replayedEvent = (await repository.listAutopilotEvents(DEFAULT_OWNER_USER_ID)).find(
       (candidate) => candidate.id === event.id
     );
 

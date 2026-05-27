@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  SYSTEM_USER_ID,
+  DEFAULT_OWNER_USER_ID,
   createHumanActorContext,
   createSystemActorContext,
   type GoalBundle,
@@ -18,10 +18,10 @@ import { enqueueApprovalFollowUpJob } from "@agentic/worker-runtime";
 
 function buildContext() {
   return {
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     memories: [
       createMemoryRecord({
-        userId: SYSTEM_USER_ID,
+        userId: DEFAULT_OWNER_USER_ID,
         category: "style",
         memoryType: "confirmed",
         content: "Use concise approval summaries.",
@@ -29,7 +29,7 @@ function buildContext() {
         source: "test"
       })
     ],
-    integrations: buildDefaultIntegrationAccounts(SYSTEM_USER_ID)
+    integrations: buildDefaultIntegrationAccounts(DEFAULT_OWNER_USER_ID)
   };
 }
 
@@ -38,7 +38,7 @@ async function createRepositoryFixture() {
   const repository = createRepository({
     storePath: path.join(tempDir, "store.json")
   });
-  await repository.seedDefaults(SYSTEM_USER_ID);
+  await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
   return repository;
 }
 
@@ -58,7 +58,7 @@ async function createApprovedCommunicationsWedge() {
     bundle,
     approvalId: approval.id,
     decision: "approved",
-    actor: createHumanActorContext(SYSTEM_USER_ID),
+    actor: createHumanActorContext(DEFAULT_OWNER_USER_ID),
     scope: "once",
     rationale: "Approved for this explicit client follow-up."
   });
@@ -72,13 +72,13 @@ async function createApprovedCommunicationsWedge() {
   await repository.saveGoalBundle(approvedBundle);
   const job = await enqueueApprovalFollowUpJob({
     repository,
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     approvalId: approvedApproval.id,
     goalId: approvedBundle.goal.id,
     taskId: approvedApproval.taskId,
     decision: "approved",
     workspaceId: approvedBundle.goal.workspaceId,
-    actorContext: createSystemActorContext(SYSTEM_USER_ID),
+    actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
     actionIntent: approvedApproval.actionIntent
   });
 
@@ -98,7 +98,7 @@ function buildPrematureApprovalFollowUpJob(bundle: GoalBundle): JobRecord {
   }
 
   return createJobRecord({
-    userId: SYSTEM_USER_ID,
+    userId: DEFAULT_OWNER_USER_ID,
     kind: "approval_follow_up",
     payload: {
       type: "approval_follow_up",
@@ -112,7 +112,7 @@ function buildPrematureApprovalFollowUpJob(bundle: GoalBundle): JobRecord {
         actionId: "approval-action:premature"
       }
     },
-    actorContext: createSystemActorContext(SYSTEM_USER_ID),
+    actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
     idempotencyKey: `approval-follow-up:${approval.id}:approval-action:premature:approved`
   });
 }
@@ -189,7 +189,7 @@ describe("execution-grade vertical wedge evaluation", () => {
   it("rejects approval follow-up evidence without stable idempotency and action ids", async () => {
     const { approvedBundle, approvedApproval } = await createApprovedCommunicationsWedge();
     const jobWithoutIdempotency = createJobRecord({
-      userId: SYSTEM_USER_ID,
+      userId: DEFAULT_OWNER_USER_ID,
       kind: "approval_follow_up",
       payload: {
         type: "approval_follow_up",
@@ -203,7 +203,7 @@ describe("execution-grade vertical wedge evaluation", () => {
           actionId: null
         }
       },
-      actorContext: createSystemActorContext(SYSTEM_USER_ID),
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       idempotencyKey: null
     });
 
