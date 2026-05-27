@@ -128,6 +128,7 @@ describe("engineering hygiene gates", () => {
     const issues = checkReleaseContext([
       "apps/web/app/page.tsx",
       ".env.local",
+      ".antigravitycli/settings.json",
       "artifacts/security/report.json",
       "tmp/private-key.pem",
       "docs/token-notes.md",
@@ -138,6 +139,7 @@ describe("engineering hygiene gates", () => {
 
     expect(issues).toEqual([
       expect.objectContaining({ path: ".env.local", kind: "forbidden-path" }),
+      expect.objectContaining({ path: ".antigravitycli/settings.json", kind: "forbidden-path" }),
       expect.objectContaining({ path: "artifacts/security/report.json", kind: "forbidden-path" }),
       expect.objectContaining({ path: "tmp/private-key.pem", kind: "forbidden-extension" }),
       expect.objectContaining({ path: "docs/token-notes.md", kind: "secret-like-name" })
@@ -196,6 +198,7 @@ describe("engineering hygiene gates", () => {
           "release:check-context": "tsx scripts/check-release-context.ts",
           "remediation:verify": "tsx scripts/aos-remediation-dashboard.ts --verify-issue-query",
           "setup:check": "tsx scripts/check-first-run.ts",
+          "test:oss:ownership": "vitest run tests/oss-ownership.test.ts",
           typecheck: "tsc --noEmit"
         }
       },
@@ -204,6 +207,7 @@ describe("engineering hygiene gates", () => {
         "npm run typecheck",
         "npm run format:check",
         "npm run release:check-context",
+        "npm run test:oss:ownership",
         "npm run docs:validate"
       ].join("\n"),
       evidenceMap: createEvidenceMap()

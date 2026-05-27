@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import {
+  DEFAULT_OWNER_USER_ID,
   GitHubIssueAutomationModeSchema,
-  SYSTEM_USER_ID,
   createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
@@ -252,7 +252,7 @@ function readGitHubAppIssueSyncConfig(): GitHubAppIssueSyncConfig {
       DEFAULT_MAX_ISSUES_PER_REPOSITORY,
       MAX_ISSUES_PER_REPOSITORY
     ),
-    userId: readOptionalRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID", 120) ?? SYSTEM_USER_ID,
+    userId: readOptionalRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID", 120) ?? DEFAULT_OWNER_USER_ID,
     workspaceId: readOptionalRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_WORKSPACE_ID", 160)
   };
 }

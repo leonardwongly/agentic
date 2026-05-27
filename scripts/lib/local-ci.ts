@@ -121,6 +121,7 @@ export function buildLocalCiPlan(options: LocalCiPlanOptions = {}): LocalCiPlan 
   steps.push(npmRun("ci:validate-provenance"));
   steps.push(npmRun("ci:issue-theme-gates", ["--", "--assert-workflow"]));
   steps.push(npmRun("compliance:validate-registry"));
+  steps.push(npmRun("test:oss:ownership"));
 
   if (mode === "fast") {
     steps.push(npmRun("test:architecture:fitness"));

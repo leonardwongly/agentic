@@ -44,8 +44,8 @@ function jsonResponse(body: unknown, init?: ResponseInit) {
 
 function buildRepositoryResponse(overrides: Record<string, unknown> = {}) {
   return {
-    full_name: "leonardwongly/agentic",
-    html_url: "https://github.com/leonardwongly/agentic",
+    full_name: "octo-org/demo-agentic",
+    html_url: "https://github.com/octo-org/demo-agentic",
     default_branch: "main",
     private: true,
     ...overrides
@@ -58,7 +58,7 @@ function buildIssueResponse(overrides: Record<string, unknown> = {}) {
     node_id: "I_kwDOAgenticIssue134",
     title: "plan(first-run): remediate first-time user setup and workflow findings",
     body: "Create a comprehensive remediation plan and implement it.",
-    html_url: "https://github.com/leonardwongly/agentic/issues/134",
+    html_url: "https://github.com/octo-org/demo-agentic/issues/134",
     user: {
       login: "issue-author"
     },
@@ -107,7 +107,7 @@ describe("GitHub App issue sync route", () => {
     process.env.AGENTIC_GITHUB_APP_INSTALLATION_ID = "98765";
     process.env.AGENTIC_GITHUB_APP_PRIVATE_KEY = createTestPrivateKey();
     process.env.AGENTIC_GITHUB_APP_API_BASE_URL = "https://github.test";
-    process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES = "leonardwongly/agentic";
+    process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES = "octo-org/demo-agentic";
     process.env.AGENTIC_GITHUB_APP_SYNC_AUTOMATION_MODE = "work";
     delete process.env.AGENTIC_GITHUB_APP_SYNC_MAX_ISSUES_PER_REPOSITORY;
     delete process.env.AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID;
@@ -132,20 +132,20 @@ describe("GitHub App issue sync route", () => {
 
       expect(authorization).toBe("Bearer github-installation-token");
 
-      if (url === "https://github.test/repos/leonardwongly/agentic") {
+      if (url === "https://github.test/repos/octo-org/demo-agentic") {
         return jsonResponse(buildRepositoryResponse());
       }
 
-      if (url.startsWith("https://github.test/repos/leonardwongly/agentic/issues?")) {
+      if (url.startsWith("https://github.test/repos/octo-org/demo-agentic/issues?")) {
         return jsonResponse([
           buildIssueResponse(),
           buildIssueResponse({
             number: 135,
             node_id: "PR_kwDOAgentic135",
             title: "PR should not be treated as an issue",
-            html_url: "https://github.com/leonardwongly/agentic/pull/135",
+            html_url: "https://github.com/octo-org/demo-agentic/pull/135",
             pull_request: {
-              url: "https://api.github.com/repos/leonardwongly/agentic/pulls/135"
+              url: "https://api.github.com/repos/octo-org/demo-agentic/pulls/135"
             }
           })
         ]);
@@ -243,7 +243,7 @@ describe("GitHub App issue sync route", () => {
       automationMode: "work",
       repositories: [
         {
-          fullName: "leonardwongly/agentic",
+          fullName: "octo-org/demo-agentic",
           openIssuesSeen: 1,
           skippedPullRequests: 1
         }
@@ -253,7 +253,7 @@ describe("GitHub App issue sync route", () => {
           kind: "github_issue_intake",
           status: "queued",
           statusUrl: expect.stringMatching(/^\/api\/jobs\/[^/?#]+$/u),
-          repository: "leonardwongly/agentic",
+          repository: "octo-org/demo-agentic",
           issueNumber: 134,
           automationMode: "work"
         }
@@ -264,7 +264,7 @@ describe("GitHub App issue sync route", () => {
       type: "github_issue_intake",
       automationMode: "work",
       repository: {
-        fullName: "leonardwongly/agentic",
+        fullName: "octo-org/demo-agentic",
         private: true
       },
       issue: {
@@ -296,11 +296,11 @@ describe("GitHub App issue sync route", () => {
 
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer github-installation-token");
 
-      if (url === "https://github.test/repos/leonardwongly/agentic") {
+      if (url === "https://github.test/repos/octo-org/demo-agentic") {
         return jsonResponse(buildRepositoryResponse());
       }
 
-      if (url.startsWith("https://github.test/repos/leonardwongly/agentic/issues?")) {
+      if (url.startsWith("https://github.test/repos/octo-org/demo-agentic/issues?")) {
         return jsonResponse([
           buildIssueResponse({
             body: largeBody
@@ -516,7 +516,7 @@ describe("GitHub App issue sync route", () => {
         });
       }
 
-      if (url === "https://github.test/repos/leonardwongly/agentic") {
+      if (url === "https://github.test/repos/octo-org/demo-agentic") {
         expect(new Headers(init?.headers).get("authorization")).toBe("Bearer github-installation-token");
         return jsonResponse(buildRepositoryResponse({
           full_name: "other-owner/other-repo"
@@ -550,14 +550,14 @@ describe("GitHub App issue sync route", () => {
         });
       }
 
-      if (url === "https://github.test/repos/leonardwongly/agentic") {
+      if (url === "https://github.test/repos/octo-org/demo-agentic") {
         return jsonResponse(buildRepositoryResponse());
       }
 
-      if (url.startsWith("https://github.test/repos/leonardwongly/agentic/issues?")) {
+      if (url.startsWith("https://github.test/repos/octo-org/demo-agentic/issues?")) {
         return jsonResponse([buildIssueResponse()], {
           headers: {
-            link: '<https://metadata.internal/repos/leonardwongly/agentic/issues?page=2>; rel="next"'
+            link: '<https://metadata.internal/repos/octo-org/demo-agentic/issues?page=2>; rel="next"'
           }
         });
       }
@@ -618,7 +618,7 @@ describe("GitHub App issue sync route", () => {
   });
 
   it("does not enqueue partial work when a later repository sync fails", async () => {
-    process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES = "leonardwongly/agentic,leonardwongly/agentic-docs";
+    process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES = "octo-org/demo-agentic,octo-org/demo-agentic-docs";
     fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : input.toString();
 
@@ -631,22 +631,22 @@ describe("GitHub App issue sync route", () => {
 
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer github-installation-token");
 
-      if (url === "https://github.test/repos/leonardwongly/agentic") {
+      if (url === "https://github.test/repos/octo-org/demo-agentic") {
         return jsonResponse(buildRepositoryResponse());
       }
 
-      if (url.startsWith("https://github.test/repos/leonardwongly/agentic/issues?")) {
+      if (url.startsWith("https://github.test/repos/octo-org/demo-agentic/issues?")) {
         return jsonResponse([buildIssueResponse()]);
       }
 
-      if (url === "https://github.test/repos/leonardwongly/agentic-docs") {
+      if (url === "https://github.test/repos/octo-org/demo-agentic-docs") {
         return jsonResponse(buildRepositoryResponse({
-          full_name: "leonardwongly/agentic-docs",
-          html_url: "https://github.com/leonardwongly/agentic-docs"
+          full_name: "octo-org/demo-agentic-docs",
+          html_url: "https://github.com/octo-org/demo-agentic-docs"
         }));
       }
 
-      if (url.startsWith("https://github.test/repos/leonardwongly/agentic-docs/issues?")) {
+      if (url.startsWith("https://github.test/repos/octo-org/demo-agentic-docs/issues?")) {
         return jsonResponse({ message: "upstream unavailable" }, { status: 502 });
       }
 
@@ -673,7 +673,7 @@ describe("GitHub App issue sync route", () => {
     const payload = await response.json();
     const issueListUrl = fetchMock.mock.calls
       .map((call) => call[0] instanceof Request ? call[0].url : call[0].toString())
-      .find((url) => url.startsWith("https://github.test/repos/leonardwongly/agentic/issues?"));
+      .find((url) => url.startsWith("https://github.test/repos/octo-org/demo-agentic/issues?"));
     const jobs = await repository.listJobs({
       userId: SYSTEM_USER_ID,
       kinds: ["github_issue_intake"]

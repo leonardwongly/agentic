@@ -216,7 +216,7 @@ function defaultFocus(preferences?: Pick<BriefingPreferences, "focus">): Briefin
 }
 
 function defaultTimezone(preferences?: Pick<BriefingPreferences, "timezone">): string {
-  return preferences?.timezone ?? process.env.TZ ?? "Asia/Singapore";
+  return preferences?.timezone ?? process.env.AGENTIC_DEFAULT_TIMEZONE ?? process.env.TZ ?? "UTC";
 }
 
 export async function generateBriefing(params: {

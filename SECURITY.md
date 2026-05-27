@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Agentic is pre-1.0. Security fixes target the current `main` branch unless a maintainer explicitly announces a supported release line.
+Agentic security fixes target the current `main` branch and published release lines announced by maintainers.
 
 ## Reporting A Vulnerability
 
@@ -11,6 +11,11 @@ Do not open a public GitHub issue for vulnerabilities, exploit details, secrets,
 Use GitHub Private Vulnerability Reporting:
 
 https://github.com/leonardwongly/agentic/security/advisories/new
+
+This advisory link is for the canonical upstream repository. Fork maintainers
+who redistribute or operate their own instance should publish their own security
+reporting path for fork-specific deployments, secrets, infrastructure, and
+provider configuration.
 
 If that private reporting flow is unavailable, contact a maintainer privately and share only the minimum details needed to establish severity and a safe communication path.
 

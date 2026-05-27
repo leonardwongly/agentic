@@ -46,6 +46,7 @@ describe("auth helpers", () => {
   const originalTrustedClientIpHeader = process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER;
   const originalAllowProcessLocalAuthState = process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
   const originalEnableLocalDevKey = process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
+  const originalBootstrapUserId = process.env.AGENTIC_BOOTSTRAP_USER_ID;
   const databaseUrl = process.env.DATABASE_URL;
   const postgresIt = databaseUrl ? it : it.skip;
 
@@ -62,6 +63,11 @@ describe("auth helpers", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = originalTrustedClientIpHeader;
     process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = originalAllowProcessLocalAuthState;
+    if (originalBootstrapUserId === undefined) {
+      delete process.env.AGENTIC_BOOTSTRAP_USER_ID;
+    } else {
+      process.env.AGENTIC_BOOTSTRAP_USER_ID = originalBootstrapUserId;
+    }
     if (originalEnableLocalDevKey === undefined) {
       delete process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
     } else {
@@ -83,7 +89,7 @@ describe("auth helpers", () => {
     await expect(isAuthorizedSessionToken(token)).resolves.toBe(true);
     await expect(isAuthorizedSessionToken("not-a-token")).resolves.toBe(false);
     await expect(parseAuthorizedSessionToken(token)).resolves.toMatchObject({
-      userId: "user-primary"
+      userId: "owner"
     });
   });
 
@@ -260,7 +266,7 @@ describe("auth helpers", () => {
       )
     ).resolves.toMatchObject({
       authMethod: "access_key",
-      userId: "user-primary"
+      userId: "owner"
     });
   });
 
@@ -278,7 +284,7 @@ describe("auth helpers", () => {
       )
     ).resolves.toMatchObject({
       authMethod: "session",
-      userId: "user-primary"
+      userId: "owner"
     });
   });
 
@@ -294,6 +300,7 @@ describe("auth helpers", () => {
 
   it("marks session cookies as secure-only in production", () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.AGENTIC_BOOTSTRAP_USER_ID = "owner";
     process.env.NODE_ENV = "production";
 
     const cookie = createSessionCookie();
@@ -307,6 +314,7 @@ describe("auth helpers", () => {
 
   it("clears session cookies immediately in production", () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.AGENTIC_BOOTSTRAP_USER_ID = "owner";
     process.env.NODE_ENV = "production";
 
     const cookie = clearSessionCookie();

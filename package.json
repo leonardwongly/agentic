@@ -1,5 +1,6 @@
 {
   "name": "agentic",
+  "version": "1.0.0",
   "private": true,
   "license": "MIT",
   "description": "Trusted execution control plane for governed goals, approvals, automations, memories, documents, and integrations.",
@@ -62,6 +63,7 @@
     "test:architecture:fitness": "tsx scripts/check-architecture-fitness.ts",
     "test:parallel-worktree:fitness": "tsx scripts/check-parallel-worktree-fitness.ts",
     "test:performance:fitness": "tsx scripts/check-performance-fitness.ts && vitest run tests/performance-fitness.test.ts",
+    "test:oss:ownership": "vitest run tests/oss-ownership.test.ts",
     "test:smoke:capabilities": "tsx scripts/feature-capability-report.ts",
     "test:smoke:observability": "tsx scripts/observability-smoke.ts",
     "test:smoke:observability-export": "tsx scripts/observability-export-smoke.ts",

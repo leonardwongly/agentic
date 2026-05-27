@@ -13,7 +13,7 @@ The system is built around a bounded execution loop:
 
 ## Current State
 
-Agentic is implemented as a private modular monorepo. The current product surface includes:
+Agentic is implemented as an open-source modular monorepo. The current product surface includes:
 
 - a commitment-first dashboard
 - authenticated JSON APIs and operational health/readiness endpoints
@@ -61,9 +61,18 @@ nvm use
 npm install
 cp .env.example .env.local
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_BOOTSTRAP_USER_ID=owner
+export AGENTIC_BOOTSTRAP_DISPLAY_NAME="Instance Owner"
+export AGENTIC_DEFAULT_TIMEZONE=UTC
 npm run setup:check
 npm run dev
 ```
+
+When running from a fork, replace the clone URL and any GitHub integration
+allowlists with your own `<your-org>/<your-repo>` values. The canonical upstream
+for issues, security advisories, and source metadata is
+`https://github.com/leonardwongly/agentic`; installed instances are owned by the
+operator who sets the runtime environment, not by the upstream maintainer.
 
 Open [http://localhost:3000](http://localhost:3000).
 
@@ -130,6 +139,9 @@ Start from `.env.example`. Common variables:
 | Variable | Purpose |
 | --- | --- |
 | `AGENTIC_ACCESS_KEY` | Access key for dashboard session bootstrap and API automation. |
+| `AGENTIC_BOOTSTRAP_USER_ID` | Install-local owner/admin user id. Required for production owner resolution. |
+| `AGENTIC_BOOTSTRAP_DISPLAY_NAME` | Display name for the install-local owner seeded into new stores. |
+| `AGENTIC_DEFAULT_TIMEZONE` | Default timezone for seeded briefing/user preferences. Defaults to `UTC` when unset. |
 | `DATABASE_URL` | Enables the Postgres repository backend. Required in production. |
 | `AGENTIC_PUBLIC_BASE_URL` | Required in production for OAuth redirects, share links, and public URLs. |
 | `AGENTIC_RUNTIME_STORE_PATH` | Optional file-backed local store path. |
@@ -146,7 +158,7 @@ Optional integrations:
 - provider credential encryption: `AGENTIC_PROVIDER_SECRET_KEY`, `AGENTIC_PROVIDER_SECRET_KEY_VERSION`
 - Slack: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_DEFAULT_CHANNEL`
 - Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_DEFAULT_CHAT_ID`
-- GitHub issue intake: `AGENTIC_GITHUB_WEBHOOK_SECRET`, `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`
+- GitHub issue intake: `AGENTIC_GITHUB_WEBHOOK_SECRET`, `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`, optional `AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID`
 - GitHub App sync: `AGENTIC_GITHUB_APP_ID`, `AGENTIC_GITHUB_APP_INSTALLATION_ID`, `AGENTIC_GITHUB_APP_PRIVATE_KEY`, `AGENTIC_GITHUB_APP_SYNC_SECRET`
 
 See [`docs/runbooks/github-issue-autopilot.md`](docs/runbooks/github-issue-autopilot.md) for GitHub webhook and GitHub App setup.
@@ -188,6 +200,7 @@ npm run setup:check
 npm run lint
 npm run typecheck
 npm run format:check
+npm run test:oss:ownership
 npm test
 npm run build
 ```
@@ -222,6 +235,9 @@ Production requires Postgres, explicit migrations, production-safe auth state, r
 export NODE_ENV=production
 export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_BOOTSTRAP_USER_ID=owner
+export AGENTIC_BOOTSTRAP_DISPLAY_NAME="Instance Owner"
+export AGENTIC_DEFAULT_TIMEZONE=UTC
 export AGENTIC_PUBLIC_BASE_URL=https://agentic.example.com
 export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
 export AGENTIC_TRUST_PROXY_HEADERS=true
@@ -242,7 +258,24 @@ Worker process:
 npm run start:worker:prod
 ```
 
-Only trust proxy headers after confirming the ingress overwrites the configured client-IP header at the edge. The deployment runbook is [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md); the current Render Blueprint candidate is [`deploy/render/render.yaml`](deploy/render/render.yaml).
+Only trust proxy headers after confirming the ingress overwrites the configured client-IP header at the edge. Start with the provider-neutral self-hosting guide in [`docs/deployment/self-hosted.md`](docs/deployment/self-hosted.md). The deployment runbook is [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md); the Render Blueprint in [`deploy/render/render.yaml`](deploy/render/render.yaml) is one optional provider example.
+
+## Forking And Self-Hosting
+
+`leonardwongly/agentic` is the canonical upstream for this repository. Fork
+owners should keep upstream links in package metadata unless they are publishing
+their own distribution, but should configure runtime values for their own
+installation:
+
+- set `AGENTIC_BOOTSTRAP_USER_ID`, `AGENTIC_BOOTSTRAP_DISPLAY_NAME`, and `AGENTIC_DEFAULT_TIMEZONE`
+- set `AGENTIC_PUBLIC_BASE_URL` to the deployed origin they control
+- set `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES` to their own repositories
+- create their own GitHub App and provider secrets if they enable issue sync
+- keep maintainer-only historical evidence separate from user-facing setup
+
+Self-hosting does not grant the upstream maintainer access to your data or
+runtime. Access depends on the secrets, database, provider account, and GitHub
+App that you configure.
 
 ## Troubleshooting
 

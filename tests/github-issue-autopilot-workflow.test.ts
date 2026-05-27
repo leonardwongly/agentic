@@ -93,7 +93,7 @@ describe("GitHub issue autopilot workflow", () => {
     expect(workflow).not.toContain("console.log(secret");
     expect(workflow).not.toContain("console.error(secret");
     expect(runbook).toContain("disabled_manually");
-    expect(runbook).toContain("gh workflow enable github-app-issue-sync.yml --repo leonardwongly/agentic");
+    expect(runbook).toContain('gh workflow enable github-app-issue-sync.yml --repo "$AGENTIC_REPOSITORY"');
     expect(runbook).toContain("npm run github:app-sync:preflight -- --help");
     expect(runbook).toContain("npm run github:app-sync:preflight -- --provider-evidence-template");
     expect(runbook).toContain("npm run github:app-sync:preflight:collect -- --help");
@@ -112,9 +112,8 @@ describe("GitHub issue autopilot workflow", () => {
     expect(runbook).toContain("| #152 | All child production proof issues are closed");
     expect(runbook).toContain("Do not enable scheduled sync or run a");
     expect(runbook).toContain("live manual dispatch before #141 stable ingress");
-    expect(runbook).toContain("Do not waive `need_payment_info` by rewriting the production Blueprint");
-    expect(runbook).toContain("does not allow the");
-    expect(runbook).toContain("`free` plan for background workers");
+    expect(runbook).toContain("Do not waive the worker and durable-store requirements");
+    expect(runbook).toContain("production topology to a web-only shape");
     expect(runbook).toContain("equivalent web, worker, Postgres, HTTPS ingress");
   });
 });

@@ -12,6 +12,10 @@ Supported automation modes:
 
 ## Runtime Configuration
 
+Create these values in the installer-owned repository and deployment. Do not
+copy the upstream maintainer's repository secrets, GitHub App, installation id,
+or provider credentials.
+
 Set the same high-entropy secret in both places:
 
 - Agentic runtime environment: `AGENTIC_GITHUB_WEBHOOK_SECRET`
@@ -23,12 +27,12 @@ Set this GitHub repository variable:
 
 Required Agentic runtime environment:
 
-- `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`: comma-separated allowlist such as `owner/repo,another-owner/another-repo`.
+- `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`: comma-separated allowlist such as `<your-org>/<your-repo>,another-owner/another-repo`.
 
 Optional Agentic runtime environment:
 
-- `AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID`: owner for generated jobs; defaults to `SYSTEM_USER_ID`.
-- `AGENTIC_GITHUB_ISSUE_INTAKE_WORKSPACE_ID`: workspace scope for generated goal work; defaults to personal/system scope.
+- `AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID`: owner for generated jobs; defaults to the installer-owned `owner` user.
+- `AGENTIC_GITHUB_ISSUE_INTAKE_WORKSPACE_ID`: workspace scope for generated goal work; defaults to the owner personal scope.
 - `AGENTIC_GITHUB_ISSUE_WORK_LABEL`: label that enables `work` mode; defaults to `agentic:work`.
 - `AGENTIC_GITHUB_ISSUE_PLAN_LABEL`: label that enables `plan` mode; defaults to `agentic:plan`.
 - `AGENTIC_GITHUB_ISSUE_COMMAND_AUTHOR_ASSOCIATIONS`: comma-separated GitHub author associations allowed to run comment commands; defaults to `OWNER,MEMBER,COLLABORATOR`.
@@ -38,7 +42,8 @@ The workflow intentionally exits with a notice when the URL or secret is missing
 
 ## GitHub App Open Issue Sync
 
-Create a GitHub App and install it on the repositories listed in `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`.
+Create a GitHub App in your own user or organization account and install it on
+the repositories listed in `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`.
 
 Minimum GitHub App permissions:
 
@@ -65,11 +70,13 @@ GitHub repository configuration:
 - Secret `AGENTIC_GITHUB_APP_SYNC_SECRET`: same value as the Agentic runtime sync secret.
 - Variable `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL`: `https://<agentic-host>/api/github/issues/app/sync`.
 
-Confirm the repository caller surface by name only; do not print secret values:
+Confirm the repository caller surface by name only; do not print secret values.
+Replace `<your-org>/<your-repo>` with the repository that owns the workflow:
 
 ```bash
-gh secret list --repo leonardwongly/agentic
-gh variable list --repo leonardwongly/agentic
+export AGENTIC_REPOSITORY=<your-org>/<your-repo>
+gh secret list --repo "$AGENTIC_REPOSITORY"
+gh variable list --repo "$AGENTIC_REPOSITORY"
 ```
 
 The repository Actions secret inventory must include
@@ -100,15 +107,17 @@ runtime GitHub App secrets, Postgres readiness, and deployed worker checks are
 complete:
 
 ```bash
-gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq '{name,state,path}'
-gh workflow enable github-app-issue-sync.yml --repo leonardwongly/agentic
+export AGENTIC_REPOSITORY=<your-org>/<your-repo>
+gh api "repos/$AGENTIC_REPOSITORY/actions/workflows/github-app-issue-sync.yml" --jq '{name,state,path}'
+gh workflow enable github-app-issue-sync.yml --repo "$AGENTIC_REPOSITORY"
 ```
 
 After provisioning the target and configuring provider secrets, run the live
 preflight before manual dispatch. The preflight fails closed when the sync URL is
 still a temporary tunnel, the workflow is not `active`, required runtime config
-names are missing, Render has no deployed web/worker services, or the Blueprint
-still reports provider blockers such as `need_payment_info`.
+names are missing, provider web/worker services are absent, or provider evidence
+still reports blockers. Historical maintainer Render evidence is kept in
+[`docs/maintainers/render-production-evidence.md`](../maintainers/render-production-evidence.md).
 
 If you need the exact evidence inputs before exporting anything, use the help
 paths first. They print operator guidance without collecting live GitHub or
@@ -134,7 +143,7 @@ export AGENTIC_GITHUB_APP_ID=replace-this-with-provider-secret-value
 export AGENTIC_GITHUB_APP_INSTALLATION_ID=replace-this-with-provider-secret-value
 export AGENTIC_GITHUB_APP_PRIVATE_KEY=replace-this-with-provider-secret-value
 export AGENTIC_GITHUB_APP_SYNC_SECRET=replace-this-with-provider-secret-value
-export AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=leonardwongly/agentic
+export AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES=<your-org>/<your-repo>
 npm run github:app-sync:preflight:collect
 ```
 
@@ -151,9 +160,10 @@ inputs:
   management, and rollback evidence
 
 ```bash
-export AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE="$(gh api repos/leonardwongly/agentic/actions/workflows/github-app-issue-sync.yml --jq .state)"
-export AGENTIC_GITHUB_APP_ISSUE_SYNC_URL="$(gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo leonardwongly/agentic)"
-export AGENTIC_GITHUB_ACTIONS_SECRETS_JSON="$(gh secret list --repo leonardwongly/agentic --json name)"
+export AGENTIC_REPOSITORY=<your-org>/<your-repo>
+export AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE="$(gh api "repos/$AGENTIC_REPOSITORY/actions/workflows/github-app-issue-sync.yml" --jq .state)"
+export AGENTIC_GITHUB_APP_ISSUE_SYNC_URL="$(gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo "$AGENTIC_REPOSITORY")"
+export AGENTIC_GITHUB_ACTIONS_SECRETS_JSON="$(gh secret list --repo "$AGENTIC_REPOSITORY" --json name)"
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-the-runtime-access-key
 export AGENTIC_RENDER_SERVICES_JSON="$(render services list --output json)"
 export AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON="$(render blueprints validate deploy/render/render.yaml --output json)"
@@ -206,10 +216,10 @@ The ordered closeout sequence is:
 | Issue | Proof required before closing | Evidence command or source |
 | --- | --- | --- |
 | #141 | Stable HTTPS ingress exists, provider web and worker services exist, provider validation passes, `/api/health` and `/api/ready` pass, proxy-header overwrite behavior and rollback authority are documented. | `render services list --output json`, `render blueprints validate deploy/render/render.yaml --output json`, `AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON` for an approved alternate provider, `npm run deploy:ingress:check`, `npm run test:smoke:deployment` |
-| #142 | Runtime-only GitHub App credentials, sync secret, and allowlist are configured in the provider; GitHub Actions has only the route caller secret and stable sync URL; invalid bearer auth returns `401`. | `gh secret list --repo leonardwongly/agentic --json name`, `gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo leonardwongly/agentic`, `npm run github:app-sync:preflight:collect`, `npm run test:smoke:github-app-sync` |
+| #142 | Runtime-only GitHub App credentials, sync secret, and allowlist are configured in the provider; GitHub Actions has only the route caller secret and stable sync URL; invalid bearer auth returns `401`. | `gh secret list --repo "$AGENTIC_REPOSITORY" --json name`, `gh variable get AGENTIC_GITHUB_APP_ISSUE_SYNC_URL --repo "$AGENTIC_REPOSITORY"`, `npm run github:app-sync:preflight:collect`, `npm run test:smoke:github-app-sync` |
 | #143 | Target Postgres exists, migrations apply idempotently, schema readiness passes, shared-auth state is required, and deployed readiness proves Postgres-backed state. | `npm run db:migrate`, `npm run db:status -- --require-ready`, `npm run production:bootstrap:check`, `npm run test:smoke:deployment` |
 | #144 | Deployed worker is running against the same durable store as web/API, worker heartbeat is fresh, and a harmless job reaches completed or sanitized failed state without secret leakage. | provider worker logs, `/api/ready`, `npm run test:smoke:deployment-async`, job status evidence |
-| #145 | Manual GitHub App issue sync reaches the stable deployed route, returns `202` for valid auth, returns `401` for invalid auth, skips pull requests, handles duplicate dispatch safely, and the worker settles queued `github_issue_intake` jobs. | `gh workflow run github-app-issue-sync.yml --repo leonardwongly/agentic`, `gh run view <run-id> --repo leonardwongly/agentic --json status,conclusion,jobs,url`, `npm run test:smoke:github-app-sync` |
+| #145 | Manual GitHub App issue sync reaches the stable deployed route, returns `202` for valid auth, returns `401` for invalid auth, skips pull requests, handles duplicate dispatch safely, and the worker settles queued `github_issue_intake` jobs. | `gh workflow run github-app-issue-sync.yml --repo "$AGENTIC_REPOSITORY"`, `gh run view <run-id> --repo "$AGENTIC_REPOSITORY" --json status,conclusion,jobs,url`, `npm run test:smoke:github-app-sync` |
 | #146 | Rollout, rollback, disablement, secret rotation, residual risk, and observability evidence are captured and the manifest verifier passes. | `npm run release:closeout:evidence -- --json`, `npm run github:issues:completion-audit -- --json` |
 | #152 | All child production proof issues are closed and the live completion audit passes. | `npm run github:issues:completion-audit -- --json` |
 
@@ -235,20 +245,18 @@ installation token, raw issue body, or database URL.
 The closeout is intentionally sequential. Do not enable scheduled sync or run a
 live manual dispatch before #141 stable ingress, #142 runtime/repo
 configuration, #143 Postgres/shared-auth bootstrap, and #144 worker proof are
-complete. If any command returns a blocker such as `need_payment_info`,
-`disabled_manually`, a temporary tunnel URL, missing runtime config, absent
-Render services, or missing alternate-provider evidence, record that blocker on
-the relevant issue instead of marking the proof complete.
+complete. If any command returns a blocker such as `disabled_manually`, a
+temporary tunnel URL, missing runtime config, absent provider services, or
+missing alternate-provider evidence, record that blocker on the relevant issue
+instead of marking the proof complete.
 
-Do not waive `need_payment_info` by rewriting the production Blueprint to a
-free-only shape. Render supports free web services and free Postgres databases
-for preview or hobby workloads, but its Blueprint reference does not allow the
-`free` plan for background workers. The Agentic production proof requires the
-deployed worker in #144 and the live GitHub App sync canary in #145 to settle
-jobs against the same durable store as the web/API process, so the safe next
-step is provider billing/provisioning approval or an approved alternate
-provider with equivalent web, worker, Postgres, HTTPS ingress, secret
-management, and rollback controls.
+Do not waive the worker and durable-store requirements by rewriting the
+production topology to a web-only shape. The Agentic production proof requires
+the deployed worker in #144 and the live GitHub App sync canary in #145 to
+settle jobs against the same durable store as the web/API process, so the safe
+next step is provider provisioning approval or an approved alternate provider
+with equivalent web, worker, Postgres, HTTPS ingress, secret management, and
+rollback controls.
 
 ## Data Flow
 

@@ -32,6 +32,7 @@ describe("open-source readiness files", () => {
   it("publishes clear root package metadata without making workspace packages publishable", () => {
     const packageJson = JSON.parse(readRepoFile("package.json")) as {
       private?: boolean;
+      version?: string;
       license?: string;
       repository?: { url?: string };
       bugs?: { url?: string };
@@ -40,6 +41,7 @@ describe("open-source readiness files", () => {
     };
 
     expect(packageJson.private).toBe(true);
+    expect(packageJson.version).toBe("1.0.0");
     expect(packageJson.license).toBe("MIT");
     expect(packageJson.description).toContain("Trusted execution control plane");
     expect(packageJson.repository?.url).toBe("git+https://github.com/leonardwongly/agentic.git");

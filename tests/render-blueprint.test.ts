@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const blueprintPath = join(process.cwd(), "deploy", "render", "render.yaml");
 const deploymentRunbookPath = join(process.cwd(), "docs", "runbooks", "deployment.md");
+const maintainerRenderEvidencePath = join(process.cwd(), "docs", "maintainers", "render-production-evidence.md");
 
 function readBlueprint(): string {
   return readFileSync(blueprintPath, "utf8");
@@ -11,6 +12,10 @@ function readBlueprint(): string {
 
 function readDeploymentRunbook(): string {
   return readFileSync(deploymentRunbookPath, "utf8");
+}
+
+function readMaintainerRenderEvidence(): string {
+  return readFileSync(maintainerRenderEvidencePath, "utf8");
 }
 
 describe("Render Blueprint deployment target", () => {
@@ -91,12 +96,12 @@ describe("Render Blueprint deployment target", () => {
 
   it("documents that free-tier rewrites are not production waivers for the worker topology", () => {
     const runbook = readDeploymentRunbook();
+    const maintainerEvidence = readMaintainerRenderEvidence();
 
-    expect(runbook).toContain("Do not treat a free-tier Blueprint rewrite as a production waiver");
-    expect(runbook).toContain("not for");
-    expect(runbook).toContain("background workers");
-    expect(runbook).toContain("services[1]");
-    expect(runbook).toContain("need_payment_info");
-    expect(runbook).toContain("preDeployCommand");
+    expect(runbook).toContain("Historical maintainer Render evidence");
+    expect(runbook).toContain("docs/maintainers/render-production-evidence.md");
+    expect(maintainerEvidence).toContain("free-only Blueprint rewrite was not accepted");
+    expect(maintainerEvidence).toContain("background worker");
+    expect(maintainerEvidence).toContain("need_payment_info");
   });
 });

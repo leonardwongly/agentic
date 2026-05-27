@@ -3937,7 +3937,17 @@ export type WorkflowTemplate = z.infer<typeof WorkflowTemplateSchema>;
 export type WorkflowExecutionState = z.infer<typeof WorkflowExecutionStateSchema>;
 export type AgentExport = z.infer<typeof AgentExportSchema>;
 
-export const SYSTEM_USER_ID = "user-primary";
+export const DEFAULT_OWNER_USER_ID = "owner";
+export const DEFAULT_BOOTSTRAP_USER_ID = DEFAULT_OWNER_USER_ID;
+export const TEST_OWNER_USER_ID = "test-owner";
+
+/**
+ * Deprecated compatibility alias for the default installer-owned user.
+ * Prefer DEFAULT_OWNER_USER_ID for runtime defaults and TEST_OWNER_USER_ID for
+ * fixture-only tests so new code does not imply a global project-controlled
+ * system account.
+ */
+export const SYSTEM_USER_ID = DEFAULT_OWNER_USER_ID;
 
 export function deriveAgentImplementationTier(executionMode: AgentExecutionMode): AgentImplementationTier {
   switch (executionMode) {

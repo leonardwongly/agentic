@@ -3,12 +3,16 @@ npm-debug.log
 .git
 .github
 .claude
+.env
+.env.local
+.env.*
 .next
 apps/web/.next
 coverage
 playwright-report
 test-results
 .agentic
+.antigravitycli
 build
 docs/.DS_Store
 docs/superpowers/.DS_Store

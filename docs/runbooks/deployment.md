@@ -18,6 +18,9 @@ Set these variables for every production deployment:
 export NODE_ENV=production
 export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_BOOTSTRAP_USER_ID=owner
+export AGENTIC_BOOTSTRAP_DISPLAY_NAME="Instance Owner"
+export AGENTIC_DEFAULT_TIMEZONE=UTC
 ```
 
 Only set `AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE=true` when production is intentionally single-instance and that tradeoff has been approved.
@@ -27,7 +30,7 @@ Optional but commonly needed:
 ```bash
 export AGENTIC_SMOKE_BASE_URL=https://agentic.example.com
 export AGENTIC_SMOKE_ACCESS_KEY=replace-this-with-a-long-random-secret
-export AGENTIC_INGRESS_PROVIDER=render
+export AGENTIC_INGRESS_PROVIDER=self-hosted
 export AGENTIC_INGRESS_ENVIRONMENT=production-like
 export AGENTIC_INGRESS_ROLLOUT_MODE=manual-only
 export AGENTIC_INGRESS_ROLLBACK_AUTHORITY=platform-operator
@@ -59,6 +62,13 @@ been verified to overwrite the configured client-IP header at the edge.
 
 ## First Container Target Candidate
 
+For open-source installs, start with the provider-neutral guide in
+[`docs/deployment/self-hosted.md`](../deployment/self-hosted.md). It documents
+the portable web + worker + Postgres process layout, Docker Compose example,
+required installer-owned environment variables, startup order, health checks,
+backup expectations, and rollback posture. The Render Blueprint below is one
+provider example, not the canonical deployment path.
+
 The lowest-friction full Node/container target currently supported by the repository is a Render Blueprint deployment using the checked-in Dockerfile. Render's Blueprint model supports the three resources Agentic needs for the first production-like target: a Docker web service for the Next.js web/API process, a Docker background worker service for the durable worker loop, and managed Postgres shared by both processes.
 
 The prepared Blueprint template lives at `deploy/render/render.yaml` instead of the repository root. This is deliberate: Render's default Blueprint path is `render.yaml`, so keeping the template under `deploy/render/` prevents accidental provider sync before #141 has an approved provider, owner, hostname, and rollback authority.
@@ -78,21 +88,10 @@ pre-deploy command so migrations run once before the web deploy is promoted; the
 worker validates the schema at startup and fails closed instead of racing the
 migration step.
 
-Current provider blocker:
-
-- `render blueprints validate deploy/render/render.yaml --output json` reaches
-  Render but currently returns `need_payment_info` for `agentic-postgres`,
-  `agentic-web`, and `agentic-worker`.
-- No Render services or datastores have been created yet. Add payment info to
-  the `leonardwongly` Render workspace before the first Blueprint sync.
-- Do not treat a free-tier Blueprint rewrite as a production waiver. Render's
-  Blueprint reference permits `free` for web services and Postgres, but not for
-  background workers, private services, or cron jobs. A throwaway validation of
-  a free web/database plus starter worker variant still failed on
-  `services[1]` with `need_payment_info`, and removing the web
-  `preDeployCommand` to satisfy free-tier validation would drop the migration
-  gate required for this production topology. See
-  <https://render.com/docs/blueprint-spec> and <https://render.com/free>.
+Historical maintainer Render evidence, including the earlier `need_payment_info`
+provider blocker, is preserved in
+[`docs/maintainers/render-production-evidence.md`](../maintainers/render-production-evidence.md).
+It is not required setup for open-source users.
 
 Required confirmation before provider setup:
 
@@ -105,6 +104,7 @@ Required confirmation before provider setup:
 After billing is available, run the first provider sync manually:
 
 ```bash
+export AGENTIC_REPOSITORY=<your-org>/<your-repo>
 render workspace current --output json
 render blueprints validate deploy/render/render.yaml --output json
 ```
@@ -125,17 +125,18 @@ Actions or the GitHub App issue sync URL.
 After the target is approved and created, configure GitHub Actions for provider-backed staging with the stable base origin and provider deploy command:
 
 ```bash
-gh secret set STAGING_BASE_URL --repo leonardwongly/agentic --body "https://agentic.example.com"
-gh secret set STAGING_SMOKE_ACCESS_KEY --repo leonardwongly/agentic --body "<same class of value as AGENTIC_ACCESS_KEY>"
-gh variable set STAGING_INGRESS_PROVIDER --repo leonardwongly/agentic --body "render"
-gh variable set STAGING_INGRESS_ENVIRONMENT --repo leonardwongly/agentic --body "production-like"
-gh variable set STAGING_INGRESS_ROLLOUT_MODE --repo leonardwongly/agentic --body "manual-only"
-gh variable set STAGING_INGRESS_ROLLBACK_AUTHORITY --repo leonardwongly/agentic --body "<operator-or-team>"
-gh variable set STAGING_TRUST_PROXY_HEADERS --repo leonardwongly/agentic --body "true"
-gh variable set STAGING_PROXY_HEADER_OVERWRITE_CONFIRMED --repo leonardwongly/agentic --body "true"
-gh variable set STAGING_TRUSTED_CLIENT_IP_HEADER --repo leonardwongly/agentic --body "x-forwarded-for"
-gh variable set STAGING_DEPLOY_BIN --repo leonardwongly/agentic --body "<provider deploy executable>"
-gh secret set STAGING_DEPLOY_ARGS_JSON --repo leonardwongly/agentic --body '["<provider>","<args>"]'
+export AGENTIC_REPOSITORY=<your-org>/<your-repo>
+gh secret set STAGING_BASE_URL --repo "$AGENTIC_REPOSITORY" --body "https://agentic.example.com"
+gh secret set STAGING_SMOKE_ACCESS_KEY --repo "$AGENTIC_REPOSITORY" --body "<same class of value as AGENTIC_ACCESS_KEY>"
+gh variable set STAGING_INGRESS_PROVIDER --repo "$AGENTIC_REPOSITORY" --body "<provider>"
+gh variable set STAGING_INGRESS_ENVIRONMENT --repo "$AGENTIC_REPOSITORY" --body "production-like"
+gh variable set STAGING_INGRESS_ROLLOUT_MODE --repo "$AGENTIC_REPOSITORY" --body "manual-only"
+gh variable set STAGING_INGRESS_ROLLBACK_AUTHORITY --repo "$AGENTIC_REPOSITORY" --body "<operator-or-team>"
+gh variable set STAGING_TRUST_PROXY_HEADERS --repo "$AGENTIC_REPOSITORY" --body "true"
+gh variable set STAGING_PROXY_HEADER_OVERWRITE_CONFIRMED --repo "$AGENTIC_REPOSITORY" --body "true"
+gh variable set STAGING_TRUSTED_CLIENT_IP_HEADER --repo "$AGENTIC_REPOSITORY" --body "x-forwarded-for"
+gh variable set STAGING_DEPLOY_BIN --repo "$AGENTIC_REPOSITORY" --body "<provider deploy executable>"
+gh secret set STAGING_DEPLOY_ARGS_JSON --repo "$AGENTIC_REPOSITORY" --body '["<provider>","<args>"]'
 ```
 
 Do not set `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL` until the deployed stable URL passes `/api/health`, `/api/ready`, and the deployment smoke checks.
@@ -144,7 +145,7 @@ Use the stable ingress preflight before a provider-backed deployment:
 
 ```bash
 export NODE_ENV=production
-export AGENTIC_INGRESS_PROVIDER=render
+export AGENTIC_INGRESS_PROVIDER=<provider>
 export AGENTIC_INGRESS_ENVIRONMENT=production-like
 export AGENTIC_INGRESS_ROLLOUT_MODE=manual-only
 export AGENTIC_INGRESS_ROLLBACK_AUTHORITY=platform-operator

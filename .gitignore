@@ -10,5 +10,6 @@ docs-preview.md
 .env.local
 .DS_Store
 .agentic
+.antigravitycli
 test-results
 artifacts
