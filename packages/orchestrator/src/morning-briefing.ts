@@ -18,7 +18,7 @@ import {
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
-import { runAgent } from "@agentic/agents";
+import { runAgentWithModel } from "@agentic/agents";
 import { createTask, createWorkflowState, recomputeWorkflowStatuses } from "@agentic/execution";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
 import { createActionLog } from "@agentic/observability";
@@ -364,7 +364,7 @@ export async function generateBriefing(params: {
       state
     });
 
-    const agentResult = await runAgent(task, scenarioTitle);
+    const agentResult = await runAgentWithModel(task, scenarioTitle);
     const nextTask = TaskSchema.parse({
       ...task,
       artifactIds: agentResult.artifacts.map((artifact) => artifact.id)

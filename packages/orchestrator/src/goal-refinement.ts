@@ -16,7 +16,7 @@ import {
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { createTask } from "@agentic/execution";
-import { runAgent } from "@agentic/agents";
+import { runAgentWithModel } from "@agentic/agents";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
 import { calculateNormalizedEditDistance, createActionLog } from "@agentic/observability";
 import { buildPolicyDecisionTrace, riskFromCapabilities, simulateTaskPolicy, type PolicyReplayValidation } from "@agentic/policy";
@@ -370,7 +370,7 @@ export async function refineGoal(params: {
       state
     });
 
-    const agentResult = await runAgent(task, bundle.goal.title);
+    const agentResult = await runAgentWithModel(task, bundle.goal.title);
     const nextTask = TaskSchema.parse({
       ...task,
       artifactIds: agentResult.artifacts.map((a) => a.id)

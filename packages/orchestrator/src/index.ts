@@ -38,7 +38,7 @@ import {
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
-import { runAgent } from "@agentic/agents";
+import { runAgentWithModel } from "@agentic/agents";
 import { createTask, createWorkflowState, recomputeWorkflowStatuses, transitionTaskState } from "@agentic/execution";
 import { inferCapabilitiesFromRequest, planActionExecution } from "@agentic/integrations";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
@@ -949,7 +949,7 @@ export async function processUserRequest(params: {
         workspaceId
       })
     });
-    const agentResult = await runAgent(task, catalog.title, {
+    const agentResult = await runAgentWithModel(task, catalog.title, {
       agentDefinition: params.agentDefinition,
       requestContext: request
     });
