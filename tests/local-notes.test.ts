@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -69,6 +69,18 @@ describe("local notes adapter", () => {
         basePath
       )
     ).rejects.toThrow();
+  });
+
+  it("rejects symlinked notes that point outside the notes directory", async () => {
+    const basePath = await mkdtemp(path.join(os.tmpdir(), "agentic-notes-"));
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "agentic-notes-outside-"));
+    const outsideNotePath = path.join(outsideRoot, "outside.md");
+
+    await writeFile(outsideNotePath, "# Outside Secret\n\nleaked-through-symlink\n", "utf8");
+    await symlink(outsideNotePath, path.join(basePath, "linked-note.md"));
+
+    await expect(readLocalNote("linked-note", basePath)).rejects.toThrow("Local note was not found.");
+    await expect(listLocalNotes(basePath)).resolves.toEqual([]);
   });
 
   it("keeps duplicate titles distinct and preserves trimmed unicode-rich titles", async () => {

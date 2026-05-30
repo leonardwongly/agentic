@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
+import { isIP } from "node:net";
 import { z } from "zod";
 import {
   GitHubIssueAutomationModeSchema,
-  SYSTEM_USER_ID,
   createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
@@ -14,11 +14,13 @@ import {
   withApiTelemetry
 } from "../../../../../../lib/api-response";
 import { getSeededRepository } from "../../../../../../lib/server";
+import { resolveBootstrapOwnerUserId } from "../../../../../../lib/instance-owner";
 
 export const runtime = "nodejs";
 
 const GITHUB_API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_API_BASE_URL = "https://api.github.com";
+const DEFAULT_GITHUB_API_HOSTNAME = "api.github.com";
 const DEFAULT_MAX_ISSUES_PER_REPOSITORY = 100;
 const MAX_ISSUES_PER_REPOSITORY = 500;
 const MAX_GITHUB_ISSUE_BODY_LENGTH = 100_000;
@@ -119,6 +121,10 @@ function readOptionalRuntimeId(envName: string, maxLength: number): string | nul
   return value;
 }
 
+function resolveIssueIntakeUserId(): string {
+  return readOptionalRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID", 120) ?? resolveBootstrapOwnerUserId();
+}
+
 function readPositiveIntegerEnv(name: string, fallback: number, max: number): number {
   const raw = process.env[name]?.trim() ?? "";
 
@@ -155,6 +161,61 @@ function parseCsvSet(value: string, maxItems: number): Set<string> {
   }
 
   return result;
+}
+
+function isTrue(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === "true";
+}
+
+function isUnsafeIpLiteral(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
+  const ipVersion = isIP(normalized);
+
+  if (ipVersion === 4) {
+    const [first = 0, second = 0] = normalized.split(".").map((part) => Number(part));
+    return (
+      first === 0 ||
+      first === 10 ||
+      first === 127 ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168)
+    );
+  }
+
+  if (ipVersion === 6) {
+    return normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80");
+  }
+
+  return false;
+}
+
+function assertSafeGitHubApiBaseUrl(url: URL) {
+  if (url.protocol !== "https:") {
+    throw new ApiRouteError(503, "AGENTIC_GITHUB_APP_API_BASE_URL must use https.");
+  }
+
+  if (url.username || url.password) {
+    throw new ApiRouteError(503, "AGENTIC_GITHUB_APP_API_BASE_URL must not include credentials.");
+  }
+
+  if (url.search || url.hash) {
+    throw new ApiRouteError(503, "AGENTIC_GITHUB_APP_API_BASE_URL must not include query or fragment components.");
+  }
+
+  if (isUnsafeIpLiteral(url.hostname)) {
+    throw new ApiRouteError(503, "AGENTIC_GITHUB_APP_API_BASE_URL must not target private or loopback IP addresses.");
+  }
+}
+
+function readAllowedEnterpriseGitHubApiHosts(): Set<string> {
+  const raw = process.env.AGENTIC_GITHUB_APP_ALLOWED_API_HOSTS?.trim() ?? "";
+
+  if (!raw) {
+    return new Set();
+  }
+
+  return parseCsvSet(raw, 20);
 }
 
 function readAllowedRepositories(): string[] {
@@ -204,8 +265,23 @@ function readGitHubApiBaseUrl(): string {
     throw new ApiRouteError(503, "AGENTIC_GITHUB_APP_API_BASE_URL is invalid.");
   }
 
-  if (url.protocol !== "https:") {
-    throw new ApiRouteError(503, "AGENTIC_GITHUB_APP_API_BASE_URL must use https.");
+  assertSafeGitHubApiBaseUrl(url);
+
+  const hostname = url.hostname.toLowerCase();
+
+  if (hostname !== DEFAULT_GITHUB_API_HOSTNAME) {
+    if (!isTrue(process.env.AGENTIC_GITHUB_APP_ALLOW_ENTERPRISE_HOSTS)) {
+      throw new ApiRouteError(
+        503,
+        "AGENTIC_GITHUB_APP_API_BASE_URL must use api.github.com unless enterprise GitHub API hosts are explicitly allowed."
+      );
+    }
+
+    const allowedHosts = readAllowedEnterpriseGitHubApiHosts();
+
+    if (!allowedHosts.has(hostname)) {
+      throw new ApiRouteError(503, "AGENTIC_GITHUB_APP_API_BASE_URL host is not in AGENTIC_GITHUB_APP_ALLOWED_API_HOSTS.");
+    }
   }
 
   return url.toString().replace(/\/$/u, "");
@@ -246,7 +322,7 @@ function readGitHubAppIssueSyncConfig(): GitHubAppIssueSyncConfig {
       DEFAULT_MAX_ISSUES_PER_REPOSITORY,
       MAX_ISSUES_PER_REPOSITORY
     ),
-    userId: readOptionalRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID", 120) ?? SYSTEM_USER_ID,
+    userId: resolveIssueIntakeUserId(),
     workspaceId: readOptionalRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_WORKSPACE_ID", 160)
   };
 }

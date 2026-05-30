@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import {
-  SYSTEM_USER_ID,
   createSystemActorContext,
   nowIso
 } from "@agentic/contracts";
@@ -10,9 +9,11 @@ import {
   ApiRouteError,
   handleOperationalApiError,
   operationalJson,
+  readBoundedRequestText,
   withApiTelemetry
 } from "../../../../../lib/api-response";
 import { getSeededRepository } from "../../../../../lib/server";
+import { resolveBootstrapOwnerUserId } from "../../../../../lib/instance-owner";
 
 export const runtime = "nodejs";
 
@@ -109,6 +110,10 @@ function readBoundedRuntimeId(envName: string, maxLength: number): string | null
   }
 
   return value;
+}
+
+function resolveIssueIntakeUserId(): string {
+  return readBoundedRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID", 120) ?? resolveBootstrapOwnerUserId();
 }
 
 function requireWebhookSecret(): string {
@@ -324,6 +329,7 @@ function isBotLogin(login: string | null): boolean {
 }
 
 function authorizeCommentCommand(params: {
+  command: "work" | "plan";
   senderLogin: string | null;
   senderType: string | null;
   commentAuthorAssociation: string | null;
@@ -336,6 +342,10 @@ function authorizeCommentCommand(params: {
   }
 
   const allowedLogins = readCommandAllowedLogins();
+
+  if (params.command === "work" && !allowedLogins) {
+    return { authorized: false, reason: "unauthorized_sender" };
+  }
 
   if (allowedLogins && (!senderLogin || !allowedLogins.has(senderLogin.toLowerCase()))) {
     return { authorized: false, reason: "unauthorized_sender" };
@@ -393,17 +403,16 @@ export async function POST(request: Request) {
         return operationalJson({ error: "GitHub issue webhook payload is too large." }, { status: 413 });
       }
 
-      const rawBody = await request.text();
-
-      if (Buffer.byteLength(rawBody, "utf8") > MAX_GITHUB_ISSUE_WEBHOOK_BYTES) {
-        return operationalJson({ error: "GitHub issue webhook payload is too large." }, { status: 413 });
-      }
-
       const signature = request.headers.get("x-hub-signature-256") ?? "";
 
       if (!signature) {
         return operationalJson({ error: "Missing GitHub signature header." }, { status: 401 });
       }
+
+      const rawBody = await readBoundedRequestText(request, {
+        maxBytes: MAX_GITHUB_ISSUE_WEBHOOK_BYTES,
+        tooLargeMessage: "GitHub issue webhook payload is too large."
+      });
 
       if (!verifyGitHubSignature({ rawBody, signature, secret })) {
         return operationalJson({ error: "Invalid GitHub signature." }, { status: 401 });
@@ -429,6 +438,11 @@ export async function POST(request: Request) {
         senderLogin: string | null;
         triggerLabel: string | null;
         command: string | null;
+        commandActor: {
+          login: string | null;
+          type: string | null;
+          authorAssociation: string | null;
+        } | null;
         triggerId: string | null;
       } | null = null;
 
@@ -453,6 +467,7 @@ export async function POST(request: Request) {
             senderLogin: payload.sender?.login?.trim() || null,
             triggerLabel: null,
             command: null,
+            commandActor: null,
             triggerId: `issues:${payload.action}`
           };
         } else if (payload.action === "labeled") {
@@ -471,6 +486,7 @@ export async function POST(request: Request) {
             senderLogin: payload.sender?.login?.trim() || null,
             triggerLabel: labelAutomation.labelName,
             command: null,
+            commandActor: null,
             triggerId: `issues:labeled:${normalizeLabel(labelAutomation.labelName ?? labelAutomation.mode)}`
           };
         } else {
@@ -501,6 +517,7 @@ export async function POST(request: Request) {
 
         const senderLogin = payload.sender?.login?.trim() || payload.comment.user?.login?.trim() || null;
         const authorization = authorizeCommentCommand({
+          command,
           senderLogin,
           senderType: payload.sender?.type?.trim() || payload.comment.user?.type?.trim() || null,
           commentAuthorAssociation: payload.comment.author_association?.trim() || null
@@ -519,6 +536,11 @@ export async function POST(request: Request) {
           senderLogin,
           triggerLabel: null,
           command: `/agentic ${command}`,
+          commandActor: {
+            login: senderLogin,
+            type: payload.sender?.type?.trim() || payload.comment.user?.type?.trim() || null,
+            authorAssociation: payload.comment.author_association?.trim() || null
+          },
           triggerId: `issue_comment:created:${payload.comment.id}`
         };
       }
@@ -529,7 +551,7 @@ export async function POST(request: Request) {
 
       assertRepositoryAllowed(selected.repository.full_name);
 
-      const userId = readBoundedRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID", 120) ?? SYSTEM_USER_ID;
+      const userId = resolveIssueIntakeUserId();
       const workspaceId = readBoundedRuntimeId("AGENTIC_GITHUB_ISSUE_INTAKE_WORKSPACE_ID", 160);
       const repository = await getSeededRepository();
       const job = await enqueueGitHubIssueIntakeJob({
@@ -564,7 +586,8 @@ export async function POST(request: Request) {
             action: selected.action,
             labelName: selected.triggerLabel,
             command: selected.command,
-            triggerId: selected.triggerId
+            triggerId: selected.triggerId,
+            commandActor: selected.commandActor
           },
           workspaceId,
           agentId: null

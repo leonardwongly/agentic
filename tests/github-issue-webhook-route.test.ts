@@ -274,6 +274,31 @@ describe("GitHub issue webhook route", () => {
     expect(jobs).toHaveLength(0);
   });
 
+  it("rejects missing GitHub signatures before consuming the request body", async () => {
+    const body = JSON.stringify(buildIssuePayload());
+    const request = new Request("http://localhost/api/github/issues/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "issues",
+        "x-github-delivery": "delivery-missing-signature"
+      },
+      body
+    });
+
+    const response = await githubIssueWebhookRoute(request);
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Missing GitHub signature header." });
+    expect(await request.text()).toBe(body);
+    expect(jobs).toHaveLength(0);
+    expectOperationalNoStoreHeaders(response);
+  });
+
   it("acknowledges non-opened issue actions without enqueueing work", async () => {
     const response = await githubIssueWebhookRoute(buildSignedRequest(buildIssuePayload({ action: "edited" })));
     const jobs = await repository.listJobs({
@@ -359,6 +384,8 @@ describe("GitHub issue webhook route", () => {
   });
 
   it("enqueues explicit work mode from an authorized exact issue comment command", async () => {
+    process.env.AGENTIC_GITHUB_ISSUE_COMMAND_ALLOWED_LOGINS = "repo-member";
+
     const response = await githubIssueWebhookRoute(
       buildSignedRequest(buildIssueCommentPayload(), { event: "issue_comment" })
     );
@@ -384,7 +411,65 @@ describe("GitHub issue webhook route", () => {
         action: "created",
         triggerLabel: null,
         command: "/agentic work",
+        commandActor: {
+          login: "repo-member",
+          type: "User",
+          authorAssociation: "MEMBER"
+        },
         triggerId: "issue_comment:created:9901"
+      }
+    });
+  });
+
+  it("requires an explicit login allowlist before issue comments can trigger work mode", async () => {
+    const response = await githubIssueWebhookRoute(
+      buildSignedRequest(buildIssueCommentPayload(), { event: "issue_comment" })
+    );
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({
+      ok: true,
+      skipped: true,
+      reason: "unauthorized_sender"
+    });
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("allows plan-mode issue comments through association policy without a work allowlist", async () => {
+    const response = await githubIssueWebhookRoute(
+      buildSignedRequest(buildIssueCommentPayload({
+        comment: {
+          ...buildIssueCommentPayload().comment,
+          body: "/agentic plan"
+        }
+      }), { event: "issue_comment" })
+    );
+    const payload = await response.json();
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(202);
+    expect(payload.job).toMatchObject({
+      kind: "github_issue_intake",
+      repository: "leonardwongly/agentic",
+      issueNumber: 74,
+      automationMode: "plan"
+    });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.payload.metadata).toMatchObject({
+      event: "issue_comment",
+      action: "created",
+      command: "/agentic plan",
+      commandActor: {
+        login: "repo-member",
+        type: "User",
+        authorAssociation: "MEMBER"
       }
     });
   });

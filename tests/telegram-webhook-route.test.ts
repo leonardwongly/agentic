@@ -566,6 +566,59 @@ describe("telegram webhook route", () => {
     resetTelegramApprovalActionStoreForTests();
   });
 
+  it("rejects Telegram webhook payloads with unsupported content types", async () => {
+    const response = await telegramWebhookRoute(
+      new Request("http://localhost/api/telegram/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "text/plain",
+          "x-telegram-bot-api-secret-token": "telegram-secret"
+        },
+        body: JSON.stringify({ update_id: 1 })
+      })
+    );
+
+    expect(response.status).toBe(415);
+    expect(await response.json()).toEqual({ error: "Content-Type must be application/json." });
+  });
+
+  it("rejects oversized Telegram webhook payloads before JSON parsing", async () => {
+    const body = JSON.stringify({
+      update_id: 1,
+      padding: "x".repeat(70_000)
+    });
+    const response = await telegramWebhookRoute(
+      new Request("http://localhost/api/telegram/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(body.length),
+          "x-telegram-bot-api-secret-token": "telegram-secret"
+        },
+        body
+      })
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Request body is too large." });
+  });
+
+  it("rejects malformed Telegram webhook JSON", async () => {
+    const response = await telegramWebhookRoute(
+      new Request("http://localhost/api/telegram/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "telegram-secret"
+        },
+        body: "{"
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Request body must be valid JSON." });
+  });
+
   it("binds approve actions to the mapped Telegram actor", async () => {
     const actions = await createTelegramApprovalActions({
       approvalId: "approval-safe",

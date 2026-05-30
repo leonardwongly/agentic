@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { postDashboardCoreLoopEvent, type DashboardCockpitTelemetryVariant } from "../lib/core-loop-client";
 
 type Command = {
@@ -19,6 +19,7 @@ type CommandPaletteProps = {
   onLogout: () => void;
   isPending: boolean;
   cockpitVariant?: DashboardCockpitTelemetryVariant;
+  defaultAccountKeywords?: string[];
 };
 
 export function CommandPalette({
@@ -27,7 +28,8 @@ export function CommandPalette({
   onNavigateToSection,
   onLogout,
   isPending,
-  cockpitVariant = "legacy"
+  cockpitVariant = "legacy",
+  defaultAccountKeywords = []
 }: CommandPaletteProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -118,14 +120,45 @@ export function CommandPalette({
     }
   ];
 
-  const filteredCommands = query.trim()
-    ? commands.filter((cmd) => {
-        const q = query.toLowerCase();
-        return cmd.label.toLowerCase().includes(q)
-          || cmd.description.toLowerCase().includes(q)
-          || cmd.keywords.some((k) => k.includes(q));
-      })
-    : commands;
+  const filteredCommands = useMemo(() => {
+    if (!query.trim()) return commands;
+
+    const lowerQuery = query.toLowerCase();
+    const scored = commands.map((cmd) => {
+      let score = 0;
+      const label = cmd.label.toLowerCase();
+      const desc = cmd.description.toLowerCase();
+      const keywords = cmd.keywords.join(" ").toLowerCase();
+
+      // Exact match in label gets highest boost
+      if (label === lowerQuery) score += 100;
+      // Starts with query is very strong
+      else if (label.startsWith(lowerQuery)) score += 50;
+      // Contains query is good
+      else if (label.includes(lowerQuery)) score += 25;
+
+      // Description and keywords matches
+      if (desc.includes(lowerQuery)) score += 10;
+      if (keywords.includes(lowerQuery)) score += 15;
+
+      // Bonus for "default account" items
+      if (defaultAccountKeywords.length > 0) {
+        const matchesAccount = defaultAccountKeywords.some(
+          (k) => label.includes(k.toLowerCase()) || desc.includes(k.toLowerCase()) || keywords.includes(k.toLowerCase())
+        );
+        if (matchesAccount) score += 20;
+      } else if (cmd.keywords.includes("default") || cmd.keywords.includes("personal")) {
+        score += 5;
+      }
+
+      return { cmd, score };
+    });
+
+    return scored
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((s) => s.cmd);
+  }, [query, commands]);
 
   const close = useCallback(() => {
     setIsOpen(false);

@@ -22,6 +22,7 @@ import type {
   EvidenceRecord,
   GoalBundle,
   GoalBundlePage,
+  LlmCacheEntry,
   GoalShareRecord,
   GoalShareStatus,
   GoalTemplate,
@@ -274,7 +275,7 @@ export type AutopilotEventClaim =
 
 export class JobMutationError extends Error {
   constructor(
-    public readonly code: "not_found" | "not_running" | "not_owner",
+    public readonly code: "not_found" | "not_running" | "not_owner" | "lease_expired",
     message: string
   ) {
     super(message);
@@ -395,6 +396,13 @@ export type AgenticRepository = {
   retryJob(params: {
     jobId: string;
     runnerId: string;
+    failedAt?: string;
+    availableAt: string;
+    error: string;
+  }): Promise<JobRecord>;
+  releaseExpiredJobLease(params: {
+    jobId: string;
+    releasedAt: string;
     availableAt: string;
     error: string;
   }): Promise<JobRecord>;
@@ -443,6 +451,8 @@ export type AgenticRepository = {
   saveWorkflowTemplate(template: WorkflowCanvasTemplate): Promise<WorkflowCanvasTemplate>;
   deleteWorkflowTemplate(templateId: string, userId?: string): Promise<void>;
   getDashboardData(userId?: string): Promise<DashboardData>;
+  getLlmCache(key: string): Promise<LlmCacheEntry | null>;
+  setLlmCache(entry: LlmCacheEntry): Promise<void>;
   listAgents(userId?: string): Promise<AgentDefinition[]>;
   getAgent(agentId: string, userId?: string): Promise<AgentDefinition | null>;
   saveAgent(agent: AgentDefinition): Promise<AgentDefinition>;

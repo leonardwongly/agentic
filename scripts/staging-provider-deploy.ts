@@ -1,4 +1,9 @@
-import { parseDeployTimeoutMs, parseProviderDeployConfig, runProviderDeployCommand } from "./lib/staging-provider-deploy";
+import {
+  buildProviderDeployEnv,
+  parseDeployTimeoutMs,
+  parseProviderDeployConfig,
+  runProviderDeployCommand
+} from "./lib/staging-provider-deploy";
 
 async function main() {
   const config = parseProviderDeployConfig(process.env, {
@@ -8,7 +13,7 @@ async function main() {
 
   await runProviderDeployCommand(config, {
     cwd: process.cwd(),
-    env: process.env,
+    env: buildProviderDeployEnv(process.env),
     timeoutMs
   });
 

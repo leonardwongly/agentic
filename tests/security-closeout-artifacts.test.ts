@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -51,6 +51,22 @@ describe("security closeout artifacts", () => {
     expect(workflow).toContain("languages: javascript-typescript");
     expect(workflow).toContain("queries: security-extended,security-and-quality");
     expect(workflow).toContain('cron: "41 3 * * 2"');
+  });
+
+  it("makes CI security scanner posture visible even when optional scanners are disabled", () => {
+    const workflow = readRepoFile(".github/workflows/ci.yml");
+
+    expect(workflow).toContain("security-posture:");
+    expect(workflow).toContain("Report security scanner posture");
+    expect(workflow).toContain("CodeQL enabled: ${CODE_SCANNING_ENABLED:-false}");
+    expect(workflow).toContain("Dependency review private-repo override: ${ENABLE_DEPENDENCY_REVIEW:-false}");
+    expect(workflow).toContain("::warning title=CodeQL disabled::");
+    expect(workflow).toMatch(/validate:\n\s+needs:\n\s+- provenance-gate\n\s+- issue-theme-gates\n\s+- security-posture/u);
+  });
+
+  it("keeps local Finder metadata out of tracked GitHub workflow paths", () => {
+    expect(readRepoFile(".gitignore")).toContain(".DS_Store");
+    expect(existsSync(path.join(repoRoot, ".github/.DS_Store"))).toBe(false);
   });
 
   it("documents the high-risk external side-effect threat model coverage", () => {

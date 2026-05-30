@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   flushTelemetryPipeline,
+  getTelemetryExportConfig,
   getTelemetryPipelineState,
   logError,
   logInfo,
@@ -25,23 +26,29 @@ describe("observability exporter", () => {
   const originalFetch = global.fetch;
   const originalExportUrl = process.env.AGENTIC_TELEMETRY_EXPORT_URL;
   const originalExportToken = process.env.AGENTIC_TELEMETRY_EXPORT_TOKEN;
+  const originalAllowedHosts = process.env.AGENTIC_TELEMETRY_ALLOWED_HOSTS;
+  const originalRawIdentifiers = process.env.AGENTIC_TELEMETRY_EXPORT_RAW_IDENTIFIERS;
   const originalRetentionDir = process.env.AGENTIC_TELEMETRY_RETENTION_DIR;
   const originalRetentionMaxFiles = process.env.AGENTIC_TELEMETRY_RETENTION_MAX_FILES;
   const originalBatchSize = process.env.AGENTIC_TELEMETRY_EXPORT_BATCH_SIZE;
   const originalInterval = process.env.AGENTIC_TELEMETRY_EXPORT_INTERVAL_MS;
   const originalTimeout = process.env.AGENTIC_TELEMETRY_EXPORT_TIMEOUT_MS;
   const originalConsole = process.env.AGENTIC_TELEMETRY_CONSOLE;
+  const originalNodeEnv = process.env.NODE_ENV;
 
   afterEach(() => {
     global.fetch = originalFetch;
     restoreOptionalEnv("AGENTIC_TELEMETRY_EXPORT_URL", originalExportUrl);
     restoreOptionalEnv("AGENTIC_TELEMETRY_EXPORT_TOKEN", originalExportToken);
+    restoreOptionalEnv("AGENTIC_TELEMETRY_ALLOWED_HOSTS", originalAllowedHosts);
+    restoreOptionalEnv("AGENTIC_TELEMETRY_EXPORT_RAW_IDENTIFIERS", originalRawIdentifiers);
     restoreOptionalEnv("AGENTIC_TELEMETRY_RETENTION_DIR", originalRetentionDir);
     restoreOptionalEnv("AGENTIC_TELEMETRY_RETENTION_MAX_FILES", originalRetentionMaxFiles);
     restoreOptionalEnv("AGENTIC_TELEMETRY_EXPORT_BATCH_SIZE", originalBatchSize);
     restoreOptionalEnv("AGENTIC_TELEMETRY_EXPORT_INTERVAL_MS", originalInterval);
     restoreOptionalEnv("AGENTIC_TELEMETRY_EXPORT_TIMEOUT_MS", originalTimeout);
     restoreOptionalEnv("AGENTIC_TELEMETRY_CONSOLE", originalConsole);
+    restoreOptionalEnv("NODE_ENV", originalNodeEnv);
     resetTelemetrySnapshot();
   });
 
@@ -78,7 +85,11 @@ describe("observability exporter", () => {
     process.env.AGENTIC_TELEMETRY_CONSOLE = "off";
     resetTelemetrySnapshot();
 
-    await withTelemetryContext({ requestId: "req-exporter-test" }, async () => {
+    await withTelemetryContext({
+      requestId: "req-exporter-test",
+      userId: "user-exporter-test",
+      workspaceId: "workspace-exporter-test"
+    }, async () => {
       logInfo("telemetry.exporter.started");
       logError("telemetry.exporter.redaction", "token=super-secret-value");
       recordCounter("integration.call.total", 1, {
@@ -96,7 +107,11 @@ describe("observability exporter", () => {
     expect(requests.length).toBeGreaterThan(0);
     expect(requests.some((request) => request.authorization === "Bearer exporter-test-token")).toBe(true);
     expect(requests.every((request) => !request.body.includes("super-secret-value"))).toBe(true);
+    expect(requests.every((request) => !request.body.includes("user-exporter-test"))).toBe(true);
+    expect(requests.every((request) => !request.body.includes("workspace-exporter-test"))).toBe(true);
+    expect(requests.some((request) => request.body.includes("sha256:"))).toBe(true);
     expect(retainedBody).not.toContain("super-secret-value");
+    expect(retainedBody).not.toContain("user-exporter-test");
     expect(state.pendingItems).toBe(0);
     expect(state.lastFlushAt).toBeTruthy();
     expect(state.lastFlushError).toBeNull();
@@ -122,6 +137,26 @@ describe("observability exporter", () => {
 
     expect(state.pendingItems).toBeGreaterThan(0);
     expect(state.lastFlushError).toContain("backend export failed");
+  });
+
+  it("requires production telemetry exports to use approved HTTPS hosts", () => {
+    process.env.NODE_ENV = "production";
+    process.env.AGENTIC_TELEMETRY_EXPORT_URL = "https://attacker.example/telemetry";
+    delete process.env.AGENTIC_TELEMETRY_ALLOWED_HOSTS;
+    resetTelemetrySnapshot();
+
+    expect(() => getTelemetryExportConfig()).toThrow(
+      "AGENTIC_TELEMETRY_EXPORT_URL host must be listed in AGENTIC_TELEMETRY_ALLOWED_HOSTS in production."
+    );
+
+    process.env.AGENTIC_TELEMETRY_ALLOWED_HOSTS = "telemetry.example.com";
+    process.env.AGENTIC_TELEMETRY_EXPORT_URL = "https://telemetry.example.com/telemetry";
+    resetTelemetrySnapshot();
+
+    expect(getTelemetryExportConfig()).toMatchObject({
+      enabled: true,
+      backendUrl: "https://telemetry.example.com/telemetry"
+    });
   });
 
   it("prunes old retained batches beyond the configured retention window", async () => {

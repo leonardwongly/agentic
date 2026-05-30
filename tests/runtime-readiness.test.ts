@@ -83,6 +83,7 @@ function buildRequestIdentityStatus(
     production: false,
     trustProxyHeaders: false,
     trustedClientIpHeader: null,
+    proxyHeaderOverwriteConfirmed: false,
     identitySource: "request-fingerprint",
     warnings: [
       "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."

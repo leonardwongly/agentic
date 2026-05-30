@@ -139,6 +139,7 @@ async function main() {
     AGENTIC_ACCESS_KEY: runtimeAccessKey,
     AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE: "true",
     AGENTIC_TRUST_PROXY_HEADERS: "true",
+    AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED: "true",
     AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for",
     AGENTIC_REQUIRE_SHARED_AUTH_STATE: "false",
     NODE_ENV: "production"

@@ -9,6 +9,7 @@ const BASE_ENV = {
   AGENTIC_ACCESS_KEY: "production-access-key",
   AGENTIC_REQUIRE_SHARED_AUTH_STATE: "true",
   AGENTIC_TRUST_PROXY_HEADERS: "true",
+  AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED: "true",
   AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for",
   AGENTIC_WORKER_HEALTH_PATH: "/var/lib/agentic/worker-health.json"
 };
@@ -64,6 +65,7 @@ describe("production bootstrap check", () => {
       ["process_local_auth_exception", "pass"],
       ["access_key", "pass"],
       ["proxy_trust", "pass"],
+      ["proxy_header_overwrite", "pass"],
       ["client_ip_header", "pass"],
       ["worker_heartbeat", "pass"]
     ]);
@@ -172,6 +174,7 @@ describe("production bootstrap check", () => {
         NODE_ENV: "development",
         AGENTIC_ACCESS_KEY: "",
         AGENTIC_TRUST_PROXY_HEADERS: "false",
+        AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED: "false",
         AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-client-ip",
         AGENTIC_WORKER_HEALTH_PATH: "worker-health.json"
       },
@@ -184,6 +187,7 @@ describe("production bootstrap check", () => {
         expect.objectContaining({ name: "runtime", status: "fail" }),
         expect.objectContaining({ name: "access_key", status: "fail" }),
         expect.objectContaining({ name: "proxy_trust", status: "fail" }),
+        expect.objectContaining({ name: "proxy_header_overwrite", status: "fail" }),
         expect.objectContaining({ name: "client_ip_header", status: "fail" }),
         expect.objectContaining({ name: "worker_heartbeat", status: "fail" })
       ])

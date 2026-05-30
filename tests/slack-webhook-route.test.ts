@@ -12,6 +12,7 @@ import {
 import { ApprovalMutationError, type AgenticRepository } from "@agentic/repository";
 import { vi } from "vitest";
 import { buildSlackApprovalToken } from "../apps/web/lib/slack-approvals";
+import { expectOperationalNoStoreHeaders } from "./route-test-helpers";
 
 function buildAutopilotSettings() {
   return {
@@ -563,6 +564,52 @@ describe("slack webhook route", () => {
     delete process.env.SLACK_SIGNING_SECRET;
     delete process.env.SLACK_USER_MAP;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+  });
+
+  it("rejects missing Slack signature headers before consuming the request body", async () => {
+    const body = new URLSearchParams({
+      payload: JSON.stringify({
+        type: "block_actions",
+        actions: [{ action_id: "approval_approve", value: "approval-token" }],
+        user: { id: "U123" }
+      })
+    }).toString();
+    const request = new Request("http://localhost/api/slack/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded"
+      },
+      body
+    });
+
+    const response = await slackWebhookRoute(request);
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Missing Slack signature headers." });
+    expect(await request.text()).toBe(body);
+    expectOperationalNoStoreHeaders(response);
+  });
+
+  it("rejects oversized Slack webhook payloads before signature verification", async () => {
+    const body = new URLSearchParams({
+      payload: "x".repeat(256_001)
+    }).toString();
+    const request = new Request("http://localhost/api/slack/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=fake",
+        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`
+      },
+      body
+    });
+
+    const response = await slackWebhookRoute(request);
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Slack webhook payload is too large." });
+    expect(verifySlackSignatureMock).not.toHaveBeenCalled();
+    expectOperationalNoStoreHeaders(response);
   });
 
   it("binds approve actions to the mapped Slack actor", async () => {

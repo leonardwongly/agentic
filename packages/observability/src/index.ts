@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { mkdir, readdir, unlink, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import path from "node:path";
 import { ActionLogSchema, nowIso, type ActionLog, type AgentDefinition } from "@agentic/contracts";
 
@@ -133,6 +134,8 @@ const TELEMETRY_EXPORT_TOKEN_ENV = "AGENTIC_TELEMETRY_EXPORT_TOKEN";
 const TELEMETRY_EXPORT_TIMEOUT_ENV = "AGENTIC_TELEMETRY_EXPORT_TIMEOUT_MS";
 const TELEMETRY_EXPORT_BATCH_SIZE_ENV = "AGENTIC_TELEMETRY_EXPORT_BATCH_SIZE";
 const TELEMETRY_EXPORT_INTERVAL_ENV = "AGENTIC_TELEMETRY_EXPORT_INTERVAL_MS";
+const TELEMETRY_ALLOWED_HOSTS_ENV = "AGENTIC_TELEMETRY_ALLOWED_HOSTS";
+const TELEMETRY_EXPORT_RAW_IDENTIFIERS_ENV = "AGENTIC_TELEMETRY_EXPORT_RAW_IDENTIFIERS";
 const TELEMETRY_RETENTION_DIR_ENV = "AGENTIC_TELEMETRY_RETENTION_DIR";
 const TELEMETRY_RETENTION_MAX_FILES_ENV = "AGENTIC_TELEMETRY_RETENTION_MAX_FILES";
 const TELEMETRY_QUEUE_LIMIT_ENV = "AGENTIC_TELEMETRY_EXPORT_QUEUE_LIMIT";
@@ -193,6 +196,93 @@ function readOptionalEnv(name: string): string | null {
   return value ? value : null;
 }
 
+function isTrue(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === "true";
+}
+
+function isProductionTelemetryRuntime(): boolean {
+  return process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+}
+
+function parseCsvHostSet(value: string | undefined): Set<string> {
+  const result = new Set<string>();
+
+  for (const item of value?.split(",") ?? []) {
+    const normalized = item.trim().toLowerCase();
+
+    if (normalized) {
+      result.add(normalized);
+    }
+  }
+
+  return result;
+}
+
+function isUnsafeTelemetryIpLiteral(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
+  const ipVersion = isIP(normalized);
+
+  if (ipVersion === 4) {
+    const [first = 0, second = 0] = normalized.split(".").map((part) => Number(part));
+    return (
+      first === 0 ||
+      first === 10 ||
+      first === 127 ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168)
+    );
+  }
+
+  if (ipVersion === 6) {
+    return normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80");
+  }
+
+  return false;
+}
+
+function validateTelemetryBackendUrl(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${TELEMETRY_EXPORT_URL_ENV} must be a valid URL.`);
+  }
+
+  if (url.username || url.password) {
+    throw new Error(`${TELEMETRY_EXPORT_URL_ENV} must not include credentials.`);
+  }
+
+  if (!isProductionTelemetryRuntime()) {
+    return url.toString();
+  }
+
+  if (url.protocol !== "https:") {
+    throw new Error(`${TELEMETRY_EXPORT_URL_ENV} must use https in production.`);
+  }
+
+  if (url.search || url.hash) {
+    throw new Error(`${TELEMETRY_EXPORT_URL_ENV} must not include query or fragment components in production.`);
+  }
+
+  if (isUnsafeTelemetryIpLiteral(url.hostname)) {
+    throw new Error(`${TELEMETRY_EXPORT_URL_ENV} must not target private or loopback IP addresses in production.`);
+  }
+
+  const allowedHosts = parseCsvHostSet(process.env[TELEMETRY_ALLOWED_HOSTS_ENV]);
+
+  if (!allowedHosts.has(url.hostname.toLowerCase())) {
+    throw new Error(`${TELEMETRY_EXPORT_URL_ENV} host must be listed in ${TELEMETRY_ALLOWED_HOSTS_ENV} in production.`);
+  }
+
+  return url.toString();
+}
+
 export function getTelemetryExportConfig(): TelemetryExportConfig {
   const cacheKey = [
     process.env[TELEMETRY_EXPORT_URL_ENV] ?? "",
@@ -200,6 +290,8 @@ export function getTelemetryExportConfig(): TelemetryExportConfig {
     process.env[TELEMETRY_EXPORT_TIMEOUT_ENV] ?? "",
     process.env[TELEMETRY_EXPORT_BATCH_SIZE_ENV] ?? "",
     process.env[TELEMETRY_EXPORT_INTERVAL_ENV] ?? "",
+    process.env[TELEMETRY_ALLOWED_HOSTS_ENV] ?? "",
+    process.env[TELEMETRY_EXPORT_RAW_IDENTIFIERS_ENV] ?? "",
     process.env[TELEMETRY_RETENTION_DIR_ENV] ?? "",
     process.env[TELEMETRY_RETENTION_MAX_FILES_ENV] ?? "",
     process.env[TELEMETRY_QUEUE_LIMIT_ENV] ?? "",
@@ -212,7 +304,7 @@ export function getTelemetryExportConfig(): TelemetryExportConfig {
     return telemetryExportConfigCache;
   }
 
-  const backendUrl = readOptionalEnv(TELEMETRY_EXPORT_URL_ENV);
+  const backendUrl = validateTelemetryBackendUrl(readOptionalEnv(TELEMETRY_EXPORT_URL_ENV));
   const retentionDir = readOptionalEnv(TELEMETRY_RETENTION_DIR_ENV);
 
   telemetryExportConfigCacheKey = cacheKey;
@@ -277,6 +369,54 @@ function cloneTelemetryExportItem(item: TelemetryExportItem): TelemetryExportIte
   return {
     kind: "span",
     entry: cloneSpanEntry(item.entry)
+  };
+}
+
+function hashTelemetryIdentifier(value: string): string {
+  return `sha256:${crypto.createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
+}
+
+function protectTelemetryContextForExport(context: TelemetryContext): TelemetryContext {
+  return {
+    ...context,
+    userId: context.userId ? hashTelemetryIdentifier(context.userId) : context.userId,
+    workspaceId: context.workspaceId ? hashTelemetryIdentifier(context.workspaceId) : context.workspaceId
+  };
+}
+
+function cloneTelemetryExportItemForExport(item: TelemetryExportItem): TelemetryExportItem {
+  const cloned = cloneTelemetryExportItem(item);
+
+  if (isTrue(process.env[TELEMETRY_EXPORT_RAW_IDENTIFIERS_ENV])) {
+    return cloned;
+  }
+
+  if (cloned.kind === "log") {
+    return {
+      kind: "log",
+      entry: {
+        ...cloned.entry,
+        context: protectTelemetryContextForExport(cloned.entry.context)
+      }
+    };
+  }
+
+  if (cloned.kind === "metric") {
+    return {
+      kind: "metric",
+      entry: {
+        ...cloned.entry,
+        context: protectTelemetryContextForExport(cloned.entry.context)
+      }
+    };
+  }
+
+  return {
+    kind: "span",
+    entry: {
+      ...cloned.entry,
+      context: protectTelemetryContextForExport(cloned.entry.context)
+    }
   };
 }
 
@@ -367,7 +507,7 @@ function createTelemetryExportBatch(config: TelemetryExportConfig, items: Teleme
     batchId: crypto.randomUUID(),
     createdAt: nowIso(),
     droppedCount: batchDroppedItems,
-    items: items.map((item) => cloneTelemetryExportItem(item))
+    items: items.map((item) => cloneTelemetryExportItemForExport(item))
   };
 }
 

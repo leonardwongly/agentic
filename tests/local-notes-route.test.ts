@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -152,6 +152,32 @@ describe("local notes routes", () => {
 
     expect(response.status).toBe(400);
     expect(payload.error).toContain("Invalid string");
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects symlinked direct-note reads without leaking outside paths", async () => {
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "agentic-local-notes-outside-target-"));
+    const outsideNotePath = path.join(outsideRoot, "outside.md");
+    const notesPath = process.env.AGENTIC_NOTES_PATH!;
+
+    await mkdir(notesPath, { recursive: true });
+    await writeFile(outsideNotePath, "# Outside Secret\n\nleaked-through-symlink\n", "utf8");
+    await symlink(outsideNotePath, path.join(notesPath, "linked-note.md"));
+
+    const response = await localNoteRouteGet(
+      new Request("http://localhost/api/integrations/local-notes/linked-note", {
+        method: "GET",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      { params: Promise.resolve({ slug: "linked-note" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(404);
+    expect(payload.error).toBe("Local note was not found.");
+    expect(JSON.stringify(payload)).not.toContain(outsideRoot);
     expectNoStoreHeaders(response);
   });
 

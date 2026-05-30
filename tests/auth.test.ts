@@ -44,8 +44,10 @@ describe("auth helpers", () => {
   const originalSharedAuthState = process.env.AGENTIC_SHARED_AUTH_STATE;
   const originalTrustProxyHeaders = process.env.AGENTIC_TRUST_PROXY_HEADERS;
   const originalTrustedClientIpHeader = process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER;
+  const originalProxyHeaderOverwriteConfirmed = process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED;
   const originalAllowProcessLocalAuthState = process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
   const originalEnableLocalDevKey = process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
+  const originalBootstrapUserId = process.env.AGENTIC_BOOTSTRAP_USER_ID;
   const databaseUrl = process.env.DATABASE_URL;
   const postgresIt = databaseUrl ? it : it.skip;
 
@@ -61,11 +63,17 @@ describe("auth helpers", () => {
     process.env.AGENTIC_SHARED_AUTH_STATE = originalSharedAuthState;
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = originalTrustedClientIpHeader;
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = originalProxyHeaderOverwriteConfirmed;
     process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = originalAllowProcessLocalAuthState;
     if (originalEnableLocalDevKey === undefined) {
       delete process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
     } else {
       process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY = originalEnableLocalDevKey;
+    }
+    if (originalBootstrapUserId === undefined) {
+      delete process.env.AGENTIC_BOOTSTRAP_USER_ID;
+    } else {
+      process.env.AGENTIC_BOOTSTRAP_USER_ID = originalBootstrapUserId;
     }
     resetAuthRuntimeStateWarningsForTesting();
     resetSessionUnlockStateStoreForTesting();
@@ -83,8 +91,28 @@ describe("auth helpers", () => {
     await expect(isAuthorizedSessionToken(token)).resolves.toBe(true);
     await expect(isAuthorizedSessionToken("not-a-token")).resolves.toBe(false);
     await expect(parseAuthorizedSessionToken(token)).resolves.toMatchObject({
-      userId: "user-primary"
+      userId: "owner"
     });
+  });
+
+  it("binds access-key sessions to the configured bootstrap owner", async () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.AGENTIC_BOOTSTRAP_USER_ID = "installer-admin";
+    process.env.NODE_ENV = "test";
+
+    const token = buildSessionToken();
+    await expect(parseAuthorizedSessionToken(token, "installer-admin")).resolves.toMatchObject({
+      userId: "installer-admin"
+    });
+    await expect(parseAuthorizedSessionToken(token, "owner")).resolves.toBeNull();
+  });
+
+  it("requires an explicit bootstrap owner for production session creation", () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.NODE_ENV = "production";
+    delete process.env.AGENTIC_BOOTSTRAP_USER_ID;
+
+    expect(() => buildSessionToken()).toThrow(/AGENTIC_BOOTSTRAP_USER_ID must be configured/);
   });
 
   it("issues distinct signed session tokens and honors revocation", async () => {
@@ -260,7 +288,7 @@ describe("auth helpers", () => {
       )
     ).resolves.toMatchObject({
       authMethod: "access_key",
-      userId: "user-primary"
+      userId: "owner"
     });
   });
 
@@ -278,7 +306,7 @@ describe("auth helpers", () => {
       )
     ).resolves.toMatchObject({
       authMethod: "session",
-      userId: "user-primary"
+      userId: "owner"
     });
   });
 
@@ -294,6 +322,7 @@ describe("auth helpers", () => {
 
   it("marks session cookies as secure-only in production", () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.AGENTIC_BOOTSTRAP_USER_ID = "owner";
     process.env.NODE_ENV = "production";
 
     const cookie = createSessionCookie();
@@ -363,12 +392,13 @@ describe("auth helpers", () => {
 
   it("uses a canonical trusted proxy IP when proxy headers are explicitly trusted", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = "true";
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     const request = new Request("http://localhost/api/session", {
       method: "POST",
       headers: {
-        "x-forwarded-for": "203.0.113.10, 198.51.100.8",
+        "x-forwarded-for": "203.0.113.10",
         "x-real-ip": "198.51.100.9",
         "user-agent": "Agentic Test Client"
       }
@@ -387,6 +417,7 @@ describe("auth helpers", () => {
       production: true,
       trustProxyHeaders: false,
       trustedClientIpHeader: null,
+      proxyHeaderOverwriteConfirmed: false,
       identitySource: "request-fingerprint",
       warnings: [
         "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."
@@ -394,12 +425,14 @@ describe("auth helpers", () => {
     });
 
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = "true";
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     expect(getRequestIdentityRuntimeStatus()).toEqual({
       production: true,
       trustProxyHeaders: true,
       trustedClientIpHeader: "x-forwarded-for",
+      proxyHeaderOverwriteConfirmed: true,
       identitySource: "trusted-ip",
       warnings: []
     });
@@ -407,6 +440,7 @@ describe("auth helpers", () => {
 
   it("falls back to request fingerprinting when trusted forwarded headers are malformed", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = "true";
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     const request = new Request("http://localhost/api/session", {
@@ -429,6 +463,7 @@ describe("auth helpers", () => {
 
   it("supports swapping in a shared session unlock state store boundary", async () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = "true";
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     const forwardedIp = "203.0.113.19";

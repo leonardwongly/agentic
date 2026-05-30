@@ -44,6 +44,11 @@ export type GitHubIssueIntakePayloadParams = {
     labelName?: string | null;
     command?: string | null;
     triggerId?: string | null;
+    commandActor?: {
+      login: string | null;
+      type: string | null;
+      authorAssociation: string | null;
+    } | null;
   };
   workspaceId?: string | null;
   agentId?: string | null;
@@ -188,6 +193,7 @@ export function buildGitHubIssueIntakePayload(params: GitHubIssueIntakePayloadPa
       triggerLabel: params.trigger?.labelName?.trim() || null,
       command: params.trigger?.command?.trim() || null,
       triggerId: params.trigger?.triggerId?.trim() || null,
+      commandActor: params.trigger?.commandActor ?? null,
       riskTags: ["untrusted_external_input", "github_issue", `github_issue_${automationMode}`]
     }
   };

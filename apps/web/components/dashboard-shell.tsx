@@ -45,6 +45,7 @@ type DashboardShellProps = {
   onFocusRequestComposer: () => void;
   onNavigateToSection: (sectionId: string) => void;
   onLogout: () => void;
+  defaultAccountKeywords?: string[];
   children: ReactNode;
 };
 
@@ -68,6 +69,7 @@ export function DashboardShell({
   onFocusRequestComposer,
   onNavigateToSection,
   onLogout,
+  defaultAccountKeywords = [],
   children
 }: DashboardShellProps) {
   return (
@@ -132,6 +134,7 @@ export function DashboardShell({
             onLogout={onLogout}
             isPending={isPending}
             cockpitVariant={cockpitVariant}
+            defaultAccountKeywords={defaultAccountKeywords}
           />
         </main>
       </KeyboardShortcutsProvider>

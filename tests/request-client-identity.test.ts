@@ -8,11 +8,13 @@ describe("request client identity", () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalTrustProxyHeaders = process.env.AGENTIC_TRUST_PROXY_HEADERS;
   const originalTrustedClientIpHeader = process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER;
+  const originalProxyHeaderOverwriteConfirmed = process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED;
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = originalTrustedClientIpHeader;
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = originalProxyHeaderOverwriteConfirmed;
   });
 
   function buildRequest(headers: Record<string, string> = {}): Request {
@@ -44,14 +46,30 @@ describe("request client identity", () => {
     });
   });
 
-  it("trusts only the configured x-forwarded-for first hop and ignores alternate spoofed headers", () => {
+  it("requires explicit proxy header overwrite confirmation before trusting forwarded headers", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
 
     expect(
       getRequestClientIdentity(
         buildRequest({
-          "x-forwarded-for": "203.0.113.10, 198.51.100.8",
+          "x-forwarded-for": "203.0.113.10"
+        })
+      )
+    ).toMatchObject({
+      source: "request-fingerprint"
+    });
+  });
+
+  it("trusts only a single configured overwritten x-forwarded-for value and ignores alternate spoofed headers", () => {
+    process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = "true";
+    process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
+
+    expect(
+      getRequestClientIdentity(
+        buildRequest({
+          "x-forwarded-for": "203.0.113.10",
           "cf-connecting-ip": "198.51.100.99",
           "x-real-ip": "198.51.100.100"
         })
@@ -64,6 +82,7 @@ describe("request client identity", () => {
 
   it("trusts only the configured cf-connecting-ip header and ignores forwarded-for spoofing", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = "true";
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "cf-connecting-ip";
 
     expect(
@@ -82,6 +101,7 @@ describe("request client identity", () => {
 
   it("trusts only the configured x-real-ip header and ignores other forwarded headers", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = "true";
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-real-ip";
 
     expect(
@@ -124,6 +144,16 @@ describe("request client identity", () => {
     ).toMatchObject({
       source: "request-fingerprint"
     });
+
+    expect(
+      getRequestClientIdentity(
+        buildRequest({
+          "x-forwarded-for": "203.0.113.10, 198.51.100.8"
+        })
+      )
+    ).toMatchObject({
+      source: "request-fingerprint"
+    });
   });
 
   it("reports the production readiness contract for trusted client IP headers", () => {
@@ -134,18 +164,22 @@ describe("request client identity", () => {
       production: true,
       trustProxyHeaders: true,
       trustedClientIpHeader: null,
+      proxyHeaderOverwriteConfirmed: false,
       identitySource: "request-fingerprint",
       warnings: [
+        "Trusted proxy headers are enabled, but AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED=true must be set after confirming the ingress overwrites forwarded client-IP headers.",
         "Trusted proxy headers are enabled, but AGENTIC_TRUSTED_CLIENT_IP_HEADER must name one canonical client-IP header."
       ]
     });
 
+    process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED = "true";
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "CF-Connecting-IP";
 
     expect(getRequestIdentityRuntimeStatus()).toEqual({
       production: true,
       trustProxyHeaders: true,
       trustedClientIpHeader: "cf-connecting-ip",
+      proxyHeaderOverwriteConfirmed: true,
       identitySource: "trusted-ip",
       warnings: []
     });

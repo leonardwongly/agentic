@@ -131,6 +131,7 @@ export type JobQueueStore = {
   retryJob(params: {
     jobId: string;
     runnerId: string;
+    failedAt?: string;
     availableAt: string;
     error: string;
   }): Promise<JobRecord>;
@@ -848,6 +849,7 @@ export function createDurableJobQueue(
           const retried = await store.retryJob({
             jobId: params.job.id,
             runnerId: options.runnerId,
+            failedAt: timestamp,
             availableAt: nextAvailableAt,
             error
           });

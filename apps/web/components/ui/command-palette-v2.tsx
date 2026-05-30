@@ -27,6 +27,7 @@ type CommandPaletteV2Props = {
   onCommandExecuted?: (id: string) => void;
   contextualCommands?: Command[];
   placeholder?: string;
+  defaultAccountKeywords?: string[];
 };
 
 export function CommandPaletteV2({
@@ -36,7 +37,8 @@ export function CommandPaletteV2({
   recentCommandIds = [],
   onCommandExecuted,
   contextualCommands = [],
-  placeholder = "Type a command or search..."
+  placeholder = "Type a command or search...",
+  defaultAccountKeywords = []
 }: CommandPaletteV2Props) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -46,7 +48,7 @@ export function CommandPaletteV2({
   // Combine and filter commands
   const filteredCommands = useMemo(() => {
     const allCommands = [...contextualCommands, ...commands].filter((c) => !c.hidden && !c.disabled);
-    
+
     if (!query.trim()) {
       // Show contextual first, then recent, then all by category
       const contextual = allCommands.filter((c) => c.category === "contextual");
@@ -57,7 +59,7 @@ export function CommandPaletteV2({
       const rest = allCommands
         .filter((c) => c.category !== "contextual" && !recentCommandIds.includes(c.id))
         .slice(0, 10);
-      
+
       return [...contextual, ...recent.map((c) => ({ ...c, category: "recent" as CommandCategory })), ...rest];
     }
 
@@ -81,6 +83,14 @@ export function CommandPaletteV2({
       if (keywords.includes(lowerQuery)) score += 15;
       // Fuzzy match (characters in order)
       if (fuzzyMatch(lowerQuery, label)) score += 5;
+
+      // Default account prioritization
+      if (defaultAccountKeywords.length > 0) {
+        const matchesAccount = defaultAccountKeywords.some(
+          (k) => label.includes(k.toLowerCase()) || desc.includes(k.toLowerCase()) || keywords.includes(k.toLowerCase())
+        );
+        if (matchesAccount) score += 20;
+      }
 
       return { cmd, score };
     });

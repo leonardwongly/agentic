@@ -201,6 +201,17 @@ function buildProxyTrustCheck(env: EnvLike): ProductionBootstrapCheck {
   return pass("proxy_trust", "Trusted proxy headers are explicitly enabled for the production ingress.");
 }
 
+function buildProxyHeaderOverwriteCheck(env: EnvLike): ProductionBootstrapCheck {
+  if (!isTrue(env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED)) {
+    return fail(
+      "proxy_header_overwrite",
+      "AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED=true must be set only after confirming the ingress overwrites forwarded client-IP headers."
+    );
+  }
+
+  return pass("proxy_header_overwrite", "Ingress proxy header overwrite behavior is explicitly confirmed.");
+}
+
 function buildTrustedClientIpHeaderCheck(env: EnvLike): ProductionBootstrapCheck {
   const configured = trim(env.AGENTIC_TRUSTED_CLIENT_IP_HEADER).toLowerCase();
 
@@ -295,6 +306,7 @@ export function validateProductionBootstrap(params: ValidateProductionBootstrapP
     buildProcessLocalExceptionCheck(env),
     buildAccessKeyCheck(env),
     buildProxyTrustCheck(env),
+    buildProxyHeaderOverwriteCheck(env),
     buildTrustedClientIpHeaderCheck(env),
     buildWorkerHeartbeatCheck(env)
   ];

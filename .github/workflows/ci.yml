@@ -62,6 +62,30 @@ jobs:
         with:
           fail-on-severity: high
 
+  security-posture:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Report security scanner posture
+        run: |
+          {
+            echo "## Security scanner posture"
+            echo ""
+            echo "- CodeQL enabled: ${CODE_SCANNING_ENABLED:-false}"
+            echo "- Dependency review private-repo override: ${ENABLE_DEPENDENCY_REVIEW:-false}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${CODE_SCANNING_ENABLED:-false}" != "true" ]; then
+            echo "::warning title=CodeQL disabled::Set CODE_SCANNING_ENABLED=true when GitHub code scanning is available."
+          fi
+          if [ "${ENABLE_DEPENDENCY_REVIEW:-false}" != "true" ] && [ "${REPOSITORY_PRIVATE:-false}" = "true" ]; then
+            echo "::warning title=Dependency review disabled::Set ENABLE_DEPENDENCY_REVIEW=true when dependency review is available for this private repository."
+          fi
+        env:
+          CODE_SCANNING_ENABLED: ${{ vars.CODE_SCANNING_ENABLED }}
+          ENABLE_DEPENDENCY_REVIEW: ${{ vars.ENABLE_DEPENDENCY_REVIEW }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+
   issue-theme-gates:
     needs: provenance-gate
     runs-on: ubuntu-24.04
@@ -86,6 +110,7 @@ jobs:
     needs:
       - provenance-gate
       - issue-theme-gates
+      - security-posture
     runs-on: ubuntu-24.04
     services:
       postgres:

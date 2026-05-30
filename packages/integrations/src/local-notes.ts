@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { nowIso } from "@agentic/contracts";
@@ -128,17 +128,42 @@ function safeNotePath(basePath: string, slug: string): string {
   return candidate;
 }
 
+async function assertRegularNoteInsideBase(notePath: string, basePath: string): Promise<void> {
+  let fileInfo: Awaited<ReturnType<typeof lstat>>;
+
+  try {
+    fileInfo = await lstat(notePath);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      throw new LocalNoteNotFoundError();
+    }
+
+    throw error;
+  }
+
+  if (!fileInfo.isFile() || fileInfo.isSymbolicLink()) {
+    throw new LocalNoteNotFoundError();
+  }
+
+  const [resolvedBase, resolvedNote] = await Promise.all([realpath(basePath), realpath(notePath)]);
+
+  if (!isPathWithin(resolvedNote, resolvedBase)) {
+    throw new LocalNoteNotFoundError();
+  }
+}
+
 export async function ensureLocalNotesDirectory(basePath = defaultLocalNotesBasePath()): Promise<string> {
   const resolved = assertLocalNotesRuntimeEnabled(basePath);
   await mkdir(resolved, { recursive: true });
   return resolved;
 }
 
-async function parseLocalNote(notePath: string): Promise<LocalNoteDocument> {
+async function parseLocalNote(notePath: string, basePath: string): Promise<LocalNoteDocument> {
   let content: string;
   let fileInfo: Awaited<ReturnType<typeof stat>>;
 
   try {
+    await assertRegularNoteInsideBase(notePath, basePath);
     [content, fileInfo] = await Promise.all([readFile(notePath, "utf8"), stat(notePath)]);
   } catch (error) {
     if (isMissingFileError(error)) {
@@ -175,7 +200,7 @@ export async function listLocalNotes(basePath = defaultLocalNotesBasePath()): Pr
   const notes = await Promise.all(
     entries
       .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-      .map((entry) => parseLocalNote(path.join(resolvedBase, entry.name)))
+      .map((entry) => parseLocalNote(path.join(resolvedBase, entry.name), resolvedBase))
   );
 
   return notes.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -197,7 +222,7 @@ export async function searchLocalNotes(query: string, basePath = defaultLocalNot
 
 export async function readLocalNote(slug: string, basePath = defaultLocalNotesBasePath()): Promise<LocalNoteDocument> {
   const resolvedBase = await ensureLocalNotesDirectory(basePath);
-  return parseLocalNote(safeNotePath(resolvedBase, slug));
+  return parseLocalNote(safeNotePath(resolvedBase, slug), resolvedBase);
 }
 
 export async function createLocalNote(
@@ -219,7 +244,7 @@ export async function updateLocalNote(
   basePath = defaultLocalNotesBasePath()
 ): Promise<LocalNoteDocument> {
   const resolvedBase = await ensureLocalNotesDirectory(basePath);
-  const existing = await parseLocalNote(safeNotePath(resolvedBase, LocalNoteSlugSchema.parse(params.slug)));
+  const existing = await parseLocalNote(safeNotePath(resolvedBase, LocalNoteSlugSchema.parse(params.slug)), resolvedBase);
   const normalized = LocalNoteMutationSchema.parse({
     title: params.title ?? existing.title,
     content: params.content

@@ -92,6 +92,8 @@ describe("GitHub App issue sync route", () => {
     installationId: process.env.AGENTIC_GITHUB_APP_INSTALLATION_ID,
     privateKey: process.env.AGENTIC_GITHUB_APP_PRIVATE_KEY,
     apiBaseUrl: process.env.AGENTIC_GITHUB_APP_API_BASE_URL,
+    allowEnterpriseHosts: process.env.AGENTIC_GITHUB_APP_ALLOW_ENTERPRISE_HOSTS,
+    allowedApiHosts: process.env.AGENTIC_GITHUB_APP_ALLOWED_API_HOSTS,
     allowedRepositories: process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES,
     mode: process.env.AGENTIC_GITHUB_APP_SYNC_AUTOMATION_MODE,
     maxIssues: process.env.AGENTIC_GITHUB_APP_SYNC_MAX_ISSUES_PER_REPOSITORY,
@@ -107,6 +109,8 @@ describe("GitHub App issue sync route", () => {
     process.env.AGENTIC_GITHUB_APP_INSTALLATION_ID = "98765";
     process.env.AGENTIC_GITHUB_APP_PRIVATE_KEY = createTestPrivateKey();
     process.env.AGENTIC_GITHUB_APP_API_BASE_URL = "https://github.test";
+    process.env.AGENTIC_GITHUB_APP_ALLOW_ENTERPRISE_HOSTS = "true";
+    process.env.AGENTIC_GITHUB_APP_ALLOWED_API_HOSTS = "github.test";
     process.env.AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES = "leonardwongly/agentic";
     process.env.AGENTIC_GITHUB_APP_SYNC_AUTOMATION_MODE = "work";
     delete process.env.AGENTIC_GITHUB_APP_SYNC_MAX_ISSUES_PER_REPOSITORY;
@@ -191,6 +195,18 @@ describe("GitHub App issue sync route", () => {
       delete process.env.AGENTIC_GITHUB_APP_API_BASE_URL;
     } else {
       process.env.AGENTIC_GITHUB_APP_API_BASE_URL = originalEnv.apiBaseUrl;
+    }
+
+    if (originalEnv.allowEnterpriseHosts === undefined) {
+      delete process.env.AGENTIC_GITHUB_APP_ALLOW_ENTERPRISE_HOSTS;
+    } else {
+      process.env.AGENTIC_GITHUB_APP_ALLOW_ENTERPRISE_HOSTS = originalEnv.allowEnterpriseHosts;
+    }
+
+    if (originalEnv.allowedApiHosts === undefined) {
+      delete process.env.AGENTIC_GITHUB_APP_ALLOWED_API_HOSTS;
+    } else {
+      process.env.AGENTIC_GITHUB_APP_ALLOWED_API_HOSTS = originalEnv.allowedApiHosts;
     }
 
     if (originalEnv.allowedRepositories === undefined) {
@@ -408,6 +424,44 @@ describe("GitHub App issue sync route", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({
       error: "GitHub issue allowed repository configuration is invalid."
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("rejects unapproved enterprise GitHub API hosts before sending an app JWT", async () => {
+    delete process.env.AGENTIC_GITHUB_APP_ALLOW_ENTERPRISE_HOSTS;
+    delete process.env.AGENTIC_GITHUB_APP_ALLOWED_API_HOSTS;
+    process.env.AGENTIC_GITHUB_APP_API_BASE_URL = "https://attacker.example";
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "AGENTIC_GITHUB_APP_API_BASE_URL must use api.github.com unless enterprise GitHub API hosts are explicitly allowed."
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("rejects unsafe GitHub API base URL shapes before contacting the host", async () => {
+    process.env.AGENTIC_GITHUB_APP_API_BASE_URL = "https://127.0.0.1";
+    process.env.AGENTIC_GITHUB_APP_ALLOW_ENTERPRISE_HOSTS = "true";
+    process.env.AGENTIC_GITHUB_APP_ALLOWED_API_HOSTS = "127.0.0.1";
+
+    const response = await githubAppIssueSyncRoute(buildSyncRequest());
+    const jobs = await repository.listJobs({
+      userId: SYSTEM_USER_ID,
+      kinds: ["github_issue_intake"]
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "AGENTIC_GITHUB_APP_API_BASE_URL must not target private or loopback IP addresses."
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(jobs).toHaveLength(0);

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
-import { SYSTEM_USER_ID } from "@agentic/contracts";
 import { getAuthSessionStateStore } from "./auth-session-store";
+import { resolveBootstrapOwnerUserId } from "./instance-owner";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const SESSION_TOKEN_VERSION = 1 as const;
@@ -137,7 +137,13 @@ function signOAuthStatePayload(secret: string, encodedPayload: string): string {
   return crypto.createHmac("sha256", secret).update(`agentic-oauth-state-v1.${encodedPayload}`).digest("base64url");
 }
 
-function buildSessionTokenPayload(userId = SYSTEM_USER_ID, now = Date.now()): SessionTokenPayload {
+function resolveSessionCreationUserId(): string {
+  return resolveBootstrapOwnerUserId({
+    requireExplicit: process.env.NODE_ENV === "production"
+  });
+}
+
+function buildSessionTokenPayload(userId = resolveSessionCreationUserId(), now = Date.now()): SessionTokenPayload {
   return {
     version: SESSION_TOKEN_VERSION,
     userId,
@@ -266,7 +272,7 @@ export function verifyAccessKey(candidate: string | null | undefined): boolean {
   return constantTimeEqual(attempted, resolved.key);
 }
 
-export function buildSessionToken(userId = SYSTEM_USER_ID): string {
+export function buildSessionToken(userId = resolveSessionCreationUserId()): string {
   const payload = buildSessionTokenPayload(userId);
   const encodedPayload = encodeSessionTokenPayload(payload);
   const signature = signSessionTokenPayload(getServerSigningSecret("session"), encodedPayload);
@@ -282,7 +288,7 @@ export function buildOAuthStateToken(params: { userId: string; workspaceId?: str
   return `${encodedPayload}.${signature}`;
 }
 
-function parseSignedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): SessionTokenPayload | null {
+function parseSignedSessionToken(candidate: string | null | undefined, userId = resolveBootstrapOwnerUserId()): SessionTokenPayload | null {
   const token = candidate?.trim();
 
   if (!token) {
@@ -363,7 +369,7 @@ export function parseAuthorizedOAuthStateToken(
 
 export async function parseAuthorizedSessionToken(
   candidate: string | null | undefined,
-  userId = SYSTEM_USER_ID
+  userId = resolveBootstrapOwnerUserId()
 ): Promise<SessionTokenPayload | null> {
   const payload = parseSignedSessionToken(candidate, userId);
 
@@ -378,11 +384,11 @@ export async function parseAuthorizedSessionToken(
   return payload;
 }
 
-export async function isAuthorizedSessionToken(candidate: string | null | undefined, userId = SYSTEM_USER_ID): Promise<boolean> {
+export async function isAuthorizedSessionToken(candidate: string | null | undefined, userId = resolveBootstrapOwnerUserId()): Promise<boolean> {
   return (await parseAuthorizedSessionToken(candidate, userId)) !== null;
 }
 
-export function createSessionCookie(userId = SYSTEM_USER_ID) {
+export function createSessionCookie(userId = resolveSessionCreationUserId()) {
   return {
     name: AGENTIC_SESSION_COOKIE,
     value: buildSessionToken(userId),
@@ -421,7 +427,7 @@ export async function resolveApiPrincipal(request: Request): Promise<AuthPrincip
   if (verifyAccessKey(headerKey)) {
     return {
       authMethod: "access_key",
-      userId: SYSTEM_USER_ID,
+      userId: resolveBootstrapOwnerUserId(),
       sessionId: null,
       expiresAt: null
     };

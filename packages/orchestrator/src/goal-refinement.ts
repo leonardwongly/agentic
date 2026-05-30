@@ -16,12 +16,11 @@ import {
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { createTask } from "@agentic/execution";
-import { runAgent } from "@agentic/agents";
+import { getModelConfig, isModelConfigured, runAgentWithModel, runTextModel } from "@agentic/agents";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
 import { calculateNormalizedEditDistance, createActionLog } from "@agentic/observability";
 import { buildPolicyDecisionTrace, riskFromCapabilities, simulateTaskPolicy, type PolicyReplayValidation } from "@agentic/policy";
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
+import { LlmCache } from "./llm-cache";
 
 type RefinementChange = {
   updatedTasks: Array<{
@@ -115,26 +114,18 @@ function parseRefinementResponse(text: string): RefinementChange {
 
 async function detectRefinementLlm(bundle: GoalBundle, refinement: string, memories: MemoryRecord[]): Promise<RefinementChange> {
   const prompt = buildRefinementPrompt(bundle, refinement, memories);
+  const cache = LlmCache.getInstance();
+  const options = getModelConfig();
+
+  const cached = await cache.get<RefinementChange>(prompt, options);
+  if (cached) return cached;
 
   try {
-    if (process.env.ANTHROPIC_API_KEY) {
-      const client = new Anthropic();
-      const response = await client.messages.create({
-        model: process.env.ANTHROPIC_MODEL ?? "claude-opus-4-6",
-        max_tokens: 1024,
-        messages: [{ role: "user", content: prompt }]
-      });
-      const text = response.content.find((b) => b.type === "text")?.text?.trim() ?? "{}";
-      return parseRefinementResponse(text);
-    } else if (process.env.OPENAI_API_KEY) {
-      const client = new OpenAI();
-      const response = await client.chat.completions.create({
-        model: process.env.OPENAI_MODEL ?? "gpt-5.4",
-        max_tokens: 1024,
-        messages: [{ role: "user", content: prompt }]
-      });
-      const text = response.choices[0]?.message?.content?.trim() ?? "{}";
-      return parseRefinementResponse(text);
+    const text = await runTextModel({ prompt, maxTokens: 1024 });
+    if (text !== null) {
+      const result = parseRefinementResponse(text);
+      await cache.set(prompt, options, result);
+      return result;
     }
   } catch {
     // Fall through to heuristic
@@ -239,7 +230,7 @@ export async function refineGoal(params: {
     agent: "orchestrator"
   });
 
-  const changes = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY
+  const changes = isModelConfigured()
     ? await detectRefinementLlm(bundle, refinement, contextPack.selectedMemories)
     : detectRefinementHeuristic(bundle, refinement);
 
@@ -330,66 +321,78 @@ export async function refineGoal(params: {
     }
   }
 
-  // Add new tasks
-  for (const planned of changes.newTasks) {
-    const capabilities = planned.capabilities ?? ["read", "draft"];
-    const policyRiskClass = riskFromCapabilities(capabilities);
-    const scorecard = await params.resolveAgentMetrics?.(planned.assignedAgent);
-    const learningValidation = await params.resolvePolicyReplayValidation?.({
-      agent: planned.assignedAgent,
-      capabilities,
-      riskClass: policyRiskClass,
-      title: planned.title
-    });
-    const policyResult = simulateTaskPolicy({
-      capabilities,
-      confidence: planned.confidence,
-      title: planned.title,
-      memories: params.memories,
-      scorecard,
-      governance: params.governance,
-      learningValidation
-    });
-    const decision = policyResult.decision;
-    const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
-    const task = createTask({
-      goalId: bundle.goal.id,
-      workflowId: bundle.workflow.id,
-      title: planned.title,
-      summary: planned.summary,
-      assignedAgent: planned.assignedAgent,
-      riskClass: decision.riskClass,
-      requiresApproval: decision.requiresApproval,
-      toolCapabilities: capabilities,
-      responsibility: deriveTaskResponsibility({
+  // Add new tasks in parallel
+  const newTaskResults = await Promise.all(
+    changes.newTasks.map(async (planned) => {
+      const capabilities = planned.capabilities ?? ["read", "draft"];
+      const policyRiskClass = riskFromCapabilities(capabilities);
+      const scorecard = await params.resolveAgentMetrics?.(planned.assignedAgent);
+      const learningValidation = await params.resolvePolicyReplayValidation?.({
+        agent: planned.assignedAgent,
+        capabilities,
+        riskClass: policyRiskClass,
+        title: planned.title
+      });
+      const policyResult = simulateTaskPolicy({
+        capabilities,
+        confidence: planned.confidence,
+        title: planned.title,
+        memories: params.memories,
+        scorecard,
+        governance: params.governance,
+        learningValidation
+      });
+      const decision = policyResult.decision;
+      const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
+      const task = createTask({
+        goalId: bundle.goal.id,
+        workflowId: bundle.workflow.id,
+        title: planned.title,
+        summary: planned.summary,
         assignedAgent: planned.assignedAgent,
+        riskClass: decision.riskClass,
         requiresApproval: decision.requiresApproval,
-        ownerUserId: bundle.goal.userId,
-        workspaceId: bundle.goal.workspaceId
-      }),
-      state
-    });
+        toolCapabilities: capabilities,
+        responsibility: deriveTaskResponsibility({
+          assignedAgent: planned.assignedAgent,
+          requiresApproval: decision.requiresApproval,
+          ownerUserId: bundle.goal.userId,
+          workspaceId: bundle.goal.workspaceId
+        }),
+        state
+      });
 
-    const agentResult = await runAgent(task, bundle.goal.title);
-    const nextTask = TaskSchema.parse({
-      ...task,
-      artifactIds: agentResult.artifacts.map((a) => a.id)
-    });
+      const agentResult = await runAgentWithModel(task, bundle.goal.title);
+      const nextTask = TaskSchema.parse({
+        ...task,
+        artifactIds: agentResult.artifacts.map((a) => a.id)
+      });
 
-    tasks.push(nextTask);
-    artifacts.push(...agentResult.artifacts);
+      return {
+        nextTask,
+        artifacts: agentResult.artifacts,
+        agentResult,
+        policyResult,
+        decision
+      };
+    })
+  );
+
+  for (const res of newTaskResults) {
+    tasks.push(res.nextTask);
+    artifacts.push(...res.artifacts);
 
     logs.push(
       createActionLog({
         goalId: bundle.goal.id,
-        taskId: nextTask.id,
+        taskId: res.nextTask.id,
         workflowId: bundle.workflow.id,
         actor: "policy",
         kind: "policy.evaluated",
-        message: `Evaluated policy for new task "${nextTask.title}".`,
+        message: `Evaluated policy for new task "${res.nextTask.title}".`,
         details: {
-          ...decision,
-          policyTrace: buildPolicyDecisionTrace(policyResult),
+          ...res.decision,
+          policyTrace: buildPolicyDecisionTrace(res.policyResult),
           actorContext
         }
       })
@@ -397,16 +400,16 @@ export async function refineGoal(params: {
     logs.push(
       createActionLog({
         goalId: bundle.goal.id,
-        taskId: nextTask.id,
+        taskId: res.nextTask.id,
         workflowId: bundle.workflow.id,
-        actor: nextTask.assignedAgent,
+        actor: res.nextTask.assignedAgent,
         kind: "agent.completed",
-        message: agentResult.summary,
+        message: res.agentResult.summary,
         details: {
-          confidence: agentResult.confidence,
-          executionMode: agentResult.executionMode,
-          implementationTier: agentResult.implementationTier,
-          nextSteps: agentResult.nextSteps,
+          confidence: res.agentResult.confidence,
+          executionMode: res.agentResult.executionMode,
+          implementationTier: res.agentResult.implementationTier,
+          nextSteps: res.agentResult.nextSteps,
           actorContext
         }
       })

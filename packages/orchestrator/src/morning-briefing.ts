@@ -18,7 +18,7 @@ import {
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
-import { runAgent } from "@agentic/agents";
+import { runAgentWithModel } from "@agentic/agents";
 import { createTask, createWorkflowState, recomputeWorkflowStatuses } from "@agentic/execution";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
 import { createActionLog } from "@agentic/observability";
@@ -325,53 +325,67 @@ export async function generateBriefing(params: {
     })
   );
 
-  for (const planned of definition.tasks) {
-    const policyRiskClass = riskFromCapabilities(planned.capabilities);
-    const scorecard = await params.resolveAgentMetrics?.(planned.assignedAgent);
-    const learningValidation = await params.resolvePolicyReplayValidation?.({
-      agent: planned.assignedAgent,
-      capabilities: planned.capabilities,
-      riskClass: policyRiskClass,
-      title: planned.title
-    });
-    const policyResult = simulateTaskPolicy({
-      capabilities: planned.capabilities,
-      confidence: planned.confidence,
-      title: planned.title,
-      memories: params.memories,
-      scorecard,
-      governance: params.governance,
-      learningValidation
-    });
-    const decision = policyResult.decision;
+  // Execute all briefing tasks in parallel
+  const briefingResults = await Promise.all(
+    definition.tasks.map(async (planned) => {
+      const policyRiskClass = riskFromCapabilities(planned.capabilities);
+      const scorecard = await params.resolveAgentMetrics?.(planned.assignedAgent);
+      const learningValidation = await params.resolvePolicyReplayValidation?.({
+        agent: planned.assignedAgent,
+        capabilities: planned.capabilities,
+        riskClass: policyRiskClass,
+        title: planned.title
+      });
+      const policyResult = simulateTaskPolicy({
+        capabilities: planned.capabilities,
+        confidence: planned.confidence,
+        title: planned.title,
+        memories: params.memories,
+        scorecard,
+        governance: params.governance,
+        learningValidation
+      });
+      const decision = policyResult.decision;
 
-    const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
-    const task = createTask({
-      goalId,
-      workflowId: workflow.id,
-      title: planned.title,
-      summary: planned.summary,
-      assignedAgent: planned.assignedAgent,
-      riskClass: decision.riskClass,
-      requiresApproval: decision.requiresApproval,
-      toolCapabilities: planned.capabilities,
-      responsibility: deriveTaskResponsibility({
+      const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
+      const task = createTask({
+        goalId,
+        workflowId: workflow.id,
+        title: planned.title,
+        summary: planned.summary,
         assignedAgent: planned.assignedAgent,
+        riskClass: decision.riskClass,
         requiresApproval: decision.requiresApproval,
-        ownerUserId: params.userId,
-        workspaceId: params.workspaceId
-      }),
-      state
-    });
+        toolCapabilities: planned.capabilities,
+        responsibility: deriveTaskResponsibility({
+          assignedAgent: planned.assignedAgent,
+          requiresApproval: decision.requiresApproval,
+          ownerUserId: params.userId,
+          workspaceId: params.workspaceId
+        }),
+        state
+      });
 
-    const agentResult = await runAgent(task, scenarioTitle);
-    const nextTask = TaskSchema.parse({
-      ...task,
-      artifactIds: agentResult.artifacts.map((artifact) => artifact.id)
-    });
+      const agentResult = await runAgentWithModel(task, scenarioTitle);
+      const nextTask = TaskSchema.parse({
+        ...task,
+        artifactIds: agentResult.artifacts.map((artifact) => artifact.id)
+      });
 
+      return {
+        nextTask,
+        artifacts: agentResult.artifacts,
+        agentResult,
+        policyResult,
+        decision
+      };
+    })
+  );
+
+  for (const res of briefingResults) {
+    const { nextTask, artifacts: resArtifacts, agentResult, policyResult, decision } = res;
     tasks.push(nextTask);
-    artifacts.push(...agentResult.artifacts);
+    artifacts.push(...resArtifacts);
 
     logs.push(
       createActionLog({

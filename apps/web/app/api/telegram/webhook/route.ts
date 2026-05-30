@@ -10,7 +10,11 @@ import {
   enqueueApprovalNotificationJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
-import { operationalJson } from "../../../../lib/api-response";
+import {
+  ApiRouteError,
+  operationalJson,
+  parseJsonBody
+} from "../../../../lib/api-response";
 import {
   consumeTelegramApprovalActions,
   getTelegramApprovalAction,
@@ -46,6 +50,8 @@ const TelegramUpdateSchema = z
   })
   .passthrough();
 
+const MAX_TELEGRAM_WEBHOOK_BYTES = 64_000;
+
 async function acknowledgeTelegramCallback(callbackQueryId: string, text: string, showAlert = false): Promise<void> {
   try {
     await answerTelegramCallbackQuery({
@@ -79,8 +85,14 @@ export async function POST(request: Request) {
     let payload: z.infer<typeof TelegramUpdateSchema>;
 
     try {
-      payload = TelegramUpdateSchema.parse(await request.json());
-    } catch {
+      payload = await parseJsonBody(request, TelegramUpdateSchema, {
+        maxBytes: MAX_TELEGRAM_WEBHOOK_BYTES
+      });
+    } catch (error) {
+      if (error instanceof ApiRouteError) {
+        return operationalJson({ error: error.message }, { status: error.status });
+      }
+
       return operationalJson({ error: "Invalid Telegram payload." }, { status: 400 });
     }
 

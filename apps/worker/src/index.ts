@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { assertDatabaseSchemaReady } from "@agentic/db/migration-runtime";
 import { prepareDefaultIntegrations } from "@agentic/integrations";
 import { logError, logInfo, withTelemetryContext } from "@agentic/observability";
@@ -43,6 +44,20 @@ function parseOptionalPositiveIntEnv(name: string): number | undefined {
   }
 
   return parsed;
+}
+
+function resolveWorkerRunnerId(): string {
+  const configured = process.env.AGENTIC_WORKER_RUNNER_ID?.trim();
+
+  if (configured) {
+    return configured;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("AGENTIC_WORKER_RUNNER_ID must be configured with a unique value in production.");
+  }
+
+  return `worker-${process.pid}-${crypto.randomUUID()}`;
 }
 
 function parseRatioEnv(name: string, fallback: number): number {
@@ -94,7 +109,7 @@ async function main() {
   const repository = createRepository();
   const selfImprovementRepository = createSelfImprovementRepository();
   const controller = new AbortController();
-  const runnerId = process.env.AGENTIC_WORKER_RUNNER_ID?.trim() || `worker-${process.pid}`;
+  const runnerId = resolveWorkerRunnerId();
   const pollIntervalMs = parsePositiveIntEnv("AGENTIC_WORKER_POLL_INTERVAL_MS", 1_000);
   const leaseMs = parsePositiveIntEnv("AGENTIC_WORKER_LEASE_MS", 30_000);
   const heartbeatIntervalMs = parsePositiveIntEnv("AGENTIC_WORKER_HEARTBEAT_INTERVAL_MS", 5_000);

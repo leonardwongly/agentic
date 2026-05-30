@@ -170,4 +170,13 @@ describe("api security headers", () => {
 
     await response.body?.cancel();
   });
+
+  it("keeps Next header configuration delegated to the centralized baseline header module", async () => {
+    const config = await readFile(path.join(process.cwd(), "apps/web/next.config.ts"), "utf8");
+
+    expect(config).toContain("BASE_SECURITY_HEADERS");
+    expect(config).not.toContain("unsafe-inline");
+    expect(config).not.toContain("unsafe-eval");
+    expect(config).not.toContain("Strict-Transport-Security");
+  });
 });

@@ -26,6 +26,7 @@ import { createRepository } from "@agentic/repository";
 import { createDurableJobQueue, createJobRecord } from "@agentic/execution";
 import { generateBriefing, processUserRequest } from "@agentic/orchestrator";
 import { createMemoryRecord } from "@agentic/memory";
+import { vi } from "vitest";
 
 describe("repository", () => {
   const systemActor = createSystemActorContext(SYSTEM_USER_ID);
@@ -216,7 +217,7 @@ describe("repository", () => {
   async function expectDurableQueueLifecycle(repository: ReturnType<typeof createRepository>, userId: string) {
     const queue = createDurableJobQueue(repository, {
       runnerId: `worker-${userId}`,
-      leaseMs: 1_000,
+      leaseMs: 10 * 60 * 1_000,
       retryPolicy: {
         baseDelayMs: 250,
         maxDelayMs: 250
@@ -279,6 +280,95 @@ describe("repository", () => {
     });
   }
 
+  async function claimExpiredJobForMutation(
+    repository: ReturnType<typeof createRepository>,
+    params: {
+      userId: string;
+      mutationName: string;
+    }
+  ) {
+    const queued = await repository.enqueueJob(
+      createGoalCreateJob({
+        userId: params.userId,
+        request: `Expired lease mutation validation for ${params.mutationName}.`,
+        availableAt: "2026-04-16T04:00:00.000Z"
+      })
+    );
+    const claimed = await repository.claimNextJob({
+      userId: params.userId,
+      runnerId: `worker-${params.mutationName}`,
+      leaseMs: 1_000,
+      now: "2026-04-16T04:00:00.000Z"
+    });
+
+    expect(claimed).toMatchObject({
+      id: queued.id,
+      claimedBy: `worker-${params.mutationName}`,
+      leaseExpiresAt: "2026-04-16T04:00:01.000Z"
+    });
+
+    return {
+      jobId: queued.id,
+      runnerId: `worker-${params.mutationName}`
+    };
+  }
+
+  async function expectExpiredLeaseMutationRejection(
+    repository: ReturnType<typeof createRepository>,
+    userId: string
+  ) {
+    const completeJob = await claimExpiredJobForMutation(repository, {
+      userId: `${userId}-complete`,
+      mutationName: "complete"
+    });
+    await expect(
+      repository.completeJob({
+        jobId: completeJob.jobId,
+        runnerId: completeJob.runnerId,
+        completedAt: "2026-04-16T04:00:02.000Z"
+      })
+    ).rejects.toMatchObject({
+      code: "lease_expired"
+    });
+
+    const retryJob = await claimExpiredJobForMutation(repository, {
+      userId: `${userId}-retry`,
+      mutationName: "retry"
+    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-16T04:00:02.000Z"));
+      await expect(
+        repository.retryJob({
+          jobId: retryJob.jobId,
+          runnerId: retryJob.runnerId,
+          failedAt: "2026-04-16T04:00:02.000Z",
+          availableAt: "2026-04-16T04:00:03.000Z",
+          error: "retry after expired lease"
+        })
+      ).rejects.toMatchObject({
+        code: "lease_expired"
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const deadLetterJob = await claimExpiredJobForMutation(repository, {
+      userId: `${userId}-dead-letter`,
+      mutationName: "dead-letter"
+    });
+    await expect(
+      repository.deadLetterJob({
+        jobId: deadLetterJob.jobId,
+        runnerId: deadLetterJob.runnerId,
+        deadLetteredAt: "2026-04-16T04:00:02.000Z",
+        error: "dead-letter after expired lease"
+      })
+    ).rejects.toMatchObject({
+      code: "lease_expired"
+    });
+  }
+
   async function expectPriorityAndConcurrencyControls(repository: ReturnType<typeof createRepository>, userId: string) {
     const queue = createDurableJobQueue(repository, {
       runnerId: `worker-${userId}`,
@@ -330,16 +420,16 @@ describe("repository", () => {
 
     await queue.acknowledge({
       jobId: reclaimedAfterLeaseExpiry!.id,
-      now: "2026-04-16T03:02:02.000Z"
+      now: "2026-04-16T03:01:01.500Z"
     });
     const drainedNormal = await queue.claimNext({
       userId,
-      now: "2026-04-16T03:02:03.000Z"
+      now: "2026-04-16T03:01:02.000Z"
     });
     expect(drainedNormal?.id).toBe(normal.id);
     await queue.acknowledge({
       jobId: drainedNormal!.id,
-      now: "2026-04-16T03:02:04.000Z"
+      now: "2026-04-16T03:01:02.500Z"
     });
 
     const backpressureUserId = `${userId}-backpressure`;
@@ -1398,7 +1488,7 @@ describe("repository", () => {
     await repository.completeJob({
       jobId: reclaimed!.id,
       runnerId: "worker-c",
-      completedAt: "2026-04-16T00:01:31.000Z"
+      completedAt: "2026-04-16T00:01:30.500Z"
     });
 
     const nextClaim = await repository.claimNextJob({
@@ -1411,6 +1501,15 @@ describe("repository", () => {
     expect(nextClaim).not.toBeNull();
     expect(nextClaim?.id).not.toBe(dueNow.id);
     expect(nextClaim?.attemptCount).toBe(1);
+  });
+
+  it("rejects stale worker mutations after the job lease expires in the file-backed store", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-repo-"));
+    const repository = createRepository({
+      storePath: path.join(tempDir, "runtime-store.json")
+    });
+
+    await expectExpiredLeaseMutationRejection(repository, `jobs-expired-lease-${Date.now()}`);
   });
 
   it("claims only jobs from the requested queue in the file-backed store", async () => {
@@ -2083,6 +2182,14 @@ describe("repository", () => {
       claimedBy: "worker-c",
       attemptCount: 2
     });
+  });
+
+  postgresIt("rejects stale worker mutations after the job lease expires in Postgres when DATABASE_URL is configured", async () => {
+    const repository = createRepository({
+      databaseUrl
+    });
+
+    await expectExpiredLeaseMutationRejection(repository, `jobs-postgres-expired-lease-${Date.now()}`);
   });
 
   postgresIt("bounds dashboard query count and recent slices in Postgres when DATABASE_URL is configured", async () => {
@@ -3883,7 +3990,7 @@ describe("repository", () => {
     await repository.deadLetterJob({
       jobId: asyncIssueJob.id,
       runnerId: "worker-dashboard",
-      deadLetteredAt: timestamp,
+      deadLetteredAt: "2026-04-17T08:00:10.000Z",
       error: "worker failed to complete async recovery"
     });
 

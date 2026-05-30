@@ -744,6 +744,96 @@ describe("approval job route", () => {
     }
   });
 
+  it("returns 403 when a viewer replays a shared job whose payload omits workspaceId", async () => {
+    const repository = await buildRepository();
+    const viewerUserId = "user-viewer-missing-workspace";
+
+    await repository.seedDefaults(viewerUserId);
+
+    const workspace = await createSharedWorkspace(repository, SYSTEM_USER_ID, viewerUserId);
+    await workspace.addMember("viewer");
+    const bundle = await processUserRequest({
+      userId: SYSTEM_USER_ID,
+      workspaceId: workspace.workspaceId,
+      request: "Review my inbox and draft responses.",
+      memories: await repository.listMemory(SYSTEM_USER_ID),
+      integrations: await repository.listIntegrations(SYSTEM_USER_ID)
+    });
+    await repository.saveGoalBundle(bundle);
+    const approval = bundle.approvals[0]!;
+
+    const queuedJob = await enqueueApprovalNotificationJob({
+      repository,
+      userId: SYSTEM_USER_ID,
+      approvalId: approval.id,
+      goalId: bundle.goal.id,
+      taskId: approval.taskId,
+      decision: "approved",
+      channel: "slack_receipt",
+      slackChannelId: "C123",
+      slackMessageTs: "1710000000.000100",
+      workspaceId: null,
+      actorContext: createSystemActorContext(SYSTEM_USER_ID)
+    });
+    const claimedJob = await repository.claimNextJob({
+      userId: SYSTEM_USER_ID,
+      kinds: ["approval_notification"],
+      runnerId: "worker-shared-job-replay-missing-workspace-viewer-test",
+      leaseMs: 30_000,
+      now: "2099-04-22T06:00:00.000Z"
+    });
+
+    expect(claimedJob?.id).toBe(queuedJob.id);
+
+    await repository.deadLetterJob({
+      jobId: queuedJob.id,
+      runnerId: "worker-shared-job-replay-missing-workspace-viewer-test",
+      deadLetteredAt: "2026-04-22T06:01:00.000Z",
+      error: "shared workspace replay missing workspace viewer denial test"
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      authMethod: "session",
+      userId: viewerUserId,
+      sessionId: "session-viewer-missing-workspace",
+      expiresAt: "2099-04-22T07:00:00.000Z"
+    });
+
+    try {
+      const statusResponse = await genericJobRoute(
+        buildAuthorizedGetRequest(`http://localhost/api/jobs/${queuedJob.id}`),
+        {
+          params: Promise.resolve({ id: queuedJob.id })
+        }
+      );
+      const replayResponse = await replayJobRoute(
+        buildAuthorizedJsonRequest(`http://localhost/api/jobs/${queuedJob.id}/replay`, {}),
+        {
+          params: Promise.resolve({ id: queuedJob.id })
+        }
+      );
+      const replayPayload = (await replayResponse.json()) as { error?: string };
+      const persistedJob = await repository.getJob(queuedJob.id, SYSTEM_USER_ID);
+
+      expect(statusResponse.status).toBe(200);
+      expect(replayResponse.status).toBe(403);
+      expect(replayPayload.error).toBe(SHARED_JOB_REPLAY_DENIED_REASON);
+      expect(persistedJob).toMatchObject({
+        status: "dead_letter",
+        payload: {
+          goalId: bundle.goal.id,
+          workspaceId: null
+        }
+      });
+      expectNoStoreHeaders(statusResponse);
+      expectNoStoreHeaders(replayResponse);
+    } finally {
+      requireApiSessionSpy.mockRestore();
+    }
+  });
+
   it("allows an editor to replay a dead-lettered shared workspace job", async () => {
     const repository = await buildRepository();
     const editorUserId = "user-editor";

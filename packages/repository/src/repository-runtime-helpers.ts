@@ -335,12 +335,27 @@ export function claimJobRecord(job: JobRecord, runnerId: string, leaseMs: number
   });
 }
 
-export function assertRunningJobOwner(job: JobRecord, runnerId: string): void {
+export function assertRunningJobOwner(job: JobRecord, runnerId: string, at = nowIso()): void {
   if (job.status !== "running") {
     throw new JobMutationError("not_running", `Job ${job.id} is not currently running.`);
   }
 
   if (job.claimedBy !== runnerId) {
     throw new JobMutationError("not_owner", `Job ${job.id} is claimed by another worker.`);
+  }
+
+  if (!job.leaseExpiresAt) {
+    return;
+  }
+
+  const mutationAt = Date.parse(at);
+  const leaseExpiresAt = Date.parse(job.leaseExpiresAt);
+
+  if (!Number.isFinite(mutationAt)) {
+    throw new Error(`Invalid job mutation clock value: ${at}.`);
+  }
+
+  if (!Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= mutationAt) {
+    throw new JobMutationError("lease_expired", `Job ${job.id} lease expired before this worker mutation.`);
   }
 }

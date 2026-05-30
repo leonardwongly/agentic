@@ -16,6 +16,7 @@ import {
   AutopilotProcessJobPayloadSchema
 } from "@agentic/contracts";
 import { createActionLog } from "@agentic/integrations";
+import type { AgenticRepository } from "@agentic/repository";
 import {
   canOperateSharedWorkflow,
   getSharedWorkflowDeniedReason,
@@ -50,6 +51,29 @@ type RouteContext = {
   }>;
 };
 
+async function resolveReplayWorkspaceId(params: {
+  repository: AgenticRepository;
+  job: Awaited<ReturnType<AgenticRepository["getJob"]>>;
+  userId: string;
+}): Promise<string | null> {
+  const job = params.job;
+
+  if (!job) {
+    return null;
+  }
+
+  if ("workspaceId" in job.payload && job.payload.workspaceId) {
+    return job.payload.workspaceId;
+  }
+
+  if ("goalId" in job.payload && typeof job.payload.goalId === "string") {
+    const bundle = await params.repository.getGoalBundleForUser(job.payload.goalId, params.userId);
+    return bundle?.goal.workspaceId ?? null;
+  }
+
+  return null;
+}
+
 async function replayDeadLetterJob(params: { principal: AuthPrincipal; context: RouteContext }) {
   const principal = params.principal;
   const actorContext = createActorContextFromPrincipal(principal);
@@ -66,7 +90,11 @@ async function replayDeadLetterJob(params: { principal: AuthPrincipal; context: 
     throw new ApiRouteError(404, `Job ${id} was not found.`);
   }
 
-  const sharedWorkspaceId = "workspaceId" in job.payload ? job.payload.workspaceId ?? null : null;
+  const sharedWorkspaceId = await resolveReplayWorkspaceId({
+    repository,
+    job,
+    userId: principal.userId
+  });
 
   if (sharedWorkspaceId) {
     const workspaceMembers = await repository.listWorkspaceMembers(sharedWorkspaceId, principal.userId);

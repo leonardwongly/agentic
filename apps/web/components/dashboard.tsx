@@ -4,8 +4,6 @@ import { startTransition, useCallback, useEffect, useMemo, useState } from "reac
 import {
   commitmentInboxBucketValues,
   privacyOperationKindValues,
-  defaultWorkspaceShadowReplayPolicy,
-  enterpriseWorkspaceGovernanceDefaults,
   DEFAULT_COMMITMENT_INBOX_LIMIT,
   type OperatorProduct,
   type OperatorProductSelection,
@@ -21,9 +19,9 @@ import {
   type CommitmentInboxPage,
   type GoalTemplate,
   type PolicyDecision,
-  type PolicyReplayValidation,
-  type WorkspaceGovernance
+  type PolicyReplayValidation
 } from "@agentic/contracts";
+import { buildWorkspaceGovernanceDraft } from "./dashboard-helpers";
 import type { LocalNoteDocument } from "@agentic/integrations/client";
 import type { PolicyLearningInfluenceComparison, PolicyShadowReplayReadiness } from "@agentic/policy";
 import type { DashboardData, DashboardDiagnosticTarget } from "@agentic/repository";
@@ -168,62 +166,6 @@ type DashboardProps = {
   initialNotes: LocalNoteDocument[];
   initialCommitmentInbox: CommitmentInboxPage;
 };
-
-type WorkspaceGovernanceDraft = Omit<WorkspaceGovernance, "workspaceId" | "updatedBy" | "createdAt" | "updatedAt">;
-
-function resolveClientGovernanceDefaults(): WorkspaceGovernanceDraft {
-  const profile =
-    process.env.NEXT_PUBLIC_AGENTIC_GOVERNANCE_DEFAULT_PROFILE ?? process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
-  if (profile?.trim().toLowerCase() !== "demo") {
-    return enterpriseWorkspaceGovernanceDefaults;
-  }
-
-  return {
-    approvalMode: "risk_based",
-    requireAuditExports: true,
-    maxAutoRunRiskClass: "R1",
-    publicSharingEnabled: true,
-    providerAccessRequiresApproval: true,
-    escalationRequiresApproval: true,
-    externalSendRequiresApproval: true,
-    calendarWriteRequiresApproval: true,
-    shadowReplayPolicy: defaultWorkspaceShadowReplayPolicy,
-    retentionDays: 365
-  };
-}
-
-function buildWorkspaceGovernanceDraft(governance: WorkspaceGovernance | null): WorkspaceGovernanceDraft {
-  const defaults = resolveClientGovernanceDefaults();
-  return {
-    approvalMode: governance?.approvalMode ?? defaults.approvalMode,
-    requireAuditExports: governance?.requireAuditExports ?? defaults.requireAuditExports,
-    maxAutoRunRiskClass: governance?.maxAutoRunRiskClass ?? defaults.maxAutoRunRiskClass,
-    publicSharingEnabled: governance?.publicSharingEnabled ?? defaults.publicSharingEnabled,
-    providerAccessRequiresApproval:
-      governance?.providerAccessRequiresApproval ?? defaults.providerAccessRequiresApproval,
-    escalationRequiresApproval: governance?.escalationRequiresApproval ?? defaults.escalationRequiresApproval,
-    externalSendRequiresApproval:
-      governance?.externalSendRequiresApproval ?? defaults.externalSendRequiresApproval,
-    calendarWriteRequiresApproval:
-      governance?.calendarWriteRequiresApproval ?? defaults.calendarWriteRequiresApproval,
-    shadowReplayPolicy: {
-      enabled: governance?.shadowReplayPolicy?.enabled ?? defaults.shadowReplayPolicy.enabled,
-      promotionMode:
-        governance?.shadowReplayPolicy?.promotionMode ?? defaults.shadowReplayPolicy.promotionMode,
-      rollbackOutcome:
-        governance?.shadowReplayPolicy?.rollbackOutcome ?? defaults.shadowReplayPolicy.rollbackOutcome,
-      minimumMatchedEpisodes:
-        governance?.shadowReplayPolicy?.minimumMatchedEpisodes ?? defaults.shadowReplayPolicy.minimumMatchedEpisodes,
-      minimumPrecision:
-        governance?.shadowReplayPolicy?.minimumPrecision ?? defaults.shadowReplayPolicy.minimumPrecision,
-      maximumNegativeOutcomeRate:
-        governance?.shadowReplayPolicy?.maximumNegativeOutcomeRate ?? defaults.shadowReplayPolicy.maximumNegativeOutcomeRate,
-      maximumFailureCostRate:
-        governance?.shadowReplayPolicy?.maximumFailureCostRate ?? defaults.shadowReplayPolicy.maximumFailureCostRate
-    },
-    retentionDays: governance?.retentionDays ?? defaults.retentionDays
-  };
-}
 
 const briefingTypeLabels: Record<BriefingType, string> = {
   startup: "Startup briefing",
@@ -2191,7 +2133,15 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
 
   const logout = () => {
     setIsPending(true);
-    window.location.assign("/logout");
+    void fetch("/logout", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      credentials: "same-origin"
+    }).finally(() => {
+      window.location.assign("/");
+    });
   };
 
   // Quick actions for the floating bar
@@ -2246,6 +2196,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
       onFocusRequestComposer={focusRequestComposer}
       onNavigateToSection={navigateToSection}
       onLogout={logout}
+      defaultAccountKeywords={[data.activeWorkspace?.name, data.activeWorkspace?.slug].filter((s): s is string => !!s)}
     >
         <DashboardCommandCenter
           model={commandCenterModel}

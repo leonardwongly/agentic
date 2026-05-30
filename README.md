@@ -13,7 +13,7 @@ The system is built around a bounded execution loop:
 
 ## Current State
 
-Agentic is implemented as a private modular monorepo. The current product surface includes:
+Agentic is implemented as a modular monorepo. The current product surface includes:
 
 - a commitment-first dashboard
 - authenticated JSON APIs and operational health/readiness endpoints
@@ -55,12 +55,15 @@ The canonical API inventory is [`docs/specs/api-route-inventory.md`](docs/specs/
 ## Quick Start
 
 ```bash
-git clone https://github.com/leonardwongly/agentic.git
+git clone <your-agentic-repository-url>
 cd agentic
 nvm use
 npm install
 cp .env.example .env.local
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_BOOTSTRAP_USER_ID=owner
+export AGENTIC_BOOTSTRAP_DISPLAY_NAME="Instance Owner"
+export AGENTIC_DEFAULT_TIMEZONE=UTC
 npm run setup:check
 npm run dev
 ```
@@ -130,12 +133,16 @@ Start from `.env.example`. Common variables:
 | Variable | Purpose |
 | --- | --- |
 | `AGENTIC_ACCESS_KEY` | Access key for dashboard session bootstrap and API automation. |
+| `AGENTIC_BOOTSTRAP_USER_ID` | Install-local owner/admin user id. Required for production owner resolution. |
+| `AGENTIC_BOOTSTRAP_DISPLAY_NAME` | Display name for the install-local owner seeded into new stores. |
+| `AGENTIC_DEFAULT_TIMEZONE` | Default timezone for seeded briefing/user preferences. Defaults to `UTC` when unset. |
 | `DATABASE_URL` | Enables the Postgres repository backend. Required in production. |
 | `AGENTIC_PUBLIC_BASE_URL` | Required in production for OAuth redirects, share links, and public URLs. |
 | `AGENTIC_RUNTIME_STORE_PATH` | Optional file-backed local store path. |
 | `AGENTIC_NOTES_PATH` | Optional local Markdown notes path. |
 | `AGENTIC_SHARED_AUTH_STATE` / `AGENTIC_REQUIRE_SHARED_AUTH_STATE` | Shared auth runtime state for Postgres-backed environments. |
-| `AGENTIC_TRUST_PROXY_HEADERS` / `AGENTIC_TRUSTED_CLIENT_IP_HEADER` | Production request identity configuration behind a trusted proxy. |
+| `AGENTIC_TRUST_PROXY_HEADERS` / `AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED` / `AGENTIC_TRUSTED_CLIENT_IP_HEADER` | Production request identity configuration behind a trusted proxy that overwrites client-IP headers. |
+| `AGENTIC_TELEMETRY_EXPORT_URL` / `AGENTIC_TELEMETRY_ALLOWED_HOSTS` | Optional telemetry export endpoint and production host allowlist. |
 | `AGENTIC_WORKER_HEALTH_PATH` | Shared worker heartbeat file for production readiness. |
 | `AGENTIC_WORKER_*` | Worker polling, lease, retry, scheduler, and concurrency tuning. |
 
@@ -146,8 +153,8 @@ Optional integrations:
 - provider credential encryption: `AGENTIC_PROVIDER_SECRET_KEY`, `AGENTIC_PROVIDER_SECRET_KEY_VERSION`
 - Slack: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_DEFAULT_CHANNEL`
 - Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_DEFAULT_CHAT_ID`
-- GitHub issue intake: `AGENTIC_GITHUB_WEBHOOK_SECRET`, `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`
-- GitHub App sync: `AGENTIC_GITHUB_APP_ID`, `AGENTIC_GITHUB_APP_INSTALLATION_ID`, `AGENTIC_GITHUB_APP_PRIVATE_KEY`, `AGENTIC_GITHUB_APP_SYNC_SECRET`
+- GitHub issue intake: `AGENTIC_GITHUB_WEBHOOK_SECRET`, `AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES`, optional `AGENTIC_GITHUB_ISSUE_INTAKE_USER_ID`; `/agentic work` comments should also set `AGENTIC_GITHUB_ISSUE_COMMAND_ALLOWED_LOGINS`
+- GitHub App sync: `AGENTIC_GITHUB_APP_ID`, `AGENTIC_GITHUB_APP_INSTALLATION_ID`, `AGENTIC_GITHUB_APP_PRIVATE_KEY`, `AGENTIC_GITHUB_APP_SYNC_SECRET`; GitHub Enterprise API hosts require `AGENTIC_GITHUB_APP_ALLOW_ENTERPRISE_HOSTS=true` and `AGENTIC_GITHUB_APP_ALLOWED_API_HOSTS`
 
 See [`docs/runbooks/github-issue-autopilot.md`](docs/runbooks/github-issue-autopilot.md) for GitHub webhook and GitHub App setup.
 
@@ -222,9 +229,13 @@ Production requires Postgres, explicit migrations, production-safe auth state, r
 export NODE_ENV=production
 export DATABASE_URL=postgres://user:password@db-host:5432/agentic
 export AGENTIC_ACCESS_KEY=replace-this-with-a-long-random-secret
+export AGENTIC_BOOTSTRAP_USER_ID=owner
+export AGENTIC_BOOTSTRAP_DISPLAY_NAME="Instance Owner"
+export AGENTIC_DEFAULT_TIMEZONE=UTC
 export AGENTIC_PUBLIC_BASE_URL=https://agentic.example.com
 export AGENTIC_REQUIRE_SHARED_AUTH_STATE=true
 export AGENTIC_TRUST_PROXY_HEADERS=true
+export AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED=true
 export AGENTIC_TRUSTED_CLIENT_IP_HEADER=x-forwarded-for
 export AGENTIC_WORKER_HEALTH_PATH=/var/lib/agentic/worker-health.json
 

@@ -11,12 +11,14 @@ import {
 type ParsedArgs = {
   json: boolean;
   maxAgeDays: number;
+  repo: string | null;
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     json: false,
-    maxAgeDays: 21
+    maxAgeDays: 21,
+    repo: null
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -35,12 +37,31 @@ function parseArgs(argv: string[]): ParsedArgs {
         index += 1;
         break;
       }
+      case "--repo": {
+        const value = argv[index + 1]?.trim();
+        if (!value) {
+          throw new Error("--repo requires an owner/name value.");
+        }
+        parsed.repo = value;
+        index += 1;
+        break;
+      }
       default:
         throw new Error(`Unknown argument: ${argument}`);
     }
   }
 
   return parsed;
+}
+
+function resolveGitHubRepository(explicitRepo: string | null): string | null {
+  if (explicitRepo) {
+    return explicitRepo;
+  }
+
+  const remote = run("git", ["remote", "get-url", "origin"], { allowFailure: true });
+  const match = remote.match(/github\.com[:/]([^/\s]+\/[^/\s.]+)(?:\.git)?$/u);
+  return match?.[1] ?? null;
 }
 
 function run(command: string, args: string[], options?: { allowFailure?: boolean }) {
@@ -86,14 +107,18 @@ function loadBranches(): BranchSnapshot[] {
     });
 }
 
-function loadPullRequests(): PullRequestSnapshot[] {
+function loadPullRequests(repo: string | null): PullRequestSnapshot[] {
+  if (!repo) {
+    return [];
+  }
+
   const output = run(
     "gh",
     [
       "pr",
       "list",
       "--repo",
-      "leonardwongly/agentic",
+      repo,
       "--state",
       "open",
       "--json",
@@ -181,9 +206,10 @@ function countDirtyFiles(cwd: string) {
 }
 
 const parsed = parseArgs(process.argv.slice(2));
+const repo = resolveGitHubRepository(parsed.repo);
 const report = evaluateRepoHygieneSnapshot({
   branches: loadBranches(),
-  pullRequests: loadPullRequests(),
+  pullRequests: loadPullRequests(repo),
   worktrees: loadWorktrees(),
   now: new Date(),
   maxAgeDays: parsed.maxAgeDays

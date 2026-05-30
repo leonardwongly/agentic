@@ -4,9 +4,14 @@ import path from "node:path";
 import { SYSTEM_USER_ID, type ApprovalRequest, type AgentDefinition, type Task } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
+import { afterEach, vi } from "vitest";
 import { deriveAgentMetricsFromGoals } from "../packages/repository/src/agent-metrics";
 
 describe("deriveAgentMetricsFromGoals", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   async function createGoalForUser(
     repository: ReturnType<typeof createRepository>,
     userId: string,
@@ -53,6 +58,9 @@ describe("deriveAgentMetricsFromGoals", () => {
   }
 
   it("uses calendar day boundaries instead of a rolling 24-hour window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-18T12:00:00.000Z"));
+
     const repository = await createIsolatedRepository();
     const agent = await loadCommunicationsAgent(repository);
     const bundle = await createGoalForUser(repository, SYSTEM_USER_ID, "Review my inbox and send one external reply.");

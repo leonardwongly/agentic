@@ -4,6 +4,32 @@ const DEFAULT_DEPLOY_TIMEOUT_MS = 20 * 60 * 1000;
 const MAX_COMMAND_LENGTH = 200;
 const MAX_ARG_LENGTH = 2_000;
 const MAX_ARG_COUNT = 64;
+const ALLOWED_DEPLOY_COMMANDS = new Set(["node", "npm", "npx", "render", "flyctl", "railway", "netlify"]);
+const DEPLOY_ENV_EXACT_ALLOWLIST = new Set([
+  "CI",
+  "HOME",
+  "PATH",
+  "TMPDIR",
+  "RUNNER_TEMP",
+  "NODE_ENV",
+  "NODE_OPTIONS",
+  "NPM_CONFIG_CACHE"
+]);
+const DEPLOY_ENV_PREFIX_ALLOWLIST = [
+  "AGENTIC_",
+  "STAGING_",
+  "GITHUB_",
+  "RENDER_",
+  "FLY_",
+  "RAILWAY_",
+  "NETLIFY_",
+  "CLOUDFLARE_",
+  "CF_",
+  "AWS_",
+  "AZURE_",
+  "GOOGLE_",
+  "GCP_"
+] as const;
 
 export type ProviderDeployConfig = {
   command: string;
@@ -24,6 +50,16 @@ function assertSafeCommandSegment(value: string, label: string, maxLength: numbe
   }
 }
 
+function assertAllowedDeployCommand(command: string) {
+  if (command.includes("/") || command.includes("\\")) {
+    throw new Error("AGENTIC_STAGING_DEPLOY_BIN must be a supported command name without path separators.");
+  }
+
+  if (!ALLOWED_DEPLOY_COMMANDS.has(command)) {
+    throw new Error("AGENTIC_STAGING_DEPLOY_BIN must name a supported deploy command.");
+  }
+}
+
 export function parseProviderDeployConfig(env: NodeJS.ProcessEnv, options?: { requireConfig?: boolean }): ProviderDeployConfig | null {
   const command = env.AGENTIC_STAGING_DEPLOY_BIN?.trim() ?? "";
   const rawArgs = env.AGENTIC_STAGING_DEPLOY_ARGS_JSON?.trim() ?? "";
@@ -38,6 +74,7 @@ export function parseProviderDeployConfig(env: NodeJS.ProcessEnv, options?: { re
   }
 
   assertSafeCommandSegment(command, "AGENTIC_STAGING_DEPLOY_BIN", MAX_COMMAND_LENGTH);
+  assertAllowedDeployCommand(command);
 
   let args: string[] = [];
 
@@ -72,6 +109,25 @@ export function parseProviderDeployConfig(env: NodeJS.ProcessEnv, options?: { re
     command,
     args
   };
+}
+
+export function buildProviderDeployEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {};
+
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) {
+      continue;
+    }
+
+    if (
+      DEPLOY_ENV_EXACT_ALLOWLIST.has(key) ||
+      DEPLOY_ENV_PREFIX_ALLOWLIST.some((prefix) => key.startsWith(prefix))
+    ) {
+      result[key] = value;
+    }
+  }
+
+  return result;
 }
 
 export function parseDeployTimeoutMs(env: NodeJS.ProcessEnv): number {

@@ -13,6 +13,7 @@ export type RequestIdentityRuntimeStatus = {
   production: boolean;
   trustProxyHeaders: boolean;
   trustedClientIpHeader: TrustedClientIpHeader | null;
+  proxyHeaderOverwriteConfirmed: boolean;
   identitySource: RequestClientIdentity["source"];
   warnings: string[];
 };
@@ -31,6 +32,10 @@ function shouldTrustProxyHeaders(): boolean {
   return isTrue(process.env.AGENTIC_TRUST_PROXY_HEADERS);
 }
 
+function isProxyHeaderOverwriteConfirmed(): boolean {
+  return isTrue(process.env.AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED);
+}
+
 function getTrustedClientIpHeader(): TrustedClientIpHeader | null {
   const configured = process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER?.trim().toLowerCase();
 
@@ -46,24 +51,35 @@ function getTrustedClientIpHeader(): TrustedClientIpHeader | null {
 export function getRequestIdentityRuntimeStatus(): RequestIdentityRuntimeStatus {
   const production = process.env.NODE_ENV === "production";
   const trustProxyHeaders = shouldTrustProxyHeaders();
+  const proxyHeaderOverwriteConfirmed = isProxyHeaderOverwriteConfirmed();
   const trustedClientIpHeader = trustProxyHeaders ? getTrustedClientIpHeader() : null;
-  const identitySource = trustProxyHeaders && trustedClientIpHeader ? "trusted-ip" : "request-fingerprint";
+  const identitySource =
+    trustProxyHeaders && proxyHeaderOverwriteConfirmed && trustedClientIpHeader ? "trusted-ip" : "request-fingerprint";
   const warnings: string[] = [];
 
   if (!trustProxyHeaders) {
     warnings.push(
       "Trusted proxy headers are disabled, so rate limits and abuse controls fall back to a coarse request fingerprint."
     );
-  } else if (!trustedClientIpHeader) {
-    warnings.push(
-      "Trusted proxy headers are enabled, but AGENTIC_TRUSTED_CLIENT_IP_HEADER must name one canonical client-IP header."
-    );
+  } else {
+    if (!proxyHeaderOverwriteConfirmed) {
+      warnings.push(
+        "Trusted proxy headers are enabled, but AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED=true must be set after confirming the ingress overwrites forwarded client-IP headers."
+      );
+    }
+
+    if (!trustedClientIpHeader) {
+      warnings.push(
+        "Trusted proxy headers are enabled, but AGENTIC_TRUSTED_CLIENT_IP_HEADER must name one canonical client-IP header."
+      );
+    }
   }
 
   return {
     production,
     trustProxyHeaders,
     trustedClientIpHeader,
+    proxyHeaderOverwriteConfirmed,
     identitySource,
     warnings
   };
@@ -103,12 +119,17 @@ function parseTrustedForwardedFor(header: string | null): string | null {
     return null;
   }
 
-  const firstHop = header.split(",")[0];
-  return normalizeIpCandidate(firstHop);
+  const hops = header.split(",").map((hop) => hop.trim()).filter(Boolean);
+
+  if (hops.length !== 1) {
+    return null;
+  }
+
+  return normalizeIpCandidate(hops[0]);
 }
 
 function getTrustedProxyIp(request: Request): string | null {
-  if (!shouldTrustProxyHeaders()) {
+  if (!shouldTrustProxyHeaders() || !isProxyHeaderOverwriteConfirmed()) {
     return null;
   }
 

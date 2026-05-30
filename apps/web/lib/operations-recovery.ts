@@ -222,9 +222,9 @@ async function releaseExpiredLease(
     throw new ApiRouteError(409, `Job ${job.id} does not have an expired worker lease to release.`);
   }
 
-  const released = await params.repository.retryJob({
+  const released = await params.repository.releaseExpiredJobLease({
     jobId: job.id,
-    runnerId: job.claimedBy,
+    releasedAt: at,
     availableAt: at,
     error: params.request.reason?.trim() || "Operator released an expired worker lease."
   });

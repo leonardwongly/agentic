@@ -38,7 +38,7 @@ import {
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
-import { runAgent } from "@agentic/agents";
+import { getModelConfig, isModelConfigured, runAgentWithModel, runTextModel } from "@agentic/agents";
 import { createTask, createWorkflowState, recomputeWorkflowStatuses, transitionTaskState } from "@agentic/execution";
 import { inferCapabilitiesFromRequest, planActionExecution } from "@agentic/integrations";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
@@ -50,14 +50,13 @@ import {
   simulateTaskPolicy,
   type PolicyReplayValidation
 } from "@agentic/policy";
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
 
 export { captureApprovalOutcomeSignals, captureExecutionOutcomeSignals, captureMemoriesFromBundle, type CapturedMemories } from "./memory-capture";
 export { executeApprovedTask, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "./execution-dispatch";
 export { generateBriefing, generateMorningBriefing } from "./morning-briefing";
 export { refineGoal } from "./goal-refinement";
 export { createGoalTemplate, interpolateTemplate, computeNextRun, shouldTemplateRun } from "./goal-templates";
+import { LlmCache } from "./llm-cache";
 
 export type ScenarioKey =
   | "inbox-triage"
@@ -311,27 +310,18 @@ User request: "${request.slice(0, 500)}"
 
 Scenario key:`;
 
+  const cache = LlmCache.getInstance();
+  const options = getModelConfig();
+
+  const cached = await cache.get<ScenarioKey>(prompt, options);
+  if (cached) return cached;
+
   try {
-    if (process.env.ANTHROPIC_API_KEY) {
-      const client = new Anthropic();
-      const response = await client.messages.create({
-        model: process.env.ANTHROPIC_MODEL ?? "claude-opus-4-6",
-        max_tokens: 20,
-        messages: [{ role: "user", content: prompt }]
-      });
-      const text = response.content.find((b) => b.type === "text")?.text?.trim().toLowerCase() ?? "";
-      const matched = validScenarios.find((s) => text.includes(s));
-      if (matched) return matched;
-    } else if (process.env.OPENAI_API_KEY) {
-      const client = new OpenAI();
-      const response = await client.chat.completions.create({
-        model: process.env.OPENAI_MODEL ?? "gpt-5.4",
-        max_tokens: 20,
-        messages: [{ role: "user", content: prompt }]
-      });
-      const text = response.choices[0]?.message?.content?.trim().toLowerCase() ?? "";
-      const matched = validScenarios.find((s) => text.includes(s));
-      if (matched) return matched;
+    const text = (await runTextModel({ prompt, maxTokens: 20 }))?.toLowerCase() ?? "";
+    const matched = validScenarios.find((s) => text.includes(s));
+    if (matched) {
+      await cache.set(prompt, options, matched);
+      return matched;
     }
   } catch {
     // Fall through to regex
@@ -346,7 +336,7 @@ async function detectScenario(request: string): Promise<ScenarioKey> {
     return detectScenarioRegex(request);
   }
 
-  if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) {
+  if (isModelConfigured()) {
     return detectScenarioLlm(request);
   }
   return detectScenarioRegex(request);
@@ -790,14 +780,19 @@ export async function processUserRequest(params: {
     );
   }
 
-  const contextPack = buildWorkflowContextPack({
-    kind: "goal_planning",
-    query: request,
-    records: params.memories,
-    agent: "orchestrator"
-  });
+  // Run analysis steps in parallel
+  const [contextPack, scenario, requestCapabilities] = await Promise.all([
+    Promise.resolve(buildWorkflowContextPack({
+      kind: "goal_planning",
+      query: request,
+      records: params.memories,
+      agent: "orchestrator"
+    })),
+    detectScenario(request),
+    Promise.resolve(inferCapabilitiesFromRequest(request))
+  ]);
+
   const relevantMemories = contextPack.selectedMemories;
-  const scenario = await detectScenario(request);
   const catalog = scenarioCatalog[scenario];
   const goalId = params.goalId ?? crypto.randomUUID();
   const workspaceId = params.workspaceId ?? null;
@@ -807,7 +802,6 @@ export async function processUserRequest(params: {
   const tasks: Task[] = [];
   const approvals: ApprovalRequest[] = [];
   const artifacts: Artifact[] = [];
-  const requestCapabilities = inferCapabilitiesFromRequest(request);
   const subAgentPlan =
     scenario === "complex-delegation"
       ? buildSubAgentPlan({
@@ -905,84 +899,105 @@ export async function processUserRequest(params: {
     });
   }
 
-  for (const plannedTask of plannedTasks) {
-    const capabilities = Array.from(
-      new Set([
-        ...plannedTask.capabilities,
-        ...requestCapabilities.filter((capability) => plannedTask.capabilities.includes(capability))
-      ])
-    );
-    const policyRiskClass = riskFromCapabilities(capabilities);
-    const scorecard = await params.resolveAgentMetrics?.(plannedTask.assignedAgent);
-    const learningValidation = await params.resolvePolicyReplayValidation?.({
-      agent: plannedTask.assignedAgent,
-      capabilities,
-      riskClass: policyRiskClass,
-      title: plannedTask.title
-    });
-    const policyResult = simulateTaskPolicy({
-      capabilities,
-      confidence: plannedTask.confidence,
-      title: plannedTask.title,
-      memories: params.memories,
-      scorecard,
-      governance: params.governance,
-      learningValidation
-    });
-    const decision = policyResult.decision;
-    const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
-    const task = createTask({
-      goalId,
-      workflowId: workflow.id,
-      title: plannedTask.title,
-      summary: plannedTask.summary,
-      assignedAgent: plannedTask.assignedAgent,
-      riskClass: decision.riskClass,
-      requiresApproval: decision.requiresApproval,
-      toolCapabilities: capabilities,
-      state,
-      dependsOn: plannedTask.subAgentRole ? [] : undefined,
-      responsibility: deriveTaskResponsibility({
+  // Execute all planned tasks in parallel
+  const taskResults = await Promise.all(
+    plannedTasks.map(async (plannedTask) => {
+      const capabilities = Array.from(
+        new Set([
+          ...plannedTask.capabilities,
+          ...requestCapabilities.filter((capability) => plannedTask.capabilities.includes(capability))
+        ])
+      );
+      const policyRiskClass = riskFromCapabilities(capabilities);
+      const scorecard = await params.resolveAgentMetrics?.(plannedTask.assignedAgent);
+      const learningValidation = await params.resolvePolicyReplayValidation?.({
+        agent: plannedTask.assignedAgent,
+        capabilities,
+        riskClass: policyRiskClass,
+        title: plannedTask.title
+      });
+      const policyResult = simulateTaskPolicy({
+        capabilities,
+        confidence: plannedTask.confidence,
+        title: plannedTask.title,
+        memories: params.memories,
+        scorecard,
+        governance: params.governance,
+        learningValidation
+      });
+      const decision = policyResult.decision;
+      const state = decision.outcome === "blocked" ? "blocked" : decision.requiresApproval ? "waiting" : "completed";
+      const task = createTask({
+        goalId,
+        workflowId: workflow.id,
+        title: plannedTask.title,
+        summary: plannedTask.summary,
         assignedAgent: plannedTask.assignedAgent,
+        riskClass: decision.riskClass,
         requiresApproval: decision.requiresApproval,
-        ownerUserId: params.userId,
-        workspaceId
-      })
-    });
-    const agentResult = await runAgent(task, catalog.title, {
-      agentDefinition: params.agentDefinition,
-      requestContext: request
-    });
-    const agentArtifacts = plannedTask.subAgentRole
-      ? agentResult.artifacts.map((artifact) =>
-          ArtifactSchema.parse({
-            ...artifact,
-            metadata: {
-              ...artifact.metadata,
-              kind: "sub_agent_output",
-              subAgentPlanId: plannedTask.subAgentPlanId,
-              subAgentRoleId: plannedTask.subAgentRole?.id,
-              subAgentRoleName: plannedTask.subAgentRole?.name,
-              responsibilities: plannedTask.subAgentRole?.responsibilities,
-              expectedOutputs: plannedTask.subAgentRole?.expectedOutputs,
-              handoffCriteria: plannedTask.subAgentRole?.handoffCriteria,
-              guardrails: plannedTask.subAgentRole?.guardrails
-            }
-          })
-        )
-      : agentResult.artifacts;
-    const nextTask = TaskSchema.parse({
-      ...task,
-      artifactIds: agentArtifacts.map((artifact) => artifact.id)
-    });
+        toolCapabilities: capabilities,
+        state,
+        dependsOn: plannedTask.subAgentRole ? [] : undefined,
+        responsibility: deriveTaskResponsibility({
+          assignedAgent: plannedTask.assignedAgent,
+          requiresApproval: decision.requiresApproval,
+          ownerUserId: params.userId,
+          workspaceId
+        })
+      });
+
+      const agentResult = await runAgentWithModel(task, catalog.title, {
+        agentDefinition: params.agentDefinition,
+        requestContext: request
+      });
+
+      const agentArtifacts = plannedTask.subAgentRole
+        ? agentResult.artifacts.map((artifact) =>
+            ArtifactSchema.parse({
+              ...artifact,
+              metadata: {
+                ...artifact.metadata,
+                kind: "sub_agent_output",
+                subAgentPlanId: plannedTask.subAgentPlanId,
+                subAgentRoleId: plannedTask.subAgentRole?.id,
+                subAgentRoleName: plannedTask.subAgentRole?.name,
+                responsibilities: plannedTask.subAgentRole?.responsibilities,
+                expectedOutputs: plannedTask.subAgentRole?.expectedOutputs,
+                handoffCriteria: plannedTask.subAgentRole?.handoffCriteria,
+                guardrails: plannedTask.subAgentRole?.guardrails
+              }
+            })
+          )
+        : agentResult.artifacts;
+
+      const nextTask = TaskSchema.parse({
+        ...task,
+        artifactIds: agentArtifacts.map((artifact) => artifact.id)
+      });
+
+      return {
+        plannedTask,
+        nextTask,
+        agentArtifacts,
+        agentResult,
+        policyResult,
+        decision
+      };
+    })
+  );
+
+  for (const res of taskResults) {
+    const { plannedTask, nextTask, agentArtifacts, agentResult, policyResult, decision } = res;
     const actionIntent = decision.requiresApproval ? inferActionIntentFromArtifacts(nextTask, agentArtifacts) : null;
 
     tasks.push(nextTask);
     artifacts.push(...agentArtifacts);
+
     if (plannedTask.subAgentRole) {
       subAgentTaskIds.set(plannedTask.subAgentRole.id, nextTask.id);
       subAgentTaskDependencyRoleIds.set(nextTask.id, plannedTask.dependsOnRoleIds ?? []);
     }
+
     appendLog({
       goalId,
       taskId: nextTask.id,
@@ -1003,18 +1018,20 @@ export async function processUserRequest(params: {
         })
       }
     });
+
     appendLog({
       goalId,
       taskId: nextTask.id,
       workflowId: workflow.id,
       actor: "policy",
       kind: "policy.evaluated",
-      message: `Evaluated policy for "${nextTask.title}".`,
+      message: `Evaluated policy for task "${nextTask.title}".`,
       details: {
         ...decision,
         policyTrace: buildPolicyDecisionTrace(policyResult)
       }
     });
+
     appendLog({
       goalId,
       taskId: nextTask.id,

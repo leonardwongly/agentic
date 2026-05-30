@@ -3711,6 +3711,13 @@ export const AgentExportSchema = z.object({
   })
 });
 
+export const LlmCacheEntrySchema = z.object({
+  key: z.string().min(1),
+  value: z.string().min(1),
+  expiresAt: z.string().datetime(),
+  createdAt: z.string().datetime()
+});
+
 export type Capability = z.infer<typeof CapabilitySchema>;
 export type RiskClass = z.infer<typeof RiskClassSchema>;
 export type TaskState = z.infer<typeof TaskStateSchema>;
@@ -3922,6 +3929,7 @@ export type OperatorProductKpi = z.infer<typeof OperatorProductKpiSchema>;
 export type OperatorProductOnboardingStep = z.infer<typeof OperatorProductOnboardingStepSchema>;
 export type OperatorProductIntegrationRequirement = z.infer<typeof OperatorProductIntegrationRequirementSchema>;
 export type OperatorProduct = z.infer<typeof OperatorProductSchema>;
+export type LlmCacheEntry = z.infer<typeof LlmCacheEntrySchema>;
 export type OperatorProductSelection = z.infer<typeof OperatorProductSelectionSchema>;
 export type AgentActivityEventKind = z.infer<typeof AgentActivityEventKindSchema>;
 export type AgentActivityEvent = z.infer<typeof AgentActivityEventSchema>;
@@ -3937,7 +3945,8 @@ export type WorkflowTemplate = z.infer<typeof WorkflowTemplateSchema>;
 export type WorkflowExecutionState = z.infer<typeof WorkflowExecutionStateSchema>;
 export type AgentExport = z.infer<typeof AgentExportSchema>;
 
-export const SYSTEM_USER_ID = "user-primary";
+export const DEFAULT_BOOTSTRAP_USER_ID = "owner";
+export const SYSTEM_USER_ID = DEFAULT_BOOTSTRAP_USER_ID;
 
 export function deriveAgentImplementationTier(executionMode: AgentExecutionMode): AgentImplementationTier {
   switch (executionMode) {
