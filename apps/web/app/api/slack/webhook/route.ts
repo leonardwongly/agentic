@@ -1,16 +1,44 @@
+import { z } from "zod";
 import { createHumanActorContext } from "@agentic/contracts";
 import {
   verifySlackSignature
 } from "@agentic/integrations";
-import { logError } from "@agentic/observability";
 import { ApprovalMutationError } from "@agentic/repository";
 import {
   enqueueApprovalNotificationJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
-import { operationalJson } from "../../../../lib/api-response";
+import {
+  ApiRouteError,
+  handleOperationalApiError,
+  operationalJson,
+  readBoundedRequestText
+} from "../../../../lib/api-response";
 import { resolveSlackActorUserId, verifySlackApprovalToken } from "../../../../lib/slack-approvals";
 import { getSeededRepository } from "../../../../lib/server";
+
+const SLACK_WEBHOOK_BODY_MAX_BYTES = 64 * 1024;
+const SLACK_WEBHOOK_BODY_TOO_LARGE_MESSAGE = "Slack webhook payload is too large.";
+
+const SlackInteractivePayloadSchema = z.object({
+  type: z.string().trim().min(1).max(64),
+  actions: z
+    .array(z.object({
+      action_id: z.string().trim().min(1).max(128),
+      value: z.string().trim().min(1).max(2048)
+    }))
+    .max(10)
+    .optional(),
+  user: z.object({
+    id: z.string().trim().min(1).max(128).optional()
+  }).optional(),
+  channel: z.object({
+    id: z.string().trim().min(1).max(128)
+  }).optional(),
+  message: z.object({
+    ts: z.string().trim().min(1).max(64)
+  }).optional()
+});
 
 /**
  * POST /api/slack/webhook
@@ -21,7 +49,10 @@ import { getSeededRepository } from "../../../../lib/server";
 export async function POST(request: Request) {
   try {
     // Read the raw body for signature verification
-    const rawBody = await request.text();
+    const rawBody = await readBoundedRequestText(request, {
+      maxBytes: SLACK_WEBHOOK_BODY_MAX_BYTES,
+      tooLargeMessage: SLACK_WEBHOOK_BODY_TOO_LARGE_MESSAGE
+    });
 
     const slackSignature = request.headers.get("x-slack-signature") ?? "";
     const slackTimestamp = request.headers.get("x-slack-request-timestamp") ?? "";
@@ -48,16 +79,15 @@ export async function POST(request: Request) {
       return operationalJson({ error: "Missing payload." }, { status: 400 });
     }
 
-    const payload = JSON.parse(payloadStr) as {
-      type: string;
-      actions?: Array<{
-        action_id: string;
-        value: string;
-      }>;
-      user?: { id?: string };
-      channel?: { id: string };
-      message?: { ts: string };
-    };
+    let parsedPayload: unknown;
+
+    try {
+      parsedPayload = JSON.parse(payloadStr);
+    } catch {
+      throw new ApiRouteError(400, "Invalid Slack payload.");
+    }
+
+    const payload = SlackInteractivePayloadSchema.parse(parsedPayload);
 
     if (payload.type !== "block_actions" || !payload.actions?.length) {
       // Acknowledge unknown interaction types gracefully
@@ -163,7 +193,6 @@ export async function POST(request: Request) {
     // Return 200 to Slack so it stops retrying
     return operationalJson({ ok: true });
   } catch (error) {
-    logError("slack.webhook.unhandled_error", error);
-    return operationalJson({ error: "Internal server error." }, { status: 500 });
+    return handleOperationalApiError(error, "Internal server error.");
   }
 }

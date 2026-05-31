@@ -233,27 +233,92 @@ function createFakeJobStore() {
   };
 }
 
-function buildTelegramRequest(callbackData: string, telegramUserId = "123", chatId = "-100123456"): Request {
+function buildTelegramPayloadRequest(payload: unknown, init?: RequestInit & { duplex?: "half" }): Request {
+  const headers = new Headers(init?.headers);
+
+  headers.set("content-type", headers.get("content-type") ?? "application/json");
+  headers.set("x-telegram-bot-api-secret-token", headers.get("x-telegram-bot-api-secret-token") ?? "telegram-secret");
+
+  return new Request("http://localhost/api/telegram/webhook", {
+    ...init,
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload)
+  });
+}
+
+function buildTelegramStreamRequest(payload: unknown): Request {
+  const body = JSON.stringify(payload);
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < body.length; offset += 16_384) {
+        controller.enqueue(encoder.encode(body.slice(offset, offset + 16_384)));
+      }
+
+      controller.close();
+    }
+  });
+
   return new Request("http://localhost/api/telegram/webhook", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-telegram-bot-api-secret-token": "telegram-secret"
     },
-    body: JSON.stringify({
-      update_id: 1,
-      callback_query: {
-        id: "callback-1",
-        from: { id: telegramUserId },
-        data: callbackData,
-        message: {
-          message_id: 77,
-          chat: {
-            id: chatId
-          }
+    body: stream,
+    duplex: "half"
+  } as RequestInit & { duplex: "half" });
+}
+
+function buildTelegramRequest(callbackData: string, telegramUserId = "123", chatId = "-100123456"): Request {
+  return buildTelegramPayloadRequest({
+    update_id: 1,
+    callback_query: {
+      id: "callback-1",
+      from: { id: telegramUserId },
+      data: callbackData,
+      message: {
+        message_id: 77,
+        chat: {
+          id: chatId
         }
       }
-    })
+    }
+  });
+}
+
+function buildTelegramCallbackWithoutDataRequest(extraFields: Record<string, unknown> = {}): Request {
+  return buildTelegramPayloadRequest({
+    update_id: 1,
+    callback_query: {
+      id: "callback-1",
+      from: {
+        id: "123",
+        unknown_from_field: true
+      },
+      message: {
+        message_id: 77,
+        chat: {
+          id: "-100123456",
+          unknown_chat_field: true
+        },
+        unknown_message_field: true
+      },
+      unknown_callback_field: true
+    },
+    ...extraFields
+  });
+}
+
+function buildMalformedTelegramRequest(body: string): Request {
+  return new Request("http://localhost/api/telegram/webhook", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-telegram-bot-api-secret-token": "telegram-secret"
+    },
+    body
   });
 }
 
@@ -564,6 +629,65 @@ describe("telegram webhook route", () => {
     delete process.env.DATABASE_URL;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     resetTelegramApprovalActionStoreForTests();
+  });
+
+  it("rejects declared oversized payloads before parsing JSON", async () => {
+    const response = await telegramWebhookRoute(
+      buildTelegramPayloadRequest({ update_id: 1 }, {
+        headers: {
+          "content-length": String(65 * 1024)
+        }
+      })
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Telegram webhook payload is too large." });
+    expect(answerTelegramCallbackQueryMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects streamed oversized payloads without declared content length", async () => {
+    const response = await telegramWebhookRoute(
+      buildTelegramStreamRequest({
+        update_id: 1,
+        callback_query: {
+          id: "callback-oversized",
+          from: { id: "123" },
+          padding: "x".repeat(65 * 1024)
+        }
+      })
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Telegram webhook payload is too large." });
+    expect(answerTelegramCallbackQueryMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed JSON payloads", async () => {
+    const response = await telegramWebhookRoute(buildMalformedTelegramRequest("{bad-json"));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid Telegram payload." });
+    expect(answerTelegramCallbackQueryMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores unknown nested fields in callback queries", async () => {
+    const response = await telegramWebhookRoute(buildTelegramCallbackWithoutDataRequest({
+      unknown_update_field: true
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(answerTelegramCallbackQueryMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts near-cap callback payloads", async () => {
+    const response = await telegramWebhookRoute(buildTelegramCallbackWithoutDataRequest({
+      padding: "x".repeat(60 * 1024)
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(answerTelegramCallbackQueryMock).not.toHaveBeenCalled();
   });
 
   it("binds approve actions to the mapped Telegram actor", async () => {

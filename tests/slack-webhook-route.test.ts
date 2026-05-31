@@ -232,8 +232,50 @@ function createFakeJobStore() {
   };
 }
 
+function buildSlackPayloadRequest(payload: Record<string, unknown>, init?: RequestInit & { duplex?: "half" }) {
+  const body = new URLSearchParams({
+    payload: JSON.stringify(payload)
+  }).toString();
+  const headers = new Headers(init?.headers);
+
+  headers.set("content-type", headers.get("content-type") ?? "application/x-www-form-urlencoded");
+  headers.set("x-slack-signature", headers.get("x-slack-signature") ?? "v0=fake");
+  headers.set("x-slack-request-timestamp", headers.get("x-slack-request-timestamp") ?? `${Math.floor(Date.now() / 1000)}`);
+
+  return new Request("http://localhost/api/slack/webhook", {
+    ...init,
+    method: "POST",
+    headers,
+    body
+  });
+}
+
+function buildSlackStreamRequest(body: string) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < body.length; offset += 16_384) {
+        controller.enqueue(encoder.encode(body.slice(offset, offset + 16_384)));
+      }
+
+      controller.close();
+    }
+  });
+
+  return new Request("http://localhost/api/slack/webhook", {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      "x-slack-signature": "v0=fake",
+      "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`
+    },
+    body: stream,
+    duplex: "half"
+  } as RequestInit & { duplex: "half" });
+}
+
 function buildSlackRequest(actionId: string, actionValue: string, slackUserId = "U123") {
-  const payload = {
+  return buildSlackPayloadRequest({
     type: "block_actions",
     actions: [
       {
@@ -244,19 +286,6 @@ function buildSlackRequest(actionId: string, actionValue: string, slackUserId = 
     user: { id: slackUserId },
     channel: { id: "C123" },
     message: { ts: "1710000000.000100" }
-  };
-  const body = new URLSearchParams({
-    payload: JSON.stringify(payload)
-  }).toString();
-
-  return new Request("http://localhost/api/slack/webhook", {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      "x-slack-signature": "v0=fake",
-      "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`
-    },
-    body
   });
 }
 
@@ -552,6 +581,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
 
 describe("slack webhook route", () => {
   beforeEach(() => {
+    verifySlackSignatureMock.mockClear();
     verifySlackSignatureMock.mockReturnValue(true);
     updateMessageMock.mockClear();
     process.env.SLACK_SIGNING_SECRET = "test-signing-secret";
@@ -563,6 +593,69 @@ describe("slack webhook route", () => {
     delete process.env.SLACK_SIGNING_SECRET;
     delete process.env.SLACK_USER_MAP;
     Reflect.set(globalThis, "__agenticRepository", undefined);
+  });
+
+  it("rejects declared oversized payloads before signature verification", async () => {
+    const response = await slackWebhookRoute(
+      buildSlackPayloadRequest({ type: "message_action" }, {
+        headers: {
+          "content-length": String(65 * 1024)
+        }
+      })
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Slack webhook payload is too large." });
+    expect(verifySlackSignatureMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects streamed oversized payloads without declared content length", async () => {
+    const oversizedBody = new URLSearchParams({
+      payload: JSON.stringify({
+        type: "message_action",
+        padding: "x".repeat(65 * 1024)
+      })
+    }).toString();
+
+    const response = await slackWebhookRoute(buildSlackStreamRequest(oversizedBody));
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Slack webhook payload is too large." });
+    expect(verifySlackSignatureMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed interactive payload JSON", async () => {
+    const response = await slackWebhookRoute(
+      new Request("http://localhost/api/slack/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-slack-signature": "v0=fake",
+          "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`
+        },
+        body: "payload=%7Bbad-json"
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid Slack payload." });
+    expect(verifySlackSignatureMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts near-cap payloads and strips unused fields", async () => {
+    const response = await slackWebhookRoute(
+      buildSlackPayloadRequest({
+        type: "message_action",
+        padding: "x".repeat(60 * 1024),
+        nested: {
+          unexpected: true
+        }
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(verifySlackSignatureMock).toHaveBeenCalledTimes(1);
   });
 
   it("binds approve actions to the mapped Slack actor", async () => {

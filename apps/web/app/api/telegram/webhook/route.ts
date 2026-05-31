@@ -10,7 +10,12 @@ import {
   enqueueApprovalNotificationJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "@agentic/worker-runtime";
-import { operationalJson } from "../../../../lib/api-response";
+import {
+  ApiRouteError,
+  handleOperationalApiError,
+  operationalJson,
+  readBoundedRequestText
+} from "../../../../lib/api-response";
 import {
   consumeTelegramApprovalActions,
   getTelegramApprovalAction,
@@ -18,33 +23,33 @@ import {
 } from "../../../../lib/telegram-approvals";
 import { getSeededRepository } from "../../../../lib/server";
 
-const TelegramIdentifierSchema = z.union([z.string().trim().min(1), z.number().int()]).transform((value) => String(value).trim());
+const TELEGRAM_WEBHOOK_BODY_MAX_BYTES = 64 * 1024;
+const TELEGRAM_WEBHOOK_BODY_TOO_LARGE_MESSAGE = "Telegram webhook payload is too large.";
+const TelegramIdentifierSchema = z
+  .union([z.string().trim().min(1).max(128), z.number().int()])
+  .transform((value) => String(value).trim());
 const SHARED_APPROVAL_OWNER_MESSAGE = "Only the workspace owner can respond to shared approvals.";
 
-const TelegramCallbackQuerySchema = z
-  .object({
-    id: z.string().trim().min(1),
-    data: z.string().trim().min(1).max(64).optional(),
-    from: z.object({
-      id: TelegramIdentifierSchema
-    }),
-    message: z
-      .object({
-        message_id: z.number().int().nonnegative(),
-        chat: z.object({
-          id: TelegramIdentifierSchema
-        })
+const TelegramCallbackQuerySchema = z.object({
+  id: z.string().trim().min(1).max(256),
+  data: z.string().trim().min(1).max(64).optional(),
+  from: z.object({
+    id: TelegramIdentifierSchema
+  }),
+  message: z
+    .object({
+      message_id: z.number().int().nonnegative(),
+      chat: z.object({
+        id: TelegramIdentifierSchema
       })
-      .optional()
-  })
-  .passthrough();
+    })
+    .optional()
+});
 
-const TelegramUpdateSchema = z
-  .object({
-    update_id: z.number().int().nonnegative().optional(),
-    callback_query: TelegramCallbackQuerySchema.optional()
-  })
-  .passthrough();
+const TelegramUpdateSchema = z.object({
+  update_id: z.number().int().nonnegative().optional(),
+  callback_query: TelegramCallbackQuerySchema.optional()
+});
 
 async function acknowledgeTelegramCallback(callbackQueryId: string, text: string, showAlert = false): Promise<void> {
   try {
@@ -76,14 +81,19 @@ export async function POST(request: Request) {
       return operationalJson({ error: "Invalid Telegram webhook secret." }, { status: 401 });
     }
 
-    let payload: z.infer<typeof TelegramUpdateSchema>;
+    const rawBody = await readBoundedRequestText(request, {
+      maxBytes: TELEGRAM_WEBHOOK_BODY_MAX_BYTES,
+      tooLargeMessage: TELEGRAM_WEBHOOK_BODY_TOO_LARGE_MESSAGE
+    });
+    let parsedBody: unknown;
 
     try {
-      payload = TelegramUpdateSchema.parse(await request.json());
+      parsedBody = JSON.parse(rawBody);
     } catch {
-      return operationalJson({ error: "Invalid Telegram payload." }, { status: 400 });
+      throw new ApiRouteError(400, "Invalid Telegram payload.");
     }
 
+    const payload = TelegramUpdateSchema.parse(parsedBody);
     const callbackQuery = payload.callback_query;
 
     if (!callbackQuery?.data) {
@@ -197,7 +207,6 @@ export async function POST(request: Request) {
 
     return operationalJson({ ok: true });
   } catch (error) {
-    logError("telegram.webhook.unhandled_error", error);
-    return operationalJson({ error: "Internal server error." }, { status: 500 });
+    return handleOperationalApiError(error, "Internal server error.");
   }
 }
