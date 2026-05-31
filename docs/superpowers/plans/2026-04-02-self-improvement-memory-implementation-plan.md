@@ -11,7 +11,7 @@ This plan translates the approved self-improvement memory design into an impleme
 
 ## Assumptions
 
-1. The implementation target is the current Node 20 and TypeScript monorepo.
+1. The implementation target is the current Node 22 and TypeScript monorepo.
 2. The package will be file-backed only in this slice.
 3. No user-facing routes or UI changes are part of this plan.
 4. Existing unrelated worktree changes must remain untouched.

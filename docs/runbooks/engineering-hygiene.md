@@ -30,7 +30,7 @@ The CI workflow runs the lightweight gates before the heavier security, migratio
 | `npm run format:check` | Checks changed text files for LF endings, final newline, and trailing whitespace. | CRLF, missing final newline, trailing whitespace. |
 | `npm run release:check-context` | Checks changed and visible local paths for files that should not become release evidence. | `.env*`, `.agentic`, build outputs, artifacts, logs, packaged outputs, key material, and secret-like filenames. |
 | `npm run docs:validate` | Validates the generated document output contract. | Missing or invalid generated document output. |
-| `npm run setup:check` | Reports first-run local readiness. | Unsupported Node version; warns on missing dependencies, access key, or database parity settings. |
+| `npm run setup:check` | Reports first-run local readiness. | Unsupported Node version; warns when local Node differs from the primary Node 22 runtime, or when dependencies, access key, or database parity settings are missing. |
 | `npm run hygiene:repo` | Reports stale branches, stale PRs, and worktree state without mutating GitHub or the local repo. | Dirty worktrees are blockers; stale branches and PRs are warnings that need owner action. |
 
 ## Issue-To-Evidence Map
@@ -106,7 +106,7 @@ npm test
 npm run build
 ```
 
-`npm run setup:check` is intentionally non-destructive. It confirms supported Node, required repo files, dependency installation, access-key posture, and file-backed versus Postgres mode. For production-like local parity, set `DATABASE_URL`, run migrations, and run:
+`npm run setup:check` is intentionally non-destructive. It confirms the local Node version is inside the supported engine range and warns when it differs from the primary Node 22 runtime pinned by `.nvmrc`, `.node-version`, CI, and Docker. It also checks required repo files, dependency installation, access-key posture, and file-backed versus Postgres mode. For production-like local parity, set `DATABASE_URL`, run migrations, and run:
 
 ```bash
 npm run db:migrate

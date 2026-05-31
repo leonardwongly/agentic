@@ -165,6 +165,7 @@ const REQUIRED_ROOT_SCRIPTS = [
   "remediation:verify",
   "build"
 ];
+const PRIMARY_NODE_MAJOR = 22;
 
 export function normalizeRepoPath(value: string) {
   const normalized = value.replaceAll("\\", "/").replace(/^\.\/+/u, "").trim();
@@ -389,19 +390,25 @@ export function evaluateFirstRunReadiness(options: {
   const checks: FirstRunCheck[] = [];
   const majorVersion = Number.parseInt(options.nodeVersion.replace(/^v/u, "").split(".")[0] ?? "", 10);
 
-  checks.push(
-    Number.isInteger(majorVersion) && majorVersion >= 20 && majorVersion < 26
-      ? {
-          id: "node-version",
-          status: "pass",
-          message: `Node ${options.nodeVersion} satisfies the repo engine range >=20 <26.`
-        }
-      : {
-          id: "node-version",
-          status: "fail",
-          message: `Node ${options.nodeVersion} does not satisfy the repo engine range >=20 <26.`
-        }
-  );
+  if (!Number.isInteger(majorVersion) || majorVersion < 20 || majorVersion >= 26) {
+    checks.push({
+      id: "node-version",
+      status: "fail",
+      message: `Node ${options.nodeVersion} does not satisfy the repo engine range >=20 <26.`
+    });
+  } else if (majorVersion !== PRIMARY_NODE_MAJOR) {
+    checks.push({
+      id: "node-version",
+      status: "warn",
+      message: `Node ${options.nodeVersion} satisfies the repo engine range >=20 <26, but Node ${PRIMARY_NODE_MAJOR} is the primary runtime pinned by .nvmrc, .node-version, CI, and Docker.`
+    });
+  } else {
+    checks.push({
+      id: "node-version",
+      status: "pass",
+      message: `Node ${options.nodeVersion} matches the primary runtime and satisfies the repo engine range >=20 <26.`
+    });
+  }
 
   for (const requiredPath of ["package-lock.json", "package.json", "docs/specs/api-route-inventory.md"]) {
     checks.push(
