@@ -248,8 +248,8 @@ function main() {
   );
   assertContains(
     runtimeReadiness,
-    "await repository.listProviderCredentials()",
-    `${runtimeReadinessPath} must inspect provider credentials when computing readiness.`
+    "await repository.getProviderCredentialReadinessSummary(",
+    `${runtimeReadinessPath} must inspect bounded provider credential health when computing readiness.`
   );
   assertContains(
     dashboard,

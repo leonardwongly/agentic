@@ -428,6 +428,110 @@ describe("repository", () => {
     });
   }
 
+  it("summarizes job readiness from aggregate queue state", async () => {
+    const repository = createRepository({
+      storePath: path.join(await mkdtemp(path.join(os.tmpdir(), "agentic-repository-job-readiness-")), "runtime-store.json")
+    });
+    const now = "2026-04-16T04:00:00.000Z";
+    const staleAvailableAt = "2026-04-16T03:40:00.000Z";
+
+    await repository.enqueueJob(createGoalCreateJob({
+      userId: DEFAULT_OWNER_USER_ID,
+      availableAt: staleAvailableAt
+    }));
+    await repository.enqueueJob({
+      ...createGoalCreateJob({
+        userId: DEFAULT_OWNER_USER_ID,
+        availableAt: staleAvailableAt
+      }),
+      status: "retrying"
+    });
+    await repository.enqueueJob({
+      ...createGoalCreateJob({
+        userId: DEFAULT_OWNER_USER_ID
+      }),
+      status: "running",
+      claimedBy: "worker-stale",
+      claimedAt: "2026-04-16T03:30:00.000Z",
+      leaseExpiresAt: "2026-04-16T03:59:00.000Z"
+    });
+    await repository.enqueueJob({
+      ...createGoalCreateJob({
+        userId: DEFAULT_OWNER_USER_ID
+      }),
+      status: "dead_letter",
+      deadLetteredAt: "2026-04-16T03:45:00.000Z",
+      lastError: "Permanent test failure."
+    });
+    await repository.enqueueJob({
+      ...createGoalCreateJob({
+        userId: DEFAULT_OWNER_USER_ID
+      }),
+      status: "completed",
+      completedAt: "2026-04-16T03:50:00.000Z"
+    });
+
+    await expect(repository.getJobReadinessSummary({
+      now,
+      maxPendingJobAgeMs: 15 * 60 * 1000
+    })).resolves.toEqual({
+      queuedJobs: 1,
+      retryingJobs: 1,
+      runningJobs: 1,
+      deadLetterJobs: 1,
+      expiredLeases: 1,
+      stalePendingJobs: 2,
+      oldestPendingJobAgeMs: 20 * 60 * 1000
+    });
+  });
+
+  it("summarizes provider credential readiness without listing credential records", async () => {
+    const repository = createRepository({
+      storePath: path.join(
+        await mkdtemp(path.join(os.tmpdir(), "agentic-repository-provider-readiness-")),
+        "runtime-store.json"
+      )
+    });
+
+    await repository.saveProviderCredential(buildProviderCredential({
+      userId: DEFAULT_OWNER_USER_ID,
+      accountId: "connected-stale",
+      lastValidatedAt: "2026-04-01T00:00:00.000Z"
+    }));
+    await repository.saveProviderCredential(buildProviderCredential({
+      userId: DEFAULT_OWNER_USER_ID,
+      accountId: "refresh-failed",
+      status: "refresh_failed",
+      lastRefreshFailureAt: "2026-04-15T00:00:00.000Z"
+    }));
+    await repository.saveProviderCredential(buildProviderCredential({
+      userId: DEFAULT_OWNER_USER_ID,
+      accountId: "reconnect",
+      status: "reconnect_required",
+      reconnectRequiredAt: "2026-04-15T00:00:00.000Z"
+    }));
+    await repository.saveProviderCredential(buildProviderCredential({
+      userId: DEFAULT_OWNER_USER_ID,
+      accountId: "expired",
+      expiresAt: "2026-04-15T00:00:00.000Z"
+    }));
+
+    await expect(repository.getProviderCredentialReadinessSummary({
+      userId: DEFAULT_OWNER_USER_ID,
+      now: "2026-04-16T00:00:00.000Z",
+      validationStaleMs: 7 * 24 * 60 * 60 * 1000
+    })).resolves.toMatchObject({
+      totalCredentials: 4,
+      connectedCredentials: 2,
+      degradedCredentials: 4,
+      reconnectRequiredCredentials: 1,
+      refreshFailedCredentials: 1,
+      revokedCredentials: 0,
+      expiredCredentials: 1,
+      validationStaleCredentials: 1
+    });
+  });
+
   it("appends goal action logs without rewriting the full bundle", async () => {
     const repository = createRepository({
       storePath: path.join(await mkdtemp(path.join(os.tmpdir(), "agentic-repository-append-logs-")), "runtime-store.json")

@@ -1,4 +1,9 @@
-import { buildConnectorHealthCheckSnapshot, buildWebReadinessReport } from "../apps/web/lib/runtime-readiness";
+import {
+  buildAsyncExecutionCheckSnapshotFromSummary,
+  buildConnectorHealthCheckSnapshot,
+  buildConnectorHealthCheckSnapshotFromSummary,
+  buildWebReadinessReport
+} from "../apps/web/lib/runtime-readiness";
 import type { AuthRuntimeStateStatus } from "../apps/web/lib/auth-runtime-state";
 import type { DatabaseSchemaStatus } from "@agentic/db/schema-status";
 import type { ReadinessCheck } from "../apps/web/lib/runtime-readiness";
@@ -144,6 +149,65 @@ function buildProviderCredential(overrides?: Partial<ProviderCredential>): Provi
 }
 
 describe("runtime readiness", () => {
+  it("builds async execution readiness from aggregate queue summaries", () => {
+    const check = buildAsyncExecutionCheckSnapshotFromSummary({
+      runtime: "production",
+      maxPendingJobAgeMs: 15 * 60 * 1000,
+      summary: {
+        queuedJobs: 100_000,
+        retryingJobs: 2,
+        runningJobs: 4,
+        deadLetterJobs: 1,
+        expiredLeases: 1,
+        stalePendingJobs: 3,
+        oldestPendingJobAgeMs: 18 * 60 * 1000
+      }
+    });
+
+    expect(check).toMatchObject({
+      status: "fail",
+      message: "Async execution requires attention: 1 dead-letter job(s), 1 expired worker lease(s), 3 stale pending job(s).",
+      details: {
+        queuedJobs: 100_000,
+        retryingJobs: 2,
+        runningJobs: 4,
+        deadLetterJobs: 1,
+        expiredLeases: 1,
+        stalePendingJobs: 3,
+        oldestPendingJobAgeSeconds: 1080,
+        maxPendingJobAgeSeconds: 900
+      }
+    });
+  });
+
+  it("builds connector readiness from aggregate credential summaries", () => {
+    const check = buildConnectorHealthCheckSnapshotFromSummary({
+      runtime: "production",
+      summary: {
+        totalCredentials: 10_000,
+        connectedCredentials: 9_995,
+        degradedCredentials: 2,
+        reconnectRequiredCredentials: 1,
+        refreshFailedCredentials: 1,
+        revokedCredentials: 0,
+        expiredCredentials: 1,
+        validationStaleCredentials: 0
+      }
+    });
+
+    expect(check).toMatchObject({
+      status: "fail",
+      message: "Connector health requires attention: 1 credential requires re-authentication, 1 credential is expired.",
+      details: {
+        totalCredentials: 10_000,
+        degradedCredentials: 2,
+        reconnectRequiredCredentials: 1,
+        refreshFailedCredentials: 1,
+        expiredCredentials: 1
+      }
+    });
+  });
+
   it("fails closed in production when the access key, database, and shared auth state are not ready", () => {
     const report = buildWebReadinessReport({
       nodeEnv: "production",

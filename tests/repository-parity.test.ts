@@ -160,4 +160,72 @@ parityDescribe("repository Postgres parity", () => {
       status: fileJob?.status
     });
   });
+
+  it("summarizes durable job readiness consistently", async () => {
+    const staleQueued = createJobRecord({
+      id: `job-readiness-queued-${unique}`,
+      userId: DEFAULT_OWNER_USER_ID,
+      kind: "goal_create",
+      availableAt: "2026-04-16T03:40:00.000Z",
+      payload: {
+        type: "goal_create",
+        goalId: `goal-readiness-queued-${unique}`,
+        workflowId: `workflow-readiness-queued-${unique}`,
+        request: "Validate readiness summary parity.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      }
+    });
+    const expiredRunning = createJobRecord({
+      id: `job-readiness-running-${unique}`,
+      userId: DEFAULT_OWNER_USER_ID,
+      kind: "docs_render",
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      }
+    });
+    const deadLetter = createJobRecord({
+      id: `job-readiness-dead-${unique}`,
+      userId: DEFAULT_OWNER_USER_ID,
+      kind: "docs_render",
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      }
+    });
+    const records = [
+      staleQueued,
+      {
+        ...expiredRunning,
+        status: "running" as const,
+        claimedBy: "worker-parity",
+        claimedAt: "2026-04-16T03:30:00.000Z",
+        leaseExpiresAt: "2026-04-16T03:59:00.000Z"
+      },
+      {
+        ...deadLetter,
+        status: "dead_letter" as const,
+        deadLetteredAt: "2026-04-16T03:50:00.000Z",
+        lastError: "Parity dead letter."
+      }
+    ];
+
+    for (const record of records) {
+      await fileRepository.enqueueJob(record);
+      await postgresRepository.enqueueJob(record);
+    }
+
+    const fileSummary = await fileRepository.getJobReadinessSummary({
+      now: "2026-04-16T04:00:00.000Z",
+      maxPendingJobAgeMs: 15 * 60 * 1000
+    });
+    const postgresSummary = await postgresRepository.getJobReadinessSummary({
+      now: "2026-04-16T04:00:00.000Z",
+      maxPendingJobAgeMs: 15 * 60 * 1000
+    });
+
+    expect(postgresSummary).toEqual(fileSummary);
+  });
 });

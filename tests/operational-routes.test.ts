@@ -1,11 +1,13 @@
 import { vi } from "vitest";
 import { expectOperationalNoStoreHeaders } from "./route-test-helpers";
 
-const { getWebReadinessReportMock } = vi.hoisted(() => ({
+const { getPublicWebReadinessSummaryMock, getWebReadinessReportMock } = vi.hoisted(() => ({
+  getPublicWebReadinessSummaryMock: vi.fn(),
   getWebReadinessReportMock: vi.fn()
 }));
 
 vi.mock("../apps/web/lib/runtime-readiness", () => ({
+  getPublicWebReadinessSummary: getPublicWebReadinessSummaryMock,
   getWebReadinessReport: getWebReadinessReportMock
 }));
 
@@ -17,6 +19,7 @@ describe("operational routes", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
 
   afterEach(() => {
+    getPublicWebReadinessSummaryMock.mockReset();
     getWebReadinessReportMock.mockReset();
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
   });
@@ -37,19 +40,11 @@ describe("operational routes", () => {
   });
 
   it("returns a ready report with HTTP 200", async () => {
-    getWebReadinessReportMock.mockResolvedValue({
+    getPublicWebReadinessSummaryMock.mockResolvedValue({
       ok: true,
       status: "ready",
-      runtime: "production",
-      storageBackend: "postgres",
       generatedAt: "2026-04-17T00:00:00.000Z",
-      checks: [
-        {
-          name: "connector_health",
-          status: "pass",
-          message: "Connector health checks passed."
-        }
-      ]
+      details: "/api/ready/details"
     });
 
     const response = await readyRoute(new Request("http://localhost/api/ready"));
@@ -73,19 +68,11 @@ describe("operational routes", () => {
   });
 
   it("returns service unavailable when readiness fails", async () => {
-    getWebReadinessReportMock.mockResolvedValue({
+    getPublicWebReadinessSummaryMock.mockResolvedValue({
       ok: false,
       status: "not_ready",
-      runtime: "production",
-      storageBackend: "postgres",
       generatedAt: "2026-04-17T00:00:00.000Z",
-      checks: [
-        {
-          name: "database",
-          status: "fail",
-          message: "Database schema is not ready for application startup."
-        }
-      ]
+      details: "/api/ready/details"
     });
 
     const response = await readyRoute(new Request("http://localhost/api/ready"));
