@@ -4,6 +4,8 @@ export type LocalCiPlanOptions = {
   mode?: LocalCiMode;
   skipInstall?: boolean;
   noE2e?: boolean;
+  skipDocs?: boolean;
+  skipHygiene?: boolean;
   withPostgres?: boolean;
   keepPostgres?: boolean;
   branchName?: string;
@@ -120,10 +122,10 @@ export function buildLocalCiPlan(options: LocalCiPlanOptions = {}): LocalCiPlan 
 
   steps.push(npmRun("ci:validate-provenance"));
   steps.push(npmRun("ci:issue-theme-gates", ["--", "--assert-workflow"]));
-  steps.push(npmRun("compliance:validate-registry"));
-  steps.push(npmRun("test:oss:ownership"));
 
   if (mode === "fast") {
+    steps.push(npmRun("compliance:validate-registry"));
+    steps.push(npmRun("test:oss:ownership"));
     steps.push(npmRun("test:architecture:fitness"));
     steps.push(npmRun("test:performance:fitness"));
     steps.push(npmRun("test"));
@@ -139,7 +141,58 @@ export function buildLocalCiPlan(options: LocalCiPlanOptions = {}): LocalCiPlan 
       steps.unshift(builtin("start-postgres", "Start local Postgres service", "start-postgres"));
     }
 
+    if (options.skipHygiene) {
+      skipped.push(
+        {
+          id: "lint",
+          title: "Run lint gate",
+          reason: "Skipped because --skip-hygiene was provided."
+        },
+        {
+          id: "typecheck",
+          title: "Run typecheck gate",
+          reason: "Skipped because --skip-hygiene was provided."
+        },
+        {
+          id: "format-check",
+          title: "Run format gate",
+          reason: "Skipped because --skip-hygiene was provided."
+        },
+        {
+          id: "release-check-context",
+          title: "Check release context",
+          reason: "Skipped because --skip-hygiene was provided."
+        }
+      );
+    } else {
+      steps.push(npmRun("lint"));
+      steps.push(npmRun("typecheck"));
+      steps.push(npmRun("format:check"));
+      steps.push(npmRun("release:check-context"));
+    }
+
+    steps.push(npmRun("test:oss:ownership"));
+
+    if (options.skipDocs) {
+      skipped.push(
+        {
+          id: "docs-render",
+          title: "Render docs inventory",
+          reason: "Skipped because --skip-docs was provided."
+        },
+        {
+          id: "docs-validate",
+          title: "Validate docs inventory",
+          reason: "Skipped because --skip-docs was provided."
+        }
+      );
+    } else {
+      steps.push(npmRun("docs:render"));
+      steps.push(npmRun("docs:validate"));
+    }
+
     steps.push(builtin("ensure-artifact-directories", "Create local CI artifact directories", "ensure-artifact-directories"));
+    steps.push(npmRun("compliance:validate-registry"));
     steps.push(npmRun("security:audit-runtime", ["--", "--minimum-severity", "moderate", "--report", "artifacts/security/runtime-audit-report.json"]));
     steps.push(npmRun("db:check-migrations"));
     steps.push(npmRun("db:migrate"));
