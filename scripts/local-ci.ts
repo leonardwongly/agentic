@@ -17,6 +17,8 @@ type ParsedArgs = {
   json: boolean;
   skipInstall: boolean;
   noE2e: boolean;
+  skipDocs: boolean;
+  skipHygiene: boolean;
   withPostgres: boolean;
   keepPostgres: boolean;
 };
@@ -30,6 +32,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     json: false,
     skipInstall: false,
     noE2e: false,
+    skipDocs: false,
+    skipHygiene: false,
     withPostgres: false,
     keepPostgres: false
   };
@@ -65,6 +69,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--no-e2e":
         parsed.noE2e = true;
         break;
+      case "--skip-docs":
+        parsed.skipDocs = true;
+        break;
+      case "--skip-hygiene":
+        parsed.skipHygiene = true;
+        break;
       case "--with-postgres":
         parsed.withPostgres = true;
         break;
@@ -93,6 +103,8 @@ Options:
   --json             Print the plan as JSON. Implies --dry-run.
   --skip-install     Skip npm ci.
   --no-e2e           Skip Playwright install and browser E2E in --full mode.
+  --skip-docs        Skip docs render and docs validate in --full mode.
+  --skip-hygiene     Skip lint, typecheck, format, and release-context gates in --full mode.
   --with-postgres    Start an isolated postgres:16 container for --full mode.
   --keep-postgres    Leave the local CI Postgres container running after completion.
 `);
@@ -263,6 +275,8 @@ async function main() {
     mode: parsed.mode,
     skipInstall: parsed.skipInstall,
     noE2e: parsed.noE2e,
+    skipDocs: parsed.skipDocs,
+    skipHygiene: parsed.skipHygiene,
     withPostgres: parsed.withPostgres,
     keepPostgres: parsed.keepPostgres,
     branchName: process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME,
