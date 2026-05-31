@@ -10,8 +10,8 @@ The suite groups tests by failure mode instead of by feature area so the release
 owner can quickly answer which defensive boundary regressed:
 
 - `malformed-input-and-size-limits`
-  Reject malformed JSON, unknown fields, oversized payloads, and ambiguous input
-  before work reaches durable or privileged code paths.
+  Reject malformed JSON, unknown fields, oversized provider webhook payloads,
+  and ambiguous input before work reaches durable or privileged code paths.
 - `auth-session-and-provider-callbacks`
   Keep session bootstrap, callback state validation, and provider auth flows
   fail-closed.
@@ -42,8 +42,14 @@ High-signal files in the suite include:
 - `tests/briefing-route.test.ts`
 - `tests/docs-render-route.test.ts`
 - `tests/autopilot-route.test.ts`
+- `tests/slack-webhook-route.test.ts`
+- `tests/telegram-webhook-route.test.ts`
 - `tests/worker-runtime.test.ts`
 - `tests/repository.test.ts`
+
+Slack and Telegram webhook coverage verifies declared and streamed request body
+caps, malformed provider payload handling, stripped unknown callback fields, and
+existing replay / duplicate-action behavior.
 
 The suite intentionally overlaps some files across categories. That overlap is
 useful because a single route often defends multiple boundaries, such as

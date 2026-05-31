@@ -16,7 +16,9 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
       "tests/api-validation.test.ts",
       "tests/local-notes-route.test.ts",
       "tests/provider-credential-secrets.test.ts",
-      "tests/public-share-view-route.test.ts"
+      "tests/public-share-view-route.test.ts",
+      "tests/slack-webhook-route.test.ts",
+      "tests/telegram-webhook-route.test.ts"
     ]
   },
   {
@@ -48,7 +50,9 @@ export const SECURITY_REGRESSION_CATEGORIES: SecurityRegressionCategory[] = [
       "tests/docs-render-route.test.ts",
       "tests/templates-route.test.ts",
       "tests/nl-intent-route.test.ts",
-      "tests/autopilot-route.test.ts"
+      "tests/autopilot-route.test.ts",
+      "tests/slack-webhook-route.test.ts",
+      "tests/telegram-webhook-route.test.ts"
     ]
   },
   {
