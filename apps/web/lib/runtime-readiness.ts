@@ -1,6 +1,11 @@
 import { createRepository, type AgenticRepository } from "@agentic/repository";
 import type { ProviderCredential } from "@agentic/contracts";
-import { readFileWorkerRuntimeHealthSnapshot, type WorkerRuntimeHealthSnapshot } from "@agentic/worker-runtime";
+import {
+  resolveWorkerConcurrencyPolicy,
+  readFileWorkerRuntimeHealthSnapshot,
+  type WorkerConcurrencyPolicy,
+  type WorkerRuntimeHealthSnapshot
+} from "@agentic/worker-runtime";
 import { getAuthMode } from "./auth";
 import { getAuthRuntimeStateStatus, type AuthRuntimeStateStatus } from "./auth-runtime-state";
 import { getRequestIdentityRuntimeStatus, type RequestIdentityRuntimeStatus } from "./request-client-identity";
@@ -14,6 +19,7 @@ export type ReadinessCheck = {
     | "auth_runtime_state"
     | "request_identity"
     | "async_execution"
+    | "worker_concurrency"
     | "worker_heartbeat"
     | "connector_health";
   status: "pass" | "warn" | "fail";
@@ -33,6 +39,7 @@ export type WebReadinessReport = {
 type AuthModeSnapshot = ReturnType<typeof getAuthMode>;
 type AsyncExecutionCheckSnapshot = Omit<ReadinessCheck, "name">;
 type ConnectorHealthCheckSnapshot = Omit<ReadinessCheck, "name">;
+type WorkerConcurrencyCheckSnapshot = Omit<ReadinessCheck, "name">;
 type WorkerHeartbeatCheckSnapshot = Omit<ReadinessCheck, "name">;
 
 type ReadinessEvaluationParams = {
@@ -44,6 +51,7 @@ type ReadinessEvaluationParams = {
   requestIdentity: RequestIdentityRuntimeStatus;
   databaseStatus: DatabaseSchemaStatus | null;
   asyncExecution: AsyncExecutionCheckSnapshot;
+  workerConcurrency?: WorkerConcurrencyCheckSnapshot;
   workerHeartbeat?: WorkerHeartbeatCheckSnapshot;
   connectorHealth: ConnectorHealthCheckSnapshot;
 };
@@ -266,6 +274,15 @@ function buildAsyncExecutionCheck(params: ReadinessEvaluationParams): ReadinessC
   };
 }
 
+function buildWorkerConcurrencyCheck(params: ReadinessEvaluationParams): ReadinessCheck {
+  return {
+    name: "worker_concurrency",
+    ...(params.workerConcurrency ?? buildWorkerConcurrencyCheckSnapshot(resolveWorkerConcurrencyPolicy({
+      nodeEnv: params.nodeEnv
+    })))
+  };
+}
+
 function buildWorkerHeartbeatCheck(params: ReadinessEvaluationParams): ReadinessCheck {
   return {
     name: "worker_heartbeat",
@@ -325,6 +342,38 @@ function buildMissingWorkerHeartbeatCheck(runtime: WebReadinessReport["runtime"]
     details: {
       configured: false
     }
+  };
+}
+
+function buildWorkerConcurrencyDetails(policy: WorkerConcurrencyPolicy): ReadinessCheck["details"] {
+  return {
+    constrained: policy.constrained,
+    source: policy.source,
+    explicitlyConfigured: policy.explicitlyConfigured,
+    maxRunningPerKind: policy.limits?.maxRunningPerKind ?? null,
+    maxRunningPerUser: policy.limits?.maxRunningPerUser ?? null,
+    maxRunningPerConcurrencyKey: policy.limits?.maxRunningPerConcurrencyKey ?? null
+  };
+}
+
+export function buildWorkerConcurrencyCheckSnapshot(
+  policy: WorkerConcurrencyPolicy
+): WorkerConcurrencyCheckSnapshot {
+  if (!policy.constrained) {
+    return {
+      status: "pass",
+      message: "Worker concurrency is unconstrained for non-production startup.",
+      details: buildWorkerConcurrencyDetails(policy)
+    };
+  }
+
+  return {
+    status: "pass",
+    message:
+      policy.source === "production-defaults"
+        ? "Worker concurrency uses production-safe default limits."
+        : "Worker concurrency limits are explicitly configured.",
+    details: buildWorkerConcurrencyDetails(policy)
   };
 }
 
@@ -651,6 +700,7 @@ export function buildWebReadinessReport(params: ReadinessEvaluationParams): WebR
     buildAuthRuntimeStateCheck(params),
     buildRequestIdentityCheck(params),
     buildAsyncExecutionCheck(params),
+    buildWorkerConcurrencyCheck(params),
     buildWorkerHeartbeatCheck(params),
     buildConnectorHealthCheck(params)
   ];
@@ -682,6 +732,9 @@ export async function getWebReadinessReport(): Promise<WebReadinessReport> {
         })
       : null,
     asyncExecution: await getAsyncExecutionCheckSnapshot(nodeEnv),
+    workerConcurrency: buildWorkerConcurrencyCheckSnapshot(resolveWorkerConcurrencyPolicy({
+      nodeEnv
+    })),
     workerHeartbeat: await getWorkerHeartbeatCheckSnapshot(nodeEnv),
     connectorHealth: await getConnectorHealthCheckSnapshot(nodeEnv)
   });

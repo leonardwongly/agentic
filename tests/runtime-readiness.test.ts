@@ -197,6 +197,10 @@ describe("runtime readiness", () => {
         status: "fail"
       }),
       expect.objectContaining({
+        name: "worker_concurrency",
+        status: "pass"
+      }),
+      expect.objectContaining({
         name: "worker_heartbeat",
         status: "fail"
       }),
@@ -252,6 +256,10 @@ describe("runtime readiness", () => {
         status: "pass"
       }),
       expect.objectContaining({
+        name: "worker_concurrency",
+        status: "pass"
+      }),
+      expect.objectContaining({
         name: "worker_heartbeat",
         status: "warn"
       }),
@@ -301,6 +309,79 @@ describe("runtime readiness", () => {
       storageBackend: "postgres"
     });
     expect(report.checks.every((check) => check.status === "pass")).toBe(true);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "worker_concurrency",
+        status: "pass",
+        message: "Worker concurrency uses production-safe default limits.",
+        details: expect.objectContaining({
+          constrained: true,
+          source: "production-defaults",
+          maxRunningPerKind: 1,
+          maxRunningPerUser: 2,
+          maxRunningPerConcurrencyKey: 1
+        })
+      })
+    );
+  });
+
+  it("surfaces explicit worker concurrency limits in readiness", () => {
+    const report = buildWebReadinessReport({
+      nodeEnv: "production",
+      databaseConfigured: true,
+      authMode: {
+        requiresConfiguredKey: false,
+        usesDevelopmentFallback: false,
+        configured: true
+      },
+      authRuntimeState: buildAuthRuntimeState({
+        production: true,
+        requiresSharedState: true,
+        sessionStateScope: "shared",
+        unlockStateScope: "shared",
+        sharedStateConfigured: true,
+        allowsProcessLocalStateException: false,
+        warnings: []
+      }),
+      requestIdentity: buildRequestIdentityStatus({
+        production: true,
+        trustProxyHeaders: true,
+        trustedClientIpHeader: "x-forwarded-for",
+        identitySource: "trusted-ip",
+        warnings: []
+      }),
+      asyncExecution: buildAsyncExecutionCheck(),
+      workerConcurrency: {
+        status: "pass",
+        message: "Worker concurrency limits are explicitly configured.",
+        details: {
+          constrained: true,
+          source: "env",
+          explicitlyConfigured: true,
+          maxRunningPerKind: 4,
+          maxRunningPerUser: 8,
+          maxRunningPerConcurrencyKey: 2
+        }
+      },
+      workerHeartbeat: buildWorkerHeartbeatCheck(),
+      connectorHealth: buildConnectorHealthCheck(),
+      databaseStatus: buildDatabaseStatus(),
+      generatedAt: "2026-04-17T00:00:00.000Z"
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "worker_concurrency",
+        status: "pass",
+        details: expect.objectContaining({
+          source: "env",
+          maxRunningPerKind: 4,
+          maxRunningPerUser: 8,
+          maxRunningPerConcurrencyKey: 2
+        })
+      })
+    );
   });
 
   it("fails readiness when migrations are still pending", () => {

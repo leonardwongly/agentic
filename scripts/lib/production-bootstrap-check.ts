@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { DatabaseSchemaStatus } from "@agentic/db/migration-runtime";
+import { resolveWorkerConcurrencyPolicy, type WorkerConcurrencyPolicy } from "@agentic/worker-runtime";
 
 const TRUSTED_CLIENT_IP_HEADERS = new Set(["cf-connecting-ip", "x-forwarded-for", "x-real-ip"]);
 
@@ -14,6 +15,7 @@ export type ProductionBootstrapCheckName =
   | "access_key"
   | "proxy_trust"
   | "client_ip_header"
+  | "worker_concurrency"
   | "worker_heartbeat";
 
 export type ProductionBootstrapCheck = {
@@ -240,6 +242,42 @@ function buildWorkerHeartbeatCheck(env: EnvLike): ProductionBootstrapCheck {
   });
 }
 
+function buildWorkerConcurrencyCheck(env: EnvLike): ProductionBootstrapCheck {
+  let policy: WorkerConcurrencyPolicy;
+
+  try {
+    policy = resolveWorkerConcurrencyPolicy({
+      env,
+      nodeEnv: "production"
+    });
+  } catch (error) {
+    return fail("worker_concurrency", "Worker concurrency limits are invalid.", {
+      error: error instanceof Error ? error.message : "Unknown worker concurrency configuration failure"
+    });
+  }
+
+  const details = {
+    constrained: policy.constrained,
+    source: policy.source,
+    explicitlyConfigured: policy.explicitlyConfigured,
+    maxRunningPerKind: policy.limits?.maxRunningPerKind ?? null,
+    maxRunningPerUser: policy.limits?.maxRunningPerUser ?? null,
+    maxRunningPerConcurrencyKey: policy.limits?.maxRunningPerConcurrencyKey ?? null
+  };
+
+  if (!policy.constrained) {
+    return fail("worker_concurrency", "Production worker concurrency must be constrained.", details);
+  }
+
+  return pass(
+    "worker_concurrency",
+    policy.source === "production-defaults"
+      ? "Production worker concurrency uses safe default limits."
+      : "Production worker concurrency limits are explicitly configured.",
+    details
+  );
+}
+
 function summarizeDatabase(params: {
   configured: boolean;
   databaseStatus?: DatabaseSchemaStatus;
@@ -296,6 +334,7 @@ export function validateProductionBootstrap(params: ValidateProductionBootstrapP
     buildAccessKeyCheck(env),
     buildProxyTrustCheck(env),
     buildTrustedClientIpHeaderCheck(env),
+    buildWorkerConcurrencyCheck(env),
     buildWorkerHeartbeatCheck(env)
   ];
 
