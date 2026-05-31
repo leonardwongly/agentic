@@ -30,6 +30,13 @@ describe("local CI runner", () => {
     expect(ids[0]).toBe("start-postgres");
     expect(ids).toEqual(
       expect.arrayContaining([
+        "lint",
+        "typecheck",
+        "format-check",
+        "release-check-context",
+        "docs-render",
+        "docs-validate",
+        "compliance-validate-registry",
         "security-audit-runtime",
         "db-check-migrations",
         "db-migrate",
@@ -50,6 +57,44 @@ describe("local CI runner", () => {
     );
   });
 
+  it("keeps full dry-run output aligned with the remote validate gate order", () => {
+    const plan = buildLocalCiPlan({
+      mode: "full",
+      databaseUrl: "postgres://custom.example/agentic",
+      noE2e: true
+    });
+    const commands = plan.steps.filter(step => step.kind === "command").map(step => formatLocalCiCommand(step));
+
+    expect(commands).toEqual([
+      "npm ci",
+      "npm run ci:validate-provenance",
+      "npm run ci:issue-theme-gates -- --assert-workflow",
+      "npm run lint",
+      "npm run typecheck",
+      "npm run format:check",
+      "npm run release:check-context",
+      "npm run test:oss:ownership",
+      "npm run docs:render",
+      "npm run docs:validate",
+      "npm run compliance:validate-registry",
+      "npm run security:audit-runtime -- --minimum-severity moderate --report artifacts/security/runtime-audit-report.json",
+      "npm run db:check-migrations",
+      "npm run db:migrate",
+      "npm run db:status -- --require-ready",
+      "npm run governance:simulate",
+      "npm run test:security:regression",
+      "npm run test",
+      "npm run test:smoke:capabilities",
+      "npm run test:architecture:fitness",
+      "npm run test:performance:fitness",
+      "npm run test:smoke:observability",
+      "npm run build",
+      "npm run security:sbom -- --output artifacts/security/agentic-sbom.spdx.json",
+      "docker build --build-arg NODE_OPTIONS=--max-old-space-size=4096 -t agentic-ci:local .",
+      "npm run security:collect-evidence -- --require-artifacts --output-dir artifacts/compliance"
+    ]);
+  });
+
   it("can skip install and browser E2E for faster full-mode diagnosis", () => {
     const plan = buildLocalCiPlan({ mode: "full", skipInstall: true, noE2e: true, withPostgres: true });
     const ids = plan.steps.map(step => step.id);
@@ -65,6 +110,35 @@ describe("local CI runner", () => {
         }),
         expect.objectContaining({
           id: "test-parallel-worktree-fitness"
+        })
+      ])
+    );
+  });
+
+  it("can explicitly skip docs and hygiene gates for runtime-only diagnosis", () => {
+    const plan = buildLocalCiPlan({
+      mode: "full",
+      withPostgres: true,
+      skipDocs: true,
+      skipHygiene: true
+    });
+    const ids = plan.steps.map(step => step.id);
+
+    expect(ids).not.toContain("lint");
+    expect(ids).not.toContain("typecheck");
+    expect(ids).not.toContain("format-check");
+    expect(ids).not.toContain("release-check-context");
+    expect(ids).not.toContain("docs-render");
+    expect(ids).not.toContain("docs-validate");
+    expect(plan.skipped).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "lint",
+          reason: expect.stringContaining("--skip-hygiene")
+        }),
+        expect.objectContaining({
+          id: "docs-render",
+          reason: expect.stringContaining("--skip-docs")
         })
       ])
     );
