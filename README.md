@@ -46,7 +46,7 @@ The canonical API inventory is [`docs/specs/api-route-inventory.md`](docs/specs/
 
 ## Requirements
 
-- Node.js `>=20 <26`; `.nvmrc` and `.node-version` currently pin Node `20`
+- Node.js `22`; `.nvmrc`, `.node-version`, CI, and Docker all pin the primary runtime. `package.json` allows `>=20 <26` for compatibility checks, but `npm run setup:check` warns when local Node differs from the primary runtime.
 - npm with the checked-in `package-lock.json`
 - PostgreSQL for production or production-like local validation
 - `pandoc` for `npm run docs:build`

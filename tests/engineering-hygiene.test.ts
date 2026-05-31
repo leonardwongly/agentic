@@ -235,6 +235,30 @@ describe("engineering hygiene gates", () => {
     );
   });
 
+  it("warns when local Node differs from the primary runtime", () => {
+    const root = createEvidenceRoot();
+    mkdirSync(path.join(root, "node_modules"));
+    const report = evaluateFirstRunReadiness({
+      cwd: root,
+      nodeVersion: "v20.19.0",
+      env: {
+        AGENTIC_ACCESS_KEY: "local-test-key",
+        DATABASE_URL: "postgres://localhost/agentic"
+      }
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "node-version",
+          status: "warn",
+          message: expect.stringContaining("Node 22 is the primary runtime")
+        })
+      ])
+    );
+  });
+
   it("accepts first-run readiness when required local inputs are present", () => {
     const root = createEvidenceRoot();
     mkdirSync(path.join(root, "node_modules"));

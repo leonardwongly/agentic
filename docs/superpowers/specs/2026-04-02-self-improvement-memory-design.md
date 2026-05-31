@@ -84,7 +84,7 @@ The expected outcome is not just "files on disk." The expected outcome is a stab
 ## Assumptions
 
 1. The first implementation target is local development and test environments, not distributed deployment.
-2. Node 20, TypeScript, Zod, and the repository’s current workspace conventions remain the active stack.
+2. Node 22, TypeScript, Zod, and the repository’s current workspace conventions remain the active stack.
 3. The self-improvement subsystem is internal infrastructure and should not be exposed through user-facing routes in slice 1.
 4. Future writers will be low-volume and mostly local, so atomic file safety matters more than high-throughput concurrency.
 5. The existing monorepo conventions should be followed unless there is a strong reason to diverge.
