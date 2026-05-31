@@ -50,6 +50,7 @@
     "setup:check": "tsx scripts/check-first-run.ts",
     "hygiene:repo": "tsx scripts/repo-hygiene-report.ts",
     "test": "vitest run",
+    "test:eval:model": "tsx scripts/model-eval.ts",
     "test:repository:parity": "vitest run tests/repository-parity.test.ts",
     "test:security:regression": "tsx scripts/security-regression-suite.ts",
     "test:watch": "vitest",
