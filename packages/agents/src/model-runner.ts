@@ -27,6 +27,23 @@ export function isModelConfigured(): boolean {
 
 export type ModelTextRequest = { prompt: string; maxTokens: number };
 
+let anthropicClient: { apiKey: string; client: Anthropic } | null = null;
+let openaiClient: { apiKey: string; client: OpenAI } | null = null;
+
+function getAnthropicClient(apiKey: string): Anthropic {
+  if (anthropicClient?.apiKey !== apiKey) {
+    anthropicClient = { apiKey, client: new Anthropic({ apiKey }) };
+  }
+  return anthropicClient.client;
+}
+
+function getOpenAIClient(apiKey: string): OpenAI {
+  if (openaiClient?.apiKey !== apiKey) {
+    openaiClient = { apiKey, client: new OpenAI({ apiKey }) };
+  }
+  return openaiClient.client;
+}
+
 /**
  * Run a single-prompt text completion against the first configured provider
  * (Anthropic preferred, then OpenAI). Returns the trimmed text, or null when no
@@ -35,9 +52,11 @@ export type ModelTextRequest = { prompt: string; maxTokens: number };
  */
 export async function runTextModel(request: ModelTextRequest): Promise<string | null> {
   const config = getModelConfig();
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  const openaiApiKey = process.env.OPENAI_API_KEY;
 
-  if (process.env.ANTHROPIC_API_KEY) {
-    const client = new Anthropic();
+  if (anthropicApiKey) {
+    const client = getAnthropicClient(anthropicApiKey);
     const response = await client.messages.create({
       model: config.anthropic,
       max_tokens: request.maxTokens,
@@ -46,8 +65,8 @@ export async function runTextModel(request: ModelTextRequest): Promise<string | 
     return response.content.find((block) => block.type === "text")?.text?.trim() ?? null;
   }
 
-  if (process.env.OPENAI_API_KEY) {
-    const client = new OpenAI();
+  if (openaiApiKey) {
+    const client = getOpenAIClient(openaiApiKey);
     const response = await client.chat.completions.create({
       model: config.openai,
       max_tokens: request.maxTokens,

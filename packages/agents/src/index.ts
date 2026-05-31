@@ -810,6 +810,7 @@ export async function runAgentWithModel(
   options?: RunAgentOptions
 ): Promise<AgentResult> {
   const baseline = runAgent(task, scenario, options);
+  const modelScenario = options?.requestContext ?? scenario;
 
   // Keep tests and unconfigured runs deterministic even when a shell exposes model credentials.
   if (process.env.NODE_ENV === "test" || !isModelConfigured()) {
@@ -823,7 +824,7 @@ export async function runAgentWithModel(
 
   try {
     const text = await runTextModel({
-      prompt: buildSpecialistPrompt(task, scenario, baseArtifact.content),
+      prompt: buildSpecialistPrompt(task, modelScenario, baseArtifact.content),
       maxTokens: 700
     });
     if (!text) {
@@ -831,7 +832,14 @@ export async function runAgentWithModel(
     }
 
     const metadata = baseArtifact.metadata as Record<string, unknown>;
-    const proposedIntent = metadata.actionIntent ? null : await proposeModelActionIntent(task, scenario);
+    let proposedIntent: ActionIntent | null = null;
+    if (!metadata.actionIntent) {
+      try {
+        proposedIntent = await proposeModelActionIntent(task, modelScenario);
+      } catch {
+        proposedIntent = null;
+      }
+    }
     const nextMetadata = proposedIntent
       ? { ...baseArtifact.metadata, actionIntent: proposedIntent, executionIntent: proposedIntent }
       : baseArtifact.metadata;
