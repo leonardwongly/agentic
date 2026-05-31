@@ -155,7 +155,18 @@ function classifyMutatingRouteImplementation(
 
 function hasAuthBoundaryEvidence(entry: MutatingRouteGovernanceEntry, source: string): boolean {
   if (/Session or access key/iu.test(entry.authBoundary)) {
-    return hasAnyEvidence(source, [governedWrapperEvidence, /\brequireApiSession\b/u]);
+    const hasPrincipalEvidence = hasAnyEvidence(source, [governedWrapperEvidence, /\brequireApiSession\b/u, /\brequireApiPrincipal\b/u]);
+
+    if (!/scoped machine token/iu.test(entry.authBoundary)) {
+      return hasPrincipalEvidence;
+    }
+
+    return (
+      hasPrincipalEvidence &&
+      hasAnyEvidence(source, [/\ballowMachineToken\s*:\s*true\b/u, /\bmachineRouteGroup\s*:\s*["']automation["']/u]) &&
+      hasAnyEvidence(source, [/\brouteGroup\s*:\s*["']automation["']/u, /\bmachineRouteGroup\s*:\s*["']automation["']/u]) &&
+      hasAnyEvidence(source, [/\bscope\s*:\s*["']jobs:create["']/u, /\bmachineScope\s*:\s*["']jobs:create["']/u])
+    );
   }
 
   if (/Access key for `POST`; session for `DELETE`/iu.test(entry.authBoundary)) {

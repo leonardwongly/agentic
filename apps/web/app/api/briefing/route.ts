@@ -3,7 +3,7 @@ import { z } from "zod";
 import { BriefingTypeSchema } from "@agentic/contracts";
 import { enqueueBriefingCreateJob } from "@agentic/worker-runtime";
 import { checkAbuseRateLimit } from "../../../lib/abuse-rate-limit";
-import { requireApiSession } from "../../../lib/auth";
+import { requireApiPrincipal } from "../../../lib/auth";
 import {
   ApiRouteError,
   authenticatedJson,
@@ -62,7 +62,11 @@ async function resolveActiveWorkspaceContext(userId: string) {
 export async function POST(request: Request) {
   return withApiTelemetry(request, "api.briefing.create", async () => {
     try {
-      const principal = await requireApiSession(request);
+      const principal = await requireApiPrincipal(request, {
+        allowMachineToken: true,
+        routeGroup: "automation",
+        scope: "jobs:create"
+      });
       const rateLimit = await checkAbuseRateLimit({
         namespace: "briefing-create",
         request,

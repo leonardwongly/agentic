@@ -321,11 +321,12 @@ describe("governance route", () => {
     const ownerUserId = "workspace-owner";
     const collaboratorUserId = "workspace-editor";
     const ownerActor = createSystemActorContext(ownerUserId);
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: collaboratorUserId,
       sessionId: "session-workspace-editor",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
 
     try {
@@ -384,7 +385,7 @@ describe("governance route", () => {
       expect(payload.error).toBe("Only the workspace owner can update governance.");
       expectNoStoreHeaders(response);
     } finally {
-      requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   });
 });

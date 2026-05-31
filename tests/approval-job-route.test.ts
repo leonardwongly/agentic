@@ -615,12 +615,15 @@ describe("approval job route", () => {
       error: "cross-user access denial test"
     });
 
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const secondaryPrincipal = {
+      kind: "session" as const,
       authMethod: "session",
       userId: "user-secondary",
       sessionId: "session-secondary",
       expiresAt: "2099-04-19T04:00:00.000Z"
-    });
+    };
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue(secondaryPrincipal);
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue(secondaryPrincipal);
 
     try {
       const pollResponse = await approvalJobRoute(buildAuthorizedGetRequest(`http://localhost${payload.statusUrl}`), {
@@ -644,6 +647,7 @@ describe("approval job route", () => {
       expect(replayPayload.error).toContain("was not found");
       expectNoStoreHeaders(replayResponse);
     } finally {
+      requireApiPrincipalSpy.mockRestore();
       requireApiSessionSpy.mockRestore();
     }
   });
@@ -698,12 +702,15 @@ describe("approval job route", () => {
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const viewerPrincipal = {
+      kind: "session" as const,
       authMethod: "session",
       userId: viewerUserId,
       sessionId: "session-viewer",
       expiresAt: "2099-04-22T07:00:00.000Z"
-    });
+    };
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue(viewerPrincipal);
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue(viewerPrincipal);
 
     try {
       const statusResponse = await genericJobRoute(
@@ -740,6 +747,7 @@ describe("approval job route", () => {
       expectNoStoreHeaders(statusResponse);
       expectNoStoreHeaders(replayResponse);
     } finally {
+      requireApiPrincipalSpy.mockRestore();
       requireApiSessionSpy.mockRestore();
     }
   });
@@ -794,12 +802,15 @@ describe("approval job route", () => {
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const editorPrincipal = {
+      kind: "session" as const,
       authMethod: "session",
       userId: editorUserId,
       sessionId: "session-editor",
       expiresAt: "2099-04-22T07:00:00.000Z"
-    });
+    };
+    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue(editorPrincipal);
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue(editorPrincipal);
 
     try {
       const replayResponse = await replayJobRoute(
@@ -852,6 +863,7 @@ describe("approval job route", () => {
       });
       expectNoStoreHeaders(replayResponse);
     } finally {
+      requireApiPrincipalSpy.mockRestore();
       requireApiSessionSpy.mockRestore();
     }
   });

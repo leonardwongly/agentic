@@ -10,7 +10,7 @@ authorization.
 authenticated mutating API routes:
 
 - telemetry and request correlation through `withApiTelemetry`
-- principal resolution through `requireApiSession`
+- principal resolution through `requireApiPrincipal`
 - actor attribution through `createActorContextFromPrincipal`
 - optional route-scoped abuse rate limiting
 - strict JSON body validation through `parseJsonBody`
@@ -21,6 +21,15 @@ Handlers still own resource authorization and invariants. Keep user and
 workspace checks in the route or repository call that has the necessary domain
 context. Do not trust client-supplied user, workspace, tenant, role, or owner
 claims.
+
+When a route must accept routine automation without the bootstrap access key,
+declare that explicitly with scoped machine-token options. Manual routes call
+`requireApiPrincipal(request, { allowMachineToken: true, routeGroup:
+"automation", scope: "jobs:create" })`; governed routes use
+`machineRouteGroup: "automation"` and `machineScope: "jobs:create"`. Do not
+enable machine tokens for read, governance, approval, provider credential,
+sharing, or high-risk routes unless the route has a narrower documented route
+group and tests that prove underscoped tokens are rejected.
 
 ## Migration Checklist
 

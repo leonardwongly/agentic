@@ -16,7 +16,12 @@ import { createSelfImprovementRepository } from "@agentic/self-improvement-memor
 import { runWorkerRuntime } from "@agentic/worker-runtime";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
-import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import {
+  AGENTIC_ACCESS_KEY_HEADER,
+  AGENTIC_MACHINE_TOKEN_HEADER,
+  AGENTIC_MACHINE_TOKENS_ENV,
+  hashMachineTokenSecret
+} from "../apps/web/lib/auth";
 import {
   resetAuthSessionStateStoreForTesting,
   setAuthSessionStateStoreForTesting,
@@ -25,12 +30,13 @@ import {
 import { SHARED_GOAL_REFINEMENT_DENIED_REASON } from "../apps/web/lib/workspace-role-permissions";
 import { GET as goalRoute } from "../apps/web/app/api/goals/[id]/route";
 import { GET as goalJobRoute } from "../apps/web/app/api/goals/jobs/[id]/route";
-import { POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
+import { GET as goalsListRoute, POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
 import { POST as goalRefineRoute } from "../apps/web/app/api/goals/[id]/refine/route";
 import { createRouteTestRepository } from "./route-test-helpers";
 
 describe("goal route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
+  const originalMachineTokens = process.env[AGENTIC_MACHINE_TOKENS_ENV];
   const originalRuntimeStorePath = process.env.AGENTIC_RUNTIME_STORE_PATH;
 
   async function createGoalForUser(
@@ -134,11 +140,31 @@ describe("goal route", () => {
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
+    process.env[AGENTIC_MACHINE_TOKENS_ENV] = originalMachineTokens;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
     resetAuthSessionStateStoreForTesting();
   });
+
+  function configureMachineToken(params: {
+    token?: string;
+    id?: string;
+    scopes?: string[];
+    routeGroups?: string[];
+  } = {}) {
+    process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
+      {
+        id: params.id ?? "goal-bot",
+        subject: "goal automation bot",
+        userId: DEFAULT_OWNER_USER_ID,
+        tokenHash: hashMachineTokenSecret(params.token ?? "machine-secret"),
+        scopes: params.scopes ?? ["jobs:create"],
+        routeGroups: params.routeGroups ?? ["automation"],
+        expiresAt: "2099-01-01T00:00:00.000Z"
+      }
+    ]);
+  }
 
   it("queues goal creation, exposes a pollable status route, and completes through the worker runtime", async () => {
     const createResponse = await goalsCreateRoute(
@@ -228,6 +254,93 @@ describe("goal route", () => {
     expect(completedStatusPayload.result.completedTaskCount).toBe(0);
     expect(completedStatusPayload.error).toBeNull();
     expect(await repository.listGoals(DEFAULT_OWNER_USER_ID)).toHaveLength(1);
+  });
+
+  it("queues goal creation from an explicitly scoped machine token actor", async () => {
+    configureMachineToken();
+
+    const createResponse = await goalsCreateRoute(
+      new Request("http://localhost/api/goals", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_MACHINE_TOKEN_HEADER]: "machine-secret"
+        },
+        body: JSON.stringify({
+          request: "Queue a machine-token goal."
+        })
+      })
+    );
+    const createPayload = (await createResponse.json()) as {
+      job: {
+        id: string;
+        kind: string;
+        status: string;
+      };
+    };
+    const repository = createRouteTestRepository();
+    const jobs = await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID });
+
+    expect(createResponse.status).toBe(202);
+    expect(createPayload.job.kind).toBe("goal_create");
+    expect(createPayload.job.status).toBe("queued");
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.actorContext).toMatchObject({
+      subjectUserId: DEFAULT_OWNER_USER_ID,
+      initiator: {
+        kind: "system",
+        userId: DEFAULT_OWNER_USER_ID,
+        label: "machine:goal-bot"
+      },
+      executor: {
+        kind: "system",
+        userId: DEFAULT_OWNER_USER_ID,
+        label: "machine:goal-bot"
+      },
+      sessionId: null
+    });
+  });
+
+  it("rejects machine tokens from non-opted-in goal reads", async () => {
+    configureMachineToken();
+
+    const response = await goalsListRoute(
+      new Request("http://localhost/api/goals", {
+        method: "GET",
+        headers: {
+          [AGENTIC_MACHINE_TOKEN_HEADER]: "machine-secret"
+        }
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toContain("Machine token is not allowed");
+  });
+
+  it("rejects goal creation machine tokens without the automation route group", async () => {
+    configureMachineToken({
+      routeGroups: ["dashboard"]
+    });
+
+    const response = await goalsCreateRoute(
+      new Request("http://localhost/api/goals", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_MACHINE_TOKEN_HEADER]: "machine-secret"
+        },
+        body: JSON.stringify({
+          request: "Queue an underscoped machine-token goal."
+        })
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+    const repository = createRouteTestRepository();
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toContain("Machine token is not scoped");
+    expect(await repository.listJobs({ userId: DEFAULT_OWNER_USER_ID })).toHaveLength(0);
   });
 
   it("deduplicates retried goal submissions when the same idempotency key is reused", async () => {
@@ -565,11 +678,12 @@ describe("goal route", () => {
       "Keep the shared planning lane current for the team.",
       workspace.workspaceId
     );
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: viewerUserId,
       sessionId: "session-viewer",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -595,7 +709,7 @@ describe("goal route", () => {
       expect(payload.error).toBe(SHARED_GOAL_REFINEMENT_DENIED_REASON);
       await expect(repository.listJobs({ userId: viewerUserId })).resolves.toHaveLength(0);
     } finally {
-      requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   });
 
@@ -614,11 +728,12 @@ describe("goal route", () => {
       "Keep the shared launch workflow aligned with current operator guidance.",
       workspace.workspaceId
     );
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: editorUserId,
       sessionId: "session-editor",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -661,7 +776,7 @@ describe("goal route", () => {
         }
       });
     } finally {
-      requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   });
 
@@ -875,11 +990,12 @@ describe("goal route", () => {
 
     await repository.seedDefaults(secondaryUserId);
     const bundle = await createGoalForUser(repository, secondaryUserId, "Prepare a weekly planning summary.");
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: secondaryUserId,
       sessionId: "session-secondary",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -918,7 +1034,7 @@ describe("goal route", () => {
       expect(refinementLogs.length).toBeGreaterThanOrEqual(1);
       expect(refinementLogs[0]?.details.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
     } finally {
-      requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   });
 });

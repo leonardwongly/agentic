@@ -25,11 +25,57 @@ type OAuthStateTokenPayload = {
   expiresAt: string;
 };
 
-export type AuthPrincipal = {
-  authMethod: "access_key" | "session";
+export type AuthPrincipalKind = "session" | "bootstrap_access_key" | "machine_token";
+
+export type BootstrapAccessKeyPrincipal = {
+  kind: "bootstrap_access_key";
+  authMethod: "access_key";
   userId: string;
   sessionId: string | null;
   expiresAt: string | null;
+};
+
+export type SessionPrincipal = {
+  kind: "session";
+  authMethod: "session";
+  userId: string;
+  sessionId: string;
+  expiresAt: string;
+};
+
+export type MachineTokenPrincipal = {
+  kind: "machine_token";
+  authMethod: "machine_token";
+  userId: string;
+  sessionId: string | null;
+  expiresAt: string | null;
+  tokenId: string;
+  subject: string;
+  scopes: string[];
+  routeGroups: string[];
+  workspaceIds: string[] | null;
+};
+
+export type AuthPrincipal = BootstrapAccessKeyPrincipal | SessionPrincipal | MachineTokenPrincipal;
+
+type MachineTokenConfig = {
+  id: string;
+  subject: string;
+  userId: string;
+  tokenHash: string;
+  scopes: string[];
+  routeGroups: string[];
+  workspaceIds: string[] | null;
+  expiresAt: string | null;
+  revoked: boolean;
+};
+
+export type RequireApiPrincipalOptions = {
+  routeGroup?: string;
+  scope?: string;
+  workspaceId?: string;
+  allowBootstrapAccessKey?: boolean;
+  allowMachineToken?: boolean;
 };
 
 export async function checkSessionRateLimit(key: string): Promise<{ allowed: boolean; retryAfterMs: number }> {
@@ -56,6 +102,8 @@ export async function isSessionTokenRevoked(sessionId: string): Promise<boolean>
 
 export const AGENTIC_SESSION_COOKIE = "agentic_session";
 export const AGENTIC_ACCESS_KEY_HEADER = "x-agentic-access-key";
+export const AGENTIC_MACHINE_TOKEN_HEADER = "x-agentic-machine-token";
+export const AGENTIC_MACHINE_TOKENS_ENV = "AGENTIC_MACHINE_TOKENS_JSON";
 
 class AuthError extends Error {
   constructor(message: string) {
@@ -251,6 +299,194 @@ function constantTimeEqual(left: string, right: string): boolean {
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+function readMachineTokenHeader(request: Request): string | null {
+  const directHeader = request.headers.get(AGENTIC_MACHINE_TOKEN_HEADER)?.trim();
+
+  if (directHeader) {
+    return directHeader;
+  }
+
+  const authorization = request.headers.get("authorization")?.trim() ?? "";
+  const bearerMatch = authorization.match(/^Bearer\s+(.+)$/iu);
+
+  return bearerMatch?.[1]?.trim() || null;
+}
+
+export function hashMachineTokenSecret(secret: string): string {
+  const normalized = secret.trim();
+
+  if (!normalized) {
+    throw new AuthError("Machine token secrets must not be empty.");
+  }
+
+  return `sha256:${crypto.createHash("sha256").update(normalized).digest("hex")}`;
+}
+
+function parseStringList(value: unknown, field: string, options?: { allowEmpty?: boolean }): string[] {
+  if (!Array.isArray(value)) {
+    throw new AuthError(`Machine token ${field} must be an array of strings.`);
+  }
+
+  const parsed = value.map((entry) => {
+    if (typeof entry !== "string" || !entry.trim()) {
+      throw new AuthError(`Machine token ${field} must contain only non-empty strings.`);
+    }
+
+    return entry.trim();
+  });
+
+  if (parsed.length === 0 && options?.allowEmpty !== true) {
+    throw new AuthError(`Machine token ${field} must contain at least one value.`);
+  }
+
+  return [...new Set(parsed)].sort((left, right) => left.localeCompare(right));
+}
+
+function parseMachineTokenConfigEntry(value: unknown): MachineTokenConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new AuthError("Machine token entries must be objects.");
+  }
+
+  const raw = value as Record<string, unknown>;
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  const subject = typeof raw.subject === "string" ? raw.subject.trim() : "";
+  const userId = typeof raw.userId === "string" ? raw.userId.trim() : "";
+  const tokenHash = typeof raw.tokenHash === "string" ? raw.tokenHash.trim().toLowerCase() : "";
+  const expiresAt = raw.expiresAt === null || raw.expiresAt === undefined ? null : typeof raw.expiresAt === "string" ? raw.expiresAt.trim() : "";
+
+  if (!id || !subject || !userId) {
+    throw new AuthError("Machine token entries require id, subject, and userId.");
+  }
+
+  if (!/^sha256:[a-f0-9]{64}$/u.test(tokenHash)) {
+    throw new AuthError("Machine token entries require a sha256 tokenHash.");
+  }
+
+  if (expiresAt !== null && (!expiresAt || !Number.isFinite(Date.parse(expiresAt)))) {
+    throw new AuthError("Machine token expiresAt must be a valid ISO timestamp when present.");
+  }
+
+  const workspaceIds =
+    raw.workspaceIds === null || raw.workspaceIds === undefined
+      ? null
+      : parseStringList(raw.workspaceIds, "workspaceIds", { allowEmpty: true });
+
+  return {
+    id,
+    subject,
+    userId,
+    tokenHash,
+    scopes: parseStringList(raw.scopes, "scopes"),
+    routeGroups: parseStringList(raw.routeGroups, "routeGroups"),
+    workspaceIds,
+    expiresAt,
+    revoked: raw.revoked === true
+  };
+}
+
+function getConfiguredMachineTokens(): MachineTokenConfig[] {
+  const raw = process.env[AGENTIC_MACHINE_TOKENS_ENV]?.trim();
+
+  if (!raw) {
+    return [];
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new AuthError(`${AGENTIC_MACHINE_TOKENS_ENV} must be valid JSON.`);
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new AuthError(`${AGENTIC_MACHINE_TOKENS_ENV} must be a JSON array.`);
+  }
+
+  const tokens = parsed.map(parseMachineTokenConfigEntry);
+  const ids = new Set<string>();
+
+  for (const token of tokens) {
+    if (ids.has(token.id)) {
+      throw new AuthError(`Duplicate machine token id "${token.id}".`);
+    }
+
+    ids.add(token.id);
+  }
+
+  return tokens;
+}
+
+function verifyMachineToken(candidate: string | null | undefined, now = Date.now()): MachineTokenPrincipal | null {
+  const attempted = candidate?.trim();
+
+  if (!attempted) {
+    return null;
+  }
+
+  const tokens = getConfiguredMachineTokens();
+
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  const attemptedHash = hashMachineTokenSecret(attempted);
+  let matched: MachineTokenConfig | null = null;
+
+  for (const token of tokens) {
+    if (constantTimeEqual(attemptedHash, token.tokenHash)) {
+      matched = token;
+    }
+  }
+
+  if (!matched || matched.revoked) {
+    return null;
+  }
+
+  if (matched.expiresAt && Date.parse(matched.expiresAt) <= now) {
+    return null;
+  }
+
+  return {
+    kind: "machine_token",
+    authMethod: "machine_token",
+    userId: matched.userId,
+    sessionId: null,
+    expiresAt: matched.expiresAt,
+    tokenId: matched.id,
+    subject: matched.subject,
+    scopes: matched.scopes,
+    routeGroups: matched.routeGroups,
+    workspaceIds: matched.workspaceIds
+  };
+}
+
+function assertPrincipalAllowed(principal: AuthPrincipal, options: RequireApiPrincipalOptions = {}): void {
+  if (principal.kind === "bootstrap_access_key" && options.allowBootstrapAccessKey === false) {
+    throw new AuthError("Bootstrap access key is not allowed for this API route.");
+  }
+
+  if (principal.kind !== "machine_token") {
+    return;
+  }
+
+  if (options.allowMachineToken !== true) {
+    throw new AuthError("Machine token is not allowed for this API route.");
+  }
+
+  if (options.routeGroup && !principal.routeGroups.includes(options.routeGroup)) {
+    throw new AuthError("Machine token is not scoped for this API route.");
+  }
+
+  if (options.scope && !principal.scopes.includes(options.scope)) {
+    throw new AuthError("Machine token does not have the required scope.");
+  }
+
+  if (options.workspaceId && principal.workspaceIds !== null && !principal.workspaceIds.includes(options.workspaceId)) {
+    throw new AuthError("Machine token is not scoped for this workspace.");
+  }
+}
+
 export function getAuthMode(options?: { emitDevelopmentWarning?: boolean }) {
   const resolved = resolveAccessKey(options);
 
@@ -422,10 +658,22 @@ export async function hasActiveSession() {
 }
 
 export async function resolveApiPrincipal(request: Request): Promise<AuthPrincipal | null> {
+  const machineToken = readMachineTokenHeader(request);
+  const machinePrincipal = verifyMachineToken(machineToken);
+
+  if (machinePrincipal) {
+    return machinePrincipal;
+  }
+
+  if (machineToken) {
+    throw new AuthError("Unauthorized. Machine token was rejected.");
+  }
+
   const headerKey = request.headers.get(AGENTIC_ACCESS_KEY_HEADER);
 
   if (verifyAccessKey(headerKey)) {
     return {
+      kind: "bootstrap_access_key",
       authMethod: "access_key",
       userId: resolveBootstrapOwnerUserId(),
       sessionId: null,
@@ -441,6 +689,7 @@ export async function resolveApiPrincipal(request: Request): Promise<AuthPrincip
   }
 
   return {
+    kind: "session",
     authMethod: "session",
     userId: session.userId,
     sessionId: session.sessionId,
@@ -448,15 +697,23 @@ export async function resolveApiPrincipal(request: Request): Promise<AuthPrincip
   };
 }
 
+export async function requireApiPrincipal(
+  request: Request,
+  options: RequireApiPrincipalOptions = {}
+): Promise<AuthPrincipal> {
+  const principal = await resolveApiPrincipal(request);
+
+  if (principal) {
+    assertPrincipalAllowed(principal, options);
+    return principal;
+  }
+
+  throw new AuthError("Unauthorized. Create a session before calling the Agentic API.");
+}
+
 export async function requireApiSession(request?: Request): Promise<AuthPrincipal> {
   if (request) {
-    const principal = await resolveApiPrincipal(request);
-
-    if (principal) {
-      return principal;
-    }
-
-    throw new AuthError("Unauthorized. Create a session before calling the Agentic API.");
+    return requireApiPrincipal(request);
   }
 
   const cookieStore = await cookies();
@@ -464,6 +721,7 @@ export async function requireApiSession(request?: Request): Promise<AuthPrincipa
 
   if (session) {
     return {
+      kind: "session",
       authMethod: "session",
       userId: session.userId,
       sessionId: session.sessionId,

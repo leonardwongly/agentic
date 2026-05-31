@@ -1,19 +1,24 @@
 import {
   AGENTIC_SESSION_COOKIE,
   AGENTIC_ACCESS_KEY_HEADER,
+  AGENTIC_MACHINE_TOKEN_HEADER,
+  AGENTIC_MACHINE_TOKENS_ENV,
   buildOAuthStateToken,
   buildSessionToken,
   checkSessionRateLimit,
   clearSessionCookie,
   createSessionCookie,
   getAuthMode,
+  hashMachineTokenSecret,
   isAuthorizedSessionToken,
   parseAuthorizedOAuthStateToken,
   parseAuthorizedSessionToken,
+  requireApiPrincipal,
   requireApiSession,
   revokeSessionToken,
   verifyAccessKey
 } from "../apps/web/lib/auth";
+import { createActorContextFromPrincipal } from "../apps/web/lib/actor-context";
 import { resetAuthSessionStateStoreForTesting, setAuthSessionStateStoreForTesting, type AuthSessionStateStore } from "../apps/web/lib/auth-session-store";
 import {
   clearFailedSessionUnlockAttempts,
@@ -47,6 +52,7 @@ describe("auth helpers", () => {
   const originalAllowProcessLocalAuthState = process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
   const originalEnableLocalDevKey = process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
   const originalBootstrapUserId = process.env.AGENTIC_BOOTSTRAP_USER_ID;
+  const originalMachineTokens = process.env[AGENTIC_MACHINE_TOKENS_ENV];
   const databaseUrl = process.env.DATABASE_URL;
   const postgresIt = databaseUrl ? it : it.skip;
 
@@ -63,6 +69,7 @@ describe("auth helpers", () => {
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = originalTrustedClientIpHeader;
     process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = originalAllowProcessLocalAuthState;
+    process.env[AGENTIC_MACHINE_TOKENS_ENV] = originalMachineTokens;
     if (originalBootstrapUserId === undefined) {
       delete process.env.AGENTIC_BOOTSTRAP_USER_ID;
     } else {
@@ -267,6 +274,161 @@ describe("auth helpers", () => {
     ).resolves.toMatchObject({
       authMethod: "access_key",
       userId: "owner"
+    });
+  });
+
+  it("accepts scoped machine tokens only through explicit principal requirements", async () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.NODE_ENV = "test";
+    process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
+      {
+        id: "ci-goals",
+        subject: "ci goal automation",
+        userId: "owner",
+        tokenHash: hashMachineTokenSecret("machine-secret"),
+        scopes: ["jobs:create"],
+        routeGroups: ["automation"],
+        workspaceIds: ["workspace-1"],
+        expiresAt: "2999-01-01T00:00:00.000Z"
+      }
+    ]);
+
+    const request = new Request("http://localhost/api/goals", {
+      method: "POST",
+      headers: {
+        [AGENTIC_MACHINE_TOKEN_HEADER]: "machine-secret"
+      }
+    });
+
+    await expect(requireApiSession(request)).rejects.toMatchObject({
+      name: "AuthError",
+      message: expect.stringContaining("Machine token is not allowed")
+    });
+
+    const principal = await requireApiPrincipal(request, {
+      allowMachineToken: true,
+      routeGroup: "automation",
+      scope: "jobs:create",
+      workspaceId: "workspace-1"
+    });
+
+    expect(principal).toMatchObject({
+      kind: "machine_token",
+      authMethod: "machine_token",
+      tokenId: "ci-goals",
+      subject: "ci goal automation",
+      userId: "owner",
+      routeGroups: ["automation"],
+      scopes: ["jobs:create"],
+      workspaceIds: ["workspace-1"]
+    });
+    expect(createActorContextFromPrincipal(principal)).toMatchObject({
+      initiator: {
+        kind: "system",
+        label: "machine:ci-goals",
+        userId: "owner"
+      },
+      subjectUserId: "owner"
+    });
+  });
+
+  it("rejects revoked, expired, or underscoped machine tokens deterministically", async () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.NODE_ENV = "test";
+
+    const request = new Request("http://localhost/api/goals", {
+      method: "POST",
+      headers: {
+        [AGENTIC_MACHINE_TOKEN_HEADER]: "machine-secret"
+      }
+    });
+
+    process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
+      {
+        id: "revoked",
+        subject: "revoked automation",
+        userId: "owner",
+        tokenHash: hashMachineTokenSecret("machine-secret"),
+        scopes: ["jobs:create"],
+        routeGroups: ["automation"],
+        revoked: true
+      }
+    ]);
+    await expect(requireApiPrincipal(request, { allowMachineToken: true, routeGroup: "automation" })).rejects.toMatchObject({
+      name: "AuthError",
+      message: expect.stringContaining("Unauthorized")
+    });
+
+    process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
+      {
+        id: "expired",
+        subject: "expired automation",
+        userId: "owner",
+        tokenHash: hashMachineTokenSecret("machine-secret"),
+        scopes: ["jobs:create"],
+        routeGroups: ["automation"],
+        expiresAt: "2000-01-01T00:00:00.000Z"
+      }
+    ]);
+    await expect(requireApiPrincipal(request, { allowMachineToken: true, routeGroup: "automation" })).rejects.toMatchObject({
+      name: "AuthError",
+      message: expect.stringContaining("Unauthorized")
+    });
+
+    process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
+      {
+        id: "readonly",
+        subject: "read-only automation",
+        userId: "owner",
+        tokenHash: hashMachineTokenSecret("machine-secret"),
+        scopes: ["jobs:read"],
+        routeGroups: ["dashboard"]
+      }
+    ]);
+    await expect(
+      requireApiPrincipal(request, {
+        allowMachineToken: true,
+        routeGroup: "automation",
+        scope: "jobs:create"
+      })
+    ).rejects.toMatchObject({
+      name: "AuthError",
+      message: expect.stringContaining("not scoped")
+    });
+  });
+
+  it("rejects an explicit invalid machine token even when an access key is present", async () => {
+    process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+    process.env.NODE_ENV = "test";
+    process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
+      {
+        id: "ci-goals",
+        subject: "ci goal automation",
+        userId: "owner",
+        tokenHash: hashMachineTokenSecret("machine-secret"),
+        scopes: ["jobs:create"],
+        routeGroups: ["automation"]
+      }
+    ]);
+
+    await expect(
+      requireApiPrincipal(
+        new Request("http://localhost/api/goals", {
+          method: "POST",
+          headers: {
+            [AGENTIC_MACHINE_TOKEN_HEADER]: "wrong-machine-secret",
+            [AGENTIC_ACCESS_KEY_HEADER]: "super-secret-key"
+          }
+        }),
+        {
+          allowMachineToken: true,
+          routeGroup: "automation",
+          scope: "jobs:create"
+        }
+      )
+    ).rejects.toMatchObject({
+      name: "AuthError",
+      message: expect.stringContaining("Machine token was rejected")
     });
   });
 
