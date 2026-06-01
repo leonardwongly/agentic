@@ -112,6 +112,7 @@ describe("GitHub issue-sync completion audit", () => {
     expect(result.stdout).toContain("GitHub issue states for #141, #142, #143, #144, #145, #146, and #152");
     expect(result.stdout).toContain("github:app-sync:preflight:collect");
     expect(result.stdout).toContain("--remediation-plan");
+    expect(result.stdout).toContain("--local-only");
     expect(result.stderr).toBe("");
   });
 
@@ -243,6 +244,12 @@ describe("GitHub issue-sync completion audit", () => {
       "npm run github:issues:completion-audit -- --json",
       "npm run release:closeout:evidence -- --json"
     ]);
+    expect(plan.commandItems).toEqual(
+      plan.commands.map((command) => ({
+        kind: "local_read_only",
+        command
+      }))
+    );
 
     const stableIngress = plan.items.find((item) => item.issue === 141);
     expect(stableIngress).toEqual(
@@ -262,6 +269,35 @@ describe("GitHub issue-sync completion audit", () => {
         ])
       })
     );
+    expect(stableIngress?.actionItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "external_github_mutation",
+          action:
+            "Replace the temporary tunnel URL with a stable public HTTPS deployment origin for `AGENTIC_GITHUB_APP_ISSUE_SYNC_URL`."
+        }),
+        expect.objectContaining({
+          kind: "external_provider",
+          action: "Provision or sync deployed Agentic web and worker services, or provide alternate provider evidence JSON for the selected target."
+        }),
+        expect.objectContaining({
+          kind: "live_smoke_required",
+          action: "Run `npm run test:smoke:deployment` against the stable origin and export passing JSON as `AGENTIC_DEPLOYMENT_SMOKE_JSON`."
+        })
+      ])
+    );
+    expect(stableIngress?.validationCommands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "local_read_only",
+          command: "npm run github:app-sync:preflight:collect -- --json"
+        }),
+        expect.objectContaining({
+          kind: "live_smoke_required",
+          command: "npm run test:smoke:deployment"
+        })
+      ])
+    );
 
     const runtimeConfig = plan.items.find((item) => item.issue === 142);
     expect(runtimeConfig).toEqual(
@@ -276,6 +312,19 @@ describe("GitHub issue-sync completion audit", () => {
         ])
       })
     );
+    expect(runtimeConfig?.actionItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "external_github_mutation",
+          action: "Re-enable the GitHub App Issue Sync workflow only after stable deployment and runtime proof are ready."
+        }),
+        expect.objectContaining({
+          kind: "external_runtime_config",
+          action:
+            "Configure provider runtime variables for database access, runtime access key, GitHub App credentials, sync secret, and repository allowlist."
+        })
+      ])
+    );
 
     const roadmap = plan.items.find((item) => item.issue === 152);
     expect(roadmap).toEqual(
@@ -285,8 +334,65 @@ describe("GitHub issue-sync completion audit", () => {
         ])
       })
     );
+    expect(roadmap?.actionItems).toContainEqual(
+      expect.objectContaining({
+        kind: "issue_closeout",
+        action: "Resolve production proof child issues #141-#145 and rerun the completion audit before closing #152."
+      })
+    );
     expect(JSON.stringify(plan)).not.toContain("-----BEGIN RSA PRIVATE KEY-----");
     expect(JSON.stringify(plan)).not.toContain("runtime-access-key");
+  });
+
+  it("filters remediation output down to local read-only commands when requested", () => {
+    const report = buildGitHubIssueSyncCompletionAudit({
+      issues: [
+        { number: 141, state: "OPEN", title: "Deploy stable ingress" },
+        { number: 142, state: "OPEN", title: "Configure GitHub App sync secrets" },
+        { number: 143, state: "OPEN", title: "Bootstrap production database" },
+        { number: 144, state: "OPEN", title: "Deploy durable worker" },
+        { number: 145, state: "OPEN", title: "Validate live issue sync" },
+        { number: 146, state: "CLOSED", title: "Capture rollout evidence" },
+        { number: 152, state: "OPEN", title: "Close roadmap" }
+      ],
+      preflight: collection({
+        ...BASE_ENV,
+        AGENTIC_GITHUB_APP_ISSUE_SYNC_URL:
+          "https://occasion-translations-cover-vids.trycloudflare.com/api/github/issues/app/sync",
+        AGENTIC_SMOKE_BASE_URL: "https://occasion-translations-cover-vids.trycloudflare.com",
+        AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE: "disabled_manually",
+        DATABASE_URL: "",
+        AGENTIC_ACCESS_KEY: "",
+        AGENTIC_GITHUB_APP_ID: "",
+        AGENTIC_GITHUB_APP_INSTALLATION_ID: "",
+        AGENTIC_GITHUB_APP_PRIVATE_KEY: "",
+        AGENTIC_GITHUB_APP_SYNC_SECRET: "",
+        AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES: "",
+        AGENTIC_RENDER_SERVICES_JSON: "null",
+        AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON: JSON.stringify({
+          valid: false,
+          errors: [{ error: "need_payment_info", path: "services[0]" }]
+        }),
+        AGENTIC_DEPLOYMENT_SMOKE_JSON: "",
+        AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON: "",
+        AGENTIC_GITHUB_APP_SYNC_CANARY_JSON: ""
+      }),
+      releaseCloseoutEvidence: PASSING_RELEASE_CLOSEOUT_EVIDENCE
+    });
+    const plan = buildGitHubIssueSyncRemediationPlan(report, { localOnly: true });
+    const serialized = JSON.stringify(plan);
+
+    expect(plan.ok).toBe(false);
+    expect(plan.commandItems.every((command) => command.kind === "local_read_only")).toBe(true);
+    expect(plan.items.length).toBeGreaterThan(0);
+    expect(plan.items.every((item) => item.actionItems.every((action) => action.kind === "local_read_only"))).toBe(true);
+    expect(plan.items.every((item) => item.validationCommands.every((command) => command.kind === "local_read_only"))).toBe(true);
+    expect(plan.commands).toContain("npm run github:app-sync:preflight:collect -- --json");
+    expect(serialized).not.toContain("Provision or sync deployed Agentic web and worker services");
+    expect(serialized).not.toContain("Re-enable the GitHub App Issue Sync workflow");
+    expect(serialized).not.toContain("Configure provider runtime variables");
+    expect(serialized).not.toContain("npm run test:smoke:deployment");
+    expect(serialized).not.toContain("Resolve production proof child issues #141-#145");
   });
 
   it("keeps roadmap closeout blocked while any production proof child gate fails", () => {
