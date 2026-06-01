@@ -1,6 +1,6 @@
 import { logError } from "@agentic/integrations";
 import type { CapturedMemories } from "@agentic/orchestrator";
-import type { AgenticRepository } from "@agentic/repository";
+import type { MemoryRepositoryPort } from "@agentic/repository";
 import {
   assertEpisodeLearningPrivacyPreflight,
   SelfImprovementConflictError,
@@ -8,7 +8,7 @@ import {
 } from "@agentic/self-improvement-memory";
 
 export async function persistCapturedSignals(params: {
-  repository: AgenticRepository;
+  repository: MemoryRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   captured: CapturedMemories;
   userId: string;

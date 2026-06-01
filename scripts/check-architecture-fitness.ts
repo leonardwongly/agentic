@@ -1,8 +1,12 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 function readRepoFile(relativePath: string): string {
   return readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
+}
+
+function readRepoDirectory(relativePath: string): string[] {
+  return readdirSync(path.resolve(process.cwd(), relativePath));
 }
 
 function countLines(content: string): number {
@@ -62,8 +66,14 @@ function main() {
   const dashboardSurfacePath = "apps/web/lib/dashboard-surface.ts";
   const repositoryTypesPath = "packages/repository/src/repository-types.ts";
   const workerRuntimePath = "packages/worker-runtime/src/index.ts";
+  const workerJobDispatchPath = "packages/worker-runtime/src/job-dispatch.ts";
+  const watcherSchedulerPath = "packages/worker-runtime/src/watcher-scheduler.ts";
+  const privacyShareExecutorsPath = "packages/worker-runtime/src/privacy-share-executors.ts";
+  const googleWorkspaceAdaptersPath = "packages/worker-runtime/src/google-workspace-adapters.ts";
+  const memoryCaptureSignalsPath = "packages/worker-runtime/src/memory-capture-signals.ts";
   const workerJobPayloadsPath = "packages/worker-runtime/src/job-payloads.ts";
   const publicShareLogPath = "packages/worker-runtime/src/public-share-log.ts";
+  const workerRuntimeDirectoryPath = "packages/worker-runtime/src";
   const decompositionDocPath = "docs/architecture/phase-1-decomposition-boundaries.md";
 
   const goalsRoute = readRepoFile(goalsRoutePath);
@@ -99,8 +109,19 @@ function main() {
   const dashboardSurface = readRepoFile(dashboardSurfacePath);
   const repositoryTypes = readRepoFile(repositoryTypesPath);
   const workerRuntime = readRepoFile(workerRuntimePath);
+  const workerJobDispatch = readRepoFile(workerJobDispatchPath);
+  const watcherScheduler = readRepoFile(watcherSchedulerPath);
+  const privacyShareExecutors = readRepoFile(privacyShareExecutorsPath);
+  const googleWorkspaceAdapters = readRepoFile(googleWorkspaceAdaptersPath);
+  const memoryCaptureSignals = readRepoFile(memoryCaptureSignalsPath);
   const workerJobPayloads = readRepoFile(workerJobPayloadsPath);
   const publicShareLog = readRepoFile(publicShareLogPath);
+  const workerRuntimeFiles = readRepoDirectory(workerRuntimeDirectoryPath)
+    .filter((file) => file.endsWith(".ts"))
+    .map((file) => {
+      const filePath = `${workerRuntimeDirectoryPath}/${file}`;
+      return [filePath, readRepoFile(filePath)] as const;
+    });
   const decompositionDoc = readRepoFile(decompositionDocPath);
 
   assertContains(
@@ -271,6 +292,21 @@ function main() {
     "export type DashboardDiagnosticTarget = {",
     `${repositoryTypesPath} must own dashboard diagnostic target types.`
   );
+  for (const portName of [
+    "QueueRepositoryPort",
+    "DashboardReadRepositoryPort",
+    "GovernanceRepositoryPort",
+    "CredentialRepositoryPort",
+    "MemoryRepositoryPort",
+    "ShareAuditRepositoryPort",
+    "WorkerRuntimeRepositoryPort"
+  ]) {
+    assertContains(
+      repositoryTypes,
+      `export type ${portName}`,
+      `${repositoryTypesPath} must expose ${portName} so consumers can avoid the full repository surface.`
+    );
+  }
   assertContains(
     workerRuntime,
     'from "./job-payloads";',
@@ -295,6 +331,28 @@ function main() {
     publicShareLog,
     "createPublicShareViewedLog",
     `${publicShareLogPath} must own public share view action-log shaping.`
+  );
+  for (const [filePath, content] of workerRuntimeFiles) {
+    assertNotContains(
+      content,
+      "AgenticRepository",
+      `${filePath} must depend on named repository ports instead of the full AgenticRepository surface.`
+    );
+  }
+  assertContains(
+    workerRuntime,
+    "WorkerRuntimeRepositoryPort",
+    `${workerRuntimePath} must type runtime orchestration against the worker runtime repository port.`
+  );
+  assertContains(
+    workerJobDispatch,
+    "QueueRepositoryPort",
+    `${workerJobDispatchPath} must type enqueue helpers against the queue repository port.`
+  );
+  assertContains(
+    watcherScheduler,
+    "WatcherRepositoryPort",
+    `${watcherSchedulerPath} must type scheduler access against the watcher repository port.`
   );
   assertContains(
     dashboard,
@@ -434,6 +492,11 @@ function main() {
     decompositionDoc,
     "## Repository Boundary",
     `${decompositionDocPath} must document the repository boundary.`
+  );
+  assertContains(
+    decompositionDoc,
+    "Repository Port Rules",
+    `${decompositionDocPath} must document narrow repository port rules.`
   );
   assertContains(
     decompositionDoc,

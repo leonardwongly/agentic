@@ -6,7 +6,7 @@ import {
   type GoalBundle,
   type WorkspaceGovernance
 } from "@agentic/contracts";
-import type { AgenticRepository } from "@agentic/repository";
+import type { WorkerRuntimeRepositoryPort } from "@agentic/repository";
 
 const NON_FABRIC_AUTOPILOT_EVENT_KINDS = new Set<AutopilotEvent["kind"]>([
   "watcher_triggered",
@@ -54,7 +54,7 @@ function buildTriggerLines(trigger: Record<string, unknown>) {
 }
 
 async function resolveGoalBundleByWorkflowId(
-  repository: AgenticRepository,
+  repository: WorkerRuntimeRepositoryPort,
   userId: string,
   workflowId: string
 ) {
@@ -63,7 +63,7 @@ async function resolveGoalBundleByWorkflowId(
 }
 
 async function resolveApproval(
-  repository: AgenticRepository,
+  repository: WorkerRuntimeRepositoryPort,
   userId: string,
   approvalId: string
 ) {
@@ -71,7 +71,7 @@ async function resolveApproval(
   return approvals.find((candidate) => candidate.id === approvalId) ?? null;
 }
 
-async function resolveDashboardWorkspaceContext(repository: AgenticRepository, userId: string) {
+async function resolveDashboardWorkspaceContext(repository: WorkerRuntimeRepositoryPort, userId: string) {
   const dashboard = await repository.getDashboardData(userId);
   const workspaceId = dashboard.activeWorkspace?.id ?? null;
 
@@ -93,7 +93,7 @@ export function getAutopilotEventFabricEnvelope(event: AutopilotEvent) {
 }
 
 export async function resolveAutopilotEventFabricExecutionContext(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   userId: string;
   envelope: AutopilotEventFabricEnvelope;
 }): Promise<FabricExecutionContext> {

@@ -22,7 +22,7 @@ import {
 } from "@agentic/contracts";
 import { createJobRecord } from "@agentic/execution";
 import { logInfo, recordCounter, withSpan } from "@agentic/integrations";
-import type { AgenticRepository } from "@agentic/repository";
+import type { ApprovalQueueRepositoryPort, QueueRepositoryPort } from "@agentic/repository";
 import {
   buildAutopilotProcessJobIdempotencyKey,
   buildAutopilotProcessPayload,
@@ -220,7 +220,7 @@ function logEnqueuedJob(job: JobRecord, context: Record<string, unknown>) {
 }
 
 export async function enqueueGoalCreateJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   userId: string;
   request: string;
   workspaceId: string | null;
@@ -273,7 +273,7 @@ export async function enqueueGoalCreateJob(params: {
 }
 
 export async function enqueueGoalRefineJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   userId: string;
   goalId: string;
   workflowId: string;
@@ -333,7 +333,7 @@ export async function enqueueGoalRefineJob(params: {
 }
 
 export async function enqueueBriefingCreateJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   userId: string;
   goalId: string;
   workflowId: string;
@@ -384,7 +384,7 @@ export async function enqueueBriefingCreateJob(params: {
 }
 
 export async function enqueueTemplateRunJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   userId: string;
   templateId: string;
   goalId: string;
@@ -440,7 +440,7 @@ export async function enqueueTemplateRunJob(params: {
 }
 
 export async function enqueueDocsRenderJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   userId: string;
   actorContext: ActorContext | null;
   idempotencyKey?: string | null;
@@ -477,7 +477,7 @@ export async function enqueueDocsRenderJob(params: {
 }
 
 export async function enqueueAutopilotProcessJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   autopilotEvent: AutopilotEvent;
   replayedFromJobId?: string | null;
 }): Promise<JobRecord & { payload: AutopilotProcessJobPayload }> {
@@ -519,7 +519,7 @@ export async function enqueueAutopilotProcessJob(params: {
 }
 
 export async function enqueueGitHubIssueIntakeJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   userId: string;
   actorContext: ActorContext | null;
   payload: GitHubIssueIntakePayloadParams;
@@ -565,7 +565,7 @@ export async function enqueueGitHubIssueIntakeJob(params: {
 }
 
 export async function enqueueApprovalFollowUpJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   userId: string;
   approvalId: string;
   goalId: string;
@@ -636,7 +636,7 @@ export async function enqueueApprovalFollowUpJob(params: {
 }
 
 export async function respondToApprovalAndEnqueueFollowUpJob(params: {
-  repository: AgenticRepository;
+  repository: ApprovalQueueRepositoryPort;
   userId: string;
   approvalId: string;
   decision: ApprovalFollowUpJobPayload["decision"];
@@ -644,7 +644,7 @@ export async function respondToApprovalAndEnqueueFollowUpJob(params: {
   scope?: ApprovalDecisionScope;
   rationale?: string | null;
 }): Promise<{
-  bundle: Awaited<ReturnType<AgenticRepository["respondToApproval"]>>;
+  bundle: Awaited<ReturnType<ApprovalQueueRepositoryPort["respondToApproval"]>>;
   job: JobRecord & { payload: ApprovalFollowUpJobPayload };
 }> {
   return withSpan(
@@ -655,7 +655,7 @@ export async function respondToApprovalAndEnqueueFollowUpJob(params: {
       approvalId: params.approvalId
     },
     async () => {
-      const buildJob = (bundle: Awaited<ReturnType<AgenticRepository["respondToApproval"]>>) => {
+      const buildJob = (bundle: Awaited<ReturnType<ApprovalQueueRepositoryPort["respondToApproval"]>>) => {
         const approval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
 
         if (!approval) {
@@ -726,7 +726,7 @@ export async function respondToApprovalAndEnqueueFollowUpJob(params: {
 }
 
 export async function enqueueApprovalNotificationJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   userId: string;
   approvalId: string;
   goalId: string;
@@ -813,7 +813,7 @@ export async function enqueueApprovalNotificationJob(params: {
 }
 
 export async function enqueuePrivacyOperationJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   operation: {
     id: string;
     workspaceId: string;
@@ -860,7 +860,7 @@ export async function enqueuePrivacyOperationJob(params: {
 }
 
 export async function enqueuePublicShareViewJob(params: {
-  repository: AgenticRepository;
+  repository: QueueRepositoryPort;
   userId: string;
   shareId: string;
   goalId: string;

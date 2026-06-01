@@ -7,10 +7,10 @@ import {
   describeIntegrationReadiness,
   type IntegrationReadinessProfile
 } from "@agentic/integrations";
-import type { AgenticRepository } from "@agentic/repository";
+import type { CredentialRepositoryPort } from "@agentic/repository";
 
 function listGoogleCredentialCandidatesForWorkspace(
-  credentials: Awaited<ReturnType<AgenticRepository["listProviderCredentials"]>>,
+  credentials: Awaited<ReturnType<CredentialRepositoryPort["listProviderCredentials"]>>,
   workspaceId: string | null | undefined
 ) {
   const connected = credentials
@@ -29,7 +29,7 @@ function listGoogleCredentialCandidatesForWorkspace(
 }
 
 export type GoogleWorkspaceAdapterResolution = {
-  credential?: Awaited<ReturnType<AgenticRepository["listProviderCredentials"]>>[number];
+  credential?: Awaited<ReturnType<CredentialRepositoryPort["listProviderCredentials"]>>[number];
   gmail?: ReturnType<typeof createGmailAdapter>;
   calendar?: ReturnType<typeof createCalendarAdapter>;
   readiness: {
@@ -94,7 +94,7 @@ function buildGoogleWorkspaceReadiness(params: {
 }
 
 export async function resolveGoogleWorkspaceAdapters(params: {
-  repository: AgenticRepository;
+  repository: CredentialRepositoryPort;
   userId: string;
   workspaceId?: string | null;
 }): Promise<GoogleWorkspaceAdapterResolution | null> {

@@ -26,7 +26,7 @@ import {
   processUserRequest,
   refineGoal
 } from "@agentic/orchestrator";
-import type { AgenticRepository } from "@agentic/repository";
+import type { WorkerRuntimeRepositoryPort } from "@agentic/repository";
 import {
   assertEpisodeLearningPrivacyPreflight,
   SelfImprovementConflictError,
@@ -89,7 +89,7 @@ export function createPolicyReplayValidationResolver(
 }
 
 async function resolveGoalCreateGovernance(
-  repository: AgenticRepository,
+  repository: WorkerRuntimeRepositoryPort,
   userId: string,
   workspaceId: string | null
 ): Promise<WorkspaceGovernance | null> {
@@ -101,7 +101,7 @@ async function resolveGoalCreateGovernance(
 }
 
 async function resolveGoalCreateAgentDefinition(
-  repository: AgenticRepository,
+  repository: WorkerRuntimeRepositoryPort,
   userId: string,
   agentId: string | null
 ) {
@@ -137,7 +137,7 @@ function assertExecutableGoalAgentDefinition(agent: AgentDefinition) {
 }
 
 export async function persistCapturedMemories(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   userId: string;
   actorContext: ActorContext | null;
@@ -186,7 +186,7 @@ export async function persistCapturedMemories(params: {
 }
 
 export async function executeGoalCreateJob(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
   signal?: AbortSignal;
@@ -234,7 +234,7 @@ export async function executeGoalCreateJob(params: {
 }
 
 export async function executeGoalRefineJob(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
   signal?: AbortSignal;
@@ -278,7 +278,7 @@ export async function executeGoalRefineJob(params: {
 }
 
 export async function executeBriefingCreateJob(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
   signal?: AbortSignal;
@@ -332,7 +332,7 @@ export async function executeBriefingCreateJob(params: {
 }
 
 export async function runTemplateExecution(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   userId: string;
   actorContext: ActorContext | null;
@@ -395,7 +395,7 @@ export async function runTemplateExecution(params: {
 }
 
 export async function executeTemplateRunJob(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
   signal?: AbortSignal;

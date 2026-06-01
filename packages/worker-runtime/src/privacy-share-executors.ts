@@ -1,5 +1,5 @@
 import { nowIso, type JobRecord, type PrivacyOperationJobPayload, type PublicShareViewJobPayload } from "@agentic/contracts";
-import type { AgenticRepository } from "@agentic/repository";
+import type { PrivacyRepositoryPort, ShareAuditRepositoryPort } from "@agentic/repository";
 import { createPublicShareViewedLog } from "./public-share-log";
 
 function isPrivacyOperationJob(
@@ -43,7 +43,7 @@ function shouldAdvanceLastViewedAt(current: string | null, candidate: string): b
 }
 
 export async function executePrivacyOperationJob(params: {
-  repository: AgenticRepository;
+  repository: PrivacyRepositoryPort;
   job: JobRecord;
   signal?: AbortSignal;
 }) {
@@ -143,7 +143,7 @@ export async function executePrivacyOperationJob(params: {
 }
 
 export async function executePublicShareViewJob(params: {
-  repository: AgenticRepository;
+  repository: ShareAuditRepositoryPort;
   job: JobRecord;
   signal?: AbortSignal;
 }) {
