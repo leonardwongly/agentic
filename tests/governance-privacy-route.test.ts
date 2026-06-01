@@ -4,7 +4,7 @@ import path from "node:path";
 import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
-import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import { AGENTIC_ACCESS_KEY_HEADER, AGENTIC_SESSION_COOKIE, buildSessionToken } from "../apps/web/lib/auth";
 import {
   resetAuthSessionStateStoreForTesting,
   setAuthSessionStateStoreForTesting,
@@ -34,6 +34,17 @@ function buildAuthorizedGetRequest(url: string) {
 }
 
 function buildAuthorizedPostRequest(url: string, body: unknown) {
+  return new Request(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(DEFAULT_OWNER_USER_ID)}`
+    },
+    body: JSON.stringify(body)
+  });
+}
+
+function buildBootstrapPostRequest(url: string, body: unknown) {
   return new Request(url, {
     method: "POST",
     headers: {
@@ -288,6 +299,13 @@ describe("governance privacy route", () => {
       sessionId: "session-collaborator",
       expiresAt: null
     });
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
+      authMethod: "session",
+      userId: "workspace-collaborator",
+      sessionId: "session-collaborator",
+      expiresAt: null
+    });
 
     await repository.seedDefaults("workspace-owner");
     await repository.seedDefaults("workspace-collaborator");
@@ -352,6 +370,7 @@ describe("governance privacy route", () => {
       expectNoStoreHeaders(postResponse);
     } finally {
       requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   });
 
@@ -383,7 +402,7 @@ describe("governance privacy route", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(DEFAULT_OWNER_USER_ID)}`,
           "user-agent": "Agentic Privacy Rate Limit Test",
           "accept-language": "en-SG"
         },
@@ -401,5 +420,23 @@ describe("governance privacy route", () => {
     expect(seenKeys[0]).toContain("privacy-operation:user:");
     expect(seenKeys[0]).toContain(":fp:/api/governance/privacy:");
     expect(enqueuePrivacyOperationJobMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects bootstrap access-key automation for privacy operations", async () => {
+    const repository = createRouteTestRepository();
+
+    await repository.seedDefaults();
+
+    const response = await governancePrivacyPostRoute(
+      buildBootstrapPostRequest("http://localhost/api/governance/privacy", {
+        kind: "workspace_export"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toBe("Bootstrap access key is not allowed for this API route.");
+    expect(enqueuePrivacyOperationJobMock).not.toHaveBeenCalled();
+    expectNoStoreHeaders(response);
   });
 });

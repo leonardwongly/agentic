@@ -101,7 +101,8 @@ export const POST = createGovernedMutationRoute(
       namespace: "governance-update",
       error: "Too many governance update requests. Try again later."
     },
-    idempotency: "optional"
+    idempotency: "optional",
+    allowBootstrapAccessKey: false
   },
   async ({ request, principal, actorContext, body }) => {
     const { repository, activeWorkspace } = await resolveWorkspaceContext(principal.userId);

@@ -21,7 +21,22 @@ import {
   setAuthSessionStateStoreForTesting,
   type AuthSessionStateStore
 } from "../apps/web/lib/auth-session-store";
-import { buildAuthorizedJsonRequest, createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
+import { buildSessionJsonRequest, createRouteTestRepository, expectNoStoreHeaders } from "./route-test-helpers";
+
+function buildRecoveryRequest(url: string, body: unknown): Request {
+  return buildSessionJsonRequest(url, body, DEFAULT_OWNER_USER_ID);
+}
+
+function buildBootstrapRecoveryRequest(url: string, body: unknown): Request {
+  return new Request(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-agentic-access-key": "test-access-key"
+    },
+    body: JSON.stringify(body)
+  });
+}
 
 describe("operations recovery route", () => {
   const originalAccessKey = process.env.AGENTIC_ACCESS_KEY;
@@ -107,7 +122,7 @@ describe("operations recovery route", () => {
     setAuthSessionStateStoreForTesting(store);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "release_expired_lease",
         jobId: "job-rate-limited"
       })
@@ -119,6 +134,20 @@ describe("operations recovery route", () => {
     expect(response.headers.get("retry-after")).toBe("30");
     expect(seenKeys).toHaveLength(1);
     expect(seenKeys[0]).toContain(`operations-recovery:user:${DEFAULT_OWNER_USER_ID}:`);
+    expectNoStoreHeaders(response);
+  });
+
+  it("rejects bootstrap access-key automation for operations recovery", async () => {
+    const response = await recoveryRoute(
+      buildBootstrapRecoveryRequest("http://localhost/api/operations/recovery", {
+        action: "release_expired_lease",
+        jobId: "job-bootstrap-key-rejected"
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toBe("Bootstrap access key is not allowed for this API route.");
     expectNoStoreHeaders(response);
   });
 
@@ -148,7 +177,7 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "release_expired_lease",
         jobId: queued.id
       })
@@ -191,7 +220,7 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "release_expired_lease",
         jobId: queued.id,
         reason: "Operator attempted early release."
@@ -245,7 +274,7 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "retry_dead_letter_job",
         jobId: deadLettered.id
       })
@@ -298,7 +327,7 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "cancel_job",
         jobId: queued.id,
         confirm: true,
@@ -337,7 +366,7 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "cancel_job",
         jobId: queued.id,
         confirm: true
@@ -386,7 +415,7 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "revalidate_connector_credential",
         credentialId: credential.id
       })
@@ -431,13 +460,13 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const missingConfirm = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "cancel_job",
         jobId: queued.id
       })
     );
     const unknownField = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "cancel_job",
         jobId: queued.id,
         confirm: true,
@@ -479,7 +508,7 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "revalidate_connector_credential",
         credentialId: credential.id
       })
@@ -520,7 +549,7 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "mark_connector_reconnect_required",
         credentialId: credential.id,
         confirm: true,
@@ -604,7 +633,7 @@ describe("operations recovery route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const response = await recoveryRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/operations/recovery", {
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
         action: "revalidate_connector_credential",
         credentialId: credential.id
       })

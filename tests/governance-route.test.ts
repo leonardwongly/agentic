@@ -6,6 +6,7 @@ import { createRepository } from "@agentic/repository";
 import { vi } from "vitest";
 import * as authModule from "../apps/web/lib/auth";
 import { GET as governanceGetRoute, POST as governancePostRoute } from "../apps/web/app/api/governance/route";
+import { AGENTIC_SESSION_COOKIE, buildSessionToken } from "../apps/web/lib/auth";
 import { buildAuthorizedGetRequest, buildAuthorizedJsonRequest, expectNoStoreHeaders } from "./route-test-helpers";
 
 function buildGovernanceUpdateRequest(body: unknown, ifMatch?: string): Request {
@@ -13,7 +14,7 @@ function buildGovernanceUpdateRequest(body: unknown, ifMatch?: string): Request 
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-agentic-access-key": "test-access-key",
+      cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(DEFAULT_OWNER_USER_ID)}`,
       ...(ifMatch ? { "if-match": `"${ifMatch}"` } : {})
     },
     body: JSON.stringify(body)
@@ -277,7 +278,7 @@ describe("governance route", () => {
     await repository.seedDefaults();
 
     const response = await governancePostRoute(
-      buildAuthorizedJsonRequest("http://localhost/api/governance", {
+      buildGovernanceUpdateRequest({
         requireAuditExports: true
       })
     );
@@ -387,5 +388,34 @@ describe("governance route", () => {
     } finally {
       requireApiPrincipalSpy.mockRestore();
     }
+  });
+
+  it("rejects bootstrap access-key automation for governance updates", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults();
+    const dashboard = await repository.getDashboardData();
+    const currentGovernance = dashboard.workspaceGovernance!;
+
+    const response = await governancePostRoute(
+      new Request("http://localhost/api/governance", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-agentic-access-key": "test-access-key",
+          "if-match": `"${currentGovernance.updatedAt}"`
+        },
+        body: JSON.stringify({
+          requireAuditExports: true
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toBe("Bootstrap access key is not allowed for this API route.");
+    expectNoStoreHeaders(response);
   });
 });

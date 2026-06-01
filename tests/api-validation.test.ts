@@ -1,6 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
 import { POST as approvalResponseRoute } from "../apps/web/app/api/approvals/[id]/respond/route";
 import { POST as autopilotEventsRoute } from "../apps/web/app/api/autopilot/events/route";
 import { POST as autopilotSettingsRoute } from "../apps/web/app/api/autopilot/settings/route";
@@ -29,6 +30,7 @@ import {
   buildInvalidJsonRequest,
   expectNoStoreHeaders
 } from "./route-test-helpers";
+import { AGENTIC_SESSION_COOKIE, buildSessionToken } from "../apps/web/lib/auth";
 
 function buildJsonRequest(url: string, body: unknown, authenticated = true): Request {
   const headers = new Headers({
@@ -43,6 +45,29 @@ function buildJsonRequest(url: string, body: unknown, authenticated = true): Req
     method: "POST",
     headers,
     body: JSON.stringify(body)
+  });
+}
+
+function buildGovernanceSessionRequest(url: string, body: unknown, headers?: Record<string, string>): Request {
+  return new Request(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(DEFAULT_OWNER_USER_ID)}`,
+      ...headers
+    },
+    body: JSON.stringify(body)
+  });
+}
+
+function buildInvalidGovernanceSessionRequest(url: string): Request {
+  return new Request(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(DEFAULT_OWNER_USER_ID)}`
+    },
+    body: "{"
   });
 }
 
@@ -115,7 +140,7 @@ describe("api request validation", () => {
       "governance",
       () =>
         governanceRoute(
-          buildJsonRequest("http://localhost/api/governance", {
+          buildGovernanceSessionRequest("http://localhost/api/governance", {
             approvalMode: "always_review",
             extra: "nope"
           })
@@ -269,7 +294,7 @@ describe("api request validation", () => {
     ["session", () => sessionRoute(buildInvalidJsonRequest("http://localhost/api/session"))],
     ["goals", () => goalsRoute(buildInvalidJsonRequest("http://localhost/api/goals"))],
     ["workspaces", () => workspacesRoute(buildInvalidJsonRequest("http://localhost/api/workspaces"))],
-    ["governance", () => governanceRoute(buildInvalidJsonRequest("http://localhost/api/governance"))],
+    ["governance", () => governanceRoute(buildInvalidGovernanceSessionRequest("http://localhost/api/governance"))],
     ["memory", () => memoryRoute(buildInvalidJsonRequest("http://localhost/api/memory"))],
     ["watchers", () => watchersRoute(buildInvalidJsonRequest("http://localhost/api/watchers"))],
     ["workflow templates", () => workflowTemplatesRoute(buildInvalidJsonRequest("http://localhost/api/workflow-templates"))],
@@ -332,7 +357,7 @@ describe("api request validation", () => {
             method: "POST",
             headers: {
               "content-type": "application/x-www-form-urlencoded",
-              "x-agentic-access-key": "test-access-key"
+              cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(DEFAULT_OWNER_USER_ID)}`
             },
             body: "approvalMode=always_review"
           })
@@ -658,7 +683,7 @@ describe("api request validation", () => {
             method: "POST",
             headers: {
               "content-type": "application/json",
-              "x-agentic-access-key": "test-access-key",
+              cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(DEFAULT_OWNER_USER_ID)}`,
               "x-idempotency-key": "bad key"
             },
             body: JSON.stringify({
@@ -676,7 +701,7 @@ describe("api request validation", () => {
             method: "POST",
             headers: {
               "content-type": "application/json",
-              "x-agentic-access-key": "test-access-key",
+              cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(DEFAULT_OWNER_USER_ID)}`,
               "x-idempotency-key": "bad key"
             },
             body: JSON.stringify({

@@ -31,6 +31,13 @@ enable machine tokens for read, governance, approval, provider credential,
 sharing, or high-risk routes unless the route has a narrower documented route
 group and tests that prove underscoped tokens are rejected.
 
+When a high-risk route must reject the broad bootstrap access key, declare that
+explicitly. Manual routes call
+`requireApiPrincipal(request, { allowBootstrapAccessKey: false })`; governed
+routes set `allowBootstrapAccessKey: false`. Keep a direct regression test that
+proves `x-agentic-access-key` is rejected while a normal session principal can
+still use the route.
+
 ## Migration Checklist
 
 Before migrating a route:
@@ -66,20 +73,23 @@ The first AOS-01 migration applies the wrapper to:
 - `POST /api/goals/[id]/share`
 - `DELETE /api/goals/[id]/share`
 - `POST /api/governance`
+- `POST /api/governance/privacy`
 
 The wrapper now validates optional `x-idempotency-key` headers for these
-mutations and applies route-scoped abuse limits. It does not make governance
-updates or share creation response-replay idempotent; those routes still rely on
-their existing domain behavior.
+mutations and applies route-scoped abuse limits. Governance and privacy
+mutations reject the bootstrap access key and require a session principal. The
+wrapper does not make governance updates or share creation response-replay
+idempotent; those routes still rely on their existing domain behavior.
 
 The W05 recovery API hardening applies the wrapper to:
 
 - `POST /api/operations/recovery`
 
-This route uses the `operations-recovery` abuse namespace and keeps domain
-authorization in `apps/web/lib/operations-recovery.ts`. Job recovery remains
-user and workspace-owner scoped, connector recovery redacts stored secrets, and
-manual connector remediation records bounded `metadata.recoveryAudit` entries.
+This route rejects the bootstrap access key, uses the `operations-recovery`
+abuse namespace, and keeps domain authorization in
+`apps/web/lib/operations-recovery.ts`. Job recovery remains user and
+workspace-owner scoped, connector recovery redacts stored secrets, and manual
+connector remediation records bounded `metadata.recoveryAudit` entries.
 
 ## Follow-up Candidates
 

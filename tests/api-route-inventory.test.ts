@@ -169,6 +169,16 @@ function hasAuthBoundaryEvidence(entry: MutatingRouteGovernanceEntry, source: st
     );
   }
 
+  if (/Session principal/iu.test(entry.authBoundary)) {
+    const hasPrincipalEvidence = hasAnyEvidence(source, [governedWrapperEvidence, /\brequireApiSession\b/u, /\brequireApiPrincipal\b/u]);
+
+    if (/bootstrap access key rejected/iu.test(entry.authBoundary)) {
+      return hasPrincipalEvidence && /allowBootstrapAccessKey\s*:\s*false/u.test(source);
+    }
+
+    return hasPrincipalEvidence;
+  }
+
   if (/Access key for `POST`; session for `DELETE`/iu.test(entry.authBoundary)) {
     return hasAnyEvidence(source, [/\bverifyAccessKey\b/u]) && hasAnyEvidence(source, [/\brevokeSessionToken\b/u]);
   }
