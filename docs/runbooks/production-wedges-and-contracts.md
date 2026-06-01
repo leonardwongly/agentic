@@ -63,4 +63,33 @@ Use `evaluateExecutionGradeVerticalWorkflow(...)` when promoting one selected we
 - responded approvals connected to `approval_follow_up` worker jobs with stable idempotency and action ids
 - no approval follow-up job queued while the approval is still pending
 
+## Execution-Grade Scorecards
+
+`defaultExecutionGradeWedgeScorecardManifest` defines explicit scorecards for both selected production wedges:
+
+- `communications_execution`
+- `scheduling_execution`
+
+Each scorecard covers the same six fixture scenarios:
+
+- happy path
+- missing context
+- connector outage
+- duplicate retry
+- approval rejection
+- rollback
+
+The measured criteria are:
+
+- completion criteria rate
+- approval acceptance rate
+- recommendation edit distance
+- approval latency
+- side-effect safety
+- connector failure recovery
+- evidence completeness
+- replay evidence
+
+Use `evaluateExecutionGradeWedgeScorecards(...)` to aggregate fixture evidence into rollout and autonomy gates. The evaluator can select a primary wedge candidate when one wedge has fixture-backed pass evidence, but `autonomyPromotionAllowed` remains false until all autonomy-gated scorecard metrics pass with replay evidence. This keeps dashboard, capability-readiness, and autonomy-promotion decisions tied to measured workflow quality instead of manual interpretation.
+
 This harness is intentionally read-only. Rollback is reverting the evaluator and tests; it does not migrate data, enqueue jobs, call providers, or change approval decisions by itself.
