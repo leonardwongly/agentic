@@ -207,6 +207,16 @@ function buildCommunicationsScorecardEvidence(
   }));
 }
 
+function buildSchedulingScorecardEvidence(
+  overrides: Partial<ExecutionGradeWedgeFixtureEvidence> = {}
+): ExecutionGradeWedgeFixtureEvidence[] {
+  return buildCommunicationsScorecardEvidence(overrides).map((fixture) => ({
+    ...fixture,
+    wedgeKey: "scheduling_execution",
+    replayEvidence: fixture.replayEvidence.map((evidence) => `calendar:${evidence}`)
+  }));
+}
+
 describe("execution-grade vertical wedge evaluation", () => {
   it("defines explicit communications and scheduling scorecards", () => {
     expect(defaultExecutionGradeWedgeScorecardManifest.scorecards.map((scorecard) => scorecard.wedgeKey)).toEqual([
@@ -289,6 +299,25 @@ describe("execution-grade vertical wedge evaluation", () => {
       passed: false,
       actual: 0
     });
+  });
+
+  it("allows readiness and autonomy promotion only when communications and scheduling have replay-backed scorecards", () => {
+    const evaluation = evaluateExecutionGradeWedgeScorecards({
+      evidence: [...buildCommunicationsScorecardEvidence(), ...buildSchedulingScorecardEvidence()]
+    });
+
+    expect(evaluation.passed).toBe(true);
+    expect(evaluation.autonomyPromotionAllowed).toBe(true);
+    expect(evaluation.selectedPrimaryWedge).toBe("communications_execution");
+    expect(evaluation.readiness).toMatchObject({
+      dashboardStatus: "ready",
+      autonomyPromotionBlockedReason: null
+    });
+    expect(evaluation.readiness.capabilityReadinessEvidence).toEqual([
+      "communications_execution: scenarios=6; replayEvidence=9; evidenceComplete=1.00",
+      "scheduling_execution: scenarios=6; replayEvidence=9; evidenceComplete=1.00"
+    ]);
+    expect(evaluation.results.every((result) => result.passed)).toBe(true);
   });
 
   it("passes when a selected wedge has governed specialist output, blast-radius previews, and an idempotent follow-up job", async () => {
