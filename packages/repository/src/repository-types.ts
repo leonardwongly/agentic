@@ -490,6 +490,9 @@ export type GovernanceRepositoryPort = Pick<
   | "saveWorkspaceGovernance"
 >;
 
+export type GovernanceRouteRepositoryPort = DashboardReadRepositoryPort &
+  Pick<AgenticRepository, "getWorkspaceGovernance" | "saveWorkspaceGovernance">;
+
 export type CredentialRepositoryPort = Pick<
   AgenticRepository,
   | "listIntegrations"

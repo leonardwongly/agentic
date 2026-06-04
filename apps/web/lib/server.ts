@@ -9,6 +9,7 @@ import {
   type DashboardEventStreamRepositoryPort,
   type DashboardReadRepositoryPort,
   type GovernanceRepositoryPort,
+  type GovernanceRouteRepositoryPort,
   type MemoryRepositoryPort,
   type PrivacyRepositoryPort,
   type ProductRepositoryPort,
@@ -59,6 +60,10 @@ export async function getSeededDashboardReadRepository(): Promise<DashboardReadR
 }
 
 export async function getSeededGovernanceRepository(): Promise<GovernanceRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededGovernanceRouteRepository(): Promise<GovernanceRouteRepositoryPort> {
   return getSeededRepository();
 }
 

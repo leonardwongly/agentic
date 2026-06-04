@@ -37,6 +37,7 @@ function main() {
   const goalRefineRoutePath = "apps/web/app/api/goals/[id]/refine/route.ts";
   const briefingRoutePath = "apps/web/app/api/briefing/route.ts";
   const docsRenderRoutePath = "apps/web/app/api/docs/render/route.ts";
+  const governanceRoutePath = "apps/web/app/api/governance/route.ts";
   const governanceAuditRoutePath = "apps/web/app/api/governance/audit/route.ts";
   const governancePrivacyRoutePath = "apps/web/app/api/governance/privacy/route.ts";
   const commitmentsRoutePath = "apps/web/app/api/commitments/[id]/route.ts";
@@ -82,6 +83,7 @@ function main() {
   const goalRefineRoute = readRepoFile(goalRefineRoutePath);
   const briefingRoute = readRepoFile(briefingRoutePath);
   const docsRenderRoute = readRepoFile(docsRenderRoutePath);
+  const governanceRoute = readRepoFile(governanceRoutePath);
   const governanceAuditRoute = readRepoFile(governanceAuditRoutePath);
   const governancePrivacyRoute = readRepoFile(governancePrivacyRoutePath);
   const commitmentsRoute = readRepoFile(commitmentsRoutePath);
@@ -314,6 +316,7 @@ function main() {
     "DashboardEventStreamRepositoryPort",
     "DashboardReadRepositoryPort",
     "GovernanceRepositoryPort",
+    "GovernanceRouteRepositoryPort",
     "CredentialRepositoryPort",
     "MemoryRepositoryPort",
     "WatcherRepositoryPort",
@@ -521,6 +524,7 @@ function main() {
   for (const [accessorName, portName] of [
     ["getSeededDashboardReadRepository", "DashboardReadRepositoryPort"],
     ["getSeededGovernanceRepository", "GovernanceRepositoryPort"],
+    ["getSeededGovernanceRouteRepository", "GovernanceRouteRepositoryPort"],
     ["getSeededCredentialRepository", "CredentialRepositoryPort"],
     ["getSeededMemoryRepository", "MemoryRepositoryPort"],
     ["getSeededWatcherRepository", "WatcherRepositoryPort"],
@@ -543,6 +547,16 @@ function main() {
       `${webServerPath} must type ${accessorName} against ${portName}.`
     );
   }
+  assertContains(
+    governanceRoute,
+    "getSeededGovernanceRouteRepository",
+    `${governanceRoutePath} must request the narrow governance route repository port.`
+  );
+  assertNotContains(
+    governanceRoute,
+    "getSeededRepository",
+    `${governanceRoutePath} must not request the full seeded repository surface.`
+  );
   for (const route of [
     [dashboardApprovalsRoutePath, dashboardApprovalsRoute],
     [dashboardCommitmentsRoutePath, dashboardCommitmentsRoute],

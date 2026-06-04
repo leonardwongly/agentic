@@ -11,6 +11,7 @@ import {
   type DashboardEventStreamRepositoryPort,
   type DashboardReadRepositoryPort,
   type GovernanceRepositoryPort,
+  type GovernanceRouteRepositoryPort,
   type MemoryRepositoryPort,
   type PrivacyRepositoryPort,
   type ProductRepositoryPort,
@@ -31,6 +32,7 @@ function assertPortAssignments(repository: AgenticRepository) {
   const dashboardEventStream: DashboardEventStreamRepositoryPort = repository;
   const dashboardRead: DashboardReadRepositoryPort = repository;
   const governance: GovernanceRepositoryPort = repository;
+  const governanceRoute: GovernanceRouteRepositoryPort = repository;
   const credential: CredentialRepositoryPort = repository;
   const memory: MemoryRepositoryPort = repository;
   const watcher: WatcherRepositoryPort = repository;
@@ -50,6 +52,7 @@ function assertPortAssignments(repository: AgenticRepository) {
     dashboardEventStream,
     dashboardRead,
     governance,
+    governanceRoute,
     credential,
     memory,
     watcher,
@@ -80,6 +83,7 @@ const portMethods = {
     "getWorkspaceGovernance",
     "saveWorkspaceGovernance"
   ],
+  GovernanceRouteRepositoryPort: ["getDashboardData", "getWorkspaceGovernance", "saveWorkspaceGovernance"],
   CredentialRepositoryPort: [
     "listIntegrations",
     "listIntegrationsPage",
