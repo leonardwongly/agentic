@@ -518,6 +518,31 @@ function main() {
     "getSeededDashboardEventStreamRepository",
     `${dashboardEventsRoutePath} must request the narrow dashboard event stream repository port.`
   );
+  for (const [accessorName, portName] of [
+    ["getSeededDashboardReadRepository", "DashboardReadRepositoryPort"],
+    ["getSeededGovernanceRepository", "GovernanceRepositoryPort"],
+    ["getSeededCredentialRepository", "CredentialRepositoryPort"],
+    ["getSeededMemoryRepository", "MemoryRepositoryPort"],
+    ["getSeededWatcherRepository", "WatcherRepositoryPort"],
+    ["getSeededPrivacyRepository", "PrivacyRepositoryPort"],
+    ["getSeededShareAuditRepository", "ShareAuditRepositoryPort"],
+    ["getSeededTemplateRepository", "TemplateRepositoryPort"],
+    ["getSeededAgentCatalogRepository", "AgentCatalogRepositoryPort"],
+    ["getSeededProductRepository", "ProductRepositoryPort"],
+    ["getSeededQueueRepository", "QueueRepositoryPort"],
+    ["getSeededApprovalQueueRepository", "ApprovalQueueRepositoryPort"]
+  ] as const) {
+    assertContains(
+      webServer,
+      accessorName,
+      `${webServerPath} must expose ${accessorName} for route-level repository port migration.`
+    );
+    assertContains(
+      webServer,
+      portName,
+      `${webServerPath} must type ${accessorName} against ${portName}.`
+    );
+  }
   for (const route of [
     [dashboardApprovalsRoutePath, dashboardApprovalsRoute],
     [dashboardCommitmentsRoutePath, dashboardCommitmentsRoute],

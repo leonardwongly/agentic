@@ -2,8 +2,20 @@ import { runDocsBuild } from "@agentic/docs-runtime";
 import { prepareDefaultIntegrations } from "@agentic/integrations";
 import {
   createRepository,
+  type AgentCatalogRepositoryPort,
+  type ApprovalQueueRepositoryPort,
+  type CredentialRepositoryPort,
   type DashboardCollectionRepositoryPort,
-  type DashboardEventStreamRepositoryPort
+  type DashboardEventStreamRepositoryPort,
+  type DashboardReadRepositoryPort,
+  type GovernanceRepositoryPort,
+  type MemoryRepositoryPort,
+  type PrivacyRepositoryPort,
+  type ProductRepositoryPort,
+  type QueueRepositoryPort,
+  type ShareAuditRepositoryPort,
+  type TemplateRepositoryPort,
+  type WatcherRepositoryPort
 } from "@agentic/repository";
 import { createSelfImprovementRepository, type SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { validateAuthRuntimeState } from "./auth-runtime-state";
@@ -39,6 +51,54 @@ export async function getSeededDashboardCollectionRepository(): Promise<Dashboar
 }
 
 export async function getSeededDashboardEventStreamRepository(): Promise<DashboardEventStreamRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededDashboardReadRepository(): Promise<DashboardReadRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededGovernanceRepository(): Promise<GovernanceRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededCredentialRepository(): Promise<CredentialRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededMemoryRepository(): Promise<MemoryRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededWatcherRepository(): Promise<WatcherRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededPrivacyRepository(): Promise<PrivacyRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededShareAuditRepository(): Promise<ShareAuditRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededTemplateRepository(): Promise<TemplateRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededAgentCatalogRepository(): Promise<AgentCatalogRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededProductRepository(): Promise<ProductRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededQueueRepository(): Promise<QueueRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededApprovalQueueRepository(): Promise<ApprovalQueueRepositoryPort> {
   return getSeededRepository();
 }
 
