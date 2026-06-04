@@ -469,6 +469,11 @@ export type ApprovalQueueRepositoryPort = Pick<
 
 export type DashboardReadRepositoryPort = Pick<AgenticRepository, "getDashboardData">;
 
+export type DashboardCollectionRepositoryPort = Pick<
+  AgenticRepository,
+  "listGoalsPage" | "listCommitments" | "listJobs" | "listMemoryPage"
+>;
+
 export type GovernanceRepositoryPort = Pick<
   AgenticRepository,
   | "listWorkspaces"

@@ -7,6 +7,7 @@ import {
   type AgenticRepository,
   type ApprovalQueueRepositoryPort,
   type CredentialRepositoryPort,
+  type DashboardCollectionRepositoryPort,
   type DashboardReadRepositoryPort,
   type GovernanceRepositoryPort,
   type MemoryRepositoryPort,
@@ -24,6 +25,7 @@ function assertPortAssignments(repository: AgenticRepository) {
   const lifecycle: RepositoryLifecyclePort = repository;
   const queue: QueueRepositoryPort = repository;
   const approvalQueue: ApprovalQueueRepositoryPort = repository;
+  const dashboardCollection: DashboardCollectionRepositoryPort = repository;
   const dashboardRead: DashboardReadRepositoryPort = repository;
   const governance: GovernanceRepositoryPort = repository;
   const credential: CredentialRepositoryPort = repository;
@@ -40,6 +42,7 @@ function assertPortAssignments(repository: AgenticRepository) {
     lifecycle,
     queue,
     approvalQueue,
+    dashboardCollection,
     dashboardRead,
     governance,
     credential,
@@ -58,6 +61,7 @@ const portMethods = {
   RepositoryLifecyclePort: ["seedDefaults"],
   QueueRepositoryPort: ["listJobs", "getJob", "enqueueJob", "claimNextJob", "completeJob", "retryJob", "deadLetterJob"],
   ApprovalQueueRepositoryPort: ["respondToApproval", "respondToApprovalAndEnqueueJob", "enqueueJob"],
+  DashboardCollectionRepositoryPort: ["listGoalsPage", "listCommitments", "listJobs", "listMemoryPage"],
   DashboardReadRepositoryPort: ["getDashboardData"],
   GovernanceRepositoryPort: [
     "listWorkspaces",

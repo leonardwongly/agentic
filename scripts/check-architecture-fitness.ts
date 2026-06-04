@@ -45,6 +45,7 @@ function main() {
   const templateRunRoutePath = "apps/web/app/api/templates/[id]/run/route.ts";
   const publicShareViewRoutePath = "apps/web/app/api/share/view/route.ts";
   const templatesRoutePath = "apps/web/app/api/templates/[id]/route.ts";
+  const webServerPath = "apps/web/lib/server.ts";
   const abuseRateLimitPath = "apps/web/lib/abuse-rate-limit.ts";
   const repositoryPath = "packages/repository/src/index.ts";
   const workerEntryPath = "apps/worker/src/index.ts";
@@ -88,6 +89,7 @@ function main() {
   const templateRunRoute = readRepoFile(templateRunRoutePath);
   const publicShareViewRoute = readRepoFile(publicShareViewRoutePath);
   const templatesRoute = readRepoFile(templatesRoutePath);
+  const webServer = readRepoFile(webServerPath);
   const abuseRateLimit = readRepoFile(abuseRateLimitPath);
   const repository = readRepoFile(repositoryPath);
   const workerEntry = readRepoFile(workerEntryPath);
@@ -296,6 +298,7 @@ function main() {
     "RepositoryLifecyclePort",
     "QueueRepositoryPort",
     "ApprovalQueueRepositoryPort",
+    "DashboardCollectionRepositoryPort",
     "DashboardReadRepositoryPort",
     "GovernanceRepositoryPort",
     "CredentialRepositoryPort",
@@ -471,6 +474,21 @@ function main() {
     "Unknown dashboard query parameter",
     `${dashboardCollectionPath} must reject unknown collection query parameters.`
   );
+  assertNotContains(
+    dashboardCollection,
+    "AgenticRepository",
+    `${dashboardCollectionPath} must depend on DashboardCollectionRepositoryPort instead of the full repository surface.`
+  );
+  assertContains(
+    webServer,
+    "getSeededDashboardCollectionRepository",
+    `${webServerPath} must expose a seeded dashboard collection repository accessor.`
+  );
+  assertContains(
+    webServer,
+    "DashboardCollectionRepositoryPort",
+    `${webServerPath} must type dashboard collection access against a narrow repository port.`
+  );
   for (const route of [
     [dashboardApprovalsRoutePath, dashboardApprovalsRoute],
     [dashboardCommitmentsRoutePath, dashboardCommitmentsRoute],
@@ -493,6 +511,11 @@ function main() {
       route[1],
       "principal.userId",
       `${route[0]} must scope collection data to the authenticated principal.`
+    );
+    assertContains(
+      route[1],
+      "getSeededDashboardCollectionRepository",
+      `${route[0]} must request the narrow dashboard collection repository port.`
     );
   }
   assertContains(

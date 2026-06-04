@@ -3,7 +3,7 @@ import { listDashboardJobsPage } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 import { buildDashboardCollectionPage, parseDashboardCollectionQuery } from "../../../../lib/dashboard-collection";
-import { getSeededRepository } from "../../../../lib/server";
+import { getSeededDashboardCollectionRepository } from "../../../../lib/server";
 
 export async function GET(request: Request) {
   return withApiTelemetry(request, "api.dashboard.jobs", async () => {
@@ -14,7 +14,7 @@ export async function GET(request: Request) {
         allowedStatusValues: jobStatusValues,
         allowedKindValues: jobKindValues
       });
-      const repository = await getSeededRepository();
+      const repository = await getSeededDashboardCollectionRepository();
       const page = await listDashboardJobsPage(repository, {
         userId: principal.userId,
         limit: query.limit,

@@ -19,7 +19,12 @@ import {
 } from "@agentic/contracts";
 import { CollectionPageQueryError, normalizeCollectionPageLimit } from "./collection-pagination";
 import { mergeCommitments } from "./commitment-helpers";
-import type { AgenticRepository, DashboardCollectionPage, DashboardCollectionPageParams, DashboardCollectionSort } from "./repository-types";
+import type {
+  DashboardCollectionPage,
+  DashboardCollectionPageParams,
+  DashboardCollectionRepositoryPort,
+  DashboardCollectionSort
+} from "./repository-types";
 
 const DashboardCollectionCursorSchema = z
   .object({
@@ -312,7 +317,7 @@ export function buildDashboardArtifactsPage(
 }
 
 async function collectDashboardGoalBundles(
-  repository: AgenticRepository,
+  repository: DashboardCollectionRepositoryPort,
   userId: string
 ): Promise<GoalBundle[]> {
   const bundles: GoalBundle[] = [];
@@ -339,7 +344,7 @@ async function collectDashboardGoalBundles(
 }
 
 async function collectDashboardMemories(
-  repository: AgenticRepository,
+  repository: DashboardCollectionRepositoryPort,
   userId: string
 ): Promise<MemoryRecord[]> {
   const memories: MemoryRecord[] = [];
@@ -366,7 +371,7 @@ async function collectDashboardMemories(
 }
 
 export async function listDashboardApprovalsPage(
-  repository: AgenticRepository,
+  repository: DashboardCollectionRepositoryPort,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<ApprovalRequest>> {
   const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
@@ -381,7 +386,7 @@ export async function listDashboardApprovalsPage(
 }
 
 export async function listDashboardCommitmentsPage(
-  repository: AgenticRepository,
+  repository: DashboardCollectionRepositoryPort,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<Commitment>> {
   const userId = params?.userId ?? DEFAULT_OWNER_USER_ID;
@@ -402,7 +407,7 @@ export async function listDashboardCommitmentsPage(
 }
 
 export async function listDashboardJobsPage(
-  repository: AgenticRepository,
+  repository: DashboardCollectionRepositoryPort,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<JobRecord>> {
   const jobs = await repository.listJobs({
@@ -416,7 +421,7 @@ export async function listDashboardJobsPage(
 }
 
 export async function listDashboardMemoryPage(
-  repository: AgenticRepository,
+  repository: DashboardCollectionRepositoryPort,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<MemoryRecord>> {
   const memories = (await collectDashboardMemories(repository, params?.userId ?? DEFAULT_OWNER_USER_ID)).filter(
@@ -426,7 +431,7 @@ export async function listDashboardMemoryPage(
 }
 
 export async function listDashboardActionLogsPage(
-  repository: AgenticRepository,
+  repository: DashboardCollectionRepositoryPort,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<ActionLog>> {
   const goals = await collectDashboardGoalBundles(repository, params?.userId ?? DEFAULT_OWNER_USER_ID);
@@ -435,7 +440,7 @@ export async function listDashboardActionLogsPage(
 }
 
 export async function listDashboardArtifactsPage(
-  repository: AgenticRepository,
+  repository: DashboardCollectionRepositoryPort,
   params?: DashboardCollectionPageParams
 ): Promise<DashboardCollectionPage<Artifact>> {
   const goals = await collectDashboardGoalBundles(repository, params?.userId ?? DEFAULT_OWNER_USER_ID);

@@ -66,7 +66,7 @@ Phase 1 is complete only when all of the following stay true:
 - collection/filter/page parameter types
 - workspace audit export types
 - mutation error classes and the `AgenticRepository` public contract
-- named repository ports for queue, dashboard read, governance, credential, memory, watcher, privacy, share/audit, template, agent catalog, product, and worker-runtime consumers
+- named repository ports for queue, dashboard read, dashboard collection read, governance, credential, memory, watcher, privacy, share/audit, template, agent catalog, product, and worker-runtime consumers
 
 ### Repository Port Rules
 
@@ -74,7 +74,7 @@ The full `AgenticRepository` remains the backing implementation contract for sto
 
 Worker/runtime modules must not import `AgenticRepository` directly once a named port exists for their access pattern. Queue dispatchers use `QueueRepositoryPort`, approval response dispatch uses `ApprovalQueueRepositoryPort`, watcher scheduling uses `WatcherRepositoryPort`, credential adapters use `CredentialRepositoryPort`, memory capture uses `MemoryRepositoryPort`, privacy/share executors use their privacy and share/audit ports, and top-level worker orchestration uses `WorkerRuntimeRepositoryPort`.
 
-Dashboard-only reads must not leak into worker ports unless the worker path is explicitly assembling runtime context that cannot be sourced from a narrower contract yet. If that happens, the method belongs in `WorkerRuntimeRepositoryPort` and needs a contract test in `tests/repository-ports.test.ts`.
+Dashboard-only reads must not leak into worker ports unless the worker path is explicitly assembling runtime context that cannot be sourced from a narrower contract yet. If that happens, the method belongs in `WorkerRuntimeRepositoryPort` and needs a contract test in `tests/repository-ports.test.ts`. Dashboard collection API routes use `DashboardCollectionRepositoryPort` through `getSeededDashboardCollectionRepository()` so paged dashboard readers do not receive the full repository surface by default.
 
 ## Worker Runtime Boundary
 

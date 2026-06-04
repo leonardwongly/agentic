@@ -1,6 +1,6 @@
 import { runDocsBuild } from "@agentic/docs-runtime";
 import { prepareDefaultIntegrations } from "@agentic/integrations";
-import { createRepository } from "@agentic/repository";
+import { createRepository, type DashboardCollectionRepositoryPort } from "@agentic/repository";
 import { createSelfImprovementRepository, type SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { validateAuthRuntimeState } from "./auth-runtime-state";
 
@@ -28,6 +28,10 @@ export async function getSeededRepository() {
   const repository = getRepository();
   await Promise.all([repository.seedDefaults(), prepareDefaultIntegrations()]);
   return repository;
+}
+
+export async function getSeededDashboardCollectionRepository(): Promise<DashboardCollectionRepositoryPort> {
+  return getSeededRepository();
 }
 
 export function getSelfImprovementRepository(): SelfImprovementRepository {
