@@ -85,6 +85,7 @@ import {
   executePublicShareViewJob,
   executeTemplateRunJob,
   createFileWorkerRuntimeHealthSink,
+  DEFAULT_PRODUCTION_WORKER_CONCURRENCY_LIMITS,
   persistCapturedMemories,
   readFileWorkerRuntimeHealthSnapshot,
   runWorkerRuntime,
@@ -226,6 +227,74 @@ describe("worker runtime", () => {
         goal_refine: 1
       }
     });
+  });
+
+  it("keeps production default concurrency caps from claiming duplicate side-effect work", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const concurrencyKey = `${DEFAULT_OWNER_USER_ID}:docs-render:production-default`;
+    const runningJob = createJobRecord({
+      userId: DEFAULT_OWNER_USER_ID,
+      kind: "docs_render",
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
+      concurrencyKey,
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      }
+    });
+    const queuedJob = createJobRecord({
+      userId: DEFAULT_OWNER_USER_ID,
+      kind: "docs_render",
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
+      concurrencyKey,
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      }
+    });
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 120);
+
+    await repository.enqueueJob({
+      ...runningJob,
+      status: "running",
+      claimedBy: "worker-active-docs-render",
+      claimedAt: "3026-04-16T00:00:00.000Z",
+      leaseExpiresAt: "3026-04-16T00:10:00.000Z",
+      updatedAt: "3026-04-16T00:00:00.000Z"
+    });
+    await repository.enqueueJob(queuedJob);
+
+    try {
+      const result = await runWorkerRuntime({
+        repository,
+        selfImprovementRepository,
+        runnerId: "worker-production-default-concurrency-test",
+        signal: controller.signal,
+        pollIntervalMs: 50,
+        leaseMs: 60_000,
+        maxJobs: 1,
+        claim: {
+          userId: DEFAULT_OWNER_USER_ID,
+          kinds: ["docs_render"]
+        },
+        concurrencyLimits: DEFAULT_PRODUCTION_WORKER_CONCURRENCY_LIMITS
+      });
+      const stillQueued = await repository.getJob(queuedJob.id, DEFAULT_OWNER_USER_ID);
+
+      expect(result).toEqual({
+        processedCount: 0,
+        stopReason: "aborted"
+      });
+      expect(stillQueued).toMatchObject({
+        id: queuedJob.id,
+        status: "queued",
+        claimedBy: null
+      });
+      expect(runDocsBuildMock).not.toHaveBeenCalled();
+    } finally {
+      clearTimeout(abortTimer);
+    }
   });
 
   it("emits a bounded worker health signal while processing jobs", async () => {
