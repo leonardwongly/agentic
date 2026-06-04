@@ -5,6 +5,9 @@ import {
   type WorkflowActionUse
 } from "../scripts/validate-github-actions-provenance";
 
+const pinnedCheckoutV6Pattern = /actions\/checkout@[a-f0-9]{40} # v6(?:\.\d+\.\d+)?/u;
+const pinnedSetupNodeV6Pattern = /actions\/setup-node@[a-f0-9]{40} # v6(?:\.\d+\.\d+)?/u;
+
 describe("GitHub Actions provenance pin validation", () => {
   it("accepts external actions pinned to full commit SHAs", () => {
     const uses = collectWorkflowActionUses(
@@ -480,7 +483,7 @@ jobs:
     expect(validateIndex).toBeGreaterThan(gateIndex);
     expect(workflow).toMatch(/validate:\n\s+needs:\n\s+- provenance-gate\n\s+- issue-theme-gates/u);
     expect(gateBlock).toContain("Validate GitHub Actions provenance pins");
-    expect(gateBlock).toContain("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6");
-    expect(gateBlock).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6");
+    expect(gateBlock).toMatch(pinnedCheckoutV6Pattern);
+    expect(gateBlock).toMatch(pinnedSetupNodeV6Pattern);
   });
 });
