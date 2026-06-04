@@ -66,7 +66,7 @@ Phase 1 is complete only when all of the following stay true:
 - collection/filter/page parameter types
 - workspace audit export types
 - mutation error classes and the `AgenticRepository` public contract
-- named repository ports for queue, dashboard read, dashboard collection read, dashboard event stream read, governance, governance route, credential, memory, watcher, privacy, share/audit, template, agent catalog, product, readiness, and worker-runtime consumers
+- named repository ports for queue, dashboard read, dashboard collection read, dashboard event stream read, governance, governance route, governance simulation, governance audit, credential, memory, watcher, privacy, privacy route, share/audit, template, agent catalog, product, readiness, and worker-runtime consumers
 
 ### Repository Port Rules
 
@@ -76,7 +76,7 @@ Worker/runtime modules must not import `AgenticRepository` directly once a named
 
 Dashboard-only reads must not leak into worker ports unless the worker path is explicitly assembling runtime context that cannot be sourced from a narrower contract yet. If that happens, the method belongs in `WorkerRuntimeRepositoryPort` and needs a contract test in `tests/repository-ports.test.ts`. Dashboard collection API routes use `DashboardCollectionRepositoryPort` through `getSeededDashboardCollectionRepository()` so paged dashboard readers do not receive the full repository surface by default. Dashboard event streams use `DashboardEventStreamRepositoryPort` through `getSeededDashboardEventStreamRepository()` for dashboard snapshot plus job event reads. Readiness probes use `ReadinessRepositoryPort` for queue and connector-health checks instead of taking the full repository contract.
 
-Web API routes should request the narrowest seeded accessor from `apps/web/lib/server.ts` that matches their method set. `getSeededRepository()` remains as the backing compatibility accessor during migration, but new route work should prefer the named accessors for dashboard read, governance, credential, memory, watcher, privacy, share/audit, template, agent catalog, product, queue, and approval queue ports. When a route genuinely crosses port boundaries, add a named composite route port such as `GovernanceRouteRepositoryPort` and cover it in `tests/repository-ports.test.ts` before migrating the route.
+Web API routes should request the narrowest seeded accessor from `apps/web/lib/server.ts` that matches their method set. `getSeededRepository()` remains as the backing compatibility accessor during migration, but new route work should prefer the named accessors for dashboard read, governance, credential, memory, watcher, privacy, share/audit, template, agent catalog, product, queue, and approval queue ports. When a route genuinely crosses port boundaries, add a named composite route port such as `GovernanceRouteRepositoryPort`, `GovernanceSimulationRepositoryPort`, `GovernanceAuditRepositoryPort`, or `PrivacyRouteRepositoryPort` and cover it in `tests/repository-ports.test.ts` before migrating the route.
 
 ## Worker Runtime Boundary
 

@@ -40,6 +40,7 @@ function main() {
   const governanceRoutePath = "apps/web/app/api/governance/route.ts";
   const governanceAuditRoutePath = "apps/web/app/api/governance/audit/route.ts";
   const governancePrivacyRoutePath = "apps/web/app/api/governance/privacy/route.ts";
+  const governanceSimulateRoutePath = "apps/web/app/api/governance/simulate/route.ts";
   const commitmentsRoutePath = "apps/web/app/api/commitments/[id]/route.ts";
   const nlIntentRoutePath = "apps/web/app/api/nl/intent/route.ts";
   const autopilotEventsRoutePath = "apps/web/app/api/autopilot/events/route.ts";
@@ -86,6 +87,7 @@ function main() {
   const governanceRoute = readRepoFile(governanceRoutePath);
   const governanceAuditRoute = readRepoFile(governanceAuditRoutePath);
   const governancePrivacyRoute = readRepoFile(governancePrivacyRoutePath);
+  const governanceSimulateRoute = readRepoFile(governanceSimulateRoutePath);
   const commitmentsRoute = readRepoFile(commitmentsRoutePath);
   const nlIntentRoute = readRepoFile(nlIntentRoutePath);
   const autopilotEventsRoute = readRepoFile(autopilotEventsRoutePath);
@@ -315,12 +317,15 @@ function main() {
     "DashboardCollectionRepositoryPort",
     "DashboardEventStreamRepositoryPort",
     "DashboardReadRepositoryPort",
+    "GovernanceAuditRepositoryPort",
     "GovernanceRepositoryPort",
     "GovernanceRouteRepositoryPort",
+    "GovernanceSimulationRepositoryPort",
     "CredentialRepositoryPort",
     "MemoryRepositoryPort",
     "WatcherRepositoryPort",
     "PrivacyRepositoryPort",
+    "PrivacyRouteRepositoryPort",
     "ShareAuditRepositoryPort",
     "TemplateRepositoryPort",
     "AgentCatalogRepositoryPort",
@@ -523,12 +528,15 @@ function main() {
   );
   for (const [accessorName, portName] of [
     ["getSeededDashboardReadRepository", "DashboardReadRepositoryPort"],
+    ["getSeededGovernanceAuditRepository", "GovernanceAuditRepositoryPort"],
     ["getSeededGovernanceRepository", "GovernanceRepositoryPort"],
     ["getSeededGovernanceRouteRepository", "GovernanceRouteRepositoryPort"],
+    ["getSeededGovernanceSimulationRepository", "GovernanceSimulationRepositoryPort"],
     ["getSeededCredentialRepository", "CredentialRepositoryPort"],
     ["getSeededMemoryRepository", "MemoryRepositoryPort"],
     ["getSeededWatcherRepository", "WatcherRepositoryPort"],
     ["getSeededPrivacyRepository", "PrivacyRepositoryPort"],
+    ["getSeededPrivacyRouteRepository", "PrivacyRouteRepositoryPort"],
     ["getSeededShareAuditRepository", "ShareAuditRepositoryPort"],
     ["getSeededTemplateRepository", "TemplateRepositoryPort"],
     ["getSeededAgentCatalogRepository", "AgentCatalogRepositoryPort"],
@@ -557,6 +565,22 @@ function main() {
     "getSeededRepository",
     `${governanceRoutePath} must not request the full seeded repository surface.`
   );
+  for (const [routePath, routeContent, accessorName] of [
+    [governanceAuditRoutePath, governanceAuditRoute, "getSeededGovernanceAuditRepository"],
+    [governancePrivacyRoutePath, governancePrivacyRoute, "getSeededPrivacyRouteRepository"],
+    [governanceSimulateRoutePath, governanceSimulateRoute, "getSeededGovernanceSimulationRepository"]
+  ] as const) {
+    assertContains(
+      routeContent,
+      accessorName,
+      `${routePath} must request the narrow repository accessor ${accessorName}.`
+    );
+    assertNotContains(
+      routeContent,
+      "getSeededRepository",
+      `${routePath} must not request the full seeded repository surface.`
+    );
+  }
   for (const route of [
     [dashboardApprovalsRoutePath, dashboardApprovalsRoute],
     [dashboardCommitmentsRoutePath, dashboardCommitmentsRoute],

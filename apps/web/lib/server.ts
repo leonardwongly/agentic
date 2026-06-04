@@ -8,10 +8,13 @@ import {
   type DashboardCollectionRepositoryPort,
   type DashboardEventStreamRepositoryPort,
   type DashboardReadRepositoryPort,
+  type GovernanceAuditRepositoryPort,
   type GovernanceRepositoryPort,
   type GovernanceRouteRepositoryPort,
+  type GovernanceSimulationRepositoryPort,
   type MemoryRepositoryPort,
   type PrivacyRepositoryPort,
+  type PrivacyRouteRepositoryPort,
   type ProductRepositoryPort,
   type QueueRepositoryPort,
   type ShareAuditRepositoryPort,
@@ -67,6 +70,10 @@ export async function getSeededGovernanceRouteRepository(): Promise<GovernanceRo
   return getSeededRepository();
 }
 
+export async function getSeededGovernanceSimulationRepository(): Promise<GovernanceSimulationRepositoryPort> {
+  return getSeededRepository();
+}
+
 export async function getSeededCredentialRepository(): Promise<CredentialRepositoryPort> {
   return getSeededRepository();
 }
@@ -80,6 +87,14 @@ export async function getSeededWatcherRepository(): Promise<WatcherRepositoryPor
 }
 
 export async function getSeededPrivacyRepository(): Promise<PrivacyRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededPrivacyRouteRepository(): Promise<PrivacyRouteRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededGovernanceAuditRepository(): Promise<GovernanceAuditRepositoryPort> {
   return getSeededRepository();
 }
 

@@ -7,7 +7,7 @@ import {
   authenticatedResponse,
   handleApiError
 } from "../../../../lib/api-response";
-import { getSeededRepository } from "../../../../lib/server";
+import { getSeededGovernanceAuditRepository } from "../../../../lib/server";
 
 function buildAuditSignalHeaders(audit: { content: string; contentType: string }) {
   if (audit.contentType !== "application/json") {
@@ -44,7 +44,7 @@ export async function GET(request: Request) {
       return authenticatedRateLimitError("Too many audit export requests. Try again later.", rateLimit.retryAfterSeconds);
     }
 
-    const repository = await getSeededRepository();
+    const repository = await getSeededGovernanceAuditRepository();
     const dashboard = await repository.getDashboardData(principal.userId);
     const activeWorkspace = dashboard.activeWorkspace;
 

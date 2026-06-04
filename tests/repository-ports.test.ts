@@ -10,10 +10,13 @@ import {
   type DashboardCollectionRepositoryPort,
   type DashboardEventStreamRepositoryPort,
   type DashboardReadRepositoryPort,
+  type GovernanceAuditRepositoryPort,
   type GovernanceRepositoryPort,
   type GovernanceRouteRepositoryPort,
+  type GovernanceSimulationRepositoryPort,
   type MemoryRepositoryPort,
   type PrivacyRepositoryPort,
+  type PrivacyRouteRepositoryPort,
   type ProductRepositoryPort,
   type QueueRepositoryPort,
   type ReadinessRepositoryPort,
@@ -33,10 +36,13 @@ function assertPortAssignments(repository: AgenticRepository) {
   const dashboardRead: DashboardReadRepositoryPort = repository;
   const governance: GovernanceRepositoryPort = repository;
   const governanceRoute: GovernanceRouteRepositoryPort = repository;
+  const governanceSimulation: GovernanceSimulationRepositoryPort = repository;
+  const governanceAudit: GovernanceAuditRepositoryPort = repository;
   const credential: CredentialRepositoryPort = repository;
   const memory: MemoryRepositoryPort = repository;
   const watcher: WatcherRepositoryPort = repository;
   const privacy: PrivacyRepositoryPort = repository;
+  const privacyRoute: PrivacyRouteRepositoryPort = repository;
   const shareAudit: ShareAuditRepositoryPort = repository;
   const template: TemplateRepositoryPort = repository;
   const agentCatalog: AgentCatalogRepositoryPort = repository;
@@ -53,10 +59,13 @@ function assertPortAssignments(repository: AgenticRepository) {
     dashboardRead,
     governance,
     governanceRoute,
+    governanceSimulation,
+    governanceAudit,
     credential,
     memory,
     watcher,
     privacy,
+    privacyRoute,
     shareAudit,
     template,
     agentCatalog,
@@ -84,6 +93,8 @@ const portMethods = {
     "saveWorkspaceGovernance"
   ],
   GovernanceRouteRepositoryPort: ["getDashboardData", "getWorkspaceGovernance", "saveWorkspaceGovernance"],
+  GovernanceSimulationRepositoryPort: ["getDashboardData", "getWorkspaceGovernance"],
+  GovernanceAuditRepositoryPort: ["getDashboardData", "exportWorkspaceAudit"],
   CredentialRepositoryPort: [
     "listIntegrations",
     "listIntegrationsPage",
@@ -112,6 +123,18 @@ const portMethods = {
     "enforceWorkspaceRetention",
     "deleteWorkspaceData",
     "exportWorkspaceAudit"
+  ],
+  PrivacyRouteRepositoryPort: [
+    "getDashboardData",
+    "listJobs",
+    "getJob",
+    "enqueueJob",
+    "claimNextJob",
+    "completeJob",
+    "retryJob",
+    "deadLetterJob",
+    "listPrivacyOperations",
+    "savePrivacyOperation"
   ],
   ShareAuditRepositoryPort: [
     "listGoalShares",

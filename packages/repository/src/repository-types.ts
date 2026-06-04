@@ -493,6 +493,9 @@ export type GovernanceRepositoryPort = Pick<
 export type GovernanceRouteRepositoryPort = DashboardReadRepositoryPort &
   Pick<AgenticRepository, "getWorkspaceGovernance" | "saveWorkspaceGovernance">;
 
+export type GovernanceSimulationRepositoryPort = DashboardReadRepositoryPort &
+  Pick<AgenticRepository, "getWorkspaceGovernance">;
+
 export type CredentialRepositoryPort = Pick<
   AgenticRepository,
   | "listIntegrations"
@@ -526,6 +529,12 @@ export type PrivacyRepositoryPort = Pick<
   | "deleteWorkspaceData"
   | "exportWorkspaceAudit"
 >;
+
+export type PrivacyRouteRepositoryPort = DashboardReadRepositoryPort &
+  QueueRepositoryPort &
+  Pick<AgenticRepository, "listPrivacyOperations" | "savePrivacyOperation">;
+
+export type GovernanceAuditRepositoryPort = DashboardReadRepositoryPort & Pick<AgenticRepository, "exportWorkspaceAudit">;
 
 export type ShareAuditRepositoryPort = Pick<
   AgenticRepository,
