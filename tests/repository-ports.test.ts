@@ -24,7 +24,8 @@ import {
   type ShareAuditRepositoryPort,
   type TemplateRepositoryPort,
   type WatcherRepositoryPort,
-  type WorkerRuntimeRepositoryPort
+  type WorkerRuntimeRepositoryPort,
+  type WorkspaceRouteRepositoryPort
 } from "@agentic/repository";
 
 function assertPortAssignments(repository: AgenticRepository) {
@@ -49,6 +50,7 @@ function assertPortAssignments(repository: AgenticRepository) {
   const product: ProductRepositoryPort = repository;
   const readiness: ReadinessRepositoryPort = repository;
   const workerRuntime: WorkerRuntimeRepositoryPort = repository;
+  const workspaceRoute: WorkspaceRouteRepositoryPort = repository;
 
   return {
     lifecycle,
@@ -71,7 +73,8 @@ function assertPortAssignments(repository: AgenticRepository) {
     agentCatalog,
     product,
     readiness,
-    workerRuntime
+    workerRuntime,
+    workspaceRoute
   };
 }
 
@@ -163,6 +166,14 @@ const portMethods = {
     "saveOperatorProductSelection"
   ],
   ReadinessRepositoryPort: ["listJobs", "listProviderCredentials"],
+  WorkspaceRouteRepositoryPort: [
+    "getDashboardData",
+    "listWorkspaces",
+    "saveWorkspace",
+    "saveWorkspaceMember",
+    "saveWorkspaceSelection",
+    "saveWorkspaceGovernance"
+  ],
   WorkerRuntimeRepositoryPort: [
     "listJobs",
     "getJob",

@@ -19,7 +19,8 @@ import {
   type QueueRepositoryPort,
   type ShareAuditRepositoryPort,
   type TemplateRepositoryPort,
-  type WatcherRepositoryPort
+  type WatcherRepositoryPort,
+  type WorkspaceRouteRepositoryPort
 } from "@agentic/repository";
 import { createSelfImprovementRepository, type SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { validateAuthRuntimeState } from "./auth-runtime-state";
@@ -71,6 +72,10 @@ export async function getSeededGovernanceRouteRepository(): Promise<GovernanceRo
 }
 
 export async function getSeededGovernanceSimulationRepository(): Promise<GovernanceSimulationRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededWorkspaceRouteRepository(): Promise<WorkspaceRouteRepositoryPort> {
   return getSeededRepository();
 }
 

@@ -8,12 +8,12 @@ import {
   WorkspaceRoleSchema,
   nowIso
 } from "@agentic/contracts";
-import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
+import { resolveWorkspaceGovernanceDefaultsFromEnv, type WorkspaceRouteRepositoryPort } from "@agentic/repository";
 import { requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
-import { getSeededRepository } from "../../../lib/server";
+import { getSeededWorkspaceRouteRepository } from "../../../lib/server";
 
 const WorkspaceNameSchema = z.string().trim().min(1).max(120);
 const WorkspaceDescriptionSchema = z.string().trim().max(500).default("");
@@ -53,7 +53,7 @@ function slugifyWorkspaceName(name: string): string {
   return slug.replace(/^-+|-+$/g, "") || "workspace";
 }
 
-async function buildWorkspaceResponse(repository: Awaited<ReturnType<typeof getSeededRepository>>, userId: string) {
+async function buildWorkspaceResponse(repository: WorkspaceRouteRepositoryPort, userId: string) {
   const dashboard = await repository.getDashboardData(userId);
 
   return authenticatedJson({
@@ -67,7 +67,7 @@ async function buildWorkspaceResponse(repository: Awaited<ReturnType<typeof getS
 }
 
 async function requireOwnedWorkspace(
-  repository: Awaited<ReturnType<typeof getSeededRepository>>,
+  repository: WorkspaceRouteRepositoryPort,
   userId: string,
   workspaceId: string
 ) {
@@ -88,7 +88,7 @@ async function requireOwnedWorkspace(
 export async function GET(request: Request) {
   try {
     const principal = await requireApiSession(request);
-    const repository = await getSeededRepository();
+    const repository = await getSeededWorkspaceRouteRepository();
 
     return await buildWorkspaceResponse(repository, principal.userId);
   } catch (error) {
@@ -101,7 +101,7 @@ export async function POST(request: Request) {
     requireJsonContentType(request);
     const principal = await requireApiSession(request);
     const actor = createActorContextFromPrincipal(principal);
-    const repository = await getSeededRepository();
+    const repository = await getSeededWorkspaceRouteRepository();
     const body = await parseJsonBody(request, WorkspaceActionSchema);
 
     if (body.action === "create") {

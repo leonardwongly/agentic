@@ -41,6 +41,7 @@ function main() {
   const governanceAuditRoutePath = "apps/web/app/api/governance/audit/route.ts";
   const governancePrivacyRoutePath = "apps/web/app/api/governance/privacy/route.ts";
   const governanceSimulateRoutePath = "apps/web/app/api/governance/simulate/route.ts";
+  const workspacesRoutePath = "apps/web/app/api/workspaces/route.ts";
   const commitmentsRoutePath = "apps/web/app/api/commitments/[id]/route.ts";
   const nlIntentRoutePath = "apps/web/app/api/nl/intent/route.ts";
   const autopilotEventsRoutePath = "apps/web/app/api/autopilot/events/route.ts";
@@ -88,6 +89,7 @@ function main() {
   const governanceAuditRoute = readRepoFile(governanceAuditRoutePath);
   const governancePrivacyRoute = readRepoFile(governancePrivacyRoutePath);
   const governanceSimulateRoute = readRepoFile(governanceSimulateRoutePath);
+  const workspacesRoute = readRepoFile(workspacesRoutePath);
   const commitmentsRoute = readRepoFile(commitmentsRoutePath);
   const nlIntentRoute = readRepoFile(nlIntentRoutePath);
   const autopilotEventsRoute = readRepoFile(autopilotEventsRoutePath);
@@ -331,6 +333,7 @@ function main() {
     "AgentCatalogRepositoryPort",
     "ProductRepositoryPort",
     "ReadinessRepositoryPort",
+    "WorkspaceRouteRepositoryPort",
     "WorkerRuntimeRepositoryPort"
   ]) {
     assertContains(
@@ -542,7 +545,8 @@ function main() {
     ["getSeededAgentCatalogRepository", "AgentCatalogRepositoryPort"],
     ["getSeededProductRepository", "ProductRepositoryPort"],
     ["getSeededQueueRepository", "QueueRepositoryPort"],
-    ["getSeededApprovalQueueRepository", "ApprovalQueueRepositoryPort"]
+    ["getSeededApprovalQueueRepository", "ApprovalQueueRepositoryPort"],
+    ["getSeededWorkspaceRouteRepository", "WorkspaceRouteRepositoryPort"]
   ] as const) {
     assertContains(
       webServer,
@@ -568,7 +572,8 @@ function main() {
   for (const [routePath, routeContent, accessorName] of [
     [governanceAuditRoutePath, governanceAuditRoute, "getSeededGovernanceAuditRepository"],
     [governancePrivacyRoutePath, governancePrivacyRoute, "getSeededPrivacyRouteRepository"],
-    [governanceSimulateRoutePath, governanceSimulateRoute, "getSeededGovernanceSimulationRepository"]
+    [governanceSimulateRoutePath, governanceSimulateRoute, "getSeededGovernanceSimulationRepository"],
+    [workspacesRoutePath, workspacesRoute, "getSeededWorkspaceRouteRepository"]
   ] as const) {
     assertContains(
       routeContent,
