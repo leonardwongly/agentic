@@ -1,6 +1,10 @@
 import { runDocsBuild } from "@agentic/docs-runtime";
 import { prepareDefaultIntegrations } from "@agentic/integrations";
-import { createRepository, type DashboardCollectionRepositoryPort } from "@agentic/repository";
+import {
+  createRepository,
+  type DashboardCollectionRepositoryPort,
+  type DashboardEventStreamRepositoryPort
+} from "@agentic/repository";
 import { createSelfImprovementRepository, type SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { validateAuthRuntimeState } from "./auth-runtime-state";
 
@@ -31,6 +35,10 @@ export async function getSeededRepository() {
 }
 
 export async function getSeededDashboardCollectionRepository(): Promise<DashboardCollectionRepositoryPort> {
+  return getSeededRepository();
+}
+
+export async function getSeededDashboardEventStreamRepository(): Promise<DashboardEventStreamRepositoryPort> {
   return getSeededRepository();
 }
 

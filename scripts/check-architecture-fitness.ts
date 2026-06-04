@@ -61,6 +61,7 @@ function main() {
   const dashboardApprovalsRoutePath = "apps/web/app/api/dashboard/approvals/route.ts";
   const dashboardCommitmentsRoutePath = "apps/web/app/api/dashboard/commitments/route.ts";
   const dashboardJobsRoutePath = "apps/web/app/api/dashboard/jobs/route.ts";
+  const dashboardEventsRoutePath = "apps/web/app/api/dashboard/events/route.ts";
   const dashboardActivityRoutePath = "apps/web/app/api/dashboard/activity/route.ts";
   const dashboardMemoriesRoutePath = "apps/web/app/api/dashboard/memories/route.ts";
   const dashboardArtifactsRoutePath = "apps/web/app/api/dashboard/artifacts/route.ts";
@@ -105,6 +106,7 @@ function main() {
   const dashboardApprovalsRoute = readRepoFile(dashboardApprovalsRoutePath);
   const dashboardCommitmentsRoute = readRepoFile(dashboardCommitmentsRoutePath);
   const dashboardJobsRoute = readRepoFile(dashboardJobsRoutePath);
+  const dashboardEventsRoute = readRepoFile(dashboardEventsRoutePath);
   const dashboardActivityRoute = readRepoFile(dashboardActivityRoutePath);
   const dashboardMemoriesRoute = readRepoFile(dashboardMemoriesRoutePath);
   const dashboardArtifactsRoute = readRepoFile(dashboardArtifactsRoutePath);
@@ -299,6 +301,7 @@ function main() {
     "QueueRepositoryPort",
     "ApprovalQueueRepositoryPort",
     "DashboardCollectionRepositoryPort",
+    "DashboardEventStreamRepositoryPort",
     "DashboardReadRepositoryPort",
     "GovernanceRepositoryPort",
     "CredentialRepositoryPort",
@@ -488,6 +491,21 @@ function main() {
     webServer,
     "DashboardCollectionRepositoryPort",
     `${webServerPath} must type dashboard collection access against a narrow repository port.`
+  );
+  assertContains(
+    webServer,
+    "getSeededDashboardEventStreamRepository",
+    `${webServerPath} must expose a seeded dashboard event stream repository accessor.`
+  );
+  assertContains(
+    webServer,
+    "DashboardEventStreamRepositoryPort",
+    `${webServerPath} must type dashboard event streams against a narrow repository port.`
+  );
+  assertContains(
+    dashboardEventsRoute,
+    "getSeededDashboardEventStreamRepository",
+    `${dashboardEventsRoutePath} must request the narrow dashboard event stream repository port.`
   );
   for (const route of [
     [dashboardApprovalsRoutePath, dashboardApprovalsRoute],
