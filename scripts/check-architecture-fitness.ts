@@ -293,12 +293,19 @@ function main() {
     `${repositoryTypesPath} must own dashboard diagnostic target types.`
   );
   for (const portName of [
+    "RepositoryLifecyclePort",
     "QueueRepositoryPort",
+    "ApprovalQueueRepositoryPort",
     "DashboardReadRepositoryPort",
     "GovernanceRepositoryPort",
     "CredentialRepositoryPort",
     "MemoryRepositoryPort",
+    "WatcherRepositoryPort",
+    "PrivacyRepositoryPort",
     "ShareAuditRepositoryPort",
+    "TemplateRepositoryPort",
+    "AgentCatalogRepositoryPort",
+    "ProductRepositoryPort",
     "WorkerRuntimeRepositoryPort"
   ]) {
     assertContains(
