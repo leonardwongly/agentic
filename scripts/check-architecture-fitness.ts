@@ -277,6 +277,16 @@ function main() {
     `${runtimeReadinessPath} must inspect provider credentials when computing readiness.`
   );
   assertContains(
+    runtimeReadiness,
+    "ReadinessRepositoryPort",
+    `${runtimeReadinessPath} must type readiness probes against a narrow repository port.`
+  );
+  assertNotContains(
+    runtimeReadiness,
+    "AgenticRepository",
+    `${runtimeReadinessPath} must not depend on the full repository surface.`
+  );
+  assertContains(
     dashboard,
     "DashboardOperationsTowerCard",
     `${dashboardPath} must render the operations control tower surface.`
@@ -312,6 +322,7 @@ function main() {
     "TemplateRepositoryPort",
     "AgentCatalogRepositoryPort",
     "ProductRepositoryPort",
+    "ReadinessRepositoryPort",
     "WorkerRuntimeRepositoryPort"
   ]) {
     assertContains(

@@ -15,6 +15,7 @@ import {
   type PrivacyRepositoryPort,
   type ProductRepositoryPort,
   type QueueRepositoryPort,
+  type ReadinessRepositoryPort,
   type RepositoryLifecyclePort,
   type ShareAuditRepositoryPort,
   type TemplateRepositoryPort,
@@ -38,6 +39,7 @@ function assertPortAssignments(repository: AgenticRepository) {
   const template: TemplateRepositoryPort = repository;
   const agentCatalog: AgentCatalogRepositoryPort = repository;
   const product: ProductRepositoryPort = repository;
+  const readiness: ReadinessRepositoryPort = repository;
   const workerRuntime: WorkerRuntimeRepositoryPort = repository;
 
   return {
@@ -56,6 +58,7 @@ function assertPortAssignments(repository: AgenticRepository) {
     template,
     agentCatalog,
     product,
+    readiness,
     workerRuntime
   };
 }
@@ -132,6 +135,7 @@ const portMethods = {
     "saveOperatorProduct",
     "saveOperatorProductSelection"
   ],
+  ReadinessRepositoryPort: ["listJobs", "listProviderCredentials"],
   WorkerRuntimeRepositoryPort: [
     "listJobs",
     "getJob",

@@ -1,4 +1,4 @@
-import { createRepository, type AgenticRepository } from "@agentic/repository";
+import { createRepository, type ReadinessRepositoryPort } from "@agentic/repository";
 import type { ProviderCredential } from "@agentic/contracts";
 import { readFileWorkerRuntimeHealthSnapshot, type WorkerRuntimeHealthSnapshot } from "@agentic/worker-runtime";
 import { getAuthMode } from "./auth";
@@ -51,9 +51,9 @@ type ReadinessEvaluationParams = {
 const DEFAULT_MAX_PENDING_JOB_AGE_MS = 15 * 60 * 1000;
 const DEFAULT_PROVIDER_VALIDATION_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_WORKER_HEARTBEAT_STALE_MS = 2 * 60 * 1000;
-let readinessRepository: AgenticRepository | null = null;
+let readinessRepository: ReadinessRepositoryPort | null = null;
 
-function getReadinessRepository(): AgenticRepository {
+function getReadinessRepository(): ReadinessRepositoryPort {
   if (readinessRepository) {
     return readinessRepository;
   }

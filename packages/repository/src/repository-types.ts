@@ -476,6 +476,8 @@ export type DashboardCollectionRepositoryPort = Pick<
 
 export type DashboardEventStreamRepositoryPort = Pick<AgenticRepository, "getDashboardData" | "listJobs">;
 
+export type ReadinessRepositoryPort = Pick<AgenticRepository, "listJobs" | "listProviderCredentials">;
+
 export type GovernanceRepositoryPort = Pick<
   AgenticRepository,
   | "listWorkspaces"
