@@ -45,6 +45,35 @@ export AGENTIC_SHARED_AUTH_STATE=true
 export AGENTIC_WORKER_HEALTH_PATH=/var/lib/agentic/worker-health.json
 ```
 
+Keep `AGENTIC_ACCESS_KEY` as the installer bootstrap and break-glass secret.
+Routine automation that only needs to enqueue durable jobs should use scoped
+machine tokens instead. Machine tokens are configured as hashed JSON records so
+the raw token is never stored in the environment:
+
+```bash
+node -e 'const crypto = require("node:crypto"); const token = process.argv[1]; console.log(`sha256:${crypto.createHash("sha256").update(token.trim()).digest("hex")}`)' '<raw-machine-token>'
+
+export AGENTIC_MACHINE_TOKENS_JSON='[
+  {
+    "id": "ci-goal-enqueue",
+    "subject": "CI routine job enqueue",
+    "userId": "owner",
+    "tokenHash": "sha256:<64-hex-digest>",
+    "scopes": ["jobs:create"],
+    "routeGroups": ["automation"],
+    "workspaceIds": null,
+    "expiresAt": "2026-12-31T23:59:59.000Z",
+    "revoked": false
+  }
+]'
+```
+
+Call opted-in automation routes with `x-agentic-machine-token:
+<raw-machine-token>` or `Authorization: Bearer <raw-machine-token>`. A token is
+accepted only on routes that explicitly allow its route group and scope; an
+invalid, expired, or revoked machine token fails closed even if another
+credential is also present.
+
 Set proxy trust only after confirming your ingress overwrites the configured
 header and never forwards a user-supplied value unchanged:
 

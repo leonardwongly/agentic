@@ -8,10 +8,13 @@ import {
   formatFeatureCapabilityContractDrift
 } from "../scripts/lib/feature-capability-contracts";
 import {
+  buildFeatureCapabilityMaturityBoard,
   FEATURE_CAPABILITIES,
   resolveFeatureCapabilities,
   deriveFeatureCapabilityReadiness,
-  summarizeFeatureCapabilities
+  summarizeFeatureCapabilities,
+  validateFeatureCapabilityMaturity,
+  type FeatureCapabilityDefinition
 } from "../apps/web/lib/feature-capabilities";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -85,6 +88,81 @@ describe("feature capability registry", () => {
     expect(summary.trackedContracts).toBeGreaterThan(0);
     expect(summary.core.total).toBeGreaterThan(0);
     expect(summary.advanced.total).toBeGreaterThan(0);
+  });
+
+  it("requires every preview capability to have owner, blocker, and validation gate metadata", () => {
+    const previewCapabilities = FEATURE_CAPABILITIES.filter((feature) => feature.readiness === "preview");
+
+    expect(previewCapabilities.map((feature) => feature.id)).toEqual([
+      "agent-memory",
+      "integrations-workspace",
+      "watchers",
+      "workflow-templates",
+      "autopilot-control"
+    ]);
+
+    for (const feature of previewCapabilities) {
+      expect(feature.maturity.ownerLane).toMatch(/^[a-z-]+$/);
+      expect(feature.maturity.nextValidationGate).not.toHaveLength(0);
+      expect(feature.maturity.requiredGates.length).toBeGreaterThan(0);
+
+      if (feature.maturity.blocker.type === "issue") {
+        expect(feature.maturity.blocker.issue).toBeGreaterThan(0);
+        expect(feature.maturity.blocker.url).toContain(`/issues/${feature.maturity.blocker.issue}`);
+      } else {
+        expect(feature.maturity.blocker.reason).not.toHaveLength(0);
+      }
+    }
+  });
+
+  it("builds a capability maturity board grouped by owner lane", () => {
+    const board = buildFeatureCapabilityMaturityBoard();
+
+    expect(board.totalFeatures).toBe(FEATURE_CAPABILITIES.length);
+    expect(board.previewFeatures).toBe(5);
+    expect(board.releaseBlocked).toBe(false);
+    expect(board.issues).toEqual([]);
+    expect(board.lanes.map((lane) => lane.ownerLane)).toEqual([
+      "agent-intelligence",
+      "platform-security",
+      "product-platform",
+      "runtime-platform"
+    ]);
+    expect(board.items.find((item) => item.id === "watchers")).toEqual(
+      expect.objectContaining({
+        ownerLane: "runtime-platform",
+        readiness: "preview",
+        targetReadiness: "operational",
+        releaseBlocked: false
+      })
+    );
+  });
+
+  it("rejects production readiness claims without production evidence", () => {
+    const [feature] = FEATURE_CAPABILITIES;
+    const productionClaim: FeatureCapabilityDefinition = {
+      ...feature,
+      readiness: "production",
+      maturity: {
+        ...feature.maturity,
+        productionEvidence: []
+      }
+    };
+    const provenProductionClaim: FeatureCapabilityDefinition = {
+      ...productionClaim,
+      maturity: {
+        ...productionClaim.maturity,
+        productionEvidence: ["release-closeout:2026-06-01"]
+      }
+    };
+
+    expect(validateFeatureCapabilityMaturity([productionClaim])).toEqual([
+      {
+        featureId: feature.id,
+        message: "Production readiness requires explicit production evidence."
+      }
+    ]);
+    expect(validateFeatureCapabilityMaturity([provenProductionClaim])).toEqual([]);
   });
 
   it("promotes watchers and autopilot control when runtime recovery signals are healthy", () => {

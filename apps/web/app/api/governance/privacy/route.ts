@@ -5,7 +5,7 @@ import { buildPrivacyControlSummary } from "@agentic/policy";
 import { resolveWorkspaceGovernanceDefaultsFromEnv } from "@agentic/repository";
 import { enqueuePrivacyOperationJob } from "@agentic/worker-runtime";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
-import { requireApiSession } from "../../../../lib/auth";
+import { requireApiPrincipal, requireApiSession } from "../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import {
   ApiRouteError,
@@ -98,7 +98,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     requireJsonContentType(request);
-    const principal = await requireApiSession(request);
+    const principal = await requireApiPrincipal(request, {
+      allowBootstrapAccessKey: false
+    });
     const rateLimit = await checkAbuseRateLimit({
       namespace: "privacy-operation",
       request,

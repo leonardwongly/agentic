@@ -29,7 +29,17 @@ The standalone worker reads these optional positive-integer environment variable
 - `AGENTIC_WORKER_MAX_RUNNING_PER_USER`
 - `AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY`
 
-If none are set, the worker runs without additional cross-runner concurrency caps beyond normal job leases. Set `AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY=1` for the safest external side-effect posture in multi-worker deployments. Add per-kind or per-user caps when provider rate limits or fairness requirements demand stricter backpressure.
+In production, the worker is constrained even when none of these variables are set. The production-safe defaults are:
+
+- `maxRunningPerKind=1`
+- `maxRunningPerUser=2`
+- `maxRunningPerConcurrencyKey=1`
+
+Production env overrides merge with these defaults, so a partial configuration cannot accidentally remove the remaining caps. For example, setting only `AGENTIC_WORKER_MAX_RUNNING_PER_USER=5` keeps the per-kind and per-concurrency-key defaults in place.
+
+In non-production runtimes, the worker remains unconstrained when none of the variables are set. Configure the variables locally when reproducing production backpressure or testing provider-specific tuning.
+
+Set `AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY=1` for the safest external side-effect posture in multi-worker deployments. Add per-kind or per-user caps when provider rate limits or fairness requirements demand stricter backpressure.
 
 ## Observability
 
@@ -42,6 +52,8 @@ Every durable claim emits `durable_job.claim.total` with:
 - `concurrencyLimited`
 
 Use `claimResult=miss` with `concurrencyLimited=true` as a backpressure signal. Pair it with queue depth, lease age, and provider telemetry before increasing limits.
+
+Web readiness includes a `worker_concurrency` check with the active policy source, whether limits were explicitly configured, and the effective per-kind, per-user, and per-concurrency-key caps. Production bootstrap evidence also includes this check so a rollout cannot silently prove readiness while the worker would start unconstrained.
 
 ## Security And Reliability Notes
 
@@ -56,6 +68,7 @@ Run the focused worker-concurrency gate:
 
 ```bash
 npm exec -- vitest run tests/repository.test.ts tests/execution.test.ts tests/worker-runtime.test.ts
+npm exec -- vitest run tests/worker-concurrency-policy.test.ts tests/runtime-readiness.test.ts tests/production-bootstrap-check.test.ts
 npm run test:architecture:fitness
 npm run test:performance:fitness
 npm run typecheck
@@ -67,4 +80,4 @@ The repository tests cover both file-backed and Postgres-backed claim semantics 
 
 ## Rollback
 
-To reduce backpressure without changing code, unset or raise the relevant `AGENTIC_WORKER_MAX_RUNNING_*` variables and restart workers. To roll back this contract completely, revert the code and test changes in the worker-concurrency PR; no data migration is required.
+To reduce backpressure without changing code, raise the relevant `AGENTIC_WORKER_MAX_RUNNING_*` variables and restart workers. Unsetting the variables restores the production defaults rather than disabling caps in production. To roll back this contract completely, revert the code and test changes in the worker-concurrency PR; no data migration is required.

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { checkAbuseRateLimit } from "./abuse-rate-limit";
 import { createActorContextFromPrincipal } from "./actor-context";
-import { type AuthPrincipal, requireApiSession } from "./auth";
+import { type AuthPrincipal, requireApiPrincipal } from "./auth";
 import {
   ApiRouteError,
   authenticatedRateLimitError,
@@ -25,6 +25,9 @@ type GovernedMutationRouteBaseOptions = {
   requireJson?: boolean;
   rateLimit?: GovernedRouteRateLimitOptions;
   idempotency?: GovernedRouteIdempotencyMode;
+  machineRouteGroup?: string;
+  machineScope?: string;
+  allowBootstrapAccessKey?: boolean;
 };
 
 type GovernedMutationHandler<TBody, TRouteContext> = (
@@ -73,7 +76,12 @@ export function createGovernedMutationRoute<TBody = undefined, TRouteContext = u
   const governedMutationRoute = async (request: Request, routeContext: TRouteContext): Promise<Response> => {
     return withApiTelemetry(request, options.route, async () => {
       try {
-        const principal = await requireApiSession(request);
+        const principal = await requireApiPrincipal(request, {
+          allowMachineToken: Boolean(options.machineRouteGroup),
+          routeGroup: options.machineRouteGroup,
+          scope: options.machineScope,
+          allowBootstrapAccessKey: options.allowBootstrapAccessKey
+        });
         const actorContext = createActorContextFromPrincipal(principal);
 
         if (options.rateLimit) {

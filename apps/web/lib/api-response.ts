@@ -59,7 +59,7 @@ export function authenticatedJson<T>(body: T, init?: ResponseInit) {
       "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0",
-      Vary: "Cookie, X-Agentic-Access-Key"
+      Vary: "Cookie, X-Agentic-Access-Key, X-Agentic-Machine-Token, Authorization"
     }))
   });
 }
@@ -82,7 +82,7 @@ export function authenticatedRedirect(url: string | URL, init?: ResponseInit & {
       "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0",
-      Vary: "Cookie, X-Agentic-Access-Key"
+      Vary: "Cookie, X-Agentic-Access-Key, X-Agentic-Machine-Token, Authorization"
     }))
   });
 }
@@ -94,7 +94,7 @@ export function authenticatedResponse(body?: BodyInit | null, init?: ResponseIni
       "Cache-Control": AUTHENTICATED_API_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0",
-      Vary: "Cookie, X-Agentic-Access-Key"
+      Vary: "Cookie, X-Agentic-Access-Key, X-Agentic-Machine-Token, Authorization"
     }))
   });
 }
@@ -106,7 +106,7 @@ export function authenticatedStreamResponse(body?: BodyInit | null, init?: Respo
       "Cache-Control": AUTHENTICATED_STREAM_CACHE_CONTROL,
       Pragma: "no-cache",
       Expires: "0",
-      Vary: "Cookie, X-Agentic-Access-Key"
+      Vary: "Cookie, X-Agentic-Access-Key, X-Agentic-Machine-Token, Authorization"
     }))
   });
 }

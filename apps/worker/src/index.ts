@@ -6,6 +6,7 @@ import { createSelfImprovementRepository } from "@agentic/self-improvement-memor
 import {
   createFileWorkerRuntimeHealthSink,
   createWorkerRuntimeHealthSnapshot,
+  resolveWorkerConcurrencyPolicy,
   runWatcherSchedulerLoop,
   runWorkerRuntime,
   updateWorkerRuntimeHealthSnapshot,
@@ -18,22 +19,6 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
 
   if (!value) {
     return fallback;
-  }
-
-  const parsed = Number.parseInt(value, 10);
-
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer when configured.`);
-  }
-
-  return parsed;
-}
-
-function parseOptionalPositiveIntEnv(name: string): number | undefined {
-  const value = process.env[name]?.trim();
-
-  if (!value) {
-    return undefined;
   }
 
   const parsed = Number.parseInt(value, 10);
@@ -102,17 +87,8 @@ async function main() {
   const watcherSchedulerIntervalMs = parsePositiveIntEnv("AGENTIC_WATCHER_SCHEDULER_INTERVAL_MS", 60_000);
   const watcherSchedulerTimeoutMs = parsePositiveIntEnv("AGENTIC_WATCHER_SCHEDULER_TIMEOUT_MS", 30_000);
   const watcherSchedulerLeaseMs = parsePositiveIntEnv("AGENTIC_WATCHER_SCHEDULER_LEASE_MS", 60_000);
-  const maxRunningPerKind = parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_KIND");
-  const maxRunningPerUser = parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_USER");
-  const maxRunningPerConcurrencyKey = parseOptionalPositiveIntEnv("AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY");
-  const concurrencyLimits =
-    maxRunningPerKind === undefined && maxRunningPerUser === undefined && maxRunningPerConcurrencyKey === undefined
-      ? undefined
-      : {
-          maxRunningPerKind,
-          maxRunningPerUser,
-          maxRunningPerConcurrencyKey
-        };
+  const concurrencyPolicy = resolveWorkerConcurrencyPolicy();
+  const concurrencyLimits = concurrencyPolicy.limits;
   const retryJitterRatio = parseRatioEnv("AGENTIC_WORKER_RETRY_JITTER_RATIO", 0.1);
   const healthPath = process.env.AGENTIC_WORKER_HEALTH_PATH?.trim();
   const healthFileSink = healthPath ? createFileWorkerRuntimeHealthSink(healthPath) : null;
@@ -180,6 +156,9 @@ async function main() {
         leaseMs,
         retryJitterRatio,
         concurrencyLimits,
+        concurrencyPolicySource: concurrencyPolicy.source,
+        concurrencyPolicyConstrained: concurrencyPolicy.constrained,
+        concurrencyPolicyExplicitlyConfigured: concurrencyPolicy.explicitlyConfigured,
         watcherSchedulerEnabled,
         watcherSchedulerIntervalMs,
         watcherSchedulerTimeoutMs,

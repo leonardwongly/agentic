@@ -64,6 +64,17 @@ Insufficient samples are treated as a failed gate, not a pass with missing data.
 - a wedge with no approval evidence cannot claim safe end-to-end execution
 - supporting wedges do not backfill the selected production wedge thresholds
 
+## Execution-Grade Scorecards
+
+The quality gate answers whether persisted wedge history is healthy enough for rollout review. The execution-grade scorecard in [`packages/observability/src/execution-grade-wedge.ts`](https://github.com/leonardwongly/agentic/blob/main/packages/observability/src/execution-grade-wedge.ts) answers the fixture-backed promotion question for the same two wedges:
+
+- `communications_execution`
+- `scheduling_execution`
+
+Each scorecard requires replay-backed fixture evidence across happy path, missing context, connector outage, duplicate retry, approval rejection, and rollback scenarios. Rollout readiness stays blocked if any rollout metric lacks samples or fails threshold. Autonomy promotion is stricter: every autonomy-gated metric must pass, including side-effect safety, connector recovery, evidence completeness, and replay evidence.
+
+Use `evaluateExecutionGradeWedgeScorecards(...)` when dashboard or capability-readiness reporting needs a compact promotion summary. Its `readiness.dashboardStatus`, `readiness.capabilityReadinessEvidence`, and `autonomyPromotionAllowed` fields are the handoff points for operator dashboards and capability maturity reports. Missing scorecard or replay evidence must be treated as a blocker, not as an implicit pass.
+
 ## Correction actions
 
 Every threshold carries an explicit correction action. Use them as the first response playbook when a gate fails:

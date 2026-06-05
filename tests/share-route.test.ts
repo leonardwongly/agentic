@@ -743,11 +743,12 @@ describe("goal share route", () => {
 
     await repository.seedDefaults(secondaryUserId);
     const bundle = await createGoalForUser(repository, secondaryUserId, "Share my current planning context with a reviewer.");
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: secondaryUserId,
       sessionId: "session-secondary",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
 
     Reflect.set(globalThis, "__agenticRepository", undefined);
@@ -765,7 +766,7 @@ describe("goal share route", () => {
       expect(createdLog?.details.actorContext).toEqual(createHumanActorContext(secondaryUserId, "session-secondary"));
       expectNoStoreHeaders(response);
     } finally {
-      requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   }, 10_000);
 
@@ -867,11 +868,12 @@ describe("goal share route", () => {
     const repository = createRouteTestRepository();
     const ownerUserId = "workspace-owner";
     const editorUserId = "workspace-editor";
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: editorUserId,
       sessionId: "session-workspace-editor",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
 
     try {
@@ -905,7 +907,7 @@ describe("goal share route", () => {
       expect(payload.shareUrl).toContain("/share/");
       expectNoStoreHeaders(response);
     } finally {
-      requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   });
 
@@ -913,11 +915,12 @@ describe("goal share route", () => {
     const repository = createRouteTestRepository();
     const ownerUserId = "workspace-owner";
     const viewerUserId = "workspace-viewer";
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: viewerUserId,
       sessionId: "session-workspace-viewer",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
 
     try {
@@ -961,7 +964,7 @@ describe("goal share route", () => {
       expect(shares).toHaveLength(0);
       expectNoStoreHeaders(response);
     } finally {
-      requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   });
 
@@ -1024,11 +1027,12 @@ describe("goal share route", () => {
       params: Promise.resolve({ id: bundle.goal.id })
     });
     const sharePayload = (await shareResponse.json()) as { shareId: string };
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: viewerUserId,
       sessionId: "session-workspace-viewer",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
 
     try {
@@ -1054,7 +1058,7 @@ describe("goal share route", () => {
       expect(share?.status).toBe("active");
       expectNoStoreHeaders(revokeResponse);
     } finally {
-      requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   });
 });

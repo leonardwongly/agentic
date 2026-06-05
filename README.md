@@ -22,7 +22,7 @@ Agentic is implemented as an open-source modular monorepo. The current product s
 - optional Google, Slack, Telegram, local-notes, and GitHub issue integrations
 - migration, security, observability, deployment, and release-context gates
 
-Capability readiness is tracked in `apps/web/lib/feature-capabilities.ts`. The core dashboard loop is operational; agent memory, integration setup, watchers, workflow templates, and autopilot control are still preview surfaces until their runtime readiness conditions are met.
+Capability readiness and maturity are tracked in `apps/web/lib/feature-capabilities.ts`. The core dashboard loop is operational; agent memory, integration setup, watchers, workflow templates, and autopilot control are still preview surfaces until their blocker issues, owner lanes, validation gates, and runtime readiness conditions are satisfied. Run `npm run test:smoke:capabilities` to render the execution board and fail on missing production evidence.
 
 ## Repository Layout
 
@@ -172,6 +172,8 @@ curl http://localhost:3000/api/health
 curl http://localhost:3000/api/ready
 ```
 
+`/api/ready` is the unauthenticated public probe. It returns a short cached summary with a 5 second TTL and should stay under a 50 ms warm-cache p95 even with large queue and credential sets. Use authenticated `/api/ready/details` for fresh per-check diagnostics across database, auth runtime, request identity, async execution, worker heartbeat, and connector health.
+
 Most authenticated API routes accept a session cookie or:
 
 ```text
@@ -284,7 +286,7 @@ App that you configure.
 | `setup:check` warns about `AGENTIC_ACCESS_KEY` | Export `AGENTIC_ACCESS_KEY`, or use `AGENTIC_ENABLE_LOCAL_DEV_KEY=true` for disposable local-only runs. |
 | Jobs stay pending | Start `npm run worker:start`. |
 | DB commands fail locally | Set `DATABASE_URL`, ensure Postgres is reachable, then run `npm run db:migrate`. |
-| `/api/ready` fails in production | Check authenticated `/api/ready/details` for DB, shared auth state, request identity, worker heartbeat, or connector failures. |
+| `/api/ready` fails in production | Check authenticated `/api/ready/details` for fresh DB, shared auth state, request identity, worker heartbeat, async execution, or connector failures. |
 | E2E startup reports a Next.js lock | Stop the manual dev server or set another `PLAYWRIGHT_E2E_PORT`. |
 | `docs:build` fails | Install `pandoc`; LibreOffice is optional for PDF smoke rendering. |
 

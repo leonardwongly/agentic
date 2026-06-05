@@ -61,6 +61,27 @@ import type { WatcherLeaseClaimParams } from "./watcher-lease-helpers";
 
 export type JobConcurrencyLimits = ExecutionJobConcurrencyLimits;
 
+export type JobReadinessSummary = {
+  queuedJobs: number;
+  retryingJobs: number;
+  runningJobs: number;
+  deadLetterJobs: number;
+  expiredLeases: number;
+  stalePendingJobs: number;
+  oldestPendingJobAgeMs: number | null;
+};
+
+export type ProviderCredentialReadinessSummary = {
+  totalCredentials: number;
+  connectedCredentials: number;
+  degradedCredentials: number;
+  reconnectRequiredCredentials: number;
+  refreshFailedCredentials: number;
+  revokedCredentials: number;
+  expiredCredentials: number;
+  validationStaleCredentials: number;
+};
+
 export type DashboardData = {
   workspaces: Workspace[];
   activeWorkspace: Workspace | null;
@@ -376,6 +397,10 @@ export type AgenticRepository = {
     statuses?: JobStatus[];
     limit?: number;
   }): Promise<JobRecord[]>;
+  getJobReadinessSummary(params?: {
+    now?: string;
+    maxPendingJobAgeMs?: number;
+  }): Promise<JobReadinessSummary>;
   getJob(jobId: string, userId?: string): Promise<JobRecord | null>;
   enqueueJob(job: JobRecord): Promise<JobRecord>;
   claimNextJob(params: {
@@ -425,6 +450,11 @@ export type AgenticRepository = {
   listIntegrationsPage(params?: CollectionPageParams): Promise<IntegrationAccountPage>;
   upsertIntegration(account: IntegrationAccount): Promise<IntegrationAccount>;
   listProviderCredentials(userId?: string): Promise<ProviderCredential[]>;
+  getProviderCredentialReadinessSummary(params?: {
+    userId?: string;
+    now?: string;
+    validationStaleMs?: number;
+  }): Promise<ProviderCredentialReadinessSummary>;
   getProviderCredential(credentialId: string, userId?: string): Promise<ProviderCredential | null>;
   saveProviderCredential(credential: ProviderCredential): Promise<ProviderCredential>;
   getProviderCredentialSecret(
@@ -476,7 +506,7 @@ export type DashboardCollectionRepositoryPort = Pick<
 
 export type DashboardEventStreamRepositoryPort = Pick<AgenticRepository, "getDashboardData" | "listJobs">;
 
-export type ReadinessRepositoryPort = Pick<AgenticRepository, "listJobs" | "listProviderCredentials">;
+export type ReadinessRepositoryPort = Pick<AgenticRepository, "getJobReadinessSummary" | "getProviderCredentialReadinessSummary">;
 
 export type GovernanceRepositoryPort = Pick<
   AgenticRepository,

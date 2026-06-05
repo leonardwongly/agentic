@@ -172,6 +172,12 @@ import {
   updateProviderSideEffectWithClient
 } from "./provider-side-effect-ledger";
 import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
+import {
+  queryJobReadinessSummary,
+  queryProviderCredentialReadinessSummary,
+  summarizeJobReadinessFromJobs,
+  summarizeProviderCredentialReadiness
+} from "./repository-readiness-summary";
 import { mapMemoryRow } from "./repository-memory-row";
 import {
   assertRunningJobOwner, autopilotEventMatchesBudget, buildDeletedWorkspaceTombstone, buildJobLifecycleJournal,
@@ -192,7 +198,9 @@ import {
   type GoalPageParams,
   type GoalShareListFilters,
   type JobConcurrencyLimits,
+  type JobReadinessSummary,
   type PrivacyOperationListFilters,
+  type ProviderCredentialReadinessSummary,
   type ReserveProviderSideEffectParams,
   type WatcherListFilters,
   type WatcherPageParams,
@@ -259,7 +267,7 @@ const RuntimeStoreSchema = z.object({
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
 
 export { CommitmentInboxQueryError, CollectionPageQueryError };
-export { ApprovalMutationError, JobMutationError, type AgentCatalogRepositoryPort, type AgenticRepository, type ApprovalQueueRepositoryPort, type AutopilotEventClaim, type CollectionPageParams, type CredentialRepositoryPort, type DashboardCollectionPage, type DashboardCollectionPageParams, type DashboardCollectionRepositoryPort, type DashboardCollectionSort, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type DashboardEventStreamRepositoryPort, type DashboardReadRepositoryPort, type GoalPageParams, type GoalShareListFilters, type GovernanceRepositoryPort, type GovernanceRouteRepositoryPort, type GovernanceSimulationRepositoryPort, type MemoryRepositoryPort, type PrivacyOperationListFilters, type PrivacyRepositoryPort, type PrivacyRouteRepositoryPort, type GovernanceAuditRepositoryPort, type ProductRepositoryPort, type QueueRepositoryPort, type ReadinessRepositoryPort, type RepositoryLifecyclePort, type ShareAuditRepositoryPort, type TemplateRepositoryPort, type WatcherListFilters, type WatcherPageParams, type WatcherRepositoryPort, type WorkerRuntimeRepositoryPort, type WorkspaceRouteRepositoryPort, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
+export { ApprovalMutationError, JobMutationError, type AgentCatalogRepositoryPort, type AgenticRepository, type ApprovalQueueRepositoryPort, type AutopilotEventClaim, type CollectionPageParams, type CredentialRepositoryPort, type DashboardCollectionPage, type DashboardCollectionPageParams, type DashboardCollectionRepositoryPort, type DashboardCollectionSort, type DashboardControlPlane, type DashboardControlPlaneSection, type DashboardData, type DashboardDiagnostic, type DashboardDiagnosticTarget, type DashboardDiagnostics, type DashboardEventStreamRepositoryPort, type DashboardReadRepositoryPort, type GoalPageParams, type GoalShareListFilters, type JobReadinessSummary, type GovernanceRepositoryPort, type GovernanceRouteRepositoryPort, type GovernanceSimulationRepositoryPort, type MemoryRepositoryPort, type PrivacyOperationListFilters, type PrivacyRepositoryPort, type PrivacyRouteRepositoryPort, type GovernanceAuditRepositoryPort, type ProductRepositoryPort, type ProviderCredentialReadinessSummary, type QueueRepositoryPort, type ReadinessRepositoryPort, type RepositoryLifecyclePort, type ShareAuditRepositoryPort, type TemplateRepositoryPort, type WatcherListFilters, type WatcherPageParams, type WatcherRepositoryPort, type WorkerRuntimeRepositoryPort, type WorkspaceRouteRepositoryPort, type WorkspaceAuditExport, type WorkspaceDeleteParams, type WorkspaceRetentionParams } from "./repository-types";
 export { resolveDashboardCockpitRollout, type DashboardCockpitRollout, type DashboardCockpitVariant } from "./dashboard-cockpit-rollout";
 export { buildDashboardTraceability, type DashboardApprovalTrace, type DashboardMemoryProvenance, type DashboardTaskTrace, type DashboardTraceability, type DashboardWorkflowTrace } from "./dashboard-traceability";
 export { buildExecutionProvenanceGraph } from "./provenance-graph";
@@ -2187,6 +2195,14 @@ class FileRepository implements AgenticRepository {
     return (limit === null ? jobs : jobs.slice(0, limit)).map((job) => JobRecordSchema.parse(clone(job)));
   }
 
+  async getJobReadinessSummary(params?: {
+    now?: string;
+    maxPendingJobAgeMs?: number;
+  }): Promise<JobReadinessSummary> {
+    const store = await this.readStore();
+    return summarizeJobReadinessFromJobs(store.jobs, params);
+  }
+
   async getJob(jobId: string, userId = DEFAULT_OWNER_USER_ID): Promise<JobRecord | null> {
     const store = await this.readStore();
     const workspaceIds = workspaceIdsForUser(store, userId);
@@ -2555,6 +2571,15 @@ class FileRepository implements AgenticRepository {
       .filter((credential) => credential.userId === userId)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .map((credential) => ProviderCredentialSchema.parse(clone(credential)));
+  }
+
+  async getProviderCredentialReadinessSummary(params?: {
+    userId?: string;
+    now?: string;
+    validationStaleMs?: number;
+  }): Promise<ProviderCredentialReadinessSummary> {
+    const store = await this.readStore();
+    return summarizeProviderCredentialReadiness(store.providerCredentials, params);
   }
 
   async getProviderCredential(credentialId: string, userId = DEFAULT_OWNER_USER_ID): Promise<ProviderCredential | null> {
@@ -6827,6 +6852,14 @@ class PostgresRepository implements AgenticRepository {
     return result.rows.map((row) => this.mapJobRow(row));
   }
 
+  async getJobReadinessSummary(params?: {
+    now?: string;
+    maxPendingJobAgeMs?: number;
+  }): Promise<JobReadinessSummary> {
+    await this.ready;
+    return queryJobReadinessSummary(this.pool, params);
+  }
+
   async getJob(jobId: string, userId = DEFAULT_OWNER_USER_ID): Promise<JobRecord | null> {
     await this.ready;
     const result = await this.pool.query(
@@ -7401,6 +7434,15 @@ class PostgresRepository implements AgenticRepository {
         updatedAt: new Date(row.updated_at).toISOString()
       })
     );
+  }
+
+  async getProviderCredentialReadinessSummary(params?: {
+    userId?: string;
+    now?: string;
+    validationStaleMs?: number;
+  }): Promise<ProviderCredentialReadinessSummary> {
+    await this.ready;
+    return queryProviderCredentialReadinessSummary(this.pool, params);
   }
 
   async getProviderCredential(credentialId: string, userId = DEFAULT_OWNER_USER_ID): Promise<ProviderCredential | null> {

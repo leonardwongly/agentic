@@ -1,10 +1,11 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { DEFAULT_OWNER_USER_ID, createSystemActorContext } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, ProviderCredentialSchema, createSystemActorContext } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
+import { createJobRecord } from "@agentic/execution";
 import { enqueueDocsRenderJob, runWorkerRuntime } from "@agentic/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -15,6 +16,7 @@ import { POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
 const ENQUEUE_ROUTE_BUDGET_MS = 250;
 const DOCS_WORKER_BATCH_BUDGET_MS = 1_500;
 const SMALL_QUEUE_BACKLOG_BUDGET_MS = 2_000;
+const PUBLIC_READY_CACHE_P95_BUDGET_MS = 50;
 
 const { runDocsBuildMock } = vi.hoisted(() => ({
   runDocsBuildMock: vi.fn(async () => ({
@@ -41,6 +43,96 @@ function buildAuthorizedRequest(url: string, init?: RequestInit) {
       ...(init?.headers ?? {})
     }
   });
+}
+
+async function writeLargeReadinessStore(storePath: string) {
+  const now = "2026-04-16T04:00:00.000Z";
+  const jobs = Array.from({ length: 10_000 }, (_, index) =>
+    createJobRecord({
+      id: `ready-large-job-${index}`,
+      userId: DEFAULT_OWNER_USER_ID,
+      kind: index % 2 === 0 ? "goal_create" : "docs_render",
+      availableAt: "2026-04-16T03:59:00.000Z",
+      payload:
+        index % 2 === 0
+          ? {
+              type: "goal_create",
+              goalId: `ready-large-goal-${index}`,
+              workflowId: `ready-large-workflow-${index}`,
+              request: "Synthetic readiness performance job.",
+              workspaceId: null,
+              agentId: null,
+              metadata: {}
+            }
+          : {
+              type: "docs_render",
+              metadata: {}
+            }
+    })
+  );
+  const providerCredentials = Array.from({ length: 2_000 }, (_, index) =>
+    ProviderCredentialSchema.parse({
+      id: `google:global:ready-large-${index}`,
+      userId: DEFAULT_OWNER_USER_ID,
+      workspaceId: null,
+      provider: "google",
+      accountId: `ready-large-${index}`,
+      accountEmail: `ready-large-${index}@example.com`,
+      displayName: `Ready Large ${index}`,
+      status: "connected",
+      scopes: ["calendar.read"],
+      lastValidatedAt: now,
+      lastRotatedAt: null,
+      lastRefreshAt: null,
+      lastRefreshFailureAt: null,
+      reconnectRequiredAt: null,
+      revokedAt: null,
+      expiresAt: null,
+      metadata: {},
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
+      createdAt: now,
+      updatedAt: now
+    })
+  );
+
+  await writeFile(
+    storePath,
+    JSON.stringify({
+      version: 1,
+      users: [],
+      goals: [],
+      workflows: [],
+      tasks: [],
+      memories: [],
+      approvals: [],
+      actionLogs: [],
+      evidenceRecords: [],
+      watchers: [],
+      integrations: [],
+      providerCredentials,
+      providerCredentialSecrets: [],
+      providerSideEffects: [],
+      artifacts: [],
+      workspaces: [],
+      workspaceMembers: [],
+      workspaceSelections: [],
+      workspaceGovernance: [],
+      goalShares: [],
+      privacyOperations: [],
+      commitments: [],
+      policyRules: [],
+      templates: [],
+      workflowTemplates: [],
+      autopilotSettings: [],
+      autopilotEvents: [],
+      jobs,
+      agents: [],
+      agentMetrics: [],
+      briefingPreferences: [],
+      operatorProducts: [],
+      operatorProductSelections: []
+    })
+  );
 }
 
 describe("performance fitness", () => {
@@ -142,6 +234,35 @@ describe("performance fitness", () => {
     expect(goalDurationMs).toBeLessThan(ENQUEUE_ROUTE_BUDGET_MS);
     expect(briefingDurationMs).toBeLessThan(ENQUEUE_ROUTE_BUDGET_MS);
     expect(docsDurationMs).toBeLessThan(ENQUEUE_ROUTE_BUDGET_MS);
+  });
+
+  it("keeps cached public readiness p95 inside budget for large queue and credential sets", async () => {
+    await writeLargeReadinessStore(process.env.AGENTIC_RUNTIME_STORE_PATH!);
+    const { getPublicWebReadinessSummary, resetPublicWebReadinessCacheForTests } = await import(
+      "../apps/web/lib/runtime-readiness"
+    );
+    resetPublicWebReadinessCacheForTests();
+
+    await expect(getPublicWebReadinessSummary({
+      ttlMs: 60_000
+    })).resolves.toMatchObject({
+      ok: true,
+      status: "ready"
+    });
+
+    const durations: number[] = [];
+    for (let index = 0; index < 25; index += 1) {
+      durations.push(
+        await measureDurationMs(async () => {
+          await getPublicWebReadinessSummary({
+            ttlMs: 60_000
+          });
+        })
+      );
+    }
+    const p95 = [...durations].sort((left, right) => left - right)[Math.floor((durations.length - 1) * 0.95)] ?? 0;
+
+    expect(p95).toBeLessThan(PUBLIC_READY_CACHE_P95_BUDGET_MS);
   });
 
   it("processes a small docs-render batch within the worker throughput budget", async () => {
