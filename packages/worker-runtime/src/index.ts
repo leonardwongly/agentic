@@ -161,6 +161,15 @@ export {
   type WorkerRuntimeHealthSink,
   type WorkerRuntimeHealthSnapshot
 } from "./worker-health";
+export {
+  AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY_ENV,
+  AGENTIC_WORKER_MAX_RUNNING_PER_KIND_ENV,
+  AGENTIC_WORKER_MAX_RUNNING_PER_USER_ENV,
+  DEFAULT_PRODUCTION_WORKER_CONCURRENCY_LIMITS,
+  resolveWorkerConcurrencyPolicy,
+  type WorkerConcurrencyPolicy,
+  type WorkerConcurrencyPolicySource
+} from "./worker-concurrency-policy";
 export type { WorkerRuntimeImmuneSystemControls } from "./runtime-immune-system";
 
 export const workerJobKindValues = [

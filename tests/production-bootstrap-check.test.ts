@@ -65,6 +65,7 @@ describe("production bootstrap check", () => {
       ["access_key", "pass"],
       ["proxy_trust", "pass"],
       ["client_ip_header", "pass"],
+      ["worker_concurrency", "pass"],
       ["worker_heartbeat", "pass"]
     ]);
 
@@ -185,8 +186,31 @@ describe("production bootstrap check", () => {
         expect.objectContaining({ name: "access_key", status: "fail" }),
         expect.objectContaining({ name: "proxy_trust", status: "fail" }),
         expect.objectContaining({ name: "client_ip_header", status: "fail" }),
+        expect.objectContaining({ name: "worker_concurrency", status: "pass" }),
         expect.objectContaining({ name: "worker_heartbeat", status: "fail" })
       ])
+    );
+  });
+
+  it("fails on invalid production worker concurrency configuration", () => {
+    const report = validateProductionBootstrap({
+      env: {
+        ...BASE_ENV,
+        AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY: "0"
+      },
+      databaseStatus: buildDatabaseStatus()
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        name: "worker_concurrency",
+        status: "fail",
+        message: "Worker concurrency limits are invalid.",
+        details: expect.objectContaining({
+          error: expect.stringContaining("AGENTIC_WORKER_MAX_RUNNING_PER_CONCURRENCY_KEY")
+        })
+      })
     );
   });
 });
