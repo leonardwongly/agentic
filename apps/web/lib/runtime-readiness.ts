@@ -1,5 +1,11 @@
-import { createRepository, type AgenticRepository } from "@agentic/repository";
+import {
+  createRepository,
+  type AgenticRepository,
+  type JobReadinessSummary,
+  type ProviderCredentialReadinessSummary
+} from "@agentic/repository";
 import type { ProviderCredential } from "@agentic/contracts";
+import { logWarn, recordHistogram } from "@agentic/observability";
 import {
   resolveWorkerConcurrencyPolicy,
   readFileWorkerRuntimeHealthSnapshot,
@@ -36,6 +42,13 @@ export type WebReadinessReport = {
   checks: ReadinessCheck[];
 };
 
+export type PublicWebReadinessSummary = {
+  ok: boolean;
+  status: WebReadinessReport["status"];
+  generatedAt: string;
+  details: "/api/ready/details";
+};
+
 type AuthModeSnapshot = ReturnType<typeof getAuthMode>;
 type AsyncExecutionCheckSnapshot = Omit<ReadinessCheck, "name">;
 type ConnectorHealthCheckSnapshot = Omit<ReadinessCheck, "name">;
@@ -59,7 +72,13 @@ type ReadinessEvaluationParams = {
 const DEFAULT_MAX_PENDING_JOB_AGE_MS = 15 * 60 * 1000;
 const DEFAULT_PROVIDER_VALIDATION_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_WORKER_HEARTBEAT_STALE_MS = 2 * 60 * 1000;
+const DEFAULT_PUBLIC_READINESS_CACHE_TTL_MS = 5_000;
+const READINESS_WARNING_DURATION_MS = 250;
 let readinessRepository: AgenticRepository | null = null;
+let publicReadinessCache: {
+  summary: PublicWebReadinessSummary;
+  expiresAtMs: number;
+} | null = null;
 
 function getReadinessRepository(): AgenticRepository {
   if (readinessRepository) {
@@ -494,14 +513,98 @@ export function buildConnectorHealthCheckSnapshot(params: {
   };
 }
 
+export function buildConnectorHealthCheckSnapshotFromSummary(params: {
+  summary: ProviderCredentialReadinessSummary;
+  runtime: WebReadinessReport["runtime"];
+}): ConnectorHealthCheckSnapshot {
+  const details = {
+    ...params.summary,
+    validationStaleAfterHours: Math.floor(DEFAULT_PROVIDER_VALIDATION_STALE_MS / (60 * 60 * 1000))
+  };
+
+  if (params.summary.totalCredentials === 0) {
+    return {
+      status: "pass",
+      message: "No provider credentials are configured, so connector-health checks are idle.",
+      details
+    };
+  }
+
+  const criticalIssues: string[] = [];
+
+  if (params.summary.reconnectRequiredCredentials > 0) {
+    criticalIssues.push(
+      formatCountLabel(
+        params.summary.reconnectRequiredCredentials,
+        "credential requires re-authentication",
+        "credentials require re-authentication"
+      )
+    );
+  }
+
+  if (params.summary.revokedCredentials > 0) {
+    criticalIssues.push(formatCountLabel(params.summary.revokedCredentials, "credential was revoked", "credentials were revoked"));
+  }
+
+  if (params.summary.expiredCredentials > 0) {
+    criticalIssues.push(formatCountLabel(params.summary.expiredCredentials, "credential is expired", "credentials are expired"));
+  }
+
+  if (criticalIssues.length > 0) {
+    return {
+      status: getConnectorHealthFailureStatus(params.runtime),
+      message: `Connector health requires attention: ${criticalIssues.join(", ")}.`,
+      details
+    };
+  }
+
+  const warnings: string[] = [];
+
+  if (params.summary.refreshFailedCredentials > 0) {
+    warnings.push(
+      formatCountLabel(
+        params.summary.refreshFailedCredentials,
+        "credential refresh failed recently",
+        "credentials refresh failed recently"
+      )
+    );
+  }
+
+  if (params.summary.validationStaleCredentials > 0) {
+    warnings.push(
+      formatCountLabel(
+        params.summary.validationStaleCredentials,
+        "credential validation is stale",
+        "credentials validation is stale"
+      )
+    );
+  }
+
+  if (warnings.length > 0) {
+    return {
+      status: getConnectorHealthWarningStatus(params.runtime),
+      message: `Connector health is degraded: ${warnings.join(", ")}.`,
+      details
+    };
+  }
+
+  return {
+    status: "pass",
+    message: "Connector health checks passed.",
+    details
+  };
+}
+
 async function getConnectorHealthCheckSnapshot(nodeEnv: string | undefined): Promise<ConnectorHealthCheckSnapshot> {
   const runtime = normalizeRuntime(nodeEnv);
 
   try {
     const repository = getReadinessRepository();
-    const credentials = await repository.listProviderCredentials();
-    return buildConnectorHealthCheckSnapshot({
-      credentials,
+    const summary = await repository.getProviderCredentialReadinessSummary({
+      validationStaleMs: DEFAULT_PROVIDER_VALIDATION_STALE_MS
+    });
+    return buildConnectorHealthCheckSnapshotFromSummary({
+      summary,
       runtime
     });
   } catch (error) {
@@ -515,81 +618,68 @@ async function getConnectorHealthCheckSnapshot(nodeEnv: string | undefined): Pro
   }
 }
 
+export function buildAsyncExecutionCheckSnapshotFromSummary(params: {
+  summary: JobReadinessSummary;
+  runtime: WebReadinessReport["runtime"];
+  maxPendingJobAgeMs?: number;
+}): AsyncExecutionCheckSnapshot {
+  const maxPendingJobAgeMs = params.maxPendingJobAgeMs ?? DEFAULT_MAX_PENDING_JOB_AGE_MS;
+  const details = {
+    queuedJobs: params.summary.queuedJobs,
+    retryingJobs: params.summary.retryingJobs,
+    runningJobs: params.summary.runningJobs,
+    deadLetterJobs: params.summary.deadLetterJobs,
+    expiredLeases: params.summary.expiredLeases,
+    stalePendingJobs: params.summary.stalePendingJobs,
+    oldestPendingJobAgeSeconds:
+      params.summary.oldestPendingJobAgeMs === null ? null : Math.floor(params.summary.oldestPendingJobAgeMs / 1000),
+    maxPendingJobAgeSeconds: Math.floor(maxPendingJobAgeMs / 1000)
+  };
+
+  if (params.summary.deadLetterJobs > 0 || params.summary.expiredLeases > 0 || params.summary.stalePendingJobs > 0) {
+    const issues: string[] = [];
+
+    if (params.summary.deadLetterJobs > 0) {
+      issues.push(`${params.summary.deadLetterJobs} dead-letter job(s)`);
+    }
+
+    if (params.summary.expiredLeases > 0) {
+      issues.push(`${params.summary.expiredLeases} expired worker lease(s)`);
+    }
+
+    if (params.summary.stalePendingJobs > 0) {
+      issues.push(`${params.summary.stalePendingJobs} stale pending job(s)`);
+    }
+
+    return {
+      status: getAsyncExecutionFailureStatus(params.runtime),
+      message: `Async execution requires attention: ${issues.join(", ")}.`,
+      details
+    };
+  }
+
+  return {
+    status: "pass",
+    message: "Async execution backlog checks passed.",
+    details
+  };
+}
+
 async function getAsyncExecutionCheckSnapshot(nodeEnv: string | undefined): Promise<AsyncExecutionCheckSnapshot> {
   const runtime = normalizeRuntime(nodeEnv);
   const maxPendingJobAgeMs = getMaxPendingJobAgeMs();
 
   try {
     const repository = getReadinessRepository();
-    const jobs = await repository.listJobs({
-      statuses: ["queued", "running", "retrying", "dead_letter"]
+    const summary = await repository.getJobReadinessSummary({
+      maxPendingJobAgeMs,
+      now: new Date().toISOString()
     });
-    const now = Date.now();
-    const deadLetterCount = jobs.filter((job) => job.status === "dead_letter").length;
-    const expiredLeaseCount = jobs.filter((job) => {
-      if (job.status !== "running" || !job.leaseExpiresAt) {
-        return false;
-      }
-
-      const leaseExpiresAt = Date.parse(job.leaseExpiresAt);
-      return Number.isFinite(leaseExpiresAt) && leaseExpiresAt <= now;
-    }).length;
-    const pendingJobs = jobs.filter((job) => job.status === "queued" || job.status === "retrying");
-    const stalePendingCount = pendingJobs.filter((job) => {
-      const availableAt = Date.parse(job.availableAt);
-      return Number.isFinite(availableAt) && availableAt <= now && now - availableAt > maxPendingJobAgeMs;
-    }).length;
-    const oldestPendingAgeMs =
-      pendingJobs.length === 0
-        ? null
-        : pendingJobs.reduce<number | null>((oldest, job) => {
-            const availableAt = Date.parse(job.availableAt);
-
-            if (!Number.isFinite(availableAt) || availableAt > now) {
-              return oldest;
-            }
-
-            const age = Math.max(0, now - availableAt);
-            return oldest === null ? age : Math.max(oldest, age);
-          }, null);
-    const details = {
-      queuedJobs: jobs.filter((job) => job.status === "queued").length,
-      retryingJobs: jobs.filter((job) => job.status === "retrying").length,
-      runningJobs: jobs.filter((job) => job.status === "running").length,
-      deadLetterJobs: deadLetterCount,
-      expiredLeases: expiredLeaseCount,
-      stalePendingJobs: stalePendingCount,
-      oldestPendingJobAgeSeconds: oldestPendingAgeMs === null ? null : Math.floor(oldestPendingAgeMs / 1000),
-      maxPendingJobAgeSeconds: Math.floor(maxPendingJobAgeMs / 1000)
-    };
-
-    if (deadLetterCount > 0 || expiredLeaseCount > 0 || stalePendingCount > 0) {
-      const issues: string[] = [];
-
-      if (deadLetterCount > 0) {
-        issues.push(`${deadLetterCount} dead-letter job(s)`);
-      }
-
-      if (expiredLeaseCount > 0) {
-        issues.push(`${expiredLeaseCount} expired worker lease(s)`);
-      }
-
-      if (stalePendingCount > 0) {
-        issues.push(`${stalePendingCount} stale pending job(s)`);
-      }
-
-      return {
-        status: getAsyncExecutionFailureStatus(runtime),
-        message: `Async execution requires attention: ${issues.join(", ")}.`,
-        details
-      };
-    }
-
-    return {
-      status: "pass",
-      message: "Async execution backlog checks passed.",
-      details
-    };
+    return buildAsyncExecutionCheckSnapshotFromSummary({
+      summary,
+      runtime,
+      maxPendingJobAgeMs
+    });
   } catch (error) {
     return {
       status: getAsyncExecutionFailureStatus(runtime),
@@ -692,6 +782,36 @@ async function getWorkerHeartbeatCheckSnapshot(nodeEnv: string | undefined): Pro
   }
 }
 
+function toPublicReadinessSummary(report: WebReadinessReport): PublicWebReadinessSummary {
+  return {
+    ok: report.ok,
+    status: report.status,
+    generatedAt: report.generatedAt,
+    details: "/api/ready/details"
+  };
+}
+
+async function measureReadiness<T>(mode: "public" | "details", callback: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+
+  try {
+    return await callback();
+  } finally {
+    const durationMs = Date.now() - startedAt;
+    recordHistogram("web.readiness.duration_ms", durationMs, {
+      mode
+    });
+
+    if (durationMs > READINESS_WARNING_DURATION_MS) {
+      logWarn("web.readiness.slow_probe", {
+        mode,
+        durationMs,
+        warningThresholdMs: READINESS_WARNING_DURATION_MS
+      });
+    }
+  }
+}
+
 export function buildWebReadinessReport(params: ReadinessEvaluationParams): WebReadinessReport {
   const runtime = normalizeRuntime(params.nodeEnv);
   const checks = [
@@ -716,26 +836,82 @@ export function buildWebReadinessReport(params: ReadinessEvaluationParams): WebR
   };
 }
 
+export function resetPublicWebReadinessCacheForTests() {
+  publicReadinessCache = null;
+}
+
+export async function getPublicWebReadinessSummary(options?: {
+  now?: number;
+  ttlMs?: number;
+}): Promise<PublicWebReadinessSummary> {
+  const now = options?.now ?? Date.now();
+  const ttlMs = options?.ttlMs ?? DEFAULT_PUBLIC_READINESS_CACHE_TTL_MS;
+
+  if (publicReadinessCache && publicReadinessCache.expiresAtMs > now) {
+    return publicReadinessCache.summary;
+  }
+
+  try {
+    const summary = await measureReadiness("public", async () => toPublicReadinessSummary(await getWebReadinessReport()));
+    if (publicReadinessCache && !publicReadinessCache.summary.ok && !summary.ok) {
+      publicReadinessCache = {
+        summary: publicReadinessCache.summary,
+        expiresAtMs: now + ttlMs
+      };
+      return publicReadinessCache.summary;
+    }
+
+    publicReadinessCache = {
+      summary,
+      expiresAtMs: now + ttlMs
+    };
+    return summary;
+  } catch (error) {
+    if (publicReadinessCache && !publicReadinessCache.summary.ok) {
+      logWarn("web.readiness.stale_not_ready_snapshot", {
+        error: error instanceof Error ? error.message : "Unknown readiness refresh failure"
+      });
+      return publicReadinessCache.summary;
+    }
+
+    const summary: PublicWebReadinessSummary = {
+      ok: false,
+      status: "not_ready",
+      generatedAt: new Date(now).toISOString(),
+      details: "/api/ready/details"
+    };
+    publicReadinessCache = {
+      summary,
+      expiresAtMs: now + ttlMs
+    };
+    return summary;
+  }
+}
+
 export async function getWebReadinessReport(): Promise<WebReadinessReport> {
   const databaseConfigured = Boolean(process.env.DATABASE_URL?.trim());
   const nodeEnv = process.env.NODE_ENV;
 
-  return buildWebReadinessReport({
-    nodeEnv,
-    databaseConfigured,
-    authMode: getAuthMode({ emitDevelopmentWarning: false }),
-    authRuntimeState: getAuthRuntimeStateStatus(),
-    requestIdentity: getRequestIdentityRuntimeStatus(),
-    databaseStatus: databaseConfigured
-      ? await loadDatabaseSchemaStatus({
-          databaseUrl: process.env.DATABASE_URL
+  return measureReadiness("details", async () =>
+    buildWebReadinessReport({
+      nodeEnv,
+      databaseConfigured,
+      authMode: getAuthMode({ emitDevelopmentWarning: false }),
+      authRuntimeState: getAuthRuntimeStateStatus(),
+      requestIdentity: getRequestIdentityRuntimeStatus(),
+      databaseStatus: databaseConfigured
+        ? await loadDatabaseSchemaStatus({
+            databaseUrl: process.env.DATABASE_URL
+          })
+        : null,
+      asyncExecution: await getAsyncExecutionCheckSnapshot(nodeEnv),
+      workerConcurrency: buildWorkerConcurrencyCheckSnapshot(
+        resolveWorkerConcurrencyPolicy({
+          nodeEnv
         })
-      : null,
-    asyncExecution: await getAsyncExecutionCheckSnapshot(nodeEnv),
-    workerConcurrency: buildWorkerConcurrencyCheckSnapshot(resolveWorkerConcurrencyPolicy({
-      nodeEnv
-    })),
-    workerHeartbeat: await getWorkerHeartbeatCheckSnapshot(nodeEnv),
-    connectorHealth: await getConnectorHealthCheckSnapshot(nodeEnv)
-  });
+      ),
+      workerHeartbeat: await getWorkerHeartbeatCheckSnapshot(nodeEnv),
+      connectorHealth: await getConnectorHealthCheckSnapshot(nodeEnv)
+    })
+  );
 }
