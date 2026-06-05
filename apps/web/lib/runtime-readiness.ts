@@ -1,8 +1,8 @@
 import {
   createRepository,
-  type AgenticRepository,
   type JobReadinessSummary,
-  type ProviderCredentialReadinessSummary
+  type ProviderCredentialReadinessSummary,
+  type ReadinessRepositoryPort
 } from "@agentic/repository";
 import type { ProviderCredential } from "@agentic/contracts";
 import { logWarn, recordHistogram } from "@agentic/observability";
@@ -74,13 +74,13 @@ const DEFAULT_PROVIDER_VALIDATION_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_WORKER_HEARTBEAT_STALE_MS = 2 * 60 * 1000;
 const DEFAULT_PUBLIC_READINESS_CACHE_TTL_MS = 5_000;
 const READINESS_WARNING_DURATION_MS = 250;
-let readinessRepository: AgenticRepository | null = null;
+let readinessRepository: ReadinessRepositoryPort | null = null;
 let publicReadinessCache: {
   summary: PublicWebReadinessSummary;
   expiresAtMs: number;
 } | null = null;
 
-function getReadinessRepository(): AgenticRepository {
+function getReadinessRepository(): ReadinessRepositoryPort {
   if (readinessRepository) {
     return readinessRepository;
   }

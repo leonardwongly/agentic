@@ -484,3 +484,138 @@ export type AgenticRepository = {
   saveOperatorProduct(product: OperatorProduct): Promise<OperatorProduct>;
   saveOperatorProductSelection(selection: OperatorProductSelection): Promise<OperatorProductSelection>;
 };
+
+export type RepositoryLifecyclePort = Pick<AgenticRepository, "backend" | "seedDefaults">;
+
+export type QueueRepositoryPort = Pick<
+  AgenticRepository,
+  "listJobs" | "getJob" | "enqueueJob" | "claimNextJob" | "completeJob" | "retryJob" | "deadLetterJob"
+>;
+
+export type ApprovalQueueRepositoryPort = Pick<
+  AgenticRepository,
+  "respondToApproval" | "respondToApprovalAndEnqueueJob" | "enqueueJob"
+>;
+
+export type DashboardReadRepositoryPort = Pick<AgenticRepository, "getDashboardData">;
+
+export type DashboardCollectionRepositoryPort = Pick<
+  AgenticRepository,
+  "listGoalsPage" | "listCommitments" | "listJobs" | "listMemoryPage"
+>;
+
+export type DashboardEventStreamRepositoryPort = Pick<AgenticRepository, "getDashboardData" | "listJobs">;
+
+export type ReadinessRepositoryPort = Pick<AgenticRepository, "getJobReadinessSummary" | "getProviderCredentialReadinessSummary">;
+
+export type GovernanceRepositoryPort = Pick<
+  AgenticRepository,
+  | "listWorkspaces"
+  | "saveWorkspace"
+  | "listWorkspaceMembers"
+  | "saveWorkspaceMember"
+  | "getWorkspaceSelection"
+  | "saveWorkspaceSelection"
+  | "getWorkspaceGovernance"
+  | "saveWorkspaceGovernance"
+>;
+
+export type GovernanceRouteRepositoryPort = DashboardReadRepositoryPort &
+  Pick<AgenticRepository, "getWorkspaceGovernance" | "saveWorkspaceGovernance">;
+
+export type GovernanceSimulationRepositoryPort = DashboardReadRepositoryPort &
+  Pick<AgenticRepository, "getWorkspaceGovernance">;
+
+export type WorkspaceRouteRepositoryPort = DashboardReadRepositoryPort &
+  Pick<
+    AgenticRepository,
+    "listWorkspaces" | "saveWorkspace" | "saveWorkspaceMember" | "saveWorkspaceSelection" | "saveWorkspaceGovernance"
+  >;
+
+export type CredentialRepositoryPort = Pick<
+  AgenticRepository,
+  | "listIntegrations"
+  | "listIntegrationsPage"
+  | "upsertIntegration"
+  | "listProviderCredentials"
+  | "getProviderCredential"
+  | "saveProviderCredential"
+  | "getProviderCredentialSecret"
+  | "saveProviderCredentialSecret"
+  | "reserveProviderSideEffect"
+  | "updateProviderSideEffect"
+>;
+
+export type MemoryRepositoryPort = Pick<
+  AgenticRepository,
+  "listMemory" | "listContextPacketMemory" | "listMemoryPage" | "saveMemory" | "saveEvidenceRecord" | "listEvidenceRecords"
+>;
+
+export type WatcherRepositoryPort = Pick<
+  AgenticRepository,
+  "listWatchers" | "listWatchersPage" | "claimWatcherLease" | "saveWatcher" | "claimAutopilotEvent"
+>;
+
+export type PrivacyRepositoryPort = Pick<
+  AgenticRepository,
+  | "listPrivacyOperations"
+  | "getPrivacyOperation"
+  | "savePrivacyOperation"
+  | "enforceWorkspaceRetention"
+  | "deleteWorkspaceData"
+  | "exportWorkspaceAudit"
+>;
+
+export type PrivacyRouteRepositoryPort = DashboardReadRepositoryPort &
+  QueueRepositoryPort &
+  Pick<AgenticRepository, "listPrivacyOperations" | "savePrivacyOperation">;
+
+export type GovernanceAuditRepositoryPort = DashboardReadRepositoryPort & Pick<AgenticRepository, "exportWorkspaceAudit">;
+
+export type ShareAuditRepositoryPort = Pick<
+  AgenticRepository,
+  | "listGoalShares"
+  | "getGoalShare"
+  | "getGoalShareByTokenFingerprint"
+  | "saveGoalShare"
+  | "getGoalBundle"
+  | "saveGoalBundle"
+  | "appendGoalActionLogs"
+  | "exportWorkspaceAudit"
+>;
+
+export type TemplateRepositoryPort = Pick<
+  AgenticRepository,
+  "listTemplates" | "saveTemplate" | "deleteTemplate" | "listWorkflowTemplates" | "getWorkflowTemplate" | "saveWorkflowTemplate" | "deleteWorkflowTemplate"
+>;
+
+export type AgentCatalogRepositoryPort = Pick<
+  AgenticRepository,
+  "listAgents" | "getAgent" | "saveAgent" | "deleteAgent" | "getAgentMetrics" | "saveAgentMetrics"
+>;
+
+export type ProductRepositoryPort = Pick<
+  AgenticRepository,
+  "listOperatorProducts" | "getOperatorProductSelection" | "saveOperatorProduct" | "saveOperatorProductSelection"
+>;
+
+export type WorkerRuntimeRepositoryPort = QueueRepositoryPort &
+  ApprovalQueueRepositoryPort &
+  DashboardReadRepositoryPort &
+  GovernanceRepositoryPort &
+  CredentialRepositoryPort &
+  MemoryRepositoryPort &
+  WatcherRepositoryPort &
+  PrivacyRepositoryPort &
+  ShareAuditRepositoryPort &
+  TemplateRepositoryPort &
+  AgentCatalogRepositoryPort &
+  Pick<
+    AgenticRepository,
+    | "getGoalBundleForUser"
+    | "listGoals"
+    | "listApprovals"
+    | "getBriefingPreferences"
+    | "listAutopilotEvents"
+    | "saveAutopilotEvent"
+  >;

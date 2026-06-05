@@ -9,7 +9,7 @@ import {
   updateMessage,
   updateTelegramMessage
 } from "@agentic/integrations";
-import type { AgenticRepository } from "@agentic/repository";
+import type { WorkerRuntimeRepositoryPort } from "@agentic/repository";
 
 export function isApprovalNotificationJob(
   job: JobRecord | null
@@ -18,7 +18,7 @@ export function isApprovalNotificationJob(
 }
 
 export async function executeApprovalNotificationJob(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   job: JobRecord;
   signal?: AbortSignal;
 }) {

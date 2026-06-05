@@ -5,7 +5,7 @@ import {
   type AutopilotMode,
   type Watcher
 } from "@agentic/contracts";
-import type { AgenticRepository } from "@agentic/repository";
+import type { WatcherRepositoryPort } from "@agentic/repository";
 
 export type WatcherSchedulerDecision = {
   watcherId: string;
@@ -125,7 +125,7 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 export async function runWatcherSchedulerOnce(params: {
-  repository: AgenticRepository;
+  repository: WatcherRepositoryPort;
   runnerId: string;
   userId?: string;
   now?: string;
@@ -312,7 +312,7 @@ export async function runWatcherSchedulerOnce(params: {
       lastEvaluation,
       evaluatedAt
     });
-    let claim: Awaited<ReturnType<AgenticRepository["claimAutopilotEvent"]>>;
+    let claim: Awaited<ReturnType<WatcherRepositoryPort["claimAutopilotEvent"]>>;
 
     try {
       claim = await params.repository.claimAutopilotEvent({
@@ -429,7 +429,7 @@ function createAbortSignalWithTimeout(parent: AbortSignal | undefined, timeoutMs
 }
 
 export async function runWatcherSchedulerLoop(params: {
-  repository: AgenticRepository;
+  repository: WatcherRepositoryPort;
   runnerId: string;
   userId?: string;
   enabled?: boolean;

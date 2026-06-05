@@ -11,7 +11,7 @@ import { requireApiSession } from "../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../lib/api-response";
 import { createGovernedMutationRoute } from "../../../lib/governed-route";
 import { buildUpdatedAtETag, requireUpdatedAtPrecondition } from "../../../lib/mutation-preconditions";
-import { getSeededRepository } from "../../../lib/server";
+import { getSeededGovernanceRouteRepository } from "../../../lib/server";
 
 const GovernanceUpdateSchema = z
   .object({
@@ -29,7 +29,7 @@ const GovernanceUpdateSchema = z
   .strict();
 
 async function resolveWorkspaceContext(userId: string) {
-  const repository = await getSeededRepository();
+  const repository = await getSeededGovernanceRouteRepository();
   const dashboard = await repository.getDashboardData(userId);
   const activeWorkspace = dashboard.activeWorkspace;
 

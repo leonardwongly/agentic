@@ -2,7 +2,7 @@ import { listDashboardActionLogsPage } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 import { buildDashboardCollectionPage, parseDashboardCollectionQuery } from "../../../../lib/dashboard-collection";
-import { getSeededRepository } from "../../../../lib/server";
+import { getSeededDashboardCollectionRepository } from "../../../../lib/server";
 
 export async function GET(request: Request) {
   return withApiTelemetry(request, "api.dashboard.activity", async () => {
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
       const query = parseDashboardCollectionQuery(request, {
         allowedFilters: ["kind"]
       });
-      const repository = await getSeededRepository();
+      const repository = await getSeededDashboardCollectionRepository();
       const page = await listDashboardActionLogsPage(repository, {
         userId: principal.userId,
         limit: query.limit,

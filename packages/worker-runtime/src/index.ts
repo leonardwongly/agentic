@@ -50,7 +50,7 @@ import {
   refineGoal,
   processUserRequest
 } from "@agentic/orchestrator";
-import type { AgenticRepository } from "@agentic/repository";
+import type { WorkerRuntimeRepositoryPort } from "@agentic/repository";
 import type { SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import {
   buildAutopilotEventFabricRequest,
@@ -192,7 +192,7 @@ export type WorkerRuntimeResult = {
 };
 
 export type WorkerRuntimeOptions = {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   runnerId: string;
   signal?: AbortSignal;
@@ -231,7 +231,7 @@ function mergeIds(...groups: Array<string[] | undefined>): string[] {
 }
 
 async function finalizeApprovalEvidenceRecord(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   bundle: GoalBundle;
   userId: string;
   approvalId: string;
@@ -278,7 +278,7 @@ async function finalizeApprovalEvidenceRecord(params: {
   });
 }
 
-async function resolveDashboardWorkspaceContext(repository: AgenticRepository, userId: string) {
+async function resolveDashboardWorkspaceContext(repository: WorkerRuntimeRepositoryPort, userId: string) {
   const dashboard = await repository.getDashboardData(userId);
   const workspaceId = dashboard.activeWorkspace?.id ?? null;
 
@@ -290,12 +290,12 @@ async function resolveDashboardWorkspaceContext(repository: AgenticRepository, u
   };
 }
 
-async function findAutopilotEvent(repository: AgenticRepository, userId: string, eventId: string) {
+async function findAutopilotEvent(repository: WorkerRuntimeRepositoryPort, userId: string, eventId: string) {
   const events = await repository.listAutopilotEvents(userId);
   return events.find((event) => event.id === eventId) ?? null;
 }
 
-async function resolveWatcherExecutionSource(repository: AgenticRepository, sourceId: string, userId: string) {
+async function resolveWatcherExecutionSource(repository: WorkerRuntimeRepositoryPort, sourceId: string, userId: string) {
   const watchers = await repository.listWatchers({ userId });
   const watcher = watchers.find((candidate) => candidate.id === sourceId);
 
@@ -319,7 +319,7 @@ async function resolveWatcherExecutionSource(repository: AgenticRepository, sour
   };
 }
 
-async function resolveTemplateExecutionSource(repository: AgenticRepository, sourceId: string, userId: string) {
+async function resolveTemplateExecutionSource(repository: WorkerRuntimeRepositoryPort, sourceId: string, userId: string) {
   const templates = await repository.listTemplates(userId);
   const template = templates.find((candidate) => candidate.id === sourceId);
 
@@ -336,7 +336,7 @@ async function resolveTemplateExecutionSource(repository: AgenticRepository, sou
   };
 }
 
-async function resolveBriefingExecutionSource(repository: AgenticRepository, sourceId: string, userId: string) {
+async function resolveBriefingExecutionSource(repository: WorkerRuntimeRepositoryPort, sourceId: string, userId: string) {
   const preferences = await repository.getBriefingPreferences(userId);
   const schedule = preferences.schedules.find((candidate) => candidate.type === sourceId);
 
@@ -462,7 +462,7 @@ function buildGenericAutopilotRequest(event: AutopilotEvent): string {
 }
 
 async function executeGenericAutopilotEvent(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   userId: string;
   actorContext: ActorContext | null;
@@ -604,7 +604,7 @@ function summarizeExecutionFailure(params: {
 }
 
 async function executeWatcherEvent(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   userId: string;
   actorContext: ActorContext | null;
@@ -652,7 +652,7 @@ async function executeWatcherEvent(params: {
 }
 
 async function runTemplateExecution(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   userId: string;
   actorContext: ActorContext | null;
@@ -715,7 +715,7 @@ async function runTemplateExecution(params: {
 }
 
 async function executeTemplateEvent(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   userId: string;
   actorContext: ActorContext | null;
@@ -744,7 +744,7 @@ async function executeTemplateEvent(params: {
 }
 
 async function executeBriefingEvent(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   userId: string;
   actorContext: ActorContext | null;
@@ -798,7 +798,7 @@ async function executeBriefingEvent(params: {
 }
 
 async function executeEventFabricEvent(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   userId: string;
   actorContext: ActorContext | null;
@@ -866,7 +866,7 @@ export function isApprovalFollowUpJob(
 }
 
 export async function executeAutopilotProcessJob(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
   retryPolicy?: Partial<JobRetryPolicy>;
@@ -1015,7 +1015,7 @@ export async function executeAutopilotProcessJob(params: {
 }
 
 export async function executeApprovalFollowUpJob(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
   signal?: AbortSignal;
@@ -1260,7 +1260,7 @@ export async function executeApprovalFollowUpJob(params: {
 }
 
 export function createWorkerJobHandlers(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   runnerId: string;
   retryPolicy?: Partial<JobRetryPolicy>;

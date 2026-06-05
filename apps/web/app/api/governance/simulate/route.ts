@@ -22,7 +22,7 @@ import {
   parseJsonBody
 } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
-import { getSeededRepository } from "../../../../lib/server";
+import { getSeededGovernanceSimulationRepository } from "../../../../lib/server";
 
 const GovernanceScenarioSchema = z
   .object({
@@ -56,7 +56,7 @@ const GovernanceSimulationRequestSchema = z
   .strict();
 
 async function resolveWorkspaceContext(userId: string) {
-  const repository = await getSeededRepository();
+  const repository = await getSeededGovernanceSimulationRepository();
   const dashboard = await repository.getDashboardData(userId);
   const activeWorkspace = dashboard.activeWorkspace;
 

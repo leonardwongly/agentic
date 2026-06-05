@@ -15,7 +15,7 @@ import {
   parseJsonBody
 } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
-import { getSeededRepository } from "../../../../lib/server";
+import { getSeededPrivacyRouteRepository } from "../../../../lib/server";
 
 const TriggerPrivacyOperationSchema = z
   .object({
@@ -32,7 +32,7 @@ const TriggerPrivacyOperationSchema = z
 const WORKSPACE_DELETE_CONFIRMATION_PHRASE = "delete workspace";
 
 async function resolveWorkspaceContext(userId: string) {
-  const repository = await getSeededRepository();
+  const repository = await getSeededPrivacyRouteRepository();
   const dashboard = await repository.getDashboardData(userId);
   const activeWorkspace = dashboard.activeWorkspace;
 

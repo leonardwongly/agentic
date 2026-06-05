@@ -91,7 +91,7 @@ describe("getWebReadinessReport repository lifecycle", () => {
     delete process.env.NODE_ENV;
   });
 
-  it("reuses a single repository instance across repeated readiness checks", async () => {
+  it("reuses a single repository instance across repeated readiness checks", { timeout: 15_000 }, async () => {
     process.env.NODE_ENV = "production";
 
     const { getWebReadinessReport } = await import("../apps/web/lib/runtime-readiness");

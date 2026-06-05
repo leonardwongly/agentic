@@ -1,8 +1,12 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 function readRepoFile(relativePath: string): string {
   return readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
+}
+
+function readRepoDirectory(relativePath: string): string[] {
+  return readdirSync(path.resolve(process.cwd(), relativePath));
 }
 
 function countLines(content: string): number {
@@ -33,14 +37,18 @@ function main() {
   const goalRefineRoutePath = "apps/web/app/api/goals/[id]/refine/route.ts";
   const briefingRoutePath = "apps/web/app/api/briefing/route.ts";
   const docsRenderRoutePath = "apps/web/app/api/docs/render/route.ts";
+  const governanceRoutePath = "apps/web/app/api/governance/route.ts";
   const governanceAuditRoutePath = "apps/web/app/api/governance/audit/route.ts";
   const governancePrivacyRoutePath = "apps/web/app/api/governance/privacy/route.ts";
+  const governanceSimulateRoutePath = "apps/web/app/api/governance/simulate/route.ts";
+  const workspacesRoutePath = "apps/web/app/api/workspaces/route.ts";
   const commitmentsRoutePath = "apps/web/app/api/commitments/[id]/route.ts";
   const nlIntentRoutePath = "apps/web/app/api/nl/intent/route.ts";
   const autopilotEventsRoutePath = "apps/web/app/api/autopilot/events/route.ts";
   const templateRunRoutePath = "apps/web/app/api/templates/[id]/run/route.ts";
   const publicShareViewRoutePath = "apps/web/app/api/share/view/route.ts";
   const templatesRoutePath = "apps/web/app/api/templates/[id]/route.ts";
+  const webServerPath = "apps/web/lib/server.ts";
   const abuseRateLimitPath = "apps/web/lib/abuse-rate-limit.ts";
   const repositoryPath = "packages/repository/src/index.ts";
   const workerEntryPath = "apps/worker/src/index.ts";
@@ -56,28 +64,39 @@ function main() {
   const dashboardApprovalsRoutePath = "apps/web/app/api/dashboard/approvals/route.ts";
   const dashboardCommitmentsRoutePath = "apps/web/app/api/dashboard/commitments/route.ts";
   const dashboardJobsRoutePath = "apps/web/app/api/dashboard/jobs/route.ts";
+  const dashboardEventsRoutePath = "apps/web/app/api/dashboard/events/route.ts";
   const dashboardActivityRoutePath = "apps/web/app/api/dashboard/activity/route.ts";
   const dashboardMemoriesRoutePath = "apps/web/app/api/dashboard/memories/route.ts";
   const dashboardArtifactsRoutePath = "apps/web/app/api/dashboard/artifacts/route.ts";
   const dashboardSurfacePath = "apps/web/lib/dashboard-surface.ts";
   const repositoryTypesPath = "packages/repository/src/repository-types.ts";
   const workerRuntimePath = "packages/worker-runtime/src/index.ts";
+  const workerJobDispatchPath = "packages/worker-runtime/src/job-dispatch.ts";
+  const watcherSchedulerPath = "packages/worker-runtime/src/watcher-scheduler.ts";
+  const privacyShareExecutorsPath = "packages/worker-runtime/src/privacy-share-executors.ts";
+  const googleWorkspaceAdaptersPath = "packages/worker-runtime/src/google-workspace-adapters.ts";
+  const memoryCaptureSignalsPath = "packages/worker-runtime/src/memory-capture-signals.ts";
   const workerJobPayloadsPath = "packages/worker-runtime/src/job-payloads.ts";
   const publicShareLogPath = "packages/worker-runtime/src/public-share-log.ts";
+  const workerRuntimeDirectoryPath = "packages/worker-runtime/src";
   const decompositionDocPath = "docs/architecture/phase-1-decomposition-boundaries.md";
 
   const goalsRoute = readRepoFile(goalsRoutePath);
   const goalRefineRoute = readRepoFile(goalRefineRoutePath);
   const briefingRoute = readRepoFile(briefingRoutePath);
   const docsRenderRoute = readRepoFile(docsRenderRoutePath);
+  const governanceRoute = readRepoFile(governanceRoutePath);
   const governanceAuditRoute = readRepoFile(governanceAuditRoutePath);
   const governancePrivacyRoute = readRepoFile(governancePrivacyRoutePath);
+  const governanceSimulateRoute = readRepoFile(governanceSimulateRoutePath);
+  const workspacesRoute = readRepoFile(workspacesRoutePath);
   const commitmentsRoute = readRepoFile(commitmentsRoutePath);
   const nlIntentRoute = readRepoFile(nlIntentRoutePath);
   const autopilotEventsRoute = readRepoFile(autopilotEventsRoutePath);
   const templateRunRoute = readRepoFile(templateRunRoutePath);
   const publicShareViewRoute = readRepoFile(publicShareViewRoutePath);
   const templatesRoute = readRepoFile(templatesRoutePath);
+  const webServer = readRepoFile(webServerPath);
   const abuseRateLimit = readRepoFile(abuseRateLimitPath);
   const repository = readRepoFile(repositoryPath);
   const workerEntry = readRepoFile(workerEntryPath);
@@ -93,14 +112,26 @@ function main() {
   const dashboardApprovalsRoute = readRepoFile(dashboardApprovalsRoutePath);
   const dashboardCommitmentsRoute = readRepoFile(dashboardCommitmentsRoutePath);
   const dashboardJobsRoute = readRepoFile(dashboardJobsRoutePath);
+  const dashboardEventsRoute = readRepoFile(dashboardEventsRoutePath);
   const dashboardActivityRoute = readRepoFile(dashboardActivityRoutePath);
   const dashboardMemoriesRoute = readRepoFile(dashboardMemoriesRoutePath);
   const dashboardArtifactsRoute = readRepoFile(dashboardArtifactsRoutePath);
   const dashboardSurface = readRepoFile(dashboardSurfacePath);
   const repositoryTypes = readRepoFile(repositoryTypesPath);
   const workerRuntime = readRepoFile(workerRuntimePath);
+  const workerJobDispatch = readRepoFile(workerJobDispatchPath);
+  const watcherScheduler = readRepoFile(watcherSchedulerPath);
+  const privacyShareExecutors = readRepoFile(privacyShareExecutorsPath);
+  const googleWorkspaceAdapters = readRepoFile(googleWorkspaceAdaptersPath);
+  const memoryCaptureSignals = readRepoFile(memoryCaptureSignalsPath);
   const workerJobPayloads = readRepoFile(workerJobPayloadsPath);
   const publicShareLog = readRepoFile(publicShareLogPath);
+  const workerRuntimeFiles = readRepoDirectory(workerRuntimeDirectoryPath)
+    .filter((file) => file.endsWith(".ts"))
+    .map((file) => {
+      const filePath = `${workerRuntimeDirectoryPath}/${file}`;
+      return [filePath, readRepoFile(filePath)] as const;
+    });
   const decompositionDoc = readRepoFile(decompositionDocPath);
 
   assertContains(
@@ -252,6 +283,16 @@ function main() {
     `${runtimeReadinessPath} must inspect bounded provider credential health when computing readiness.`
   );
   assertContains(
+    runtimeReadiness,
+    "ReadinessRepositoryPort",
+    `${runtimeReadinessPath} must type readiness probes against a narrow repository port.`
+  );
+  assertNotContains(
+    runtimeReadiness,
+    "AgenticRepository",
+    `${runtimeReadinessPath} must not depend on the full repository surface.`
+  );
+  assertContains(
     dashboard,
     "DashboardOperationsTowerCard",
     `${dashboardPath} must render the operations control tower surface.`
@@ -271,6 +312,36 @@ function main() {
     "export type DashboardDiagnosticTarget = {",
     `${repositoryTypesPath} must own dashboard diagnostic target types.`
   );
+  for (const portName of [
+    "RepositoryLifecyclePort",
+    "QueueRepositoryPort",
+    "ApprovalQueueRepositoryPort",
+    "DashboardCollectionRepositoryPort",
+    "DashboardEventStreamRepositoryPort",
+    "DashboardReadRepositoryPort",
+    "GovernanceAuditRepositoryPort",
+    "GovernanceRepositoryPort",
+    "GovernanceRouteRepositoryPort",
+    "GovernanceSimulationRepositoryPort",
+    "CredentialRepositoryPort",
+    "MemoryRepositoryPort",
+    "WatcherRepositoryPort",
+    "PrivacyRepositoryPort",
+    "PrivacyRouteRepositoryPort",
+    "ShareAuditRepositoryPort",
+    "TemplateRepositoryPort",
+    "AgentCatalogRepositoryPort",
+    "ProductRepositoryPort",
+    "ReadinessRepositoryPort",
+    "WorkspaceRouteRepositoryPort",
+    "WorkerRuntimeRepositoryPort"
+  ]) {
+    assertContains(
+      repositoryTypes,
+      `export type ${portName}`,
+      `${repositoryTypesPath} must expose ${portName} so consumers can avoid the full repository surface.`
+    );
+  }
   assertContains(
     workerRuntime,
     'from "./job-payloads";',
@@ -295,6 +366,28 @@ function main() {
     publicShareLog,
     "createPublicShareViewedLog",
     `${publicShareLogPath} must own public share view action-log shaping.`
+  );
+  for (const [filePath, content] of workerRuntimeFiles) {
+    assertNotContains(
+      content,
+      "AgenticRepository",
+      `${filePath} must depend on named repository ports instead of the full AgenticRepository surface.`
+    );
+  }
+  assertContains(
+    workerRuntime,
+    "WorkerRuntimeRepositoryPort",
+    `${workerRuntimePath} must type runtime orchestration against the worker runtime repository port.`
+  );
+  assertContains(
+    workerJobDispatch,
+    "QueueRepositoryPort",
+    `${workerJobDispatchPath} must type enqueue helpers against the queue repository port.`
+  );
+  assertContains(
+    watcherScheduler,
+    "WatcherRepositoryPort",
+    `${watcherSchedulerPath} must type scheduler access against the watcher repository port.`
   );
   assertContains(
     dashboard,
@@ -406,6 +499,93 @@ function main() {
     "Unknown dashboard query parameter",
     `${dashboardCollectionPath} must reject unknown collection query parameters.`
   );
+  assertNotContains(
+    dashboardCollection,
+    "AgenticRepository",
+    `${dashboardCollectionPath} must depend on DashboardCollectionRepositoryPort instead of the full repository surface.`
+  );
+  assertContains(
+    webServer,
+    "getSeededDashboardCollectionRepository",
+    `${webServerPath} must expose a seeded dashboard collection repository accessor.`
+  );
+  assertContains(
+    webServer,
+    "DashboardCollectionRepositoryPort",
+    `${webServerPath} must type dashboard collection access against a narrow repository port.`
+  );
+  assertContains(
+    webServer,
+    "getSeededDashboardEventStreamRepository",
+    `${webServerPath} must expose a seeded dashboard event stream repository accessor.`
+  );
+  assertContains(
+    webServer,
+    "DashboardEventStreamRepositoryPort",
+    `${webServerPath} must type dashboard event streams against a narrow repository port.`
+  );
+  assertContains(
+    dashboardEventsRoute,
+    "getSeededDashboardEventStreamRepository",
+    `${dashboardEventsRoutePath} must request the narrow dashboard event stream repository port.`
+  );
+  for (const [accessorName, portName] of [
+    ["getSeededDashboardReadRepository", "DashboardReadRepositoryPort"],
+    ["getSeededGovernanceAuditRepository", "GovernanceAuditRepositoryPort"],
+    ["getSeededGovernanceRepository", "GovernanceRepositoryPort"],
+    ["getSeededGovernanceRouteRepository", "GovernanceRouteRepositoryPort"],
+    ["getSeededGovernanceSimulationRepository", "GovernanceSimulationRepositoryPort"],
+    ["getSeededCredentialRepository", "CredentialRepositoryPort"],
+    ["getSeededMemoryRepository", "MemoryRepositoryPort"],
+    ["getSeededWatcherRepository", "WatcherRepositoryPort"],
+    ["getSeededPrivacyRepository", "PrivacyRepositoryPort"],
+    ["getSeededPrivacyRouteRepository", "PrivacyRouteRepositoryPort"],
+    ["getSeededShareAuditRepository", "ShareAuditRepositoryPort"],
+    ["getSeededTemplateRepository", "TemplateRepositoryPort"],
+    ["getSeededAgentCatalogRepository", "AgentCatalogRepositoryPort"],
+    ["getSeededProductRepository", "ProductRepositoryPort"],
+    ["getSeededQueueRepository", "QueueRepositoryPort"],
+    ["getSeededApprovalQueueRepository", "ApprovalQueueRepositoryPort"],
+    ["getSeededWorkspaceRouteRepository", "WorkspaceRouteRepositoryPort"]
+  ] as const) {
+    assertContains(
+      webServer,
+      accessorName,
+      `${webServerPath} must expose ${accessorName} for route-level repository port migration.`
+    );
+    assertContains(
+      webServer,
+      portName,
+      `${webServerPath} must type ${accessorName} against ${portName}.`
+    );
+  }
+  assertContains(
+    governanceRoute,
+    "getSeededGovernanceRouteRepository",
+    `${governanceRoutePath} must request the narrow governance route repository port.`
+  );
+  assertNotContains(
+    governanceRoute,
+    "getSeededRepository",
+    `${governanceRoutePath} must not request the full seeded repository surface.`
+  );
+  for (const [routePath, routeContent, accessorName] of [
+    [governanceAuditRoutePath, governanceAuditRoute, "getSeededGovernanceAuditRepository"],
+    [governancePrivacyRoutePath, governancePrivacyRoute, "getSeededPrivacyRouteRepository"],
+    [governanceSimulateRoutePath, governanceSimulateRoute, "getSeededGovernanceSimulationRepository"],
+    [workspacesRoutePath, workspacesRoute, "getSeededWorkspaceRouteRepository"]
+  ] as const) {
+    assertContains(
+      routeContent,
+      accessorName,
+      `${routePath} must request the narrow repository accessor ${accessorName}.`
+    );
+    assertNotContains(
+      routeContent,
+      "getSeededRepository",
+      `${routePath} must not request the full seeded repository surface.`
+    );
+  }
   for (const route of [
     [dashboardApprovalsRoutePath, dashboardApprovalsRoute],
     [dashboardCommitmentsRoutePath, dashboardCommitmentsRoute],
@@ -429,11 +609,21 @@ function main() {
       "principal.userId",
       `${route[0]} must scope collection data to the authenticated principal.`
     );
+    assertContains(
+      route[1],
+      "getSeededDashboardCollectionRepository",
+      `${route[0]} must request the narrow dashboard collection repository port.`
+    );
   }
   assertContains(
     decompositionDoc,
     "## Repository Boundary",
     `${decompositionDocPath} must document the repository boundary.`
+  );
+  assertContains(
+    decompositionDoc,
+    "Repository Port Rules",
+    `${decompositionDocPath} must document narrow repository port rules.`
   );
   assertContains(
     decompositionDoc,

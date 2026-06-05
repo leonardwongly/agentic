@@ -3,7 +3,7 @@ import { listDashboardMemoryPage } from "@agentic/repository";
 import { requireApiSession } from "../../../../lib/auth";
 import { authenticatedJson, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 import { buildDashboardCollectionPage, parseDashboardCollectionQuery } from "../../../../lib/dashboard-collection";
-import { getSeededRepository } from "../../../../lib/server";
+import { getSeededDashboardCollectionRepository } from "../../../../lib/server";
 
 export async function GET(request: Request) {
   return withApiTelemetry(request, "api.dashboard.memories", async () => {
@@ -13,7 +13,7 @@ export async function GET(request: Request) {
         allowedFilters: ["kind"],
         allowedKindValues: memoryTypeValues
       });
-      const repository = await getSeededRepository();
+      const repository = await getSeededDashboardCollectionRepository();
       const page = await listDashboardMemoryPage(repository, {
         userId: principal.userId,
         limit: query.limit,

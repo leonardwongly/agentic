@@ -4,7 +4,7 @@ import {
   type GoalCreateJobPayload,
   type JobRecord
 } from "@agentic/contracts";
-import type { AgenticRepository } from "@agentic/repository";
+import type { WorkerRuntimeRepositoryPort } from "@agentic/repository";
 import type { SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { executeGoalCreateJob } from "./job-executors-core";
 import {
@@ -73,7 +73,7 @@ function buildGitHubIssueIntakeRequest(payload: GitHubIssueIntakeJobPayload): st
 }
 
 export async function executeGitHubIssueIntakeJob(params: {
-  repository: AgenticRepository;
+  repository: WorkerRuntimeRepositoryPort;
   selfImprovementRepository: SelfImprovementRepository;
   job: JobRecord;
   signal?: AbortSignal;

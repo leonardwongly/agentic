@@ -1,6 +1,6 @@
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedStreamResponse, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
-import { getSeededRepository } from "../../../../lib/server";
+import { getSeededDashboardEventStreamRepository } from "../../../../lib/server";
 import {
   buildDashboardEventBatch,
   buildDashboardEventSignature
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
   return withApiTelemetry(request, "api.dashboard.events.stream", async () => {
     try {
       const principal = await requireApiSession(request);
-      const repository = await getSeededRepository();
+      const repository = await getSeededDashboardEventStreamRepository();
       const url = new URL(request.url);
       const pollMs = parseBoundedInteger({
         value: url.searchParams.get("pollMs"),
