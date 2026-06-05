@@ -38,6 +38,14 @@ Verify the manifest against the live GitHub tracker:
 npm run remediation:verify
 ```
 
+Render the capability maturity execution board:
+
+```bash
+npm run test:smoke:capabilities
+```
+
+The capability board is generated from `apps/web/lib/feature-capabilities.ts`. Every preview capability must declare an owner lane, blocker issue or explicit no-op reason, required gates, rollout and rollback notes, and the next validation gate. A capability cannot be represented as production-ready unless the registry includes production evidence; the smoke command fails when that evidence is missing.
+
 The tracker no longer treats the original 19-item baseline as the complete universe of valid remediation IDs. `config/remediation/aos-tracker.json` defines `itemIdPolicy.requiredIds` for the required baseline and `itemIdPolicy.acceptedPrefixes` for canonical generated IDs. Future items such as `AOS-19` and `AOS-100` may be added to the manifest or appear in live GitHub results without changing the dashboard script. Ambiguous padded IDs such as `AOS-010` remain invalid.
 
 ## Kickoff Branch Baseline

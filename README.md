@@ -22,7 +22,7 @@ Agentic is implemented as an open-source modular monorepo. The current product s
 - optional Google, Slack, Telegram, local-notes, and GitHub issue integrations
 - migration, security, observability, deployment, and release-context gates
 
-Capability readiness is tracked in `apps/web/lib/feature-capabilities.ts`. The core dashboard loop is operational; agent memory, integration setup, watchers, workflow templates, and autopilot control are still preview surfaces until their runtime readiness conditions are met.
+Capability readiness and maturity are tracked in `apps/web/lib/feature-capabilities.ts`. The core dashboard loop is operational; agent memory, integration setup, watchers, workflow templates, and autopilot control are still preview surfaces until their blocker issues, owner lanes, validation gates, and runtime readiness conditions are satisfied. Run `npm run test:smoke:capabilities` to render the execution board and fail on missing production evidence.
 
 ## Repository Layout
 

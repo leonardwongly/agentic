@@ -3,11 +3,40 @@ import { DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS, type AutopilotEvent, type Autop
 export type FeatureCapabilitySurface = "core" | "advanced";
 export type FeatureCapabilityReadiness = "prototype" | "preview" | "operational" | "production";
 export type FeatureCapabilityLoopStage = "decide" | "approve" | "execute" | "observe" | "improve" | "setup";
+export type FeatureCapabilityOwnerLane =
+  | "agent-intelligence"
+  | "platform-security"
+  | "product-platform"
+  | "runtime-platform";
 
 export type FeatureCapabilityContract = {
   route: string;
   routeFile: string;
   methods: readonly ("GET" | "POST" | "PUT" | "PATCH" | "DELETE")[];
+};
+
+export type FeatureCapabilityMaturityBlocker =
+  | {
+      type: "issue";
+      issue: number;
+      title: string;
+      url: string;
+    }
+  | {
+      type: "none";
+      reason: string;
+    };
+
+export type FeatureCapabilityMaturity = {
+  ownerLane: FeatureCapabilityOwnerLane;
+  targetReadiness: FeatureCapabilityReadiness;
+  blocker: FeatureCapabilityMaturityBlocker;
+  requiredGates: readonly string[];
+  nextValidationGate: string;
+  rolloutNotes: string;
+  rollbackNotes: string;
+  lastValidationEvidence: readonly string[];
+  productionEvidence?: readonly string[];
 };
 
 export type FeatureCapabilityDefinition = {
@@ -18,6 +47,7 @@ export type FeatureCapabilityDefinition = {
   loopStage: FeatureCapabilityLoopStage;
   uiModules: readonly string[];
   contracts: readonly FeatureCapabilityContract[];
+  maturity: FeatureCapabilityMaturity;
   notes?: string;
 };
 
@@ -49,6 +79,18 @@ const READINESS_RANK: Record<FeatureCapabilityReadiness, number> = {
   production: 3
 };
 
+const NO_BLOCKER_REASON =
+  "No open graduation blocker; continue using the listed gates as release evidence before any production claim.";
+
+function issueBlocker(issue: number, title: string): FeatureCapabilityMaturityBlocker {
+  return {
+    type: "issue",
+    issue,
+    title,
+    url: `https://github.com/leonardwongly/agentic/issues/${issue}`
+  };
+}
+
 export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
   {
     id: "request-work",
@@ -69,6 +111,19 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         methods: ["GET", "POST"]
       }
     ],
+    maturity: {
+      ownerLane: "product-platform",
+      targetReadiness: "production",
+      blocker: {
+        type: "none",
+        reason: NO_BLOCKER_REASON
+      },
+      requiredGates: ["npm exec -- vitest run tests/nl-intent-route.test.ts tests/goal-detail-panel.test.tsx"],
+      nextValidationGate: "Capture production intake evidence through the release closeout package.",
+      rolloutNotes: "Keep intake enabled for authenticated operators after route and governance smoke checks pass.",
+      rollbackNotes: "Disable NL intake entry points and fall back to direct goal creation if intent parsing regresses.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    },
     notes: "Translates operator intent into governed goal creation and bounded next actions."
   },
   {
@@ -90,6 +145,19 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         methods: ["PATCH"]
       }
     ],
+    maturity: {
+      ownerLane: "runtime-platform",
+      targetReadiness: "production",
+      blocker: {
+        type: "none",
+        reason: NO_BLOCKER_REASON
+      },
+      requiredGates: ["npm exec -- vitest run tests/action-execution-contract.test.ts tests/execution-dispatch.test.ts"],
+      nextValidationGate: "Refresh queue sequencing evidence with the next production closeout run.",
+      rolloutNotes: "Keep the commitments inbox backed by server-derived ordering and idempotent PATCH handling.",
+      rollbackNotes: "Hide commitment mutation controls and keep the queue read-only if sequencing evidence fails.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    },
     notes: "Server-derived sequencing keeps the operating queue bounded and urgency-aware."
   },
   {
@@ -106,6 +174,19 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         methods: ["POST"]
       }
     ],
+    maturity: {
+      ownerLane: "platform-security",
+      targetReadiness: "production",
+      blocker: {
+        type: "none",
+        reason: NO_BLOCKER_REASON
+      },
+      requiredGates: ["npm exec -- vitest run tests/action-execution-contract.test.ts tests/operational-routes.test.ts"],
+      nextValidationGate: "Attach approval decision evidence to the next release closeout packet.",
+      rolloutNotes: "Keep high-risk execution paths behind explicit approval responses.",
+      rollbackNotes: "Fail closed by disabling approval mutations if authorization or audit evidence regresses.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    },
     notes: "High-risk actions stay gated behind explicit approval decisions."
   },
   {
@@ -126,7 +207,20 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         routeFile: "apps/web/app/api/briefing/schedule/route.ts",
         methods: ["GET", "POST"]
       }
-    ]
+    ],
+    maturity: {
+      ownerLane: "product-platform",
+      targetReadiness: "production",
+      blocker: {
+        type: "none",
+        reason: NO_BLOCKER_REASON
+      },
+      requiredGates: ["npm exec -- vitest run tests/dashboard-first-run-checklist.test.tsx tests/operational-routes.test.ts"],
+      nextValidationGate: "Refresh briefing smoke evidence alongside runtime readiness checks.",
+      rolloutNotes: "Expose startup briefing when readiness and schedule route checks are green.",
+      rollbackNotes: "Keep briefing manual and suppress scheduling controls if readiness or schedule evidence fails.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    }
   },
   {
     id: "memories-workbench",
@@ -146,7 +240,20 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         routeFile: "apps/web/app/api/memory/[id]/route.ts",
         methods: ["PATCH"]
       }
-    ]
+    ],
+    maturity: {
+      ownerLane: "agent-intelligence",
+      targetReadiness: "production",
+      blocker: {
+        type: "none",
+        reason: NO_BLOCKER_REASON
+      },
+      requiredGates: ["npm exec -- vitest run tests/memory.test.ts tests/feature-capabilities.test.ts"],
+      nextValidationGate: "Refresh shared-memory provenance evidence before production positioning.",
+      rolloutNotes: "Keep shared memory edits available where audit and rollback controls are visible.",
+      rollbackNotes: "Disable write controls and leave memory browse-only if provenance checks regress.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    }
   },
   {
     id: "agent-memory",
@@ -167,6 +274,16 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         methods: ["PATCH"]
       }
     ],
+    maturity: {
+      ownerLane: "agent-intelligence",
+      targetReadiness: "operational",
+      blocker: issueBlocker(152, "plan(roadmap): close Agentic capability and operations gaps after production proof"),
+      requiredGates: ["npm exec -- vitest run tests/feature-capabilities.test.ts tests/route-user-scope.test.ts"],
+      nextValidationGate: "Prove agent-scoped memory isolation and graduation evidence under #152.",
+      rolloutNotes: "Keep the agent memory UI preview-labeled until scoped provenance and route evidence are attached.",
+      rollbackNotes: "Remove the agent-scoped memory entry point while preserving shared memory routes.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    },
     notes: "Preview surface that now has an explicit backing contract instead of a phantom endpoint."
   },
   {
@@ -192,7 +309,20 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         routeFile: "apps/web/app/api/agents/[id]/clone/route.ts",
         methods: ["POST"]
       }
-    ]
+    ],
+    maturity: {
+      ownerLane: "product-platform",
+      targetReadiness: "production",
+      blocker: {
+        type: "none",
+        reason: NO_BLOCKER_REASON
+      },
+      requiredGates: ["npm exec -- vitest run tests/agents-route.test.ts tests/feature-capabilities.test.ts"],
+      nextValidationGate: "Refresh custom agent create, clone, and delete evidence before production positioning.",
+      rolloutNotes: "Keep catalog operations enabled after route contract and permission checks pass.",
+      rollbackNotes: "Disable catalog mutation controls and leave existing agents readable if route evidence regresses.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    }
   },
   {
     id: "integrations-workspace",
@@ -212,7 +342,17 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         routeFile: "apps/web/app/api/workspaces/route.ts",
         methods: ["GET", "POST"]
       }
-    ]
+    ],
+    maturity: {
+      ownerLane: "platform-security",
+      targetReadiness: "operational",
+      blocker: issueBlocker(142, "sec(config): configure GitHub App sync runtime and repo settings"),
+      requiredGates: ["npm exec -- vitest run tests/integration-readiness.test.ts tests/google-provider-routes.test.ts"],
+      nextValidationGate: "Prove connector configuration, scopes, and recovery state under #142.",
+      rolloutNotes: "Keep setup surfaces preview-labeled until live connector and workspace settings are verified.",
+      rollbackNotes: "Hide provider mutation controls and keep integration status read-only if configuration proof fails.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    }
   },
   {
     id: "watchers",
@@ -232,7 +372,17 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         routeFile: "apps/web/app/api/watchers/[id]/route.ts",
         methods: ["PATCH"]
       }
-    ]
+    ],
+    maturity: {
+      ownerLane: "runtime-platform",
+      targetReadiness: "operational",
+      blocker: issueBlocker(144, "ops(worker): verify deployed worker durability and recovery behavior"),
+      requiredGates: ["npm exec -- vitest run tests/action-execution-idempotency.test.ts tests/runtime-readiness.test.ts"],
+      nextValidationGate: "Verify deployed watcher durability, replay, and recovery behavior under #144.",
+      rolloutNotes: "Promote watchers only when active event emission and durable queue recovery stay healthy.",
+      rollbackNotes: "Return watchers to dry-run or notification-only mode if queue durability evidence regresses.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    }
   },
   {
     id: "workflow-templates",
@@ -252,7 +402,17 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         routeFile: "apps/web/app/api/workflow-templates/[id]/route.ts",
         methods: ["GET", "PUT", "DELETE"]
       }
-    ]
+    ],
+    maturity: {
+      ownerLane: "product-platform",
+      targetReadiness: "operational",
+      blocker: issueBlocker(152, "plan(roadmap): close Agentic capability and operations gaps after production proof"),
+      requiredGates: ["npm exec -- vitest run tests/feature-capabilities.test.ts tests/dashboard-advanced-operations-card.test.tsx"],
+      nextValidationGate: "Attach template graduation scope and execution evidence under #152.",
+      rolloutNotes: "Keep templates preview-labeled until they have owner, rollback, and execution evidence.",
+      rollbackNotes: "Hide template mutation controls while preserving existing workflow execution paths.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    }
   },
   {
     id: "autopilot-control",
@@ -273,6 +433,16 @@ export const FEATURE_CAPABILITIES: readonly FeatureCapabilityDefinition[] = [
         methods: ["POST"]
       }
     ],
+    maturity: {
+      ownerLane: "runtime-platform",
+      targetReadiness: "operational",
+      blocker: issueBlocker(144, "ops(worker): verify deployed worker durability and recovery behavior"),
+      requiredGates: ["npm exec -- vitest run tests/policy.test.ts tests/runtime-readiness.test.ts"],
+      nextValidationGate: "Prove deployed autopilot queue durability, event budgets, and override paths under #144.",
+      rolloutNotes: "Promote autopilot control only when bounded reliability controls and operator overrides are green.",
+      rollbackNotes: "Force notify-only mode and suppress automation controls if event budgets or override paths regress.",
+      lastValidationEvidence: ["tests/feature-capabilities.test.ts", "npm run test:smoke:capabilities"]
+    },
     notes: "Runtime readiness graduates from preview once backlog, failure, and event-budget thresholds stay inside the bounded reliability controls."
   }
 ] as const;
@@ -290,8 +460,165 @@ export type FeatureCapabilitySummary = {
   advanced: SurfaceSummary;
 };
 
+export type FeatureCapabilityMaturityIssue = {
+  featureId: string;
+  message: string;
+};
+
+export type FeatureCapabilityMaturityBoardItem = {
+  id: string;
+  label: string;
+  ownerLane: FeatureCapabilityOwnerLane;
+  surface: FeatureCapabilitySurface;
+  readiness: FeatureCapabilityReadiness;
+  targetReadiness: FeatureCapabilityReadiness;
+  blocker: FeatureCapabilityMaturityBlocker;
+  nextValidationGate: string;
+  requiredGates: readonly string[];
+  lastValidationEvidence: readonly string[];
+  productionEvidence: readonly string[];
+  contracts: number;
+  releaseBlocked: boolean;
+};
+
+export type FeatureCapabilityMaturityLaneSummary = {
+  ownerLane: FeatureCapabilityOwnerLane;
+  total: number;
+  preview: number;
+  operationalOrBetter: number;
+  releaseBlocked: number;
+};
+
+export type FeatureCapabilityMaturityBoard = {
+  totalFeatures: number;
+  previewFeatures: number;
+  productionClaims: number;
+  releaseBlocked: boolean;
+  lanes: readonly FeatureCapabilityMaturityLaneSummary[];
+  items: readonly FeatureCapabilityMaturityBoardItem[];
+  issues: readonly FeatureCapabilityMaturityIssue[];
+};
+
 function humanizeReadiness(value: FeatureCapabilityReadiness): string {
   return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function hasText(value: string): boolean {
+  return value.trim().length > 0;
+}
+
+function isProductionEvidenceMissing(feature: FeatureCapabilityDefinition): boolean {
+  return feature.readiness === "production" && (feature.maturity.productionEvidence?.length ?? 0) === 0;
+}
+
+export function validateFeatureCapabilityMaturity(
+  features: readonly FeatureCapabilityDefinition[] = FEATURE_CAPABILITIES
+): readonly FeatureCapabilityMaturityIssue[] {
+  const issues: FeatureCapabilityMaturityIssue[] = [];
+
+  for (const feature of features) {
+    const { maturity } = feature;
+
+    if (!hasText(maturity.ownerLane)) {
+      issues.push({
+        featureId: feature.id,
+        message: "Capability must declare an owner lane."
+      });
+    }
+
+    if (maturity.requiredGates.length === 0) {
+      issues.push({
+        featureId: feature.id,
+        message: "Capability must declare at least one required validation gate."
+      });
+    }
+
+    if (!hasText(maturity.nextValidationGate)) {
+      issues.push({
+        featureId: feature.id,
+        message: "Capability must declare the next validation gate."
+      });
+    }
+
+    if (!hasText(maturity.rolloutNotes) || !hasText(maturity.rollbackNotes)) {
+      issues.push({
+        featureId: feature.id,
+        message: "Capability must declare rollout and rollback notes."
+      });
+    }
+
+    if (feature.readiness === "preview") {
+      if (maturity.blocker.type === "issue") {
+        if (maturity.blocker.issue <= 0 || !hasText(maturity.blocker.title) || !hasText(maturity.blocker.url)) {
+          issues.push({
+            featureId: feature.id,
+            message: "Preview capability issue blockers must include issue number, title, and URL."
+          });
+        }
+      } else if (!hasText(maturity.blocker.reason)) {
+        issues.push({
+          featureId: feature.id,
+          message: "Preview capability no-op blockers must explain why no issue is required."
+        });
+      }
+    }
+
+    if (isProductionEvidenceMissing(feature)) {
+      issues.push({
+        featureId: feature.id,
+        message: "Production readiness requires explicit production evidence."
+      });
+    }
+  }
+
+  return issues;
+}
+
+export function buildFeatureCapabilityMaturityBoard(
+  features: readonly FeatureCapabilityDefinition[] = FEATURE_CAPABILITIES
+): FeatureCapabilityMaturityBoard {
+  const issues = validateFeatureCapabilityMaturity(features);
+  const issueFeatureIds = new Set(issues.map((issue) => issue.featureId));
+  const items = features.map((feature): FeatureCapabilityMaturityBoardItem => {
+    const productionEvidence = feature.maturity.productionEvidence ?? [];
+
+    return {
+      id: feature.id,
+      label: feature.label,
+      ownerLane: feature.maturity.ownerLane,
+      surface: feature.surface,
+      readiness: feature.readiness,
+      targetReadiness: feature.maturity.targetReadiness,
+      blocker: feature.maturity.blocker,
+      nextValidationGate: feature.maturity.nextValidationGate,
+      requiredGates: feature.maturity.requiredGates,
+      lastValidationEvidence: feature.maturity.lastValidationEvidence,
+      productionEvidence,
+      contracts: feature.contracts.length,
+      releaseBlocked: issueFeatureIds.has(feature.id)
+    };
+  });
+  const ownerLanes = Array.from(new Set(items.map((item) => item.ownerLane))).sort();
+
+  return {
+    totalFeatures: features.length,
+    previewFeatures: features.filter((feature) => feature.readiness === "preview").length,
+    productionClaims: features.filter((feature) => feature.readiness === "production").length,
+    releaseBlocked: issues.length > 0,
+    lanes: ownerLanes.map((ownerLane) => {
+      const laneItems = items.filter((item) => item.ownerLane === ownerLane);
+
+      return {
+        ownerLane,
+        total: laneItems.length,
+        preview: laneItems.filter((item) => item.readiness === "preview").length,
+        operationalOrBetter: laneItems.filter((item) => READINESS_RANK[item.readiness] >= READINESS_RANK.operational).length,
+        releaseBlocked: laneItems.filter((item) => item.releaseBlocked).length
+      };
+    }),
+    items,
+    issues
+  };
 }
 
 type FeatureCapabilitySummaryOverrides = Partial<Record<string, FeatureCapabilityReadiness>>;
