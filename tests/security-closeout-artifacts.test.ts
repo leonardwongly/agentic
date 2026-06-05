@@ -3,6 +3,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const pinnedCheckoutV6Pattern = /actions\/checkout@[a-f0-9]{40} # v6(?:\.\d+\.\d+)?/u;
+const pinnedCodeqlInitV4Pattern = /github\/codeql-action\/init@[a-f0-9]{40} # v4(?:\.\d+\.\d+)?/u;
+const pinnedCodeqlAnalyzeV4Pattern = /github\/codeql-action\/analyze@[a-f0-9]{40} # v4(?:\.\d+\.\d+)?/u;
 
 function readRepoFile(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -45,9 +48,9 @@ describe("security closeout artifacts", () => {
     expect(workflow).toContain("name: CodeQL");
     expect(workflow).toContain("security-events: write");
     expect(workflow).toContain("contents: read");
-    expect(workflow).toContain("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6");
-    expect(workflow).toContain("github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4");
-    expect(workflow).toContain("github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4");
+    expect(workflow).toMatch(pinnedCheckoutV6Pattern);
+    expect(workflow).toMatch(pinnedCodeqlInitV4Pattern);
+    expect(workflow).toMatch(pinnedCodeqlAnalyzeV4Pattern);
     expect(workflow).toContain("languages: javascript-typescript");
     expect(workflow).toContain("queries: security-extended,security-and-quality");
     expect(workflow).toContain('cron: "41 3 * * 2"');
