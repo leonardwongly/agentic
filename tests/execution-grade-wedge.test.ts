@@ -11,7 +11,12 @@ import {
 import { createJobRecord } from "@agentic/execution";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord } from "@agentic/memory";
-import { evaluateExecutionGradeVerticalWorkflow } from "@agentic/observability";
+import {
+  defaultExecutionGradeWedgeScorecardManifest,
+  evaluateExecutionGradeVerticalWorkflow,
+  evaluateExecutionGradeWedgeScorecards,
+  type ExecutionGradeWedgeFixtureEvidence
+} from "@agentic/observability";
 import { processUserRequest, respondToApproval } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { enqueueApprovalFollowUpJob } from "@agentic/worker-runtime";
@@ -117,7 +122,204 @@ function buildPrematureApprovalFollowUpJob(bundle: GoalBundle): JobRecord {
   });
 }
 
+function buildCommunicationsScorecardEvidence(
+  overrides: Partial<ExecutionGradeWedgeFixtureEvidence> = {}
+): ExecutionGradeWedgeFixtureEvidence[] {
+  const base: ExecutionGradeWedgeFixtureEvidence[] = [
+    {
+      wedgeKey: "communications_execution",
+      scenario: "happy_path",
+      completed: true,
+      accepted: true,
+      recommendationEditDistance: 0.12,
+      approvalLatencyMs: 8 * 60 * 1000,
+      sideEffectSafe: true,
+      connectorFailureRecovered: null,
+      evidenceComplete: true,
+      replayEvidence: ["approval:happy", "ledger:happy"]
+    },
+    {
+      wedgeKey: "communications_execution",
+      scenario: "missing_context",
+      completed: true,
+      accepted: true,
+      recommendationEditDistance: 0.2,
+      approvalLatencyMs: 14 * 60 * 1000,
+      sideEffectSafe: true,
+      connectorFailureRecovered: null,
+      evidenceComplete: true,
+      replayEvidence: ["approval:missing-context"]
+    },
+    {
+      wedgeKey: "communications_execution",
+      scenario: "connector_outage",
+      completed: true,
+      accepted: true,
+      recommendationEditDistance: 0.18,
+      approvalLatencyMs: 12 * 60 * 1000,
+      sideEffectSafe: true,
+      connectorFailureRecovered: true,
+      evidenceComplete: true,
+      replayEvidence: ["connector:recovered", "retry:stable"]
+    },
+    {
+      wedgeKey: "communications_execution",
+      scenario: "duplicate_retry",
+      completed: true,
+      accepted: true,
+      recommendationEditDistance: 0.16,
+      approvalLatencyMs: 10 * 60 * 1000,
+      sideEffectSafe: true,
+      connectorFailureRecovered: null,
+      evidenceComplete: true,
+      replayEvidence: ["idempotency:duplicate-suppressed"]
+    },
+    {
+      wedgeKey: "communications_execution",
+      scenario: "approval_rejection",
+      completed: true,
+      accepted: false,
+      recommendationEditDistance: 0.28,
+      approvalLatencyMs: 20 * 60 * 1000,
+      sideEffectSafe: true,
+      connectorFailureRecovered: null,
+      evidenceComplete: true,
+      replayEvidence: ["approval:rejected", "side-effect:none"]
+    },
+    {
+      wedgeKey: "communications_execution",
+      scenario: "rollback",
+      completed: true,
+      accepted: true,
+      recommendationEditDistance: 0.19,
+      approvalLatencyMs: 11 * 60 * 1000,
+      sideEffectSafe: true,
+      connectorFailureRecovered: null,
+      evidenceComplete: true,
+      replayEvidence: ["rollback:documented"]
+    }
+  ];
+
+  return base.map((fixture) => ({
+    ...fixture,
+    ...overrides,
+    scenario: fixture.scenario
+  }));
+}
+
+function buildSchedulingScorecardEvidence(
+  overrides: Partial<ExecutionGradeWedgeFixtureEvidence> = {}
+): ExecutionGradeWedgeFixtureEvidence[] {
+  return buildCommunicationsScorecardEvidence(overrides).map((fixture) => ({
+    ...fixture,
+    wedgeKey: "scheduling_execution",
+    replayEvidence: fixture.replayEvidence.map((evidence) => `calendar:${evidence}`)
+  }));
+}
+
 describe("execution-grade vertical wedge evaluation", () => {
+  it("defines explicit communications and scheduling scorecards", () => {
+    expect(defaultExecutionGradeWedgeScorecardManifest.scorecards.map((scorecard) => scorecard.wedgeKey)).toEqual([
+      "communications_execution",
+      "scheduling_execution"
+    ]);
+
+    for (const scorecard of defaultExecutionGradeWedgeScorecardManifest.scorecards) {
+      expect(scorecard.scenarios).toEqual([
+        "happy_path",
+        "missing_context",
+        "connector_outage",
+        "duplicate_retry",
+        "approval_rejection",
+        "rollback"
+      ]);
+      expect(scorecard.metrics.map((metric) => metric.metric)).toEqual([
+        "completion_criteria",
+        "acceptance_rate",
+        "recommendation_edit_distance",
+        "approval_latency",
+        "side_effect_safety",
+        "connector_failure_recovery",
+        "evidence_completeness",
+        "replay_evidence"
+      ]);
+    }
+  });
+
+  it("uses fixture evidence to select communications as the primary implementation wedge", () => {
+    const evaluation = evaluateExecutionGradeWedgeScorecards({
+      evidence: buildCommunicationsScorecardEvidence()
+    });
+    const communicationsResults = evaluation.results.filter((result) => result.wedgeKey === "communications_execution");
+    const schedulingResults = evaluation.results.filter((result) => result.wedgeKey === "scheduling_execution");
+
+    expect(evaluation.passed).toBe(false);
+    expect(evaluation.autonomyPromotionAllowed).toBe(false);
+    expect(evaluation.selectedPrimaryWedge).toBe("communications_execution");
+    expect(evaluation.readiness).toMatchObject({
+      dashboardStatus: "blocked",
+      autonomyPromotionBlockedReason: "completion_criteria has 0 sample(s); 3 required for execution-grade evidence."
+    });
+    expect(evaluation.readiness.capabilityReadinessEvidence).toContain(
+      "communications_execution: scenarios=6; replayEvidence=9; evidenceComplete=1.00"
+    );
+    expect(communicationsResults.every((result) => result.passed)).toBe(true);
+    expect(schedulingResults.every((result) => result.passed)).toBe(false);
+    expect(
+      evaluation.summaries.find((summary) => summary.wedgeKey === "communications_execution")
+    ).toMatchObject({
+      scenarioCount: 6,
+      acceptanceRate: 5 / 6,
+      connectorFailureRecoveryRate: 1,
+      evidenceCompletenessRate: 1
+    });
+  });
+
+  it("blocks rollout and autonomy when scorecard evidence is incomplete or unsafe", () => {
+    const evidence = buildCommunicationsScorecardEvidence({
+      completed: false,
+      accepted: false,
+      recommendationEditDistance: 0.72,
+      approvalLatencyMs: 90 * 60 * 1000,
+      sideEffectSafe: false,
+      connectorFailureRecovered: false,
+      evidenceComplete: false,
+      replayEvidence: []
+    });
+    const evaluation = evaluateExecutionGradeWedgeScorecards({ evidence });
+
+    expect(evaluation.selectedPrimaryWedge).toBeNull();
+    expect(evaluation.results.filter((result) => result.rolloutGate).every((result) => result.passed)).toBe(false);
+    expect(evaluation.results.find((result) => result.key === "communications_execution.side_effect_safety")).toMatchObject({
+      passed: false,
+      actual: 0,
+      reason: "side_effect_safety observed 0.00 but requires >= 1.00."
+    });
+    expect(evaluation.results.find((result) => result.key === "communications_execution.replay_evidence")).toMatchObject({
+      passed: false,
+      actual: 0
+    });
+  });
+
+  it("allows readiness and autonomy promotion only when communications and scheduling have replay-backed scorecards", () => {
+    const evaluation = evaluateExecutionGradeWedgeScorecards({
+      evidence: [...buildCommunicationsScorecardEvidence(), ...buildSchedulingScorecardEvidence()]
+    });
+
+    expect(evaluation.passed).toBe(true);
+    expect(evaluation.autonomyPromotionAllowed).toBe(true);
+    expect(evaluation.selectedPrimaryWedge).toBe("communications_execution");
+    expect(evaluation.readiness).toMatchObject({
+      dashboardStatus: "ready",
+      autonomyPromotionBlockedReason: null
+    });
+    expect(evaluation.readiness.capabilityReadinessEvidence).toEqual([
+      "communications_execution: scenarios=6; replayEvidence=9; evidenceComplete=1.00",
+      "scheduling_execution: scenarios=6; replayEvidence=9; evidenceComplete=1.00"
+    ]);
+    expect(evaluation.results.every((result) => result.passed)).toBe(true);
+  });
+
   it("passes when a selected wedge has governed specialist output, blast-radius previews, and an idempotent follow-up job", async () => {
     const { approvedBundle, job } = await createApprovedCommunicationsWedge();
 
