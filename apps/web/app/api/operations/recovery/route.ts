@@ -17,7 +17,8 @@ export const POST = createGovernedMutationRoute(
       namespace: "operations-recovery",
       error: "Too many operations recovery requests. Try again later."
     },
-    idempotency: "optional"
+    idempotency: "optional",
+    allowBootstrapAccessKey: false
   },
   async ({ request, principal, actorContext, body }) => {
     const repository = await getSeededRepository();

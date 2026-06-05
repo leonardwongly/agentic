@@ -1,7 +1,7 @@
 import { enqueueDocsRenderJob } from "@agentic/worker-runtime";
 import { checkAbuseRateLimit } from "../../../../lib/abuse-rate-limit";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
-import { requireApiSession } from "../../../../lib/auth";
+import { requireApiPrincipal } from "../../../../lib/auth";
 import { authenticatedJson, authenticatedRateLimitError, handleApiError, withApiTelemetry } from "../../../../lib/api-response";
 import { parseOrDeriveIdempotencyKey } from "../../../../lib/request-idempotency";
 import { getSeededRepository } from "../../../../lib/server";
@@ -9,7 +9,11 @@ import { getSeededRepository } from "../../../../lib/server";
 export async function POST(request: Request) {
   return withApiTelemetry(request, "api.docs.render", async () => {
     try {
-      const principal = await requireApiSession(request);
+      const principal = await requireApiPrincipal(request, {
+        allowMachineToken: true,
+        routeGroup: "automation",
+        scope: "jobs:create"
+      });
       const rateLimit = await checkAbuseRateLimit({
         namespace: "docs-render",
         request,

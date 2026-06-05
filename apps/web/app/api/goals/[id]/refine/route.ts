@@ -2,7 +2,7 @@ import { z } from "zod";
 import { RecommendationRefinementSourceSchema } from "@agentic/contracts";
 import { enqueueGoalRefineJob } from "@agentic/worker-runtime";
 import { checkAbuseRateLimit } from "../../../../../lib/abuse-rate-limit";
-import { requireApiSession } from "../../../../../lib/auth";
+import { requireApiPrincipal } from "../../../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import {
   ApiRouteError,
@@ -36,7 +36,11 @@ type RouteContext = {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const principal = await requireApiSession(request);
+    const principal = await requireApiPrincipal(request, {
+      allowMachineToken: true,
+      routeGroup: "automation",
+      scope: "jobs:create"
+    });
     const rateLimit = await checkAbuseRateLimit({
       namespace: "goal-refine",
       request,

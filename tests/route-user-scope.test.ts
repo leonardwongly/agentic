@@ -16,7 +16,7 @@ import { ApprovalMutationError, type AgenticRepository, type DashboardData } fro
 import { createMemoryRecord } from "@agentic/memory";
 import type { SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { vi } from "vitest";
-import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
+import { AGENTIC_ACCESS_KEY_HEADER, AGENTIC_SESSION_COOKIE, buildSessionToken } from "../apps/web/lib/auth";
 import { GET as integrationsRouteGet, POST as integrationsRoutePost } from "../apps/web/app/api/integrations/route";
 import { POST as approvalResponseRoute } from "../apps/web/app/api/approvals/[id]/respond/route";
 import { POST as briefingSchedulePostRoute } from "../apps/web/app/api/briefing/schedule/route";
@@ -48,6 +48,18 @@ function buildAuthorizedJsonRequest(url: string, body: unknown, headers?: Record
     headers: {
       "content-type": "application/json",
       [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+      ...headers
+    },
+    body: JSON.stringify(body)
+  });
+}
+
+function buildSessionJsonRequest(url: string, body: unknown, headers?: Record<string, string>): Request {
+  return new Request(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: `${AGENTIC_SESSION_COOKIE}=${buildSessionToken(DEFAULT_OWNER_USER_ID)}`,
       ...headers
     },
     body: JSON.stringify(body)
@@ -1593,7 +1605,7 @@ describe("route user scoping", () => {
     const getResponse = await governanceRouteGet(buildAuthorizedGetRequest("http://localhost/api/governance"));
     const currentGovernance = buildDashboardData().workspaceGovernance!;
     const postResponse = await governanceRoutePost(
-      buildAuthorizedJsonRequest("http://localhost/api/governance", {
+      buildSessionJsonRequest("http://localhost/api/governance", {
         approvalMode: "always_review",
         retentionDays: 90
       }, {
@@ -1606,7 +1618,20 @@ describe("route user scoping", () => {
     expect(postResponse.status).toBe(200);
     expect(auditResponse.status).toBe(200);
     expect(governanceCalls).toEqual([DEFAULT_OWNER_USER_ID]);
-    expect(savedGovernanceActors).toEqual([createSystemActorContext(DEFAULT_OWNER_USER_ID)]);
+    expect(savedGovernanceActors).toEqual([
+      expect.objectContaining({
+        subjectUserId: DEFAULT_OWNER_USER_ID,
+        sessionId: expect.any(String),
+        initiator: expect.objectContaining({
+          kind: "human",
+          userId: DEFAULT_OWNER_USER_ID
+        }),
+        executor: expect.objectContaining({
+          kind: "human",
+          userId: DEFAULT_OWNER_USER_ID
+        })
+      })
+    ]);
     expect(dashboardCalls).toEqual([DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID, DEFAULT_OWNER_USER_ID]);
     expect(auditCalls).toEqual([
       {

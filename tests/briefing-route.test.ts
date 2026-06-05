@@ -216,7 +216,8 @@ describe("briefing route", () => {
     });
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+    const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: secondaryUserId,
       sessionId: "session-secondary",
@@ -251,7 +252,7 @@ describe("briefing route", () => {
       expect(persistedBundle?.goal.explanation).toContain("deep");
       expect(persistedBundle?.goal.explanation).not.toContain("urgent");
     } finally {
-      requireApiSessionSpy.mockRestore();
+      requireApiPrincipalSpy.mockRestore();
     }
   });
 

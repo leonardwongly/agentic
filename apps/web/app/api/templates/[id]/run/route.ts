@@ -3,7 +3,7 @@ import { z } from "zod";
 import { enqueueTemplateRunJob } from "@agentic/worker-runtime";
 import { checkAbuseRateLimit } from "../../../../../lib/abuse-rate-limit";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
-import { requireApiSession } from "../../../../../lib/auth";
+import { requireApiPrincipal } from "../../../../../lib/auth";
 import {
   ApiRouteError,
   authenticatedJson,
@@ -19,7 +19,11 @@ const TemplateIdSchema = z.string().trim().min(1).max(200);
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   return withApiTelemetry(request, "api.templates.run", async () => {
     try {
-      const principal = await requireApiSession(request);
+      const principal = await requireApiPrincipal(request, {
+        allowMachineToken: true,
+        routeGroup: "automation",
+        scope: "jobs:create"
+      });
       const rateLimit = await checkAbuseRateLimit({
         namespace: "template-run",
         request,

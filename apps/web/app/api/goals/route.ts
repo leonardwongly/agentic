@@ -2,7 +2,7 @@ import { z } from "zod";
 import { enqueueGoalCreateJob } from "@agentic/worker-runtime";
 import type { AgenticRepository } from "@agentic/repository";
 import { checkAbuseRateLimit } from "../../../lib/abuse-rate-limit";
-import { requireApiSession } from "../../../lib/auth";
+import { requireApiPrincipal, requireApiSession } from "../../../lib/auth";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import {
   ApiRouteError,
@@ -74,7 +74,11 @@ export async function POST(request: Request) {
   return withApiTelemetry(request, "api.goals.create", async () => {
     try {
       requireJsonContentType(request);
-      const principal = await requireApiSession(request);
+      const principal = await requireApiPrincipal(request, {
+        allowMachineToken: true,
+        routeGroup: "automation",
+        scope: "jobs:create"
+      });
       const rateLimit = await checkAbuseRateLimit({
         namespace: "goal-create",
         request,
