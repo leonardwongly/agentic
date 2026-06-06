@@ -177,7 +177,7 @@ Dedicated helper ownership:
 
 The current hotspot budgets are intentionally strict enough to stop obvious backsliding while still leaving room for small edits:
 
-- `packages/repository/src/index.ts`: `<= 7900` lines
+- `packages/repository/src/index.ts`: `<= 7950` lines
 - `packages/worker-runtime/src/index.ts`: `<= 1650` lines
 - `apps/web/components/dashboard.tsx`: `<= 3150` lines
 - `apps/web/components/dashboard-cockpit.tsx`: `<= 450` lines

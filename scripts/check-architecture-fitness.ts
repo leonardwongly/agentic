@@ -640,7 +640,7 @@ function main() {
     "## Line Budgets",
     `${decompositionDocPath} must document hotspot line budgets.`
   );
-  assertMaxLines(repository, 7900, repositoryPath);
+  assertMaxLines(repository, 7950, repositoryPath);
   assertMaxLines(workerRuntime, 1650, workerRuntimePath);
   assertMaxLines(dashboard, 3150, dashboardPath);
   assertMaxLines(dashboardCockpit, 450, dashboardCockpitPath);

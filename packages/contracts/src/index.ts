@@ -1354,6 +1354,33 @@ export const ProviderSideEffectRecordSchema = z
   })
   .strict();
 
+export const WorkerRuntimeHealthSnapshotSchema = z
+  .object({
+    version: z.literal(1),
+    runnerId: z.string().min(1).max(200),
+    pid: z.number().int(),
+    status: z.enum(["starting", "running", "idle", "stopped", "error"]),
+    startedAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    processedCount: z.number().int().min(0),
+    lastProcessedAt: z.string().datetime().nullable(),
+    lastErrorAt: z.string().datetime().nullable(),
+    lastErrorClass: z.string().min(1).max(200).nullable(),
+    scheduler: z
+      .object({
+        enabled: z.boolean(),
+        lastRunAt: z.string().datetime().nullable(),
+        lastCompletedAt: z.string().datetime().nullable(),
+        lastDecisionCount: z.number().int().min(0).nullable(),
+        lastErrorAt: z.string().datetime().nullable(),
+        lastErrorClass: z.string().min(1).max(200).nullable()
+      })
+      .strict()
+  })
+  .strict();
+
+export type WorkerRuntimeHealthSnapshot = z.infer<typeof WorkerRuntimeHealthSnapshotSchema>;
+
 export const ApprovalDecisionRecordSchema = z.object({
   decision: ApprovalDecisionSchema.exclude(["pending"]),
   scope: ApprovalDecisionScopeSchema,

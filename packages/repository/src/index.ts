@@ -122,6 +122,8 @@ import {
   type WorkflowCanvasTemplate,
   type Workspace,
   type WorkspaceGovernance,
+  WorkerRuntimeHealthSnapshotSchema,
+  type WorkerRuntimeHealthSnapshot,
   type WorkspaceMember,
   type WorkspaceSelection
 } from "@agentic/contracts";
@@ -171,6 +173,12 @@ import {
   updateProviderSideEffectInStore,
   updateProviderSideEffectWithClient
 } from "./provider-side-effect-ledger";
+import {
+  getLatestWorkerRuntimeHealthFromStore,
+  getLatestWorkerRuntimeHealthWithClient,
+  recordWorkerRuntimeHealthInStore,
+  recordWorkerRuntimeHealthWithClient
+} from "./worker-runtime-health-store";
 import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
 import {
   queryJobReadinessSummary,
@@ -261,7 +269,8 @@ const RuntimeStoreSchema = z.object({
   agentMetrics: z.array(AgentMetricsSchema).default([]),
   briefingPreferences: z.array(BriefingPreferencesSchema).default([]),
   operatorProducts: z.array(OperatorProductSchema).default([]),
-  operatorProductSelections: z.array(OperatorProductSelectionSchema).default([])
+  operatorProductSelections: z.array(OperatorProductSelectionSchema).default([]),
+  workerRuntimeHealth: z.array(WorkerRuntimeHealthSnapshotSchema).default([])
 });
 
 type RuntimeStore = z.infer<typeof RuntimeStoreSchema>;
@@ -330,7 +339,8 @@ function createEmptyStore(): RuntimeStore {
     agentMetrics: [],
     briefingPreferences: [],
     operatorProducts: [],
-    operatorProductSelections: []
+    operatorProductSelections: [],
+    workerRuntimeHealth: []
   });
 }
 
@@ -2649,6 +2659,19 @@ class FileRepository implements AgenticRepository {
       await this.writeStore(store);
       return record;
     });
+  }
+
+  async recordWorkerRuntimeHealth(snapshot: WorkerRuntimeHealthSnapshot): Promise<void> {
+    await this.withMutationLock(async () => {
+      const store = await this.readStore();
+      recordWorkerRuntimeHealthInStore(store, snapshot);
+      await this.writeStore(store);
+    });
+  }
+
+  async getLatestWorkerRuntimeHealth(): Promise<WorkerRuntimeHealthSnapshot | null> {
+    const store = await this.readStore();
+    return getLatestWorkerRuntimeHealthFromStore(store);
   }
 
   async listTemplates(userId = DEFAULT_OWNER_USER_ID): Promise<GoalTemplate[]> {
@@ -7561,6 +7584,15 @@ class PostgresRepository implements AgenticRepository {
 
   async updateProviderSideEffect(params: UpdateProviderSideEffectParams): Promise<ProviderSideEffectRecord> {
     return this.withTransaction((client) => updateProviderSideEffectWithClient(client, params));
+  }
+
+  async recordWorkerRuntimeHealth(snapshot: WorkerRuntimeHealthSnapshot): Promise<void> {
+    await this.withTransaction((client) => recordWorkerRuntimeHealthWithClient(client, snapshot));
+  }
+
+  async getLatestWorkerRuntimeHealth(): Promise<WorkerRuntimeHealthSnapshot | null> {
+    await this.ready;
+    return getLatestWorkerRuntimeHealthWithClient(this.pool);
   }
 
   async listTemplates(userId = DEFAULT_OWNER_USER_ID): Promise<GoalTemplate[]> {

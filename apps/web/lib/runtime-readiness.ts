@@ -356,7 +356,7 @@ function buildMissingWorkerHeartbeatCheck(runtime: WebReadinessReport["runtime"]
     status: getWorkerHeartbeatFailureStatus(runtime),
     message:
       runtime === "production"
-        ? "Worker heartbeat is not configured; set AGENTIC_WORKER_HEALTH_PATH so readiness can verify the worker process."
+        ? "Worker heartbeat is not configured; set AGENTIC_WORKER_HEALTH_PATH (shared file) or run the worker against the shared DATABASE_URL so readiness can verify the worker process."
         : "Worker heartbeat is not configured; readiness is using durable queue state only.",
     details: {
       configured: false
@@ -719,14 +719,46 @@ function buildWorkerHeartbeatDetails(params: {
   };
 }
 
-async function getWorkerHeartbeatCheckSnapshot(nodeEnv: string | undefined): Promise<WorkerHeartbeatCheckSnapshot> {
-  const runtime = normalizeRuntime(nodeEnv);
-  const healthPath = process.env.AGENTIC_WORKER_HEALTH_PATH?.trim();
+function evaluateWorkerHeartbeatSnapshot(
+  heartbeat: WorkerRuntimeHealthSnapshot,
+  runtime: WebReadinessReport["runtime"]
+): WorkerHeartbeatCheckSnapshot {
+  const updatedAt = Date.parse(heartbeat.updatedAt);
+  const staleAfterMs = getWorkerHeartbeatStaleMs();
+  const ageMs = Number.isFinite(updatedAt) ? Math.max(0, Date.now() - updatedAt) : Number.POSITIVE_INFINITY;
+  const details = buildWorkerHeartbeatDetails({
+    heartbeat,
+    ageMs,
+    staleAfterMs
+  });
 
-  if (!healthPath) {
-    return buildMissingWorkerHeartbeatCheck(runtime);
+  if (heartbeat.status === "error") {
+    return {
+      status: getWorkerHeartbeatFailureStatus(runtime),
+      message: "Worker heartbeat reports an error state.",
+      details
+    };
   }
 
+  if (!Number.isFinite(ageMs) || ageMs > staleAfterMs) {
+    return {
+      status: getWorkerHeartbeatFailureStatus(runtime),
+      message: "Worker heartbeat is stale.",
+      details
+    };
+  }
+
+  return {
+    status: "pass",
+    message: "Worker heartbeat is fresh.",
+    details
+  };
+}
+
+async function getFileWorkerHeartbeatCheckSnapshot(
+  healthPath: string,
+  runtime: WebReadinessReport["runtime"]
+): Promise<WorkerHeartbeatCheckSnapshot> {
   try {
     const heartbeat = await readFileWorkerRuntimeHealthSnapshot(healthPath);
 
@@ -735,51 +767,70 @@ async function getWorkerHeartbeatCheckSnapshot(nodeEnv: string | undefined): Pro
         status: getWorkerHeartbeatFailureStatus(runtime),
         message: "Worker heartbeat could not be loaded.",
         details: {
-          configured: true
+          configured: true,
+          source: "file"
         }
       };
     }
 
-    const updatedAt = Date.parse(heartbeat.updatedAt);
-    const staleAfterMs = getWorkerHeartbeatStaleMs();
-    const ageMs = Number.isFinite(updatedAt) ? Math.max(0, Date.now() - updatedAt) : Number.POSITIVE_INFINITY;
-    const details = buildWorkerHeartbeatDetails({
-      heartbeat,
-      ageMs,
-      staleAfterMs
-    });
-
-    if (heartbeat.status === "error") {
-      return {
-        status: getWorkerHeartbeatFailureStatus(runtime),
-        message: "Worker heartbeat reports an error state.",
-        details
-      };
-    }
-
-    if (!Number.isFinite(ageMs) || ageMs > staleAfterMs) {
-      return {
-        status: getWorkerHeartbeatFailureStatus(runtime),
-        message: "Worker heartbeat is stale.",
-        details
-      };
-    }
-
-    return {
-      status: "pass",
-      message: "Worker heartbeat is fresh.",
-      details
-    };
+    return evaluateWorkerHeartbeatSnapshot(heartbeat, runtime);
   } catch (error) {
     return {
       status: getWorkerHeartbeatFailureStatus(runtime),
       message: "Worker heartbeat readiness checks could not be completed.",
       details: {
         configured: true,
+        source: "file",
         error: error instanceof Error ? error.message : "Unknown readiness failure"
       }
     };
   }
+}
+
+async function getDatabaseWorkerHeartbeatCheckSnapshot(
+  runtime: WebReadinessReport["runtime"]
+): Promise<WorkerHeartbeatCheckSnapshot> {
+  try {
+    const heartbeat = await getReadinessRepository().getLatestWorkerRuntimeHealth();
+
+    if (!heartbeat) {
+      return {
+        status: getWorkerHeartbeatFailureStatus(runtime),
+        message: "Worker heartbeat has not been recorded in the shared database yet.",
+        details: {
+          configured: true,
+          source: "database"
+        }
+      };
+    }
+
+    return evaluateWorkerHeartbeatSnapshot(heartbeat, runtime);
+  } catch (error) {
+    return {
+      status: getWorkerHeartbeatFailureStatus(runtime),
+      message: "Worker heartbeat readiness checks could not be completed.",
+      details: {
+        configured: true,
+        source: "database",
+        error: error instanceof Error ? error.message : "Unknown readiness failure"
+      }
+    };
+  }
+}
+
+async function getWorkerHeartbeatCheckSnapshot(nodeEnv: string | undefined): Promise<WorkerHeartbeatCheckSnapshot> {
+  const runtime = normalizeRuntime(nodeEnv);
+  const healthPath = process.env.AGENTIC_WORKER_HEALTH_PATH?.trim();
+
+  if (healthPath) {
+    return getFileWorkerHeartbeatCheckSnapshot(healthPath, runtime);
+  }
+
+  if (process.env.DATABASE_URL?.trim()) {
+    return getDatabaseWorkerHeartbeatCheckSnapshot(runtime);
+  }
+
+  return buildMissingWorkerHeartbeatCheck(runtime);
 }
 
 function toPublicReadinessSummary(report: WebReadinessReport): PublicWebReadinessSummary {

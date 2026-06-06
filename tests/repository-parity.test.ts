@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   MemoryRecordSchema,
   DEFAULT_OWNER_USER_ID,
+  WorkerRuntimeHealthSnapshotSchema,
   WorkspaceSchema,
   createSystemActorContext,
   nowIso
@@ -43,6 +44,42 @@ parityDescribe("repository Postgres parity", () => {
   it("uses the expected repository backends", () => {
     expect(fileRepository.backend).toBe("file");
     expect(postgresRepository.backend).toBe("postgres");
+  });
+
+  it("records and reads the worker runtime heartbeat consistently", async () => {
+    const runnerId = `runner-parity-${unique}`;
+    const now = nowIso();
+    const record = WorkerRuntimeHealthSnapshotSchema.parse({
+      version: 1,
+      runnerId,
+      pid: 4242,
+      status: "running",
+      startedAt: now,
+      updatedAt: now,
+      processedCount: 2,
+      lastProcessedAt: now,
+      lastErrorAt: null,
+      lastErrorClass: null,
+      scheduler: {
+        enabled: false,
+        lastRunAt: null,
+        lastCompletedAt: null,
+        lastDecisionCount: null,
+        lastErrorAt: null,
+        lastErrorClass: null
+      }
+    });
+
+    await fileRepository.recordWorkerRuntimeHealth(record);
+    await postgresRepository.recordWorkerRuntimeHealth(record);
+
+    const fileLatest = await fileRepository.getLatestWorkerRuntimeHealth();
+    const postgresLatest = await postgresRepository.getLatestWorkerRuntimeHealth();
+
+    expect(fileLatest?.runnerId).toBe(runnerId);
+    expect(postgresLatest?.runnerId).toBe(runnerId);
+    expect(postgresLatest?.processedCount).toBe(2);
+    expect(postgresLatest).toEqual(fileLatest);
   });
 
   it("persists workspace membership consistently", async () => {
