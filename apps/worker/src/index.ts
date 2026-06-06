@@ -179,6 +179,25 @@ async function main() {
         maxRunDurationMs
       });
 
+      const workerRuntimeOptions = {
+        repository,
+        selfImprovementRepository,
+        runnerId,
+        pollIntervalMs,
+        leaseMs,
+        concurrencyLimits,
+        retryJitterRatio,
+        requireIdempotencyForRetry: true,
+        signal: controller.signal,
+        health: healthSink
+          ? {
+              sink: healthSink,
+              intervalMs: heartbeatIntervalMs,
+              schedulerEnabled: watcherSchedulerEnabled
+            }
+          : undefined
+      };
+
       if (runOnce) {
         const deadlineTimer = setTimeout(() => shutdown("deadline"), maxRunDurationMs);
         deadlineTimer.unref();
@@ -215,24 +234,9 @@ async function main() {
 
           const [onceResult] = await Promise.all([
             runWorkerRuntime({
-              repository,
-              selfImprovementRepository,
-              runnerId,
-              pollIntervalMs,
-              leaseMs,
-              concurrencyLimits,
-              retryJitterRatio,
-              requireIdempotencyForRetry: true,
+              ...workerRuntimeOptions,
               maxJobs: maxJobsPerRun,
-              stopWhenIdle: true,
-              signal: controller.signal,
-              health: healthSink
-                ? {
-                    sink: healthSink,
-                    intervalMs: heartbeatIntervalMs,
-                    schedulerEnabled: watcherSchedulerEnabled
-                  }
-                : undefined
+              stopWhenIdle: true
             }),
             drainScheduler()
           ]);
@@ -254,24 +258,7 @@ async function main() {
       }
 
       const [result] = await Promise.all([
-        runWorkerRuntime({
-          repository,
-          selfImprovementRepository,
-          runnerId,
-          pollIntervalMs,
-          leaseMs,
-          concurrencyLimits,
-          retryJitterRatio,
-          requireIdempotencyForRetry: true,
-          signal: controller.signal,
-          health: healthSink
-            ? {
-                sink: healthSink,
-                intervalMs: heartbeatIntervalMs,
-                schedulerEnabled: watcherSchedulerEnabled
-              }
-            : undefined
-        }),
+        runWorkerRuntime(workerRuntimeOptions),
         runWatcherSchedulerLoop({
           repository,
           runnerId,
