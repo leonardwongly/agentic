@@ -55,5 +55,9 @@ export const CHECKED_IN_MIGRATIONS: readonly CheckedInMigration[] = [
   {
     name: "0011_provider_side_effect_ledger.sql",
     checksum: "882ace56f1dce3a10e729ef975b50c9ef3289dd8a6af9c1b4108c44fea542ca1"
+  },
+  {
+    name: "0012_worker_runtime_health.sql",
+    checksum: "7af70341e7ce17768b9fe81aa92093442ae5d84f480d6ed5162c8d715a4d1eae"
   }
 ] as const;

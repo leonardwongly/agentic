@@ -188,6 +188,10 @@ npm run test:smoke:github-app-sync
 the canonical deployment path, and it should be copied and reviewed in the
 installer's provider account before use.
 
+For a completely-free deployment that replaces the always-on worker with a
+bounded run-once worker on a free scheduler (for example Vercel + Neon + GitHub
+Actions cron), see [`free-tier-serverless.md`](./free-tier-serverless.md).
+
 Fork maintainers can add provider-specific examples as long as they preserve
 the same safety properties: Postgres-backed state, separate worker process,
 stable HTTPS ingress, installer-owned secrets, and a clear rollback path.

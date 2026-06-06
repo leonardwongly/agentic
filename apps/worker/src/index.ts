@@ -5,9 +5,11 @@ import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import {
   createFileWorkerRuntimeHealthSink,
+  createRepositoryWorkerRuntimeHealthSink,
   createWorkerRuntimeHealthSnapshot,
   resolveWorkerConcurrencyPolicy,
   runWatcherSchedulerLoop,
+  runWatcherSchedulerOnce,
   runWorkerRuntime,
   updateWorkerRuntimeHealthSnapshot,
   type WorkerRuntimeHealthSink,
@@ -90,27 +92,35 @@ async function main() {
   const concurrencyPolicy = resolveWorkerConcurrencyPolicy();
   const concurrencyLimits = concurrencyPolicy.limits;
   const retryJitterRatio = parseRatioEnv("AGENTIC_WORKER_RETRY_JITTER_RATIO", 0.1);
+  const runOnce = process.argv.includes("--once") || parseBooleanEnv("AGENTIC_WORKER_RUN_ONCE", false);
+  const maxJobsPerRun = parsePositiveIntEnv("AGENTIC_WORKER_MAX_JOBS", 50);
+  const maxRunDurationMs = parsePositiveIntEnv("AGENTIC_WORKER_MAX_DURATION_MS", 55_000);
   const healthPath = process.env.AGENTIC_WORKER_HEALTH_PATH?.trim();
-  const healthFileSink = healthPath ? createFileWorkerRuntimeHealthSink(healthPath) : null;
-  let healthSnapshot: WorkerRuntimeHealthSnapshot | null = healthFileSink
+  const databaseConfigured = Boolean(process.env.DATABASE_URL?.trim());
+  const baseHealthSink = healthPath
+    ? createFileWorkerRuntimeHealthSink(healthPath)
+    : databaseConfigured
+      ? createRepositoryWorkerRuntimeHealthSink(repository)
+      : null;
+  let healthSnapshot: WorkerRuntimeHealthSnapshot | null = baseHealthSink
     ? createWorkerRuntimeHealthSnapshot({
         runnerId,
         status: "starting"
       })
     : null;
-  const healthSink: WorkerRuntimeHealthSink | undefined = healthFileSink
+  const healthSink: WorkerRuntimeHealthSink | undefined = baseHealthSink
     ? {
         async write(snapshot) {
           healthSnapshot = updateWorkerRuntimeHealthSnapshot({
             ...snapshot,
             scheduler: healthSnapshot?.scheduler ?? snapshot.scheduler
           }, {});
-          await healthFileSink.write(healthSnapshot);
+          await baseHealthSink.write(healthSnapshot);
         }
       }
     : undefined;
   const writeSchedulerHealth = async (updates: Partial<WorkerRuntimeHealthSnapshot["scheduler"]>) => {
-    if (!healthFileSink || !healthSnapshot) {
+    if (!baseHealthSink || !healthSnapshot) {
       return;
     }
 
@@ -121,7 +131,7 @@ async function main() {
         enabled: watcherSchedulerEnabled
       }
     });
-    await healthFileSink.write(healthSnapshot);
+    await baseHealthSink.write(healthSnapshot);
   };
 
   const shutdown = (signal: string) => {
@@ -162,8 +172,86 @@ async function main() {
         watcherSchedulerEnabled,
         watcherSchedulerIntervalMs,
         watcherSchedulerTimeoutMs,
-        healthConfigured: Boolean(healthSink)
+        healthConfigured: Boolean(healthSink),
+        healthBackend: healthPath ? "file" : databaseConfigured ? "database" : "none",
+        runOnce,
+        maxJobsPerRun,
+        maxRunDurationMs
       });
+
+      if (runOnce) {
+        const deadlineTimer = setTimeout(() => shutdown("deadline"), maxRunDurationMs);
+        deadlineTimer.unref();
+        let onceExitCode = 0;
+
+        try {
+          const drainScheduler = async () => {
+            if (!watcherSchedulerEnabled) {
+              return;
+            }
+
+            await writeSchedulerHealth({ lastRunAt: new Date().toISOString() });
+
+            try {
+              const schedulerResult = await runWatcherSchedulerOnce({
+                repository,
+                runnerId,
+                leaseMs: watcherSchedulerLeaseMs,
+                signal: controller.signal
+              });
+              await writeSchedulerHealth({
+                lastCompletedAt: schedulerResult.evaluatedAt,
+                lastDecisionCount: schedulerResult.decisions.length,
+                lastErrorAt: null,
+                lastErrorClass: null
+              });
+            } catch (error) {
+              await writeSchedulerHealth({
+                lastErrorAt: new Date().toISOString(),
+                lastErrorClass: error instanceof Error ? error.name : "UnknownError"
+              });
+            }
+          };
+
+          const [onceResult] = await Promise.all([
+            runWorkerRuntime({
+              repository,
+              selfImprovementRepository,
+              runnerId,
+              pollIntervalMs,
+              leaseMs,
+              concurrencyLimits,
+              retryJitterRatio,
+              requireIdempotencyForRetry: true,
+              maxJobs: maxJobsPerRun,
+              stopWhenIdle: true,
+              signal: controller.signal,
+              health: healthSink
+                ? {
+                    sink: healthSink,
+                    intervalMs: heartbeatIntervalMs,
+                    schedulerEnabled: watcherSchedulerEnabled
+                  }
+                : undefined
+            }),
+            drainScheduler()
+          ]);
+
+          logInfo("worker.run_once_complete", {
+            runnerId,
+            processedCount: onceResult.processedCount,
+            stopReason: onceResult.stopReason,
+            maxJobs: maxJobsPerRun
+          });
+        } catch (error) {
+          logError("worker.run_once_failed", error);
+          onceExitCode = 1;
+        } finally {
+          clearTimeout(deadlineTimer);
+        }
+
+        process.exit(onceExitCode);
+      }
 
       const [result] = await Promise.all([
         runWorkerRuntime({

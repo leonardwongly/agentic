@@ -1,30 +1,11 @@
 import crypto from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { nowIso } from "@agentic/contracts";
+import { nowIso, type WorkerRuntimeHealthSnapshot } from "@agentic/contracts";
 
 const MAX_HEALTH_FILE_BYTES = 16 * 1024;
 
-export type WorkerRuntimeHealthSnapshot = {
-  version: 1;
-  runnerId: string;
-  pid: number;
-  status: "starting" | "running" | "idle" | "stopped" | "error";
-  startedAt: string;
-  updatedAt: string;
-  processedCount: number;
-  lastProcessedAt: string | null;
-  lastErrorAt: string | null;
-  lastErrorClass: string | null;
-  scheduler: {
-    enabled: boolean;
-    lastRunAt: string | null;
-    lastCompletedAt: string | null;
-    lastDecisionCount: number | null;
-    lastErrorAt: string | null;
-    lastErrorClass: string | null;
-  };
-};
+export type { WorkerRuntimeHealthSnapshot };
 
 export type WorkerRuntimeHealthSink = {
   write(snapshot: WorkerRuntimeHealthSnapshot): Promise<void>;
@@ -161,6 +142,16 @@ export function createFileWorkerRuntimeHealthSink(filePath: string): WorkerRunti
       const tempPath = `${resolvedPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
       await writeFile(tempPath, payload, { mode: 0o600 });
       await rename(tempPath, resolvedPath);
+    }
+  };
+}
+
+export function createRepositoryWorkerRuntimeHealthSink(repository: {
+  recordWorkerRuntimeHealth(snapshot: WorkerRuntimeHealthSnapshot): Promise<void>;
+}): WorkerRuntimeHealthSink {
+  return {
+    async write(snapshot) {
+      await repository.recordWorkerRuntimeHealth(snapshot);
     }
   };
 }

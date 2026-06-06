@@ -46,6 +46,7 @@ import type {
   RiskClass,
   Watcher,
   WatcherPage,
+  WorkerRuntimeHealthSnapshot,
   WorkflowCanvasTemplate,
   Workspace,
   WorkspaceGovernance,
@@ -483,6 +484,8 @@ export type AgenticRepository = {
   getOperatorProductSelection(userId?: string): Promise<OperatorProductSelection | null>;
   saveOperatorProduct(product: OperatorProduct): Promise<OperatorProduct>;
   saveOperatorProductSelection(selection: OperatorProductSelection): Promise<OperatorProductSelection>;
+  recordWorkerRuntimeHealth(snapshot: WorkerRuntimeHealthSnapshot): Promise<void>;
+  getLatestWorkerRuntimeHealth(): Promise<WorkerRuntimeHealthSnapshot | null>;
 };
 
 export type RepositoryLifecyclePort = Pick<AgenticRepository, "backend" | "seedDefaults">;
@@ -506,7 +509,10 @@ export type DashboardCollectionRepositoryPort = Pick<
 
 export type DashboardEventStreamRepositoryPort = Pick<AgenticRepository, "getDashboardData" | "listJobs">;
 
-export type ReadinessRepositoryPort = Pick<AgenticRepository, "getJobReadinessSummary" | "getProviderCredentialReadinessSummary">;
+export type ReadinessRepositoryPort = Pick<
+  AgenticRepository,
+  "getJobReadinessSummary" | "getProviderCredentialReadinessSummary" | "getLatestWorkerRuntimeHealth"
+>;
 
 export type GovernanceRepositoryPort = Pick<
   AgenticRepository,
@@ -618,4 +624,5 @@ export type WorkerRuntimeRepositoryPort = QueueRepositoryPort &
     | "getBriefingPreferences"
     | "listAutopilotEvents"
     | "saveAutopilotEvent"
+    | "recordWorkerRuntimeHealth"
   >;

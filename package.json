@@ -81,6 +81,7 @@
     "start:web:prod": "tsx scripts/start-web.ts",
     "start:worker:prod": "tsx scripts/start-worker.ts",
     "worker:start": "npm run start -w @agentic/worker",
+    "worker:once": "npm run start:worker:prod -- --once",
     "docs:render": "node scripts/render-docs.mjs",
     "docs:validate": "node scripts/validate-docs.mjs",
     "docs:build": "npm run docs:render && npm run docs:validate",

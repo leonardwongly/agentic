@@ -155,6 +155,7 @@ export {
 } from "./watcher-scheduler";
 export {
   createFileWorkerRuntimeHealthSink,
+  createRepositoryWorkerRuntimeHealthSink,
   createWorkerRuntimeHealthSnapshot,
   readFileWorkerRuntimeHealthSnapshot,
   updateWorkerRuntimeHealthSnapshot,
@@ -188,7 +189,7 @@ export const workerJobKindValues = [
 
 export type WorkerRuntimeResult = {
   processedCount: number;
-  stopReason: "aborted" | "max_jobs";
+  stopReason: "aborted" | "max_jobs" | "drained";
 };
 
 export type WorkerRuntimeOptions = {
@@ -203,6 +204,7 @@ export type WorkerRuntimeOptions = {
   retryJitterRatio?: number;
   requireIdempotencyForRetry?: boolean;
   maxJobs?: number;
+  stopWhenIdle?: boolean;
   claim?: ClaimNextJobParams;
   immuneSystem?: Partial<WorkerRuntimeImmuneSystemControls>;
   health?: {
@@ -1497,6 +1499,18 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
             }
 
             continue;
+          }
+
+          if (options.stopWhenIdle) {
+            healthReporter.write({
+              status: "stopped",
+              processedCount
+            });
+            await healthReporter.flush();
+            return {
+              processedCount,
+              stopReason: "drained"
+            };
           }
 
           await delay(pollIntervalMs, options.signal);

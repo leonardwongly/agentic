@@ -260,7 +260,7 @@ Worker process:
 npm run start:worker:prod
 ```
 
-Only trust proxy headers after confirming the ingress overwrites the configured client-IP header at the edge. Start with the provider-neutral self-hosting guide in [`docs/deployment/self-hosted.md`](docs/deployment/self-hosted.md). The deployment runbook is [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md); the Render Blueprint in [`deploy/render/render.yaml`](deploy/render/render.yaml) is one optional provider example.
+Only trust proxy headers after confirming the ingress overwrites the configured client-IP header at the edge. Start with the provider-neutral self-hosting guide in [`docs/deployment/self-hosted.md`](docs/deployment/self-hosted.md). For a completely-free serverless deployment (bounded run-once worker on a free scheduler), see [`docs/deployment/free-tier-serverless.md`](docs/deployment/free-tier-serverless.md). The deployment runbook is [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md); the Render Blueprint in [`deploy/render/render.yaml`](deploy/render/render.yaml) is one optional provider example.
 
 ## Forking And Self-Hosting
 

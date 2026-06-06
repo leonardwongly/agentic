@@ -1,0 +1,85 @@
+name: Scheduled Worker
+
+# Free-tier serverless worker driver. When the web/API runs on a host that
+# cannot keep an always-on worker process (for example Vercel + Neon), this
+# scheduled job runs a bounded run-once worker against the shared DATABASE_URL,
+# draining the durable queue and updating the DB-backed worker heartbeat. It is
+# free for public repositories on GitHub-hosted runners.
+#
+# Prerequisites (configure as repository secrets/variables):
+#   secrets.AGENTIC_DATABASE_URL  - Postgres connection string (migrations must
+#                                   already be applied; this job does not migrate)
+#   secrets.AGENTIC_ACCESS_KEY    - runtime access key
+#   vars.AGENTIC_BOOTSTRAP_USER_ID / vars.AGENTIC_BOOTSTRAP_DISPLAY_NAME /
+#   vars.AGENTIC_DEFAULT_TIMEZONE - optional owner bootstrap values
+#
+# The schedule below runs every 10 minutes; tune it to your workload. Keep the
+# web readiness stale window (AGENTIC_READY_WORKER_HEARTBEAT_STALE_MS) at roughly
+# 2-3x this interval so a between-run heartbeat is not treated as stale.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      maxJobs:
+        description: "Maximum durable jobs to drain in this run"
+        required: false
+        default: "50"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-worker
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    name: Drain durable jobs once
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.AGENTIC_DATABASE_URL }}
+      AGENTIC_ACCESS_KEY: ${{ secrets.AGENTIC_ACCESS_KEY }}
+      AGENTIC_BOOTSTRAP_USER_ID: ${{ vars.AGENTIC_BOOTSTRAP_USER_ID || 'owner' }}
+      AGENTIC_BOOTSTRAP_DISPLAY_NAME: ${{ vars.AGENTIC_BOOTSTRAP_DISPLAY_NAME || 'Instance Owner' }}
+      AGENTIC_DEFAULT_TIMEZONE: ${{ vars.AGENTIC_DEFAULT_TIMEZONE || 'UTC' }}
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=4096
+      NEXT_TELEMETRY_DISABLED: "1"
+      AGENTIC_WORKER_RUNNER_ID: github-actions-scheduled-worker
+      AGENTIC_WORKER_MAX_JOBS: ${{ github.event.inputs.maxJobs || '50' }}
+      # Bounded so the run terminates well under the job timeout even if the
+      # queue never drains (stopWhenIdle exits earlier when the queue is empty).
+      AGENTIC_WORKER_MAX_DURATION_MS: "480000"
+    steps:
+      - name: Check worker configuration
+        id: guard
+        shell: bash
+        run: |
+          if [ -z "${DATABASE_URL}" ] || [ -z "${AGENTIC_ACCESS_KEY}" ]; then
+            echo "::notice title=Scheduled worker not configured::Set secrets.AGENTIC_DATABASE_URL and secrets.AGENTIC_ACCESS_KEY to enable the free scheduled worker."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: steps.guard.outputs.configured == 'true'
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        if: steps.guard.outputs.configured == 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.guard.outputs.configured == 'true'
+        run: npm ci
+
+      - name: Drain durable jobs (bounded run-once worker)
+        if: steps.guard.outputs.configured == 'true'
+        run: npm run worker:once
