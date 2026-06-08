@@ -41,7 +41,7 @@
   // Hyperdrive binding for Postgres (F2 / #978). Provision once with:
   //   wrangler hyperdrive create agentic-db --connection-string="postgres://USER:PASS@HOST:5432/agentic"
   // then uncomment and set "id". The web app reads env.HYPERDRIVE.connectionString
-  // per request (see apps/web/lib/server.ts) and uses a maxUses:1 pool so a
+  // per request (see apps/web/lib/server.ts), creating a request-scoped pool so a
   // connection is never reused across requests. localConnectionString lets
   // `cf:preview` talk to a local Postgres.
   // ,"hyperdrive": [

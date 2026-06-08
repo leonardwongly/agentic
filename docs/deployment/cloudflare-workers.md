@@ -20,7 +20,7 @@ One prerequisite remains that can only be completed against a live Cloudflare
 account:
 
 - **Hyperdrive + Postgres.** Workers cannot reuse a pg connection across
-  requests; the app resolves a per-request `maxUses:1` pool from a Hyperdrive
+  requests; the app resolves a per-request (request-scoped) pool from a Hyperdrive
   binding. Provision Hyperdrive over your Postgres before deploying.
 
 ## Runtime shape on Cloudflare
@@ -28,7 +28,7 @@ account:
 | Component | How it runs |
 | --- | --- |
 | Web/API | Next.js app as a Worker via `@opennextjs/cloudflare` (`apps/web/worker.ts`). |
-| Database | Postgres behind **Hyperdrive** (`HYPERDRIVE` binding); per-request `maxUses:1` pool. |
+| Database | Postgres behind **Hyperdrive** (`HYPERDRIVE` binding); per-request (request-scoped) pool. |
 | Worker (jobs) | **Cron Trigger** → `scheduled()` → `POST /api/worker/tick` (drains durable jobs + one watcher pass). No always-on process. |
 | Readiness | `/api/ready` reads the **DB-backed** worker heartbeat (do not set `AGENTIC_WORKER_HEALTH_PATH`). |
 | File-backed features | **Unsupported.** Local notes stay disabled; learned-execution (self-improvement) memory degrades to a no-op (not persisted). |

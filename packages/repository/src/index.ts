@@ -2958,20 +2958,13 @@ class FileRepository implements AgenticRepository {
   }
 }
 
-export type PostgresPoolConfig = {
-  /** Maximum number of clients in the pool. */
-  max?: number;
-  /** Discard a physical connection after this many uses (1 = never reuse across requests). */
-  maxUses?: number;
-};
-
 class PostgresRepository implements AgenticRepository {
   backend = "postgres" as const;
   private readonly pool: Pool;
   private readonly ready = Promise.resolve();
 
-  constructor(url: string, poolConfig?: PostgresPoolConfig) {
-    this.pool = new Pool({ connectionString: url, ...poolConfig });
+  constructor(url: string) {
+    this.pool = new Pool({ connectionString: url });
   }
 
   private async withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -7916,11 +7909,7 @@ class PostgresRepository implements AgenticRepository {
   }
 }
 
-export function createRepository(options?: {
-  storePath?: string;
-  databaseUrl?: string;
-  poolConfig?: PostgresPoolConfig;
-}): AgenticRepository {
+export function createRepository(options?: { storePath?: string; databaseUrl?: string }): AgenticRepository {
   assertWorkspaceGovernanceStartupConfig();
 
   // Explicit file-backed test stores must win over an ambient DATABASE_URL so
@@ -7929,7 +7918,7 @@ export function createRepository(options?: {
     options?.databaseUrl ?? (options?.storePath === undefined ? process.env.DATABASE_URL : undefined);
 
   if (databaseUrl) {
-    return new PostgresRepository(databaseUrl, options?.poolConfig);
+    return new PostgresRepository(databaseUrl);
   }
 
   if (process.env.NODE_ENV === "production") {

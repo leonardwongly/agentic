@@ -36,18 +36,15 @@ declare global {
 }
 
 // Cloudflare Workers cannot reuse a pg connection across requests, so on Workers
-// the Postgres repository (and its pool) must be created per request. React
-// cache() memoizes within a single request and resets between requests, giving
-// one short-lived maxUses:1 pool per request; Hyperdrive provides the durable
-// server-side connection pooling.
-const WORKERS_POSTGRES_POOL_CONFIG = { max: 1, maxUses: 1 } as const;
-
+// the Postgres repository (and its pool) is created per request: React cache()
+// memoizes within a single request and resets between requests, giving one
+// short-lived pool per request, while Hyperdrive provides the durable
+// server-side connection pooling. (Request-scoping alone prevents cross-request
+// connection reuse; finer pool tuning such as maxUses belongs to the repository
+// "spine" stream.)
 const getRequestScopedHyperdriveRepository = cache((connectionString: string) => {
   validateAuthRuntimeState();
-  return createRepository({
-    databaseUrl: connectionString,
-    poolConfig: WORKERS_POSTGRES_POOL_CONFIG
-  });
+  return createRepository({ databaseUrl: connectionString });
 });
 
 export function getRepository() {
