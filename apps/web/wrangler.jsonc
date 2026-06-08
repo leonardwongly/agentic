@@ -1,0 +1,54 @@
+{
+  // Cloudflare Workers config for the Next.js app via @opennextjs/cloudflare.
+  // Phase A adapter spike (issue #977). Feature bindings (R2 incremental cache,
+  // Hyperdrive for Postgres, Cron Trigger for the worker tick) are added in the
+  // F2/F3 follow-ups; this minimal config is enough to build and boot the app.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "main": "worker.ts",
+  "name": "agentic-web",
+  // Cloudflare Cron Trigger (F3 / #980). Drives POST /api/worker/tick (drain
+  // durable jobs + one watcher pass) via worker.ts scheduled(). Tune cadence to
+  // your queue latency; minimum granularity is 1 minute. Requires the
+  // AGENTIC_WORKER_TICK_TOKEN secret + a matching AGENTIC_MACHINE_TOKENS_JSON entry.
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  // Must be >= 2024-09-23 for @opennextjs/cloudflare; >= 2025-05-05 so that
+  // FinalizationRegistry/WeakRef (used by React 19 / Next 16) are available.
+  "compatibility_date": "2025-05-05",
+  "compatibility_flags": [
+    // Node.js API surface (required by the Node.js runtime build).
+    "nodejs_compat",
+    // Required by OpenNext: only allow fetch() to public URLs.
+    "global_fetch_strictly_public"
+  ],
+  // Non-secret runtime configuration (F7 / #984). OpenNext maps these to
+  // process.env. Cloudflare overwrites CF-Connecting-IP at the edge (clients
+  // cannot spoof it), so it is the trusted client-IP source. Secrets
+  // (AGENTIC_ACCESS_KEY, AGENTIC_MACHINE_TOKENS_JSON, AGENTIC_WORKER_TICK_TOKEN,
+  // provider keys) are set via `wrangler secret put`, and AGENTIC_PUBLIC_BASE_URL
+  // must be set to your deployed origin (as a var or secret). Do NOT set
+  // AGENTIC_WORKER_HEALTH_PATH on Workers — readiness reads the DB heartbeat.
+  "vars": {
+    "AGENTIC_TRUST_PROXY_HEADERS": "true",
+    "AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED": "true",
+    "AGENTIC_TRUSTED_CLIENT_IP_HEADER": "cf-connecting-ip"
+  },
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  }
+  // Hyperdrive binding for Postgres (F2 / #978). Provision once with:
+  //   wrangler hyperdrive create agentic-db --connection-string="postgres://USER:PASS@HOST:5432/agentic"
+  // then uncomment and set "id". The web app reads env.HYPERDRIVE.connectionString
+  // per request (see apps/web/lib/server.ts) and uses a maxUses:1 pool so a
+  // connection is never reused across requests. localConnectionString lets
+  // `cf:preview` talk to a local Postgres.
+  // ,"hyperdrive": [
+  //   {
+  //     "binding": "HYPERDRIVE",
+  //     "id": "<your-hyperdrive-id>",
+  //     "localConnectionString": "postgres://user:password@localhost:5432/agentic"
+  //   }
+  // ]
+}
