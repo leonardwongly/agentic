@@ -118,6 +118,59 @@ curl https://<your-worker-domain>/api/ready
 After at least one cron run, authenticated `/api/ready/details` shows a fresh
 `worker_heartbeat` with `details.source: "database"`.
 
+## Live deploy validation checklist (runtime-only)
+
+These need a live Cloudflare account + Hyperdrive + Postgres and cannot be
+validated locally — the bundled Miniflare in this toolchain rejects the
+`hyperdrives` binding, so the DB path must be exercised on a real deploy.
+
+### Secrets reach `process.env` (verify first — highest risk)
+
+The app reads most config from `process.env`. In local preview, wrangler `vars`
+populated `process.env` but a `.dev.vars` secret did not, so confirm secrets
+populate on a real deploy before trusting auth.
+
+- [ ] Non-secret config as `vars` (`AGENTIC_PUBLIC_BASE_URL`,
+      `AGENTIC_SHARED_AUTH_STATE`, `AGENTIC_REQUIRE_SHARED_AUTH_STATE`, bootstrap
+      ids, timezone); secrets via `wrangler secret put` (`AGENTIC_ACCESS_KEY`,
+      `AGENTIC_MACHINE_TOKENS_JSON`, `AGENTIC_WORKER_TICK_TOKEN`, provider keys).
+- [ ] After deploy, call an authed route (`GET /api/ready/details` with
+      `x-agentic-access-key`). If the key is rejected, secrets are not in
+      `process.env` → move the value to `vars`, or add a request-init shim that
+      copies `getCloudflareContext().env` into `process.env`.
+      (`AGENTIC_WORKER_TICK_TOKEN` is read from the binding in `worker.ts`, so the
+      cron itself is unaffected; the tick *route* validates `AGENTIC_MACHINE_TOKENS_JSON` via `process.env`.)
+
+### #978 Hyperdrive / per-request Postgres
+
+- [ ] `/api/ready/details` `async_execution` + `connector_health` report `pass`.
+- [ ] `POST /api/goals` (authed) returns a `statusUrl`; a second request also
+      succeeds (no `Cannot perform I/O on behalf of a different request`).
+- [ ] Watch job-claim/lease paths for Hyperdrive cache staleness; disable query
+      caching for transactional reads if needed.
+
+### #980 Cron Trigger
+
+- [ ] Trigger registered (deploy output / dashboard → Triggers).
+- [ ] `wrangler tail` shows `[cron] worker tick 200`; `api.worker.tick.completed`
+      has `processedCount > 0` and `ranWatchers: true`.
+- [ ] The enqueued goal progresses to completion.
+- [ ] `AGENTIC_WORKER_TICK_TOKEN` matches a `scopes:["worker:tick"]`,
+      `routeGroups:["worker"]` entry in `AGENTIC_MACHINE_TOKENS_JSON`.
+
+### Readiness / heartbeat
+
+- [ ] `AGENTIC_WORKER_HEALTH_PATH` unset; `AGENTIC_READY_WORKER_HEARTBEAT_STALE_MS`
+      set to ~2–3× the cron interval.
+- [ ] After one cron run, `worker_heartbeat` is `pass` with
+      `details.source: "database"`.
+
+### #984 Identity / CSP
+
+- [ ] Single static `Content-Security-Policy`; `X-Frame-Options: DENY`, etc.
+- [ ] A client-supplied `cf-connecting-ip` is not trusted (only the edge value).
+- [ ] OAuth round-trip works against the real `AGENTIC_PUBLIC_BASE_URL`.
+
 ## Rollback
 
 Cloudflare keeps prior Worker versions:
