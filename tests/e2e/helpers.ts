@@ -49,19 +49,42 @@ export async function openRequestComposer(page: Page) {
 }
 
 export async function submitRequest(requestCard: Locator, requestInput: Locator, request: string) {
-  await requestInput.fill(request);
-  await expect(requestInput).toHaveValue(request, { timeout: E2E_UI_TIMEOUT_MS });
-  await requestInput.press("Tab");
-
+  const page = requestCard.page();
   const submitButton = requestCard.locator(".hero-button-row").getByRole("button", {
     name: "Submit request"
   });
 
-  // Hosted CI runners can take longer to propagate the composer state after
-  // input events and initial dashboard refreshes, leaving the submit button
-  // temporarily disabled even after the textarea reflects the new request.
-  await expect(submitButton).toBeEnabled({ timeout: E2E_UI_TIMEOUT_MS });
-  await submitButton.click();
+  // Submitting can race with the dashboard's periodic refresh re-rendering the
+  // composer, which occasionally swallows the first click before it fires the
+  // request (a flaky timeout waiting for the success chip, esp. on mobile). Tie
+  // the click to the POST /api/goals response and retry once if it does not fire.
+  let submitted = false;
+  for (let attempt = 0; attempt < 2 && !submitted; attempt += 1) {
+    await requestInput.fill(request);
+    await expect(requestInput).toHaveValue(request, { timeout: E2E_UI_TIMEOUT_MS });
+    await requestInput.press("Tab");
+
+    // Hosted CI runners can take longer to propagate the composer state after
+    // input events and initial dashboard refreshes, leaving the submit button
+    // temporarily disabled even after the textarea reflects the new request.
+    await expect(submitButton).toBeEnabled({ timeout: E2E_UI_TIMEOUT_MS });
+
+    try {
+      await Promise.all([
+        page.waitForResponse(
+          (response) => response.url().includes("/api/goals") && response.request().method() === "POST",
+          { timeout: 20_000 }
+        ),
+        submitButton.click()
+      ]);
+      submitted = true;
+    } catch {
+      if (attempt === 1) {
+        throw new Error("Goal submission did not fire a POST /api/goals request after retrying.");
+      }
+    }
+  }
+
   await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
     timeout: E2E_UI_TIMEOUT_MS * 3
   });
