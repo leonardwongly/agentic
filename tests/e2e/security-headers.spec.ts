@@ -35,14 +35,9 @@ test("serves a static content security policy on HTML pages", async ({ page }) =
   expect(csp).toContain("form-action 'self'");
   expect(csp).toContain("frame-ancestors 'none'");
   expect(csp).toContain("upgrade-insecure-requests");
-
-  if (useProductionServer) {
-    // Production must not permit eval.
-    expect(csp).not.toContain("'unsafe-eval'");
-  } else {
-    // The Next.js dev server requires eval for HMR/dev tooling.
-    expect(csp).toContain("'unsafe-eval'");
-  }
+  // The e2e stack runs with NODE_ENV=test (or production), never "development",
+  // so eval is never permitted in the served policy.
+  expect(csp).not.toContain("'unsafe-eval'");
 });
 
 test("keeps the authenticated dashboard non-cacheable and applies security headers to public share pages", async ({ browser, page }) => {
