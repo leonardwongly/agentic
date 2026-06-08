@@ -18,6 +18,17 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 async function expectFocusedElementVisible(page: Page) {
+  // `next dev` injects the Next.js DevTools as a focusable 0x0 <nextjs-portal>
+  // element that can capture the first Tab. It does not exist in production, so
+  // skip past it to assert on the real first app focusable.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const activeTag = await page.evaluate(() => document.activeElement?.tagName ?? null);
+    if (activeTag !== "NEXTJS-PORTAL") {
+      break;
+    }
+    await page.keyboard.press("Tab");
+  }
+
   const focus = await page.evaluate(() => {
     const element = document.activeElement as HTMLElement | null;
     const style = element ? getComputedStyle(element) : null;
