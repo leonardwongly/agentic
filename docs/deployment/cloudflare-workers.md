@@ -11,18 +11,17 @@ alternative to the provider-neutral [self-hosted](./self-hosted.md) and
 
 ## Status and hard prerequisites
 
-This target is **not yet production-ready out of the box**. Before a real deploy
-can succeed you must resolve two runtime-only items that cannot be validated
-without a live Cloudflare account:
+The Cloudflare build uses **Webpack** (`cf:build` runs `next build --webpack` so
+shared server chunks are deduped rather than duplicated per route, as Turbopack
+did). This produces a **~2.4 MiB gzipped worker** — under both the 3 MiB free and
+10 MiB paid limits — enforced by `npm run cf:check-size`.
 
-1. **Worker bundle size.** The single OpenNext worker is currently ~20+ MiB
-   gzipped, over the Workers limit (3 MiB free / 10 MiB paid). `npm run
-   cf:check-size` fails until this is reduced (OpenNext
-   [multi-worker split](https://opennext.js.org/cloudflare/howtos/multi-worker)
-   or dependency reduction). `wrangler deploy` will reject an oversized script.
-2. **Hyperdrive + Postgres.** Workers cannot reuse a pg connection across
-   requests; the app resolves a per-request `maxUses:1` pool from a Hyperdrive
-   binding. You must provision Hyperdrive over your Postgres.
+One prerequisite remains that can only be completed against a live Cloudflare
+account:
+
+- **Hyperdrive + Postgres.** Workers cannot reuse a pg connection across
+  requests; the app resolves a per-request `maxUses:1` pool from a Hyperdrive
+  binding. Provision Hyperdrive over your Postgres before deploying.
 
 ## Runtime shape on Cloudflare
 
@@ -94,8 +93,8 @@ Use the raw token for `AGENTIC_WORKER_TICK_TOKEN` and the hash in a
 ## 4. Build, check size, deploy
 
 ```bash
-npm run cf:build -w @agentic/web      # next build + OpenNext transform
-npm run cf:check-size                 # fails until the bundle is under the limit
+npm run cf:build -w @agentic/web      # next build --webpack + OpenNext transform
+npm run cf:check-size                 # enforces the worker stays under the limit (~2.4 MiB)
 cd apps/web
 npx wrangler versions upload          # preview a version without promoting
 npx wrangler deploy                   # promote to production
@@ -135,7 +134,8 @@ Capture the current version id and a database backup id before deploying.
 
 ## Limitations on Workers
 
-- **Bundle size** must be under the Workers limit before deploy (see Status).
+- **Bundle size** is kept under the Workers limit by the Webpack build (deduped
+  chunks, ~2.4 MiB gzip) and the `cf:check-size` guard.
 - **Local notes** and **file-backed self-improvement memory** require a
   filesystem and are unsupported; learned memory is not persisted (no-op).
 - **Migrations** run out-of-band (CI/deploy pipeline), never on the Worker.

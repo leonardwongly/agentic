@@ -15,9 +15,8 @@ name: Cloudflare Deploy
 # Hyperdrive binding are configured as Wrangler secrets/bindings out-of-band, not
 # in CI. See docs/deployment/cloudflare-workers.md.
 #
-# NOTE: the worker currently exceeds the Workers gzipped script-size limit, so the
-# "Check worker bundle size" step (and wrangler deploy) will fail until the bundle
-# is reduced (OpenNext multi-worker split / dependency reduction).
+# The Cloudflare build uses Webpack (deduped chunks) and is ~2.4 MiB gzipped, under
+# the Workers limit; the "Check worker bundle size" step enforces it.
 
 on:
   workflow_dispatch:

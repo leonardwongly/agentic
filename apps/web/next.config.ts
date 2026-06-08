@@ -13,6 +13,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const HTML_CACHE_CONTROL = "no-store, max-age=0, must-revalidate";
 
 const nextConfig: NextConfig = {
+  // OpenNext (--skipNextBuild) consumes Next's standalone output. Emit it only
+  // for the Cloudflare build (cf:build sets CF_BUILD=1) so the Node/Docker build
+  // is unchanged.
+  output: process.env.CF_BUILD === "1" ? "standalone" : undefined,
   turbopack: {
     root: repoRoot
   },
