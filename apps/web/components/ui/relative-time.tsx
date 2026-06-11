@@ -30,7 +30,8 @@ function formatRelativeTime(date: Date): string {
 }
 
 function formatAbsoluteTime(date: Date): string {
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString("en-US", {
+    timeZone: "UTC",
     year: "numeric",
     month: "short",
     day: "numeric",

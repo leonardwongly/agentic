@@ -7,6 +7,22 @@ import {
 } from "../scripts/lib/github-app-sync-live-preflight-collector";
 
 const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nredacted\\n-----END RSA PRIVATE KEY-----";
+const CLOUDFLARE_PROVIDER_EVIDENCE = JSON.stringify({
+  provider: "cloudflare-workers",
+  environment: "production",
+  services: [
+    { name: "agentic", role: "web" },
+    { name: "agentic-cron", role: "worker" }
+  ],
+  database: {
+    engine: "postgres",
+    configured: true,
+    binding: "HYPERDRIVE"
+  },
+  stableHttpsIngress: true,
+  secretManagement: true,
+  rollbackAuthority: "wrangler deployments rollback"
+});
 
 const RUNTIME_ENV = {
   AGENTIC_REPOSITORY: "octo-org/demo-agentic",
@@ -78,6 +94,9 @@ const STABLE_OUTPUTS = {
   "gh secret list --repo octo-org/demo-agentic --json name": {
     stdout: JSON.stringify([{ name: "AGENTIC_GITHUB_APP_SYNC_SECRET" }])
   },
+  "npm run --silent cloudflare:provider-evidence": {
+    stdout: CLOUDFLARE_PROVIDER_EVIDENCE
+  },
   "render services list --output json": {
     stdout: JSON.stringify([{ name: "agentic-web" }, { name: "agentic-worker" }])
   },
@@ -96,12 +115,13 @@ describe("GitHub App sync live preflight collector", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: npm run github:app-sync:preflight:collect -- [--json]");
     expect(result.stdout).toContain("GitHub App Issue Sync workflow state");
-    expect(result.stdout).toContain("Runtime-only secrets and alternate-provider evidence are not fetched");
+    expect(result.stdout).toContain("Cloudflare provider evidence");
+    expect(result.stdout).toContain("Runtime-only secrets are not fetched");
     expect(result.stdout).toContain("AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON");
     expect(result.stderr).toBe("");
   });
 
-  it("collects read-only GitHub and Render evidence before running preflight", async () => {
+  it("collects read-only GitHub and deployment-provider evidence before running preflight", async () => {
     const report = await collectGitHubAppSyncLivePreflight(RUNTIME_ENV, runnerWith(STABLE_OUTPUTS));
 
     expect(report.ok).toBe(true);
@@ -109,10 +129,45 @@ describe("GitHub App sync live preflight collector", () => {
       ["workflow_state", "AGENTIC_GITHUB_APP_SYNC_WORKFLOW_STATE", "collected"],
       ["sync_url", "AGENTIC_GITHUB_APP_ISSUE_SYNC_URL", "collected"],
       ["github_actions_secret_inventory", "AGENTIC_GITHUB_ACTIONS_SECRETS_JSON", "collected"],
+      ["cloudflare_provider_evidence", "AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON", "collected"],
       ["render_services", "AGENTIC_RENDER_SERVICES_JSON", "collected"],
       ["render_blueprint", "AGENTIC_RENDER_BLUEPRINT_VALIDATION_JSON", "collected"]
     ]);
     expect(report.preflight.checks.every((check) => check.status === "pass")).toBe(true);
+  });
+
+  it("allows missing Render CLI evidence when Cloudflare provider evidence satisfies preflight", async () => {
+    const report = await collectGitHubAppSyncLivePreflight(
+      RUNTIME_ENV,
+      runnerWith({
+        ...STABLE_OUTPUTS,
+        "render services list --output json": {
+          stdout: "",
+          exitCode: 1
+        },
+        "render blueprints validate deploy/render/render.yaml --output json": {
+          stdout: "",
+          exitCode: 1
+        }
+      })
+    );
+
+    expect(report.ok).toBe(true);
+    expect(report.collection).toContainEqual(
+      expect.objectContaining({
+        name: "render_services",
+        status: "failed"
+      })
+    );
+    expect(report.preflight.checks).toContainEqual(
+      expect.objectContaining({
+        name: "provider_services",
+        status: "pass",
+        details: expect.objectContaining({
+          provider: "cloudflare-workers"
+        })
+      })
+    );
   });
 
   it("uses collected live evidence to expose current disabled workflow and temporary tunnel blockers", async () => {
@@ -163,6 +218,10 @@ describe("GitHub App sync live preflight collector", () => {
             valid: false,
             errors: [{ error: "need_payment_info", path: "services[0]" }]
           }),
+          exitCode: 1
+        },
+        "npm run --silent cloudflare:provider-evidence": {
+          stdout: "",
           exitCode: 1
         }
       })
@@ -225,6 +284,14 @@ describe("GitHub App sync live preflight collector", () => {
             ...baseOutput,
             stdout: JSON.stringify([{ name: "agentic-web" }, { name: "agentic-worker" }]),
             truncatedStream: "stdout"
+          };
+        }
+
+        if (commandKey(command, args) === "npm run --silent cloudflare:provider-evidence") {
+          return {
+            stdout: "",
+            stderr: "not configured",
+            exitCode: 1
           };
         }
 

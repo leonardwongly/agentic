@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { formatTime } from "../../lib/format-date";
 
 // Live Collaboration: Real-time multi-user presence and editing
 
@@ -37,7 +38,7 @@ export type Presence = {
   isTyping?: boolean;
 };
 
-export type CollabEvent = 
+export type CollabEvent =
   | { type: "user-joined"; user: User }
   | { type: "user-left"; userId: string }
   | { type: "cursor-move"; cursor: Cursor }
@@ -76,7 +77,7 @@ export function PresenceAvatars({ presences, currentUserId, maxVisible = 5, onUs
           key={presence.user.id}
           type="button"
           className={`presence-avatar presence-avatar-${presence.user.status}`}
-          style={{ 
+          style={{
             backgroundColor: presence.user.color,
             zIndex: visible.length - i
           }}
@@ -212,20 +213,20 @@ export function LiveChat({ messages, presences, currentUserId, onSendMessage, on
                 </div>
               )}
               <div className="chat-message-header">
-                <span 
+                <span
                   className="chat-message-author"
                   style={{ color: sender?.color }}
                 >
                   {sender?.name || "Unknown"}
                 </span>
                 <span className="chat-message-time">
-                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  {formatTime(msg.timestamp)}
                 </span>
               </div>
               <div className="chat-message-content">{msg.content}</div>
               <div className="chat-message-actions">
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   className="btn-icon btn-reply"
                   onClick={() => setReplyingTo(msg.id)}
                 >
@@ -318,7 +319,7 @@ export function ActivityFeed({ events, presences, maxItems = 20, className = "" 
       <h4>Live Activity</h4>
       <div className="activity-feed-list">
         {recentEvents.map((event, i) => {
-          const userId = "userId" in event ? event.userId : 
+          const userId = "userId" in event ? event.userId :
             event.type === "user-joined" ? event.user.id :
             event.type === "cursor-move" ? event.cursor.userId :
             event.type === "selection-change" ? event.selection.userId : "";
@@ -327,7 +328,7 @@ export function ActivityFeed({ events, presences, maxItems = 20, className = "" 
 
           return (
             <div key={i} className="activity-feed-item">
-              <div 
+              <div
                 className="activity-avatar"
                 style={{ backgroundColor: user.color }}
               >
@@ -365,7 +366,7 @@ export function EditLock({ itemId, itemType, lockedBy, onRequestEdit, onReleaseL
     <div className={`edit-lock ${isLocked ? "locked" : "unlocked"}`}>
       {isLocked ? (
         <div className="edit-lock-info">
-          <span 
+          <span
             className="lock-user"
             style={{ color: lockedBy?.color }}
           >
@@ -402,7 +403,7 @@ export function UserList({ presences, currentUserId, onFollow, className = "" }:
     offline: 3
   };
 
-  const sortedPresences = [...presences].sort((a, b) => 
+  const sortedPresences = [...presences].sort((a, b) =>
     statusOrder[a.user.status] - statusOrder[b.user.status]
   );
 
@@ -411,11 +412,11 @@ export function UserList({ presences, currentUserId, onFollow, className = "" }:
       <h4>Team ({presences.length})</h4>
       <div className="user-list-items">
         {sortedPresences.map(presence => (
-          <div 
+          <div
             key={presence.user.id}
             className={`user-list-item ${presence.user.id === currentUserId ? "current" : ""}`}
           >
-            <div 
+            <div
               className={`user-avatar user-status-${presence.user.status}`}
               style={{ backgroundColor: presence.user.color }}
             >
@@ -518,7 +519,7 @@ export function useCollaboration(options: {
       target,
       timestamp: Date.now()
     };
-    setPresences(prev => prev.map(p => 
+    setPresences(prev => prev.map(p =>
       p.user.id === currentUser.id ? { ...p, cursor } : p
     ));
   }, [currentUser.id]);
@@ -570,12 +571,12 @@ type CollaborationPanelProps = {
   className?: string;
 };
 
-export function CollaborationPanel({ 
-  collaboration, 
-  messages = [], 
-  onSendMessage, 
-  onReact, 
-  className = "" 
+export function CollaborationPanel({
+  collaboration,
+  messages = [],
+  onSendMessage,
+  onReact,
+  className = ""
 }: CollaborationPanelProps) {
   const [activeTab, setActiveTab] = useState<"users" | "chat" | "activity">("users");
 

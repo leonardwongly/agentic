@@ -593,6 +593,8 @@ function isJobVisibleInScope(
     case "docs_render":
     case "github_issue_intake":
       return true;
+    case "deployment_canary":
+      return false;
   }
 }
 
@@ -620,6 +622,8 @@ function buildJobLabel(job: JobRecord, goalTitleById: Map<string, string>, activ
       return `Share analytics · ${goalTitleById.get(job.payload.goalId) ?? "shared goal"}`;
     case "docs_render":
       return "Docs render job";
+    case "deployment_canary":
+      return "Deployment canary job";
   }
 }
 
@@ -666,6 +670,7 @@ function buildJobTarget(job: JobRecord, goalTitleById: Map<string, string>): Das
         label: goalTitleById.get(job.payload.goalId) ?? "Open shared goal"
       };
     case "docs_render":
+    case "deployment_canary":
       return null;
   }
 }

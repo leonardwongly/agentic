@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 
     if (!isTelegramReady()) {
       throw new ApiRouteError(
-        503,
+        409,
         "Telegram integration is not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET."
       );
     }

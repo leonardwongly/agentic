@@ -10,6 +10,7 @@ import {
   type AutopilotProcessJobPayload,
   type BriefingCreateJobPayload,
   type BriefingType,
+  type DeploymentCanaryJobPayload,
   type DocsRenderJobPayload,
   type GoalCreateJobPayload,
   type GoalRefineJobPayload,
@@ -28,6 +29,7 @@ import {
   buildAutopilotProcessPayload,
   buildBriefingCreateJobIdempotencyKey,
   buildBriefingCreatePayload,
+  buildDeploymentCanaryPayload,
   buildDocsRenderJobIdempotencyKey,
   buildDocsRenderPayload,
   buildGitHubIssueIntakeConcurrencyKey,
@@ -470,6 +472,51 @@ export async function enqueueDocsRenderJob(params: {
       });
       recordCounter("worker.job.enqueued.total", 1, {
         jobKind: job.kind
+      });
+      return job;
+    }
+  );
+}
+
+export async function enqueueDeploymentCanaryJob(params: {
+  repository: QueueRepositoryPort;
+  userId: string;
+  actorContext: ActorContext | null;
+  requestId: string;
+  traceId: string;
+  idempotencyKey: string;
+}): Promise<JobRecord & { payload: DeploymentCanaryJobPayload }> {
+  const now = new Date().toISOString();
+  const payload = buildDeploymentCanaryPayload({
+    requestId: params.requestId,
+    traceId: params.traceId,
+    enqueuedAt: now
+  });
+
+  return withSpan(
+    "worker.job.enqueue.deployment_canary",
+    {
+      jobKind: "deployment_canary",
+      userId: params.userId,
+      requestId: params.requestId,
+      traceId: params.traceId
+    },
+    async () => {
+      const job = await params.repository.enqueueJob(createJobRecord({
+        userId: params.userId,
+        kind: "deployment_canary",
+        priority: "maintenance",
+        queue: "deployment-canary",
+        timeoutMs: 30_000,
+        payload,
+        actorContext: params.actorContext,
+        idempotencyKey: params.idempotencyKey,
+        maxAttempts: 1
+      })) as JobRecord & { payload: DeploymentCanaryJobPayload };
+
+      logEnqueuedJob(job, {
+        requestId: params.requestId,
+        traceId: params.traceId
       });
       return job;
     }

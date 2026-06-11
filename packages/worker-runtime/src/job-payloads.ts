@@ -4,6 +4,7 @@ import type {
   AutopilotProcessJobPayload,
   BriefingCreateJobPayload,
   BriefingType,
+  DeploymentCanaryJobPayload,
   DocsRenderJobPayload,
   GoalCreateJobPayload,
   GoalRefineJobPayload,
@@ -143,6 +144,22 @@ export function buildGoalCreatePayload(params: {
     workspaceId: params.workspaceId,
     agentId: params.agentId,
     metadata: {}
+  };
+}
+
+export function buildDeploymentCanaryPayload(params: {
+  requestId: string;
+  traceId: string;
+  enqueuedAt: string;
+}): DeploymentCanaryJobPayload {
+  return {
+    type: "deployment_canary",
+    requestId: params.requestId,
+    traceId: params.traceId,
+    enqueuedAt: params.enqueuedAt,
+    metadata: {
+      purpose: "deployment_async_smoke"
+    }
   };
 }
 

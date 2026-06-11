@@ -1,19 +1,12 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import {
-  DEFAULT_OWNER_USER_ID,
-  GitHubIssueAutomationModeSchema,
-  createSystemActorContext,
-  nowIso
-} from "@agentic/contracts";
-import { enqueueGitHubIssueIntakeJob } from "@agentic/worker-runtime";
-import {
   ApiRouteError,
   handleOperationalApiError,
   operationalJson,
   withApiTelemetry
 } from "../../../../../../lib/api-response";
-import { getSeededRepository } from "../../../../../../lib/server";
+import { getRuntimeEnvValue } from "../../../../../../lib/cloudflare-runtime";
 
 export const runtime = "nodejs";
 
@@ -26,6 +19,7 @@ const MAX_JOB_ISSUE_BODY_LENGTH = 10_000;
 const GITHUB_REQUEST_TIMEOUT_MS = 10_000;
 const GITHUB_REPOSITORY_FULL_NAME_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const GITHUB_INSTALLATION_ID_PATTERN = /^[1-9][0-9]{0,19}$/u;
+const DEFAULT_OWNER_USER_ID = "owner";
 
 const GitHubAppInstallationTokenResponseSchema = z
   .object({
@@ -98,7 +92,7 @@ type PreparedGitHubRepositorySync = {
 };
 
 function readRequiredEnv(name: string, maxLength: number): string {
-  const value = process.env[name]?.trim() ?? "";
+  const value = getRuntimeEnvValue(name)?.trim() ?? "";
 
   if (!value) {
     throw new ApiRouteError(503, `${name} is not configured.`);
@@ -112,7 +106,7 @@ function readRequiredEnv(name: string, maxLength: number): string {
 }
 
 function readOptionalRuntimeId(envName: string, maxLength: number): string | null {
-  const value = process.env[envName]?.trim() ?? "";
+  const value = getRuntimeEnvValue(envName)?.trim() ?? "";
 
   if (!value) {
     return null;
@@ -126,7 +120,7 @@ function readOptionalRuntimeId(envName: string, maxLength: number): string | nul
 }
 
 function readPositiveIntegerEnv(name: string, fallback: number, max: number): number {
-  const raw = process.env[name]?.trim() ?? "";
+  const raw = getRuntimeEnvValue(name)?.trim() ?? "";
 
   if (!raw) {
     return fallback;
@@ -201,7 +195,7 @@ function normalizePrivateKey(value: string): string {
 }
 
 function readGitHubApiBaseUrl(): string {
-  const raw = process.env.AGENTIC_GITHUB_APP_API_BASE_URL?.trim() || DEFAULT_GITHUB_API_BASE_URL;
+  const raw = getRuntimeEnvValue("AGENTIC_GITHUB_APP_API_BASE_URL")?.trim() || DEFAULT_GITHUB_API_BASE_URL;
   let url: URL;
 
   try {
@@ -218,14 +212,28 @@ function readGitHubApiBaseUrl(): string {
 }
 
 function readAutomationMode(): "plan" | "work" {
-  const mode = process.env.AGENTIC_GITHUB_APP_SYNC_AUTOMATION_MODE?.trim() || "work";
-  const parsed = GitHubIssueAutomationModeSchema.safeParse(mode);
+  const mode = getRuntimeEnvValue("AGENTIC_GITHUB_APP_SYNC_AUTOMATION_MODE")?.trim() || "work";
 
-  if (!parsed.success || parsed.data === "intake") {
+  if (mode !== "plan" && mode !== "work") {
     throw new ApiRouteError(503, "AGENTIC_GITHUB_APP_SYNC_AUTOMATION_MODE must be plan or work.");
   }
 
-  return parsed.data;
+  return mode;
+}
+
+async function loadGitHubAppSyncRuntime() {
+  const [contracts, workerRuntime, server] = await Promise.all([
+    import("@agentic/contracts"),
+    import("@agentic/worker-runtime"),
+    import("../../../../../../lib/server")
+  ]);
+
+  return {
+    createSystemActorContext: contracts.createSystemActorContext,
+    nowIso: contracts.nowIso,
+    enqueueGitHubIssueIntakeJob: workerRuntime.enqueueGitHubIssueIntakeJob,
+    getSeededRepository: server.getSeededRepository
+  };
 }
 
 function readGitHubAppIssueSyncConfig(): GitHubAppIssueSyncConfig {
@@ -287,7 +295,7 @@ function assertSyncAuthorized(request: Request, expectedSecret: string) {
   }
 }
 
-function assertBodylessSyncRequest(request: Request) {
+async function assertBodylessSyncRequest(request: Request) {
   const contentLengthHeader = request.headers.get("content-length");
 
   if (contentLengthHeader) {
@@ -298,7 +306,9 @@ function assertBodylessSyncRequest(request: Request) {
     }
   }
 
-  if (request.body !== null) {
+  const body = await request.clone().text();
+
+  if (body.length > 0) {
     throw new ApiRouteError(400, "GitHub App issue sync requests must not include a body.");
   }
 }
@@ -526,7 +536,7 @@ export async function POST(request: Request) {
     try {
       const syncSecret = requireSyncSecret();
       assertSyncAuthorized(request, syncSecret);
-      assertBodylessSyncRequest(request);
+      await assertBodylessSyncRequest(request);
 
       const config = readGitHubAppIssueSyncConfig();
       const installationToken = await createInstallationAccessToken(config);
@@ -543,6 +553,12 @@ export async function POST(request: Request) {
         });
       }
 
+      const {
+        createSystemActorContext,
+        enqueueGitHubIssueIntakeJob,
+        getSeededRepository,
+        nowIso
+      } = await loadGitHubAppSyncRuntime();
       const repository = await getSeededRepository();
       const actorContext = createSystemActorContext(config.userId);
       const synchronizedAt = nowIso();

@@ -77,6 +77,12 @@ function buildCollectionCommands(env: NodeJS.ProcessEnv): CollectionCommand[] {
 
   commands.push(
     {
+      name: "cloudflare_provider_evidence",
+      envName: "AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON",
+      command: "npm",
+      args: ["run", "--silent", "cloudflare:provider-evidence"]
+    },
+    {
       name: "render_services",
       envName: "AGENTIC_RENDER_SERVICES_JSON",
       command: "render",
@@ -93,6 +99,7 @@ function buildCollectionCommands(env: NodeJS.ProcessEnv): CollectionCommand[] {
   return commands;
 }
 const MAX_COMMAND_OUTPUT_BYTES = 1_048_576;
+const RENDER_COLLECTION_STEP_NAMES = new Set(["render_services", "render_blueprint"]);
 
 export function runGitHubAppSyncLivePreflightCommand(
   command: string,
@@ -253,7 +260,9 @@ export async function collectGitHubAppSyncLivePreflight(
   const preflight = redactGitHubAppSyncLivePreflightReport(validateGitHubAppSyncLivePreflight(collectedEnv));
 
   return {
-    ok: preflight.ok && collection.every((step) => step.status !== "failed"),
+    ok:
+      preflight.ok &&
+      collection.every((step) => step.status !== "failed" || RENDER_COLLECTION_STEP_NAMES.has(step.name)),
     collection,
     preflight
   };

@@ -390,23 +390,23 @@ export function evaluateFirstRunReadiness(options: {
   const checks: FirstRunCheck[] = [];
   const majorVersion = Number.parseInt(options.nodeVersion.replace(/^v/u, "").split(".")[0] ?? "", 10);
 
-  if (!Number.isInteger(majorVersion) || majorVersion < 20 || majorVersion >= 26) {
+  if (!Number.isInteger(majorVersion) || majorVersion < 20 || majorVersion >= 27) {
     checks.push({
       id: "node-version",
       status: "fail",
-      message: `Node ${options.nodeVersion} does not satisfy the repo engine range >=20 <26.`
+      message: `Node ${options.nodeVersion} does not satisfy the repo engine range >=20 <27.`
     });
   } else if (majorVersion !== PRIMARY_NODE_MAJOR) {
     checks.push({
       id: "node-version",
       status: "warn",
-      message: `Node ${options.nodeVersion} satisfies the repo engine range >=20 <26, but Node ${PRIMARY_NODE_MAJOR} is the primary runtime pinned by .nvmrc, .node-version, CI, and Docker.`
+      message: `Node ${options.nodeVersion} satisfies the repo engine range >=20 <27, but Node ${PRIMARY_NODE_MAJOR} is the primary runtime pinned by .nvmrc, .node-version, CI, and Docker.`
     });
   } else {
     checks.push({
       id: "node-version",
       status: "pass",
-      message: `Node ${options.nodeVersion} matches the primary runtime and satisfies the repo engine range >=20 <26.`
+      message: `Node ${options.nodeVersion} matches the primary runtime and satisfies the repo engine range >=20 <27.`
     });
   }
 

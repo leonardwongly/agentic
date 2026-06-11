@@ -128,7 +128,8 @@ export const jobKindValues = [
   "approval_follow_up",
   "approval_notification",
   "privacy_operation",
-  "public_share_view"
+  "public_share_view",
+  "deployment_canary"
 ] as const;
 export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
 export const jobPriorityValues = ["critical", "high", "normal", "low", "maintenance"] as const;
@@ -2276,6 +2277,16 @@ export const PublicShareViewJobPayloadSchema = z
   })
   .strict();
 
+export const DeploymentCanaryJobPayloadSchema = z
+  .object({
+    type: z.literal("deployment_canary"),
+    requestId: z.string().trim().min(1).max(120),
+    traceId: z.string().trim().min(1).max(120),
+    enqueuedAt: z.string().datetime(),
+    metadata: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
 export const JobPayloadSchema = z.discriminatedUnion("type", [
   GoalCreateJobPayloadSchema,
   GoalRefineJobPayloadSchema,
@@ -2287,7 +2298,8 @@ export const JobPayloadSchema = z.discriminatedUnion("type", [
   ApprovalFollowUpJobPayloadSchema,
   ApprovalNotificationJobPayloadSchema,
   PrivacyOperationJobPayloadSchema,
-  PublicShareViewJobPayloadSchema
+  PublicShareViewJobPayloadSchema,
+  DeploymentCanaryJobPayloadSchema
 ]);
 
 export const jobRecoveryStrategyValues = ["retry_job", "replay_job", "manual_review"] as const;
@@ -2371,6 +2383,10 @@ function deriveJobExecutionSideEffectTarget(payload: JobPayload): string | null 
 
   if (payload.type === "public_share_view") {
     return `share:${payload.shareId}`;
+  }
+
+  if (payload.type === "deployment_canary") {
+    return `deployment-canary:${payload.requestId}`;
   }
 
   return null;
@@ -2762,6 +2778,14 @@ export const JobRecordSchema = JobRecordBaseSchema
         code: z.ZodIssueCode.custom,
         path: ["payload", "type"],
         message: 'Public-share-view jobs must carry a "public_share_view" payload.'
+      });
+    }
+
+    if (value.kind === "deployment_canary" && value.payload.type !== "deployment_canary") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "type"],
+        message: 'Deployment-canary jobs must carry a "deployment_canary" payload.'
       });
     }
 
@@ -3893,6 +3917,7 @@ export type ApprovalFollowUpJobPayload = z.infer<typeof ApprovalFollowUpJobPaylo
 export type ApprovalNotificationJobPayload = z.infer<typeof ApprovalNotificationJobPayloadSchema>;
 export type PrivacyOperationJobPayload = z.infer<typeof PrivacyOperationJobPayloadSchema>;
 export type PublicShareViewJobPayload = z.infer<typeof PublicShareViewJobPayloadSchema>;
+export type DeploymentCanaryJobPayload = z.infer<typeof DeploymentCanaryJobPayloadSchema>;
 export type JobPayload = z.infer<typeof JobPayloadSchema>;
 export type JobExecutionJournalEntry = z.infer<typeof JobExecutionJournalEntrySchema>;
 export type JobRecoveryStrategy = z.infer<typeof JobRecoveryStrategySchema>;

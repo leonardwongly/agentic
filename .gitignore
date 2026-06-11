@@ -1,5 +1,8 @@
 node_modules
 .next
+.open-next
+.wrangler
+.dev.vars
 coverage
 dist
 build/*.pdf
@@ -8,8 +11,10 @@ build/*.json
 docs-preview.md
 .env
 .env.local
+OPERATOR_HANDOFF.md
 .DS_Store
 .agentic
 .antigravitycli
 test-results
 artifacts
+certs/

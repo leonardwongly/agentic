@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { Pool, type PoolClient } from "pg";
 import {
   getRequiredAuthRuntimeSchemaObjectStatus,
@@ -5,6 +6,7 @@ import {
 } from "@agentic/db/auth-runtime-schema";
 import type { AuthSessionStateStore, SessionRateLimitStatus } from "./auth-session-store";
 import type { SessionUnlockStateStore, UnlockRateLimitStatus } from "./session-unlock-store";
+import { getHyperdriveConnectionString, getServerDatabaseUrl } from "./cloudflare-runtime";
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_ATTEMPTS = 10;
@@ -61,7 +63,7 @@ export async function assertSharedAuthStateSchemaReady(queryable: Queryable = ge
 }
 
 function requireDatabaseUrl(): string {
-  const url = process.env.DATABASE_URL?.trim();
+  const url = getServerDatabaseUrl();
 
   if (!url) {
     throw new SharedAuthStateStoreError("Shared auth state requires DATABASE_URL.");
@@ -70,9 +72,31 @@ function requireDatabaseUrl(): string {
   return url;
 }
 
+// On Cloudflare Workers a pg connection cannot be reused across requests, so the
+// auth-state pool is resolved per request (React cache() resets between
+// requests) and reaches Postgres through the Hyperdrive binding.
+const getRequestScopedAuthStatePool = cache(
+  (connectionString: string): Pool =>
+    new Pool({
+      connectionString,
+      application_name: "agentic-auth-state",
+      connectionTimeoutMillis: 2_000,
+      idleTimeoutMillis: 30_000,
+      max: 4,
+      query_timeout: 5_000,
+      statement_timeout: 5_000
+    })
+);
+
 function getSharedAuthStatePool(): Pool {
+  const connectionString = requireDatabaseUrl();
+
+  if (getHyperdriveConnectionString()) {
+    return getRequestScopedAuthStatePool(connectionString);
+  }
+
   globalThis.__agenticSharedAuthStatePool ??= new Pool({
-    connectionString: requireDatabaseUrl(),
+    connectionString,
     application_name: "agentic-auth-state",
     connectionTimeoutMillis: 2_000,
     idleTimeoutMillis: 30_000,

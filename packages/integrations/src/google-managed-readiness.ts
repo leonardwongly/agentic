@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { IntegrationAccount, ProviderCredential, ProviderCredentialStatus } from "@agentic/contracts";
 
 export const managedGoogleRequiredScopesByIntegration = {
@@ -134,7 +133,22 @@ function boundedMetadataString(metadata: Record<string, unknown>, key: string, m
 }
 
 function buildCursorRef(cursor: string | null): string | null {
-  return cursor ? crypto.createHash("sha256").update(cursor).digest("hex").slice(0, 16) : null;
+  if (!cursor) {
+    return null;
+  }
+
+  // Runtime-agnostic 16-char fingerprint (no node:crypto), so this module is safe
+  // to include in client/edge bundles and the OpenNext (webpack) build. Not
+  // security-sensitive: it only redacts and references the opaque provider cursor.
+  let h1 = 0x811c9dc5;
+  let h2 = 0xc2b2ae35;
+  for (let i = 0; i < cursor.length; i += 1) {
+    const code = cursor.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 0x01000193);
+    h2 = Math.imul(h2 ^ code, 0x85ebca77);
+  }
+  const toHex = (value: number): string => (value >>> 0).toString(16).padStart(8, "0");
+  return `${toHex(h1)}${toHex(h2)}`;
 }
 
 function buildReconciliationState(params: {

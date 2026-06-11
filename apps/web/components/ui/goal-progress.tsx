@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { Goal } from "@agentic/contracts";
+import { formatTime } from "../../lib/format-date";
 
 // Inline goal progress: Show current step/status inline on goal cards
 
@@ -27,10 +28,10 @@ export type GoalProgressData = {
 // Parse goal progress from action logs or task state
 export function parseGoalProgress(goal: Goal, actionLogs: Array<{ kind: string; message: string; createdAt: string }>): GoalProgressData {
   const steps: GoalStep[] = [];
-  
+
   // Extract steps from action logs
-  const stepLogs = actionLogs.filter((log) => 
-    log.kind.startsWith("task.") || 
+  const stepLogs = actionLogs.filter((log) =>
+    log.kind.startsWith("task.") ||
     log.kind.startsWith("agent.") ||
     log.kind.startsWith("step.")
   );
@@ -38,7 +39,7 @@ export function parseGoalProgress(goal: Goal, actionLogs: Array<{ kind: string; 
   for (const log of stepLogs) {
     const stepMatch = log.message.match(/(?:step|task|agent)\s+["']?([^"']+)["']?/i);
     const stepName = stepMatch ? stepMatch[1] : log.kind.split(".").pop() || "Unknown step";
-    
+
     let status: GoalStep["status"] = "completed";
     if (log.kind.includes("started") || log.kind.includes("running")) {
       status = "running";
@@ -62,7 +63,7 @@ export function parseGoalProgress(goal: Goal, actionLogs: Array<{ kind: string; 
   const completedSteps = steps.filter((s) => s.status === "completed").length;
   const totalSteps = Math.max(steps.length, 1);
   const currentStep = steps.find((s) => s.status === "running");
-  
+
   // Estimate completion based on average step duration
   let estimatedCompletion: Date | undefined;
   if (currentStep && steps.length > 1) {
@@ -72,7 +73,7 @@ export function parseGoalProgress(goal: Goal, actionLogs: Array<{ kind: string; 
         const duration = new Date(s.completedAt!).getTime() - new Date(s.startedAt!).getTime();
         return sum + duration;
       }, 0) / completedWithTime.length;
-      
+
       const remainingSteps = totalSteps - completedSteps;
       estimatedCompletion = new Date(Date.now() + remainingSteps * avgDuration);
     }
@@ -110,7 +111,7 @@ export function GoalProgressBar({ progress, showSteps = false, compact = false }
           aria-valuemax={100}
         />
       </div>
-      
+
       <div className="goal-progress-info">
         <span className="goal-progress-percent">{progress.percentComplete}%</span>
         {progress.currentStep && (
@@ -135,7 +136,7 @@ export function GoalProgressBar({ progress, showSteps = false, compact = false }
           >
             {expanded ? "Hide steps" : "Show steps"}
           </button>
-          
+
           {expanded && (
             <div className="goal-progress-steps-list">
               {progress.steps.map((step) => (
@@ -158,7 +159,7 @@ export function GoalProgressBar({ progress, showSteps = false, compact = false }
 
       {progress.estimatedCompletion && (
         <div className="goal-progress-eta">
-          Est. completion: {progress.estimatedCompletion.toLocaleTimeString()}
+          Est. completion: {formatTime(progress.estimatedCompletion)}
         </div>
       )}
     </div>

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
+import type { JobRecord } from "@agentic/contracts";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import { runDeploymentAsyncCanary } from "../scripts/lib/deployment-async-canary";
 
@@ -22,8 +23,76 @@ describe("deployment async canary", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: npm run test:smoke:deployment-async -- [--json]");
     expect(result.stdout).toContain("AGENTIC_SMOKE_ACCESS_KEY");
+    expect(result.stdout).toContain("DATABASE_URL");
     expect(result.stdout).toContain("AGENTIC_DEPLOYMENT_ASYNC_CANARY_JSON");
     expect(result.stderr).toBe("");
+  });
+
+  it("can prove durable worker completion through the database-backed canary path", async () => {
+    let savedJob: JobRecord | null = null;
+    let getAttempt = 0;
+    const repository = {
+      enqueueJob: vi.fn(async (job: JobRecord) => {
+        savedJob = job;
+        return job;
+      }),
+      getJob: vi.fn(async () => {
+        expect(savedJob).not.toBeNull();
+        getAttempt += 1;
+
+        if (getAttempt === 1) {
+          return savedJob;
+        }
+
+        const completedAt = new Date().toISOString();
+        return {
+          ...savedJob!,
+          status: "completed",
+          completedAt,
+          updatedAt: completedAt
+        } satisfies JobRecord;
+      })
+    };
+    const fetchImpl = vi.fn<typeof fetch>();
+    const wait = vi.fn(async () => undefined);
+
+    const summary = await runDeploymentAsyncCanary({
+      baseUrl: "https://agentic.example.com/",
+      accessKey: "test-access-key",
+      databaseUrl: "postgres://agentic:redacted@db.example.com/agentic",
+      pollIntervalMs: 10,
+      timeoutMs: 30,
+      idempotencyKey: "deploy-canary:database-test",
+      requestId: "canary-request-db",
+      traceId: "canary-trace-db",
+      fetchImpl,
+      repository,
+      wait
+    });
+
+    expect(summary).toMatchObject({
+      jobId: expect.any(String),
+      attempts: 2,
+      statusUrl: expect.stringMatching(/^https:\/\/agentic\.example\.com\/api\/jobs\//u),
+      requestId: "canary-request-db",
+      traceId: "canary-trace-db",
+      idempotencyKey: "deploy-canary:database-test",
+      enqueueDurationMs: expect.any(Number),
+      pollDurationMs: expect.any(Number)
+    });
+    expect(savedJob).toMatchObject({
+      kind: "deployment_canary",
+      priority: "maintenance",
+      queue: "deployment-canary",
+      idempotencyKey: "deploy-canary:database-test",
+      payload: {
+        type: "deployment_canary",
+        requestId: "canary-request-db",
+        traceId: "canary-trace-db"
+      }
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(wait).toHaveBeenCalledTimes(1);
   });
 
   it("proves queued work reaches durable completion", async () => {

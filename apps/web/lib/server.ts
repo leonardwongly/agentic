@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { runDocsBuild } from "@agentic/docs-runtime";
 import { prepareDefaultIntegrations } from "@agentic/integrations";
 import {
@@ -24,6 +25,8 @@ import {
 } from "@agentic/repository";
 import { createSelfImprovementRepository, type SelfImprovementRepository } from "@agentic/self-improvement-memory";
 import { validateAuthRuntimeState } from "./auth-runtime-state";
+import { getCloudflareEnv, getHyperdriveConnectionString } from "./cloudflare-runtime";
+import { createNoopSelfImprovementRepository } from "./workers-self-improvement";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -32,7 +35,27 @@ declare global {
   var __agenticSelfImprovementRepository: SelfImprovementRepository | undefined;
 }
 
+// Cloudflare Workers cannot reuse a pg connection across requests, so on Workers
+// the Postgres repository (and its pool) is created per request: React cache()
+// memoizes within a single request and resets between requests, giving one
+// short-lived pool per request, while Hyperdrive provides the durable
+// server-side connection pooling. (Request-scoping alone prevents cross-request
+// connection reuse; finer pool tuning such as maxUses belongs to the repository
+// "spine" stream.)
+const getRequestScopedHyperdriveRepository = cache((connectionString: string) => {
+  validateAuthRuntimeState();
+  return createRepository({ databaseUrl: connectionString });
+});
+
 export function getRepository() {
+  // On Cloudflare Workers with a Hyperdrive binding, resolve a request-scoped
+  // repository instead of the long-lived global one.
+  const hyperdriveConnectionString = getHyperdriveConnectionString();
+
+  if (hyperdriveConnectionString) {
+    return getRequestScopedHyperdriveRepository(hyperdriveConnectionString);
+  }
+
   if (!global.__agenticRepository) {
     validateAuthRuntimeState();
     // Respect explicit file-backed test stores so route handlers and test fixtures
@@ -129,8 +152,15 @@ export async function getSeededApprovalQueueRepository(): Promise<ApprovalQueueR
 
 export function getSelfImprovementRepository(): SelfImprovementRepository {
   if (!global.__agenticSelfImprovementRepository) {
-    validateAuthRuntimeState();
-    global.__agenticSelfImprovementRepository = createSelfImprovementRepository();
+    // Cloudflare Workers have no filesystem, so the file-backed learned-execution
+    // memory degrades to a no-op (see apps/web/lib/workers-self-improvement.ts and
+    // F4 / #979). Dependent routes keep working; learned memory is not persisted.
+    if (getCloudflareEnv()) {
+      global.__agenticSelfImprovementRepository = createNoopSelfImprovementRepository();
+    } else {
+      validateAuthRuntimeState();
+      global.__agenticSelfImprovementRepository = createSelfImprovementRepository();
+    }
   }
 
   return global.__agenticSelfImprovementRepository;

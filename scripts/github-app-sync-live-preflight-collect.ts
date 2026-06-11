@@ -4,16 +4,17 @@ type GitHubAppSyncLivePreflightCollectionReport = Awaited<ReturnType<typeof coll
 
 const HELP_TEXT = `Usage: npm run github:app-sync:preflight:collect -- [--json]
 
-Collects read-only GitHub and Render inventory, then runs the live GitHub App issue sync preflight.
+Collects read-only GitHub and deployment-provider inventory, then runs the live GitHub App issue sync preflight.
 
 Read-only inventory collected:
 - GitHub App Issue Sync workflow state
 - AGENTIC_GITHUB_APP_ISSUE_SYNC_URL repository variable
 - GitHub Actions secret names
+- Cloudflare provider evidence from the checked-in Worker config (AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON)
 - Render service list
 - Render Blueprint validation result for deploy/render/render.yaml
 
-Runtime-only secrets and alternate-provider evidence are not fetched by this command. Provide deployment runtime configuration and, for a non-Render target, AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON through the environment before using the collected report as production-proof evidence.
+Runtime-only secrets are not fetched by this command. Provide deployment runtime configuration through the environment before using the collected report as production-proof evidence.
 `;
 
 function printHumanSummary(report: GitHubAppSyncLivePreflightCollectionReport) {
