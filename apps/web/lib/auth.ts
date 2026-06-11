@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { getAuthSessionStateStore } from "./auth-session-store";
+import { getRuntimeEnvValue } from "./cloudflare-runtime";
 import { resolveBootstrapOwnerUserId } from "./instance-owner";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
@@ -133,13 +134,13 @@ function readCookieValue(cookieHeader: string | null | undefined, cookieName: st
 let _devKeyWarningEmitted = false;
 
 function isExplicitLocalDevKeyEnabled(): boolean {
-  return process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY?.trim().toLowerCase() === "true";
+  return getRuntimeEnvValue("AGENTIC_ENABLE_LOCAL_DEV_KEY")?.trim().toLowerCase() === "true";
 }
 
 function resolveAccessKey(options?: {
   emitDevelopmentWarning?: boolean;
 }): { key: string | null; source: "env" | "development-fallback" | "missing" } {
-  const configured = process.env.AGENTIC_ACCESS_KEY?.trim();
+  const configured = getRuntimeEnvValue("AGENTIC_ACCESS_KEY")?.trim();
 
   if (configured) {
     return { key: configured, source: "env" };
@@ -385,7 +386,7 @@ function parseMachineTokenConfigEntry(value: unknown): MachineTokenConfig {
 }
 
 function getConfiguredMachineTokens(): MachineTokenConfig[] {
-  const raw = process.env[AGENTIC_MACHINE_TOKENS_ENV]?.trim();
+  const raw = getRuntimeEnvValue(AGENTIC_MACHINE_TOKENS_ENV)?.trim();
 
   if (!raw) {
     return [];

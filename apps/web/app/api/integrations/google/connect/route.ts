@@ -15,7 +15,11 @@ export async function GET(request: Request) {
     const wantsJson = url.searchParams.get("format") === "json" || request.headers.get("accept")?.includes("application/json");
 
     if (!isGoogleOAuthConfigured()) {
-      throw new ApiRouteError(503, "Google OAuth is not configured for this runtime.");
+      return authenticatedJson({
+        setupRequired: true,
+        provider: "google",
+        message: "Google OAuth is not configured for this runtime."
+      });
     }
 
     const repository = await getSeededRepository();

@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import type { MemoryRecord, MemoryType } from "@agentic/contracts";
+import { formatDate } from "../../lib/format-date";
 
 // Agent Memory Spaces: Persistent, agent-scoped memory management
 
@@ -47,7 +48,7 @@ type MemorySpaceCardProps = {
 
 export function MemorySpaceCard({ space, stats, isSelected, onClick, onEdit, onDelete }: MemorySpaceCardProps) {
   return (
-    <div 
+    <div
       className={`memory-space-card ${isSelected ? "selected" : ""}`}
       style={{ "--space-color": space.color } as React.CSSProperties}
       onClick={onClick}
@@ -61,12 +62,12 @@ export function MemorySpaceCard({ space, stats, isSelected, onClick, onEdit, onD
           {space.type}
         </span>
       </div>
-      
+
       <h4 className="memory-space-name">{space.name}</h4>
       {space.description && (
         <p className="memory-space-description">{space.description}</p>
       )}
-      
+
       <div className="memory-space-stats">
         <span className="stat">
           <span className="stat-value">{stats?.totalMemories || space.memoryCount}</span>
@@ -90,12 +91,12 @@ export function MemorySpaceCard({ space, stats, isSelected, onClick, onEdit, onD
 
       <div className="memory-space-footer">
         <span className="last-accessed">
-          Last accessed {new Date(space.lastAccessed).toLocaleDateString()}
+          Last accessed {formatDate(space.lastAccessed)}
         </span>
         <div className="memory-space-actions">
           {onEdit && (
-            <button 
-              type="button" 
+            <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); onEdit(); }}
               className="btn-icon"
               title="Edit"
@@ -104,8 +105,8 @@ export function MemorySpaceCard({ space, stats, isSelected, onClick, onEdit, onD
             </button>
           )}
           {onDelete && (
-            <button 
-              type="button" 
+            <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); onDelete(); }}
               className="btn-icon btn-danger"
               title="Delete"
@@ -279,7 +280,7 @@ export function MemoryLinker({ sourceMemory, targetMemories, existingLinks, onLi
   const [strength, setStrength] = useState(0.5);
 
   const linkedMemories = existingLinks.filter(l => l.sourceId === sourceMemory.id);
-  const availableTargets = targetMemories.filter(m => 
+  const availableTargets = targetMemories.filter(m =>
     m.id !== sourceMemory.id && !linkedMemories.some(l => l.targetId === m.id)
   );
 
@@ -339,7 +340,7 @@ export function MemoryLinker({ sourceMemory, targetMemories, existingLinks, onLi
       {availableTargets.length > 0 && (
         <div className="new-link-form">
           <h5>Add Link</h5>
-          
+
           <div className="form-group">
             <label htmlFor="link-target">Target Memory</label>
             <select
@@ -455,7 +456,7 @@ export function MemorySpaceBrowser({
             placeholder={selectedSpace ? "Search memories..." : "Search spaces..."}
           />
         </div>
-        
+
         <div className="browser-controls">
           {selectedSpace && (
             <>
@@ -498,7 +499,7 @@ export function MemorySpaceBrowser({
               ← All Spaces
             </button>
             <span className="breadcrumb-separator">/</span>
-            <span 
+            <span
               className="breadcrumb-current"
               style={{ color: selectedSpace.color }}
             >
@@ -526,7 +527,7 @@ export function MemorySpaceBrowser({
                   </span>
                   <p className="memory-content">{memory.content}</p>
                   <span className="memory-date">
-                    {new Date(memory.createdAt).toLocaleDateString()}
+                    {formatDate(memory.createdAt)}
                   </span>
                 </div>
               ))
@@ -604,14 +605,14 @@ export function useMemorySpaces(agents: Array<{ id: string; name: string }>) {
   }, []);
 
   const removeLink = useCallback((sourceId: string, targetId: string) => {
-    setLinks(prev => prev.filter(l => 
+    setLinks(prev => prev.filter(l =>
       !(l.sourceId === sourceId && l.targetId === targetId)
     ));
   }, []);
 
   const getSpaceStats = useCallback((spaceId: string, memories: MemoryRecord[]): MemorySpaceStats => {
     const space = spaces.find(s => s.id === spaceId);
-    const spaceMemories = memories.filter(m => 
+    const spaceMemories = memories.filter(m =>
       m.agentId === space?.agentId || (!m.agentId && !space?.agentId)
     );
 
@@ -625,7 +626,7 @@ export function useMemorySpaces(agents: Array<{ id: string; name: string }>) {
     });
 
     const today = new Date().toDateString();
-    const recentAccess = spaceMemories.filter(m => 
+    const recentAccess = spaceMemories.filter(m =>
       new Date(m.createdAt).toDateString() === today
     ).length;
 

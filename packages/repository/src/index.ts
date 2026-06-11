@@ -913,6 +913,7 @@ function isJobVisibleToUserInStore(
       return goal?.workspaceId ? workspaceIds.has(goal.workspaceId) : false;
     }
     case "docs_render":
+    case "deployment_canary":
       return false;
   }
 }

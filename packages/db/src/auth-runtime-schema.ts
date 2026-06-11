@@ -32,24 +32,37 @@ export async function getSchemaObjectChecks(
   queryable: SchemaObjectQueryable,
   objectNames: readonly string[]
 ): Promise<Array<{ name: string; exists: boolean }>> {
-  return Promise.all(
-    objectNames.map(async (objectName) => ({
-      name: objectName,
-      exists: await schemaObjectExists(queryable, objectName)
-    }))
+  if (objectNames.length === 0) {
+    return [];
+  }
+
+  const result = await queryable.query<{ name: string; exists: string | null }>(
+    `
+      select object_name as name, to_regclass(object_name) as exists
+      from unnest($1::text[]) as object_names(object_name)
+    `,
+    [[...objectNames]]
   );
+  const existsByName = new Map(result.rows.map((row) => [row.name, Boolean(row.exists)]));
+
+  return objectNames.map((objectName) => ({
+    name: objectName,
+    exists: existsByName.get(objectName) ?? false
+  }));
 }
 
 export async function getRequiredAuthRuntimeSchemaObjectStatus(
   queryable: SchemaObjectQueryable
 ): Promise<AuthRuntimeSchemaObjectStatus> {
-  const tableChecks = await getSchemaObjectChecks(queryable, REQUIRED_AUTH_RUNTIME_TABLES);
-  const indexChecks = await getSchemaObjectChecks(queryable, REQUIRED_AUTH_RUNTIME_INDEXES);
+  const requiredTables = [...REQUIRED_AUTH_RUNTIME_TABLES];
+  const requiredIndexes = [...REQUIRED_AUTH_RUNTIME_INDEXES];
+  const objectChecks = await getSchemaObjectChecks(queryable, [...requiredTables, ...requiredIndexes]);
+  const missingObjects = new Set(objectChecks.filter((check) => !check.exists).map((check) => check.name));
 
   return {
-    tables: [...REQUIRED_AUTH_RUNTIME_TABLES],
-    indexes: [...REQUIRED_AUTH_RUNTIME_INDEXES],
-    missingTables: tableChecks.filter((check) => !check.exists).map((check) => check.name),
-    missingIndexes: indexChecks.filter((check) => !check.exists).map((check) => check.name)
+    tables: requiredTables,
+    indexes: requiredIndexes,
+    missingTables: requiredTables.filter((objectName) => missingObjects.has(objectName)),
+    missingIndexes: requiredIndexes.filter((objectName) => missingObjects.has(objectName))
   };
 }

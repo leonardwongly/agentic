@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import type { MemoryRecord } from "@agentic/contracts";
+import { formatDate } from "../../lib/format-date";
 
 // Agent-scoped memory viewer and editor
 // Shows memories associated with a specific agent
@@ -32,7 +33,7 @@ export function AgentMemory({
 
   // Filter memories by agent
   const agentMemories = useMemo(() => {
-    return memories.filter(m => 
+    return memories.filter(m =>
       (m as MemoryRecord & { agentId?: string }).agentId === agentId ||
       m.content.toLowerCase().includes(agentName.toLowerCase())
     );
@@ -68,7 +69,7 @@ export function AgentMemory({
     const memories = groupedMemories[activeTab];
     if (!searchQuery) return memories;
     const query = searchQuery.toLowerCase();
-    return memories.filter(m => 
+    return memories.filter(m =>
       m.content.toLowerCase().includes(query) ||
       m.category.toLowerCase().includes(query)
     );
@@ -76,14 +77,14 @@ export function AgentMemory({
 
   const handleAddMemory = async () => {
     if (!newMemoryContent.trim() || !onAddMemory) return;
-    
+
     await onAddMemory({
       content: newMemoryContent.trim(),
       category: activeTab === "episodic" ? "history" :
                activeTab === "semantic" ? "preference" :
                activeTab === "procedural" ? "workflow" : "working-style"
     });
-    
+
     setNewMemoryContent("");
     setIsAdding(false);
   };
@@ -245,13 +246,13 @@ function AgentMemoryItem({ memory, onDelete, onUpdate }: AgentMemoryItemProps) {
           <div className="agent-memory-meta">
             <span className="agent-memory-category">{memory.category}</span>
             <span className="agent-memory-date">
-              {new Date(memory.createdAt).toLocaleDateString()}
+              {formatDate(memory.createdAt)}
             </span>
           </div>
           <div className="agent-memory-actions">
             {onUpdate && (
-              <button 
-                type="button" 
+              <button
+                type="button"
                 className="agent-memory-action-btn"
                 onClick={() => setIsEditing(true)}
               >
@@ -259,8 +260,8 @@ function AgentMemoryItem({ memory, onDelete, onUpdate }: AgentMemoryItemProps) {
               </button>
             )}
             {onDelete && (
-              <button 
-                type="button" 
+              <button
+                type="button"
                 className="agent-memory-action-btn delete"
                 onClick={handleDelete}
                 disabled={isDeleting}

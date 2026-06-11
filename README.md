@@ -46,7 +46,7 @@ The canonical API inventory is [`docs/specs/api-route-inventory.md`](docs/specs/
 
 ## Requirements
 
-- Node.js `22`; `.nvmrc`, `.node-version`, CI, and Docker all pin the primary runtime. `package.json` allows `>=20 <26` for compatibility checks, but `npm run setup:check` warns when local Node differs from the primary runtime.
+- Node.js `22`; `.nvmrc`, `.node-version`, CI, and Docker all pin the primary runtime. `package.json` allows `>=20 <27` for compatibility checks, but `npm run setup:check` warns when local Node differs from the primary runtime.
 - npm with the checked-in `package-lock.json`
 - PostgreSQL for production or production-like local validation
 - `pandoc` for `npm run docs:build`
@@ -260,7 +260,7 @@ Worker process:
 npm run start:worker:prod
 ```
 
-Only trust proxy headers after confirming the ingress overwrites the configured client-IP header at the edge. Start with the provider-neutral self-hosting guide in [`docs/deployment/self-hosted.md`](docs/deployment/self-hosted.md). For a completely-free serverless deployment (bounded run-once worker on a free scheduler), see [`docs/deployment/free-tier-serverless.md`](docs/deployment/free-tier-serverless.md). The deployment runbook is [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md); the Render Blueprint in [`deploy/render/render.yaml`](deploy/render/render.yaml) is one optional provider example.
+Only trust proxy headers after confirming the ingress overwrites the configured client-IP header at the edge. Start with the provider-neutral self-hosting guide in [`docs/deployment/self-hosted.md`](docs/deployment/self-hosted.md). For a completely-free serverless deployment (bounded run-once worker on a free scheduler), see [`docs/deployment/free-tier-serverless.md`](docs/deployment/free-tier-serverless.md). For Cloudflare Workers via the OpenNext adapter, see [`docs/deployment/cloudflare-workers.md`](docs/deployment/cloudflare-workers.md). The deployment runbook is [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md); the Render Blueprint in [`deploy/render/render.yaml`](deploy/render/render.yaml) is one optional provider example.
 
 ## Forking And Self-Hosting
 

@@ -16,6 +16,21 @@ class FakeSharedAuthQueryable {
     const normalized = sql.trim();
     this.queries.push(normalized);
 
+    if (normalized.includes("from unnest($1::text[]) as object_names(object_name)")) {
+      const objectNames = (params ?? [])[0] as string[] | undefined;
+      expect(objectNames).toEqual([...REQUIRED_AUTH_RUNTIME_TABLES, ...REQUIRED_AUTH_RUNTIME_INDEXES]);
+
+      return {
+        rows: (objectNames ?? []).map((objectName) => {
+          expect(objectName).not.toMatch(/^public\./u);
+          return {
+            name: objectName,
+            exists: this.schemaObjects.has(objectName) ? objectName : null
+          };
+        })
+      };
+    }
+
     if (normalized !== "select to_regclass($1) as exists") {
       throw new Error(`Unexpected query: ${normalized}`);
     }
@@ -33,7 +48,7 @@ describe("shared auth state database schema", () => {
     const queryable = new FakeSharedAuthQueryable(REQUIRED_AUTH_RUNTIME_OBJECTS);
 
     await expect(assertSharedAuthStateSchemaReady(queryable as never)).resolves.toBeUndefined();
-    expect(queryable.queries).toHaveLength(6);
+    expect(queryable.queries).toHaveLength(1);
     expect(queryable.queries.some((query) => /create\s+(table|index)/iu.test(query))).toBe(false);
   });
 

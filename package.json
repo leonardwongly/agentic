@@ -21,7 +21,7 @@
   ],
   "type": "module",
   "engines": {
-    "node": ">=20 <26"
+    "node": ">=20 <27"
   },
   "workspaces": [
     "apps/*",
@@ -72,6 +72,7 @@
     "test:smoke:deployment-async": "tsx scripts/deployment-async-canary.ts",
     "test:smoke:github-app-sync": "tsx scripts/deployment-github-app-sync-canary.ts",
     "test:smoke:deployment-confidence": "tsx scripts/deployment-confidence.ts",
+    "cloudflare:provider-evidence": "tsx scripts/cloudflare-provider-evidence.ts",
     "test:load:observability": "tsx scripts/observability-load.ts",
     "test:failure:observability": "tsx scripts/observability-failure-injection.ts",
     "telemetry:rollout-gate": "tsx scripts/observability-rollout-gate.ts",
@@ -79,6 +80,7 @@
     "remediation:dashboard": "tsx scripts/aos-remediation-dashboard.ts --include-git-snapshot",
     "remediation:verify": "tsx scripts/aos-remediation-dashboard.ts --verify-issue-query --include-git-snapshot",
     "start:web:prod": "tsx scripts/start-web.ts",
+    "cf:check-size": "tsx scripts/check-cloudflare-bundle-size.ts",
     "start:worker:prod": "tsx scripts/start-worker.ts",
     "worker:start": "npm run start -w @agentic/worker",
     "worker:once": "npm run start:worker:prod -- --once",
@@ -91,6 +93,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.100.1",
+    "@opennextjs/cloudflare": "1.19.11",
     "drizzle-orm": "^0.45.2",
     "googleapis": "^173.0.0",
     "jszip": "^3.10.1",
@@ -113,6 +116,7 @@
     "@vitejs/plugin-react": "^6.0.2",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "wrangler": "4.98.0"
   }
 }

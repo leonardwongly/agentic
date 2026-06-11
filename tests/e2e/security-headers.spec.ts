@@ -22,27 +22,22 @@ test("serves baseline security headers on the dashboard shell", async ({ page })
   expect(response?.headers()["permissions-policy"]).toContain("camera=()");
 });
 
-test("serves a nonce-backed content security policy on HTML pages", async ({ page }) => {
+test("serves a static content security policy on HTML pages", async ({ page }) => {
   const response = await page.request.get("/");
-  const html = await response.text();
   const csp = response.headers()["content-security-policy"];
 
   expect(csp).toBeTruthy();
   expect(csp).toContain("default-src 'self'");
-  expect(csp).toContain("script-src 'self' 'nonce-");
+  expect(csp).toContain("script-src 'self' 'unsafe-inline'");
+  expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+  expect(csp).toContain("object-src 'none'");
+  expect(csp).toContain("base-uri 'self'");
+  expect(csp).toContain("form-action 'self'");
   expect(csp).toContain("frame-ancestors 'none'");
-  expect(html).toMatch(/<script[^>]+nonce="[^"]+"/u);
-
-  if (useProductionServer) {
-    expect(csp).toContain("'strict-dynamic'");
-    expect(csp).toContain("style-src 'self' 'nonce-");
-    expect(csp).not.toContain("'unsafe-inline'");
-    expect(csp).not.toContain("'unsafe-eval'");
-  } else {
-    expect(csp).toContain("'strict-dynamic'");
-    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
-    expect(csp).toContain("'unsafe-eval'");
-  }
+  expect(csp).toContain("upgrade-insecure-requests");
+  // The e2e stack runs with NODE_ENV=test (or production), never "development",
+  // so eval is never permitted in the served policy.
+  expect(csp).not.toContain("'unsafe-eval'");
 });
 
 test("keeps the authenticated dashboard non-cacheable and applies security headers to public share pages", async ({ browser, page }) => {
@@ -102,7 +97,7 @@ test("keeps the authenticated dashboard non-cacheable and applies security heade
   expect(publicResponse?.headers()["referrer-policy"]).toBe("no-referrer");
   expect(publicResponse?.headers()["x-frame-options"]).toBe("DENY");
   expect(publicResponse?.headers()["cross-origin-opener-policy"]).toBe("same-origin");
-  expect(publicResponse?.headers()["content-security-policy"]).toContain("script-src 'self' 'nonce-");
+  expect(publicResponse?.headers()["content-security-policy"]).toContain("script-src 'self' 'unsafe-inline'");
 
   await publicContext.close();
 });

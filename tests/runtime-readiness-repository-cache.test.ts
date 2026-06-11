@@ -20,6 +20,26 @@ const repositoryMocks = vi.hoisted(() => ({
     expiredCredentials: 0,
     validationStaleCredentials: 0
   })),
+  getLatestWorkerRuntimeHealth: vi.fn(async () => ({
+    version: 1,
+    runnerId: "test-worker",
+    pid: 1,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    processedCount: 0,
+    lastProcessedAt: null,
+    lastErrorAt: null,
+    lastErrorClass: null,
+    scheduler: {
+      enabled: true,
+      lastRunAt: null,
+      lastCompletedAt: null,
+      lastDecisionCount: 0,
+      lastErrorAt: null,
+      lastErrorClass: null
+    }
+  })),
   listJobs: vi.fn(async () => {
     throw new Error("readiness should use aggregate job summaries");
   }),
@@ -29,9 +49,46 @@ const repositoryMocks = vi.hoisted(() => ({
 }));
 
 const createRepositoryMock = vi.fn(() => repositoryMocks);
+const schemaStatusMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    reachable: true,
+    ready: true,
+    failureReason: null,
+    missingMetadataTable: false,
+    appliedMigrations: ["0001_init.sql"],
+    pendingMigrations: [],
+    driftedMigrations: [],
+    requiredSchemaObjects: {
+      tables: ["auth_session_rate_limits"],
+      indexes: ["auth_session_rate_limits_updated_at_idx"],
+      missingTables: [],
+      missingIndexes: []
+    },
+    lastAppliedAt: "2026-06-11T00:00:00.000Z"
+  }))
+);
+const poolMocks = vi.hoisted(() => ({
+  constructor: vi.fn(),
+  query: vi.fn(async () => ({ rows: [{ ok: 1 }] })),
+  end: vi.fn(async () => undefined)
+}));
 
 vi.mock("@agentic/repository", () => ({
   createRepository: createRepositoryMock
+}));
+
+vi.mock("@agentic/db/schema-status", () => ({
+  getDatabaseSchemaStatus: schemaStatusMock
+}));
+
+vi.mock("pg", () => ({
+  Pool: vi.fn().mockImplementation(function MockPool(options) {
+    poolMocks.constructor(options);
+    return {
+      query: poolMocks.query,
+      end: poolMocks.end
+    };
+  })
 }));
 
 vi.mock("../apps/web/lib/auth", () => ({
@@ -87,6 +144,30 @@ describe("getWebReadinessReport repository lifecycle", () => {
       expiredCredentials: 0,
       validationStaleCredentials: 0
     });
+    repositoryMocks.getLatestWorkerRuntimeHealth.mockResolvedValue({
+      version: 1,
+      runnerId: "test-worker",
+      pid: 1,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      processedCount: 0,
+      lastProcessedAt: null,
+      lastErrorAt: null,
+      lastErrorClass: null,
+      scheduler: {
+        enabled: true,
+        lastRunAt: null,
+        lastCompletedAt: null,
+        lastDecisionCount: 0,
+        lastErrorAt: null,
+        lastErrorClass: null
+      }
+    });
+    schemaStatusMock.mockClear();
+    poolMocks.constructor.mockClear();
+    poolMocks.query.mockClear();
+    poolMocks.end.mockClear();
     delete process.env.DATABASE_URL;
     delete process.env.NODE_ENV;
   });
@@ -146,6 +227,32 @@ describe("getWebReadinessReport repository lifecycle", () => {
 
     expect(repositoryMocks.getJobReadinessSummary).toHaveBeenCalledTimes(2);
     expect(repositoryMocks.getProviderCredentialReadinessSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses a lightweight database ping for public readiness and keeps schema drift on details", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.DATABASE_URL = "postgres://agentic.example/agentic";
+
+    const { getPublicWebReadinessSummary, getWebReadinessReport, resetPublicWebReadinessCacheForTests } = await import(
+      "../apps/web/lib/runtime-readiness"
+    );
+    resetPublicWebReadinessCacheForTests();
+
+    await expect(getPublicWebReadinessSummary({
+      now: 1_000,
+      ttlMs: 1
+    })).resolves.toMatchObject({
+      ok: true,
+      status: "ready"
+    });
+
+    expect(poolMocks.query).toHaveBeenCalledWith("select 1");
+    expect(schemaStatusMock).not.toHaveBeenCalled();
+
+    const details = await getWebReadinessReport();
+
+    expect(details.status).toBe("ready");
+    expect(schemaStatusMock).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to a stale not-ready public snapshot when refresh fails", async () => {

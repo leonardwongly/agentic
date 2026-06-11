@@ -16,6 +16,8 @@ const REQUIRED_AUTH_RUNTIME_OBJECTS = new Set([
 ]);
 
 class FakeSchemaPool {
+  batchedSchemaObjectQueryCount = 0;
+
   constructor(
     private readonly state: {
       metadataTableExists: boolean;
@@ -29,6 +31,22 @@ class FakeSchemaPool {
 
     if (normalized === "select 1") {
       return { rows: [{ "?column?": 1 }] };
+    }
+
+    if (normalized.includes("from unnest($1::text[]) as object_names(object_name)")) {
+      this.batchedSchemaObjectQueryCount += 1;
+      const objectNames = (params ?? [])[0] as string[] | undefined;
+      expect(objectNames).toEqual([...REQUIRED_AUTH_RUNTIME_TABLES, ...REQUIRED_AUTH_RUNTIME_INDEXES]);
+
+      return {
+        rows: (objectNames ?? []).map((objectName) => {
+          expect(objectName).not.toMatch(/^public\./u);
+          return {
+            name: objectName,
+            exists: this.state.schemaObjects?.has(objectName) ? objectName : null
+          };
+        })
+      };
     }
 
     if (normalized === "select to_regclass($1) as exists") {
@@ -77,6 +95,7 @@ describe("schema status", () => {
       pendingMigrations: [],
       driftedMigrations: []
     });
+    expect(pool.batchedSchemaObjectQueryCount).toBe(1);
   });
 
   it("fails status when migration metadata is current but shared auth runtime objects are missing", async () => {
@@ -109,5 +128,6 @@ describe("schema status", () => {
         missingIndexes: ["session_unlock_attempts_last_seen_at_idx"]
       }
     });
+    expect(pool.batchedSchemaObjectQueryCount).toBe(1);
   });
 });

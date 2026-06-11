@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { AgentMetrics } from "@agentic/contracts";
+import { formatDateTime } from "../../lib/format-date";
 
 type AgentMetricsDisplayProps = {
   metrics: AgentMetrics;
@@ -272,7 +273,7 @@ export function AgentMetricsDisplay({ metrics, comparisonMetrics }: AgentMetrics
               <span className="error-count">{metrics.errorCount} errors</span>
               {metrics.lastErrorAt && (
                 <span className="last-error">
-                  Last: {new Date(metrics.lastErrorAt).toLocaleString()}
+                  Last: {formatDateTime(metrics.lastErrorAt)}
                 </span>
               )}
               {metrics.lastErrorMessage && (

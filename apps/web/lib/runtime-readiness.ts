@@ -1,3 +1,4 @@
+import { cache } from "react";
 import {
   createRepository,
   type JobReadinessSummary,
@@ -13,6 +14,7 @@ import {
   type WorkerRuntimeHealthSnapshot
 } from "@agentic/worker-runtime";
 import { getAuthMode } from "./auth";
+import { getHyperdriveConnectionString, getServerDatabaseUrl } from "./cloudflare-runtime";
 import { getAuthRuntimeStateStatus, type AuthRuntimeStateStatus } from "./auth-runtime-state";
 import { getRequestIdentityRuntimeStatus, type RequestIdentityRuntimeStatus } from "./request-client-identity";
 
@@ -59,6 +61,7 @@ type ReadinessEvaluationParams = {
   generatedAt?: string;
   nodeEnv?: string;
   databaseConfigured: boolean;
+  databaseCheckMode?: "schema" | "connectivity";
   authMode: AuthModeSnapshot;
   authRuntimeState: AuthRuntimeStateStatus;
   requestIdentity: RequestIdentityRuntimeStatus;
@@ -80,12 +83,27 @@ let publicReadinessCache: {
   expiresAtMs: number;
 } | null = null;
 
+const getRequestScopedReadinessRepository = cache(
+  (databaseUrl: string | undefined): ReadinessRepositoryPort =>
+    createRepository(databaseUrl ? { databaseUrl } : undefined)
+);
+
 function getReadinessRepository(): ReadinessRepositoryPort {
+  const databaseUrl = getServerDatabaseUrl();
+
+  // On Cloudflare Workers a pg connection cannot be reused across requests, so
+  // resolve a request-scoped repository (React cache() resets between requests)
+  // that reaches Postgres through the Hyperdrive binding. Off-Workers, keep the
+  // long-lived module-level singleton.
+  if (getHyperdriveConnectionString()) {
+    return getRequestScopedReadinessRepository(databaseUrl);
+  }
+
   if (readinessRepository) {
     return readinessRepository;
   }
 
-  readinessRepository = createRepository();
+  readinessRepository = createRepository(databaseUrl ? { databaseUrl } : undefined);
   return readinessRepository;
 }
 
@@ -94,6 +112,62 @@ async function loadDatabaseSchemaStatus(options?: {
 }): Promise<DatabaseSchemaStatus> {
   const runtime = await import("@agentic/db/schema-status");
   return runtime.getDatabaseSchemaStatus(options);
+}
+
+function buildConnectivityOnlyDatabaseStatus(overrides?: Partial<DatabaseSchemaStatus>): DatabaseSchemaStatus {
+  return {
+    reachable: true,
+    ready: true,
+    failureReason: null,
+    missingMetadataTable: false,
+    appliedMigrations: [],
+    pendingMigrations: [],
+    driftedMigrations: [],
+    requiredSchemaObjects: {
+      tables: [],
+      indexes: [],
+      missingTables: [],
+      missingIndexes: []
+    },
+    lastAppliedAt: null,
+    ...overrides
+  };
+}
+
+async function loadDatabaseConnectivityStatus(options?: {
+  databaseUrl?: string;
+}): Promise<DatabaseSchemaStatus> {
+  if (!options?.databaseUrl?.trim()) {
+    return buildConnectivityOnlyDatabaseStatus({
+      reachable: false,
+      ready: false,
+      failureReason: "unreachable"
+    });
+  }
+
+  const { Pool } = await import("pg");
+  const pool = new Pool({
+    connectionString: options.databaseUrl,
+    application_name: "agentic-public-readiness",
+    connectionTimeoutMillis: 2_000,
+    idleTimeoutMillis: 1_000,
+    max: 1,
+    query_timeout: 3_000,
+    statement_timeout: 3_000
+  });
+
+  try {
+    await pool.query("select 1");
+    return buildConnectivityOnlyDatabaseStatus();
+  } catch {
+    return buildConnectivityOnlyDatabaseStatus({
+      reachable: false,
+      ready: false,
+      failureReason: "unreachable"
+    });
+  } finally {
+    await pool.end();
+  }
 }
 
 function normalizeRuntime(nodeEnv: string | undefined): WebReadinessReport["runtime"] {
@@ -162,10 +236,14 @@ function buildDatabaseCheck(params: ReadinessEvaluationParams): ReadinessCheck {
   return {
     name: "database",
     status: "pass",
-    message: "Database connectivity and schema checks passed.",
+    message:
+      params.databaseCheckMode === "connectivity"
+        ? "Database connectivity check passed; schema drift is checked by /api/ready/details."
+        : "Database connectivity and schema checks passed.",
     details: {
       reachable: true,
       ready: true,
+      schemaChecked: params.databaseCheckMode !== "connectivity",
       appliedMigrations: params.databaseStatus.appliedMigrations.length,
       authRuntimeTables: params.databaseStatus.requiredSchemaObjects.tables.length,
       authRuntimeIndexes: params.databaseStatus.requiredSchemaObjects.indexes.length
@@ -826,7 +904,7 @@ async function getWorkerHeartbeatCheckSnapshot(nodeEnv: string | undefined): Pro
     return getFileWorkerHeartbeatCheckSnapshot(healthPath, runtime);
   }
 
-  if (process.env.DATABASE_URL?.trim()) {
+  if (getServerDatabaseUrl()) {
     return getDatabaseWorkerHeartbeatCheckSnapshot(runtime);
   }
 
@@ -903,7 +981,7 @@ export async function getPublicWebReadinessSummary(options?: {
   }
 
   try {
-    const summary = await measureReadiness("public", async () => toPublicReadinessSummary(await getWebReadinessReport()));
+    const summary = toPublicReadinessSummary(await getPublicWebReadinessReport());
     if (publicReadinessCache && !publicReadinessCache.summary.ok && !summary.ok) {
       publicReadinessCache = {
         summary: publicReadinessCache.summary,
@@ -939,30 +1017,74 @@ export async function getPublicWebReadinessSummary(options?: {
   }
 }
 
-export async function getWebReadinessReport(): Promise<WebReadinessReport> {
-  const databaseConfigured = Boolean(process.env.DATABASE_URL?.trim());
+export async function getPublicWebReadinessReport(): Promise<WebReadinessReport> {
+  const databaseUrl = getServerDatabaseUrl();
+  const databaseConfigured = Boolean(databaseUrl);
   const nodeEnv = process.env.NODE_ENV;
 
-  return measureReadiness("details", async () =>
-    buildWebReadinessReport({
+  return measureReadiness("public", async () => {
+    // Public readiness is intentionally cheaper than /api/ready/details:
+    // load balancers only need operational connectivity/backlog/heartbeat health.
+    // Full migration drift and required-schema verification stay on the
+    // authenticated details route where slower diagnostics are acceptable.
+    const [databaseStatus, asyncExecution, workerHeartbeat, connectorHealth] = await Promise.all([
+      databaseConfigured ? loadDatabaseConnectivityStatus({ databaseUrl }) : Promise.resolve(null),
+      getAsyncExecutionCheckSnapshot(nodeEnv),
+      getWorkerHeartbeatCheckSnapshot(nodeEnv),
+      getConnectorHealthCheckSnapshot(nodeEnv)
+    ]);
+
+    return buildWebReadinessReport({
       nodeEnv,
       databaseConfigured,
+      databaseCheckMode: "connectivity",
       authMode: getAuthMode({ emitDevelopmentWarning: false }),
       authRuntimeState: getAuthRuntimeStateStatus(),
       requestIdentity: getRequestIdentityRuntimeStatus(),
-      databaseStatus: databaseConfigured
-        ? await loadDatabaseSchemaStatus({
-            databaseUrl: process.env.DATABASE_URL
-          })
-        : null,
-      asyncExecution: await getAsyncExecutionCheckSnapshot(nodeEnv),
+      databaseStatus,
+      asyncExecution,
       workerConcurrency: buildWorkerConcurrencyCheckSnapshot(
         resolveWorkerConcurrencyPolicy({
           nodeEnv
         })
       ),
-      workerHeartbeat: await getWorkerHeartbeatCheckSnapshot(nodeEnv),
-      connectorHealth: await getConnectorHealthCheckSnapshot(nodeEnv)
-    })
-  );
+      workerHeartbeat,
+      connectorHealth
+    });
+  });
+}
+
+export async function getWebReadinessReport(): Promise<WebReadinessReport> {
+  const databaseUrl = getServerDatabaseUrl();
+  const databaseConfigured = Boolean(databaseUrl);
+  const nodeEnv = process.env.NODE_ENV;
+
+  return measureReadiness("details", async () => {
+    // Run the I/O-bound checks concurrently so the probe stays well under the
+    // Workers request resource limit even when the database is in a distant
+    // region (each check is a separate Hyperdrive round-trip).
+    const [databaseStatus, asyncExecution, workerHeartbeat, connectorHealth] = await Promise.all([
+      databaseConfigured ? loadDatabaseSchemaStatus({ databaseUrl }) : Promise.resolve(null),
+      getAsyncExecutionCheckSnapshot(nodeEnv),
+      getWorkerHeartbeatCheckSnapshot(nodeEnv),
+      getConnectorHealthCheckSnapshot(nodeEnv)
+    ]);
+
+    return buildWebReadinessReport({
+      nodeEnv,
+      databaseConfigured,
+      authMode: getAuthMode({ emitDevelopmentWarning: false }),
+      authRuntimeState: getAuthRuntimeStateStatus(),
+      requestIdentity: getRequestIdentityRuntimeStatus(),
+      databaseStatus,
+      asyncExecution,
+      workerConcurrency: buildWorkerConcurrencyCheckSnapshot(
+        resolveWorkerConcurrencyPolicy({
+          nodeEnv
+        })
+      ),
+      workerHeartbeat,
+      connectorHealth
+    });
+  });
 }

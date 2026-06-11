@@ -10,6 +10,31 @@ declare global {
   var __agenticDocsBuild: Promise<{ stdout: string; stderr: string }> | undefined;
 }
 
+function extractDocsBuildErrorDetail(error: unknown): string | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+
+  const candidate = error as Error & { stderr?: unknown; stdout?: unknown; code?: unknown };
+  const stream =
+    typeof candidate.stderr === "string" && candidate.stderr.trim().length > 0
+      ? candidate.stderr
+      : typeof candidate.stdout === "string" && candidate.stdout.trim().length > 0
+        ? candidate.stdout
+        : "";
+  const trimmed = stream.trim().replace(/\s+/g, " ");
+
+  if (trimmed.length > 0) {
+    return trimmed.length > 300 ? trimmed.slice(-300) : trimmed;
+  }
+
+  if (candidate.code !== undefined && candidate.code !== null) {
+    return `exit code ${String(candidate.code)}`;
+  }
+
+  return null;
+}
+
 function normalizeDocsBuildError(error: unknown, step: "render" | "validate"): Error {
   if (error instanceof Error && "killed" in error && error.killed) {
     return new Error(`Document ${step} timed out after ${DOCS_BUILD_TIMEOUT_MS / 1000} seconds.`);
@@ -19,7 +44,8 @@ function normalizeDocsBuildError(error: unknown, step: "render" | "validate"): E
     return new Error(`Document ${step} produced too much output.`);
   }
 
-  return new Error(`Document ${step} failed.`);
+  const detail = extractDocsBuildErrorDetail(error);
+  return new Error(detail ? `Document ${step} failed: ${detail}` : `Document ${step} failed.`);
 }
 
 async function runDocsScript(scriptPath: string, step: "render" | "validate") {

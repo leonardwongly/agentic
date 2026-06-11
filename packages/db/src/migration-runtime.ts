@@ -231,7 +231,20 @@ function buildSchemaNotReadyMessage(status: DatabaseSchemaStatus): string {
   }
 }
 
+let cachedDefaultMigrationFiles: DatabaseMigrationFile[] | null = null;
+
 export async function listMigrationFiles(options?: { migrationsDir?: string }): Promise<DatabaseMigrationFile[]> {
+  // The checked-in migration files are immutable at runtime, so reading and
+  // SHA-256 hashing all of them on every call is wasteful — the readiness probe
+  // recomputes schema status frequently. Cache the default-directory result for
+  // the process lifetime. The cache is disabled under the test runner (and for
+  // explicit migrationsDir overrides) so suites always observe fresh fixtures.
+  const useCache = options?.migrationsDir === undefined && process.env.NODE_ENV !== "test";
+
+  if (useCache && cachedDefaultMigrationFiles) {
+    return cachedDefaultMigrationFiles;
+  }
+
   const migrationsDir = resolveMigrationsDir(options?.migrationsDir);
   const entries = await readdir(migrationsDir, { withFileTypes: true });
   const migrationNames = entries
@@ -239,7 +252,7 @@ export async function listMigrationFiles(options?: { migrationsDir?: string }): 
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
 
-  return Promise.all(
+  const files = await Promise.all(
     migrationNames.map(async (name) => {
       const absolutePath = path.join(migrationsDir, name);
       const sql = await readFile(absolutePath, "utf8");
@@ -252,6 +265,12 @@ export async function listMigrationFiles(options?: { migrationsDir?: string }): 
       };
     })
   );
+
+  if (useCache) {
+    cachedDefaultMigrationFiles = files;
+  }
+
+  return files;
 }
 
 export async function getDatabaseSchemaStatus(options?: {
