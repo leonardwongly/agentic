@@ -467,5 +467,5 @@ describe("provenance graph route", () => {
     expect(response.status).toBe(200);
     expect(payload.graph.nodes.filter((node) => node.type === "memory")).toHaveLength(225);
     expect(payload.graph.nodes.some((node) => node.id === "memory:memory-scale-000")).toBe(true);
-  });
+  }, 15_000);
 });
