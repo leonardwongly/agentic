@@ -60,7 +60,8 @@ function getEventColor(kind: AgentActivityEvent["kind"]): string {
 
 function formatTime(iso: string): string {
   const date = new Date(iso);
-  return date.toLocaleTimeString(undefined, {
+  return date.toLocaleTimeString("en-US", {
+    timeZone: "UTC",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit"

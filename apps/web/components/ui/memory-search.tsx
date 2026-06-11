@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
+import { formatDate } from "../../lib/format-date";
 
 // Memory search: Full-text search across all memories with filters
 
@@ -69,11 +70,11 @@ export function searchMemories(
       const bContent = b.content.toLowerCase();
       const aIndex = aContent.indexOf(lowerQuery);
       const bIndex = bContent.indexOf(lowerQuery);
-      
+
       // Exact match in category ranks higher
       if (a.category.toLowerCase() === lowerQuery) return -1;
       if (b.category.toLowerCase() === lowerQuery) return 1;
-      
+
       // Earlier position ranks higher
       return aIndex - bIndex;
     });
@@ -305,7 +306,7 @@ function MemorySearchResult({
         </div>
         <p className="memory-text">{highlightText(memory.content, query)}</p>
         <div className="memory-meta">
-          <span>{new Date(memory.createdAt).toLocaleDateString()}</span>
+          <span>{formatDate(memory.createdAt)}</span>
           {memory.agentId && <span>Agent: {memory.agentId}</span>}
         </div>
       </div>
@@ -316,13 +317,13 @@ function MemorySearchResult({
 // Highlight matching text
 function highlightText(text: string, query: string): ReactNode {
   if (!query.trim()) return text;
-  
+
   const lowerText = text.toLowerCase();
   const lowerQuery = query.toLowerCase();
   const index = lowerText.indexOf(lowerQuery);
-  
+
   if (index === -1) return text;
-  
+
   return (
     <>
       {text.slice(0, index)}

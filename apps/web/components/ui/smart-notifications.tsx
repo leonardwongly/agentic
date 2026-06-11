@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { formatDate } from "../../lib/format-date";
 
 // Smart Notifications - Context-aware alerting system
 // Learns preferences, batches low-priority, pushes urgent, in-app for info
@@ -117,8 +118,8 @@ export function NotificationCenter({
           <div className="notification-header">
             <h3>Notifications</h3>
             <div className="notification-header-actions">
-              <select 
-                value={filter} 
+              <select
+                value={filter}
                 onChange={(e) => setFilter(e.target.value as "all" | "unread")}
                 className="notification-filter"
               >
@@ -126,8 +127,8 @@ export function NotificationCenter({
                 <option value="unread">Unread</option>
               </select>
               {unreadCount > 0 && (
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   className="notification-mark-all"
                   onClick={onMarkAllRead}
                 >
@@ -181,7 +182,7 @@ function NotificationItem({
   };
 
   return (
-    <div 
+    <div
       className={`notification-item priority-${notification.priority} ${notification.read ? "read" : "unread"}`}
       onClick={() => !notification.read && onMarkRead(notification.id)}
     >
@@ -234,7 +235,7 @@ function formatRelativeTime(date: Date): string {
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24) return `${hours}h ago`;
   if (days < 7) return `${days}d ago`;
-  return date.toLocaleDateString();
+  return formatDate(date);
 }
 
 // Hook for managing notifications
@@ -267,10 +268,10 @@ export function useSmartNotifications() {
   // Check if in quiet hours
   const isQuietHours = useCallback(() => {
     if (!preferences.quietHours.enabled) return false;
-    
+
     const now = new Date();
     const currentTime = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
-    
+
     const { start, end } = preferences.quietHours;
     if (start < end) {
       return currentTime >= start && currentTime < end;
@@ -291,7 +292,7 @@ export function useSmartNotifications() {
 
     // Determine channel based on priority and preferences
     const channels = preferences.channels[notification.priority];
-    
+
     // During quiet hours, downgrade non-urgent notifications
     if (isQuietHours() && notification.priority !== "urgent") {
       newNotification.channel = "silent";
@@ -324,7 +325,7 @@ export function useSmartNotifications() {
           id: `batch-${Date.now()}`,
           type: "batch",
           title: `${batchedNotifications.length} updates`,
-          message: batchedNotifications.map(n => n.title).slice(0, 3).join(", ") + 
+          message: batchedNotifications.map(n => n.title).slice(0, 3).join(", ") +
                    (batchedNotifications.length > 3 ? ` +${batchedNotifications.length - 3} more` : ""),
           priority: "low",
           channel: "in-app",
@@ -332,7 +333,7 @@ export function useSmartNotifications() {
           dismissed: false,
           createdAt: new Date().toISOString()
         };
-        
+
         setNotifications(prev => [summary, ...prev]);
         setBatchedNotifications([]);
       }
@@ -342,7 +343,7 @@ export function useSmartNotifications() {
   }, [batchedNotifications, preferences.batchLowPriority, preferences.batchInterval]);
 
   const markRead = useCallback((id: string) => {
-    setNotifications(prev => prev.map(n => 
+    setNotifications(prev => prev.map(n =>
       n.id === id ? { ...n, read: true } : n
     ));
   }, []);
@@ -352,7 +353,7 @@ export function useSmartNotifications() {
   }, []);
 
   const dismiss = useCallback((id: string) => {
-    setNotifications(prev => prev.map(n => 
+    setNotifications(prev => prev.map(n =>
       n.id === id ? { ...n, dismissed: true } : n
     ));
   }, []);
@@ -388,7 +389,7 @@ export function NotificationPreferencesPanel({
   return (
     <div className={`notification-preferences ${className}`}>
       <h4>Notification Settings</h4>
-      
+
       <div className="notification-pref-section">
         <label className="notification-pref-toggle">
           <input
@@ -428,7 +429,7 @@ export function NotificationPreferencesPanel({
           <input
             type="checkbox"
             checked={preferences.quietHours.enabled}
-            onChange={(e) => onUpdate({ 
+            onChange={(e) => onUpdate({
               quietHours: { ...preferences.quietHours, enabled: e.target.checked }
             })}
           />

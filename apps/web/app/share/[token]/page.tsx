@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { formatDateTime } from "../../../lib/format-date";
 import {
   buildSharedGoalView,
   fingerprintGoalShareToken,
@@ -102,7 +103,7 @@ export default async function ShareGoalPage({ params }: SharePageProps) {
             </div>
             <div className="list-item vertical">
               <strong>Updated</strong>
-              <p>{new Date(sharedGoal.updatedAt).toLocaleString()}</p>
+              <p>{formatDateTime(sharedGoal.updatedAt)}</p>
             </div>
           </div>
         </div>

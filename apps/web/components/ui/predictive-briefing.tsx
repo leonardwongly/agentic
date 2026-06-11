@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import type { GoalBundle, ApprovalRequest, MemoryRecord } from "@agentic/contracts";
+import { formatTime } from "../../lib/format-date";
 
 // Predictive Briefings - Time and calendar-aware proactive briefings
 // Generates contextual summaries based on time of day and upcoming events
@@ -108,8 +109,8 @@ export function PredictiveBriefing({
 
           <div className="predictive-briefing-sections">
             {briefing.sections.map(section => (
-              <div 
-                key={section.id} 
+              <div
+                key={section.id}
                 className={`predictive-briefing-section priority-${section.priority}`}
               >
                 <div className="predictive-briefing-section-header">
@@ -121,9 +122,9 @@ export function PredictiveBriefing({
                 </div>
                 <div className="predictive-briefing-items">
                   {section.items.map(item => (
-                    <BriefingItemComponent 
-                      key={item.id} 
-                      item={item} 
+                    <BriefingItemComponent
+                      key={item.id}
+                      item={item}
                       onAction={onAction}
                     />
                   ))}
@@ -134,7 +135,7 @@ export function PredictiveBriefing({
 
           <div className="predictive-briefing-footer">
             <span className="predictive-briefing-generated">
-              Generated at {new Date(briefing.generatedAt).toLocaleTimeString()}
+              Generated at {formatTime(briefing.generatedAt)}
             </span>
           </div>
         </>
@@ -143,11 +144,11 @@ export function PredictiveBriefing({
   );
 }
 
-function BriefingItemComponent({ 
-  item, 
-  onAction 
-}: { 
-  item: BriefingItem; 
+function BriefingItemComponent({
+  item,
+  onAction
+}: {
+  item: BriefingItem;
   onAction?: (itemId: string, action: string) => void;
 }) {
   return (
@@ -176,7 +177,7 @@ function generateBriefing(
 ): Briefing {
   const hour = new Date().getHours();
   const type: BriefingType = hour < 12 ? "morning" : hour < 17 ? "midday" : "evening";
-  
+
   const pendingApprovals = approvals.filter(a => a.decision === "pending");
   const activeGoals = goals.filter(g => g.goal.status === "running" || g.goal.status === "planned");
   const completedToday = goals.filter(g => {

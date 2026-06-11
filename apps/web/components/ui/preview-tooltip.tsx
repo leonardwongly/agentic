@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApprovalRequest } from "@agentic/contracts";
+import { formatDate, formatDateTime } from "../../lib/format-date";
 
 type PreviewTooltipProps = {
   children: React.ReactNode;
@@ -127,7 +128,7 @@ export function GoalPreview({ goal, children }: GoalPreviewProps) {
           <p className="goal-preview-explanation">{goal.explanation}</p>
           <div className="goal-preview-meta">
             <code>{goal.id.slice(0, 8)}...</code>
-            <span>{new Date(goal.createdAt).toLocaleDateString()}</span>
+            <span>{formatDate(goal.createdAt)}</span>
           </div>
         </div>
       }
@@ -148,8 +149,8 @@ type ArtifactPreviewProps = {
 };
 
 export function ArtifactPreview({ artifact, children }: ArtifactPreviewProps) {
-  const truncatedContent = artifact.content.length > 200 
-    ? artifact.content.slice(0, 200) + "..." 
+  const truncatedContent = artifact.content.length > 200
+    ? artifact.content.slice(0, 200) + "..."
     : artifact.content;
 
   return (
@@ -262,7 +263,7 @@ export function ApprovalPreview({ approval, children }: ApprovalPreviewProps) {
             </div>
           ) : null}
           <div className="approval-preview-meta">
-            <span>{new Date(approval.createdAt).toLocaleString()}</span>
+            <span>{formatDateTime(approval.createdAt)}</span>
             {approval.decisionScope ? <span>Scope: {approval.decisionScope.replace(/_/g, " ")}</span> : null}
           </div>
           {approval.decisionRationale ? (
