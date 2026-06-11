@@ -27,3 +27,29 @@ export function getHyperdriveConnectionString(): string | null {
   const connectionString = getCloudflareEnv()?.HYPERDRIVE?.connectionString;
   return typeof connectionString === "string" && connectionString.length > 0 ? connectionString : null;
 }
+
+export function getRuntimeEnvValue(name: string): string | undefined {
+  const cloudflareValue = getCloudflareEnv()?.[name];
+
+  if (typeof cloudflareValue === "string" && cloudflareValue.length > 0) {
+    return cloudflareValue;
+  }
+
+  const processValue = process.env[name];
+  return typeof processValue === "string" && processValue.length > 0 ? processValue : undefined;
+}
+
+// Resolves the Postgres connection string for server-side consumers that read
+// process.env.DATABASE_URL directly (readiness checks, shared auth runtime
+// state). On Cloudflare Workers pg cannot reach the origin database directly, so
+// prefer the Hyperdrive binding's connection string; otherwise fall back to
+// process.env.DATABASE_URL for Node/local runtimes.
+export function getServerDatabaseUrl(): string | undefined {
+  const hyperdrive = getHyperdriveConnectionString();
+  if (hyperdrive) {
+    return hyperdrive;
+  }
+
+  const databaseUrl = getRuntimeEnvValue("DATABASE_URL")?.trim();
+  return databaseUrl ? databaseUrl : undefined;
+}

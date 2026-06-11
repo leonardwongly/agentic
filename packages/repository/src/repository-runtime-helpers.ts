@@ -109,6 +109,12 @@ export function isJobScopedToWorkspace(
         job.payload.workspaceId === params.workspaceId &&
         job.payload.operationId !== params.preservedPrivacyOperationId
       );
+    case "deployment_canary":
+    case "docs_render":
+    case "approval_follow_up":
+    case "approval_notification":
+    case "public_share_view":
+      return false;
     default:
       return false;
   }

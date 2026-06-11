@@ -1,9 +1,11 @@
+import { getServerDatabaseUrl } from "./cloudflare-runtime";
+
 function isTrue(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "true";
 }
 
 export function shouldUseSharedAuthState(): boolean {
-  if (!process.env.DATABASE_URL?.trim()) {
+  if (!getServerDatabaseUrl()) {
     return false;
   }
 

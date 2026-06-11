@@ -460,11 +460,14 @@ describe("google provider routes", () => {
       buildAuthorizedGetRequest("http://localhost/api/integrations/google/connect?format=json")
     );
     const payload = (await response.json()) as {
-      error: string;
+      setupRequired?: boolean;
+      provider?: string;
+      message?: string;
     };
 
-    expect(response.status).toBe(503);
-    expect(payload.error).toBe("Google OAuth is not configured for this runtime.");
+    expect(response.status).toBe(200);
+    expect(payload.setupRequired).toBe(true);
+    expect(payload.provider).toBe("google");
     expectNoStoreHeaders(response);
   });
 

@@ -66,6 +66,7 @@ import {
   buildAutopilotWorkflowId,
   buildBriefingCreateJobIdempotencyKey,
   buildBriefingCreatePayload,
+  buildDeploymentCanaryPayload,
   buildDocsRenderJobIdempotencyKey,
   buildDocsRenderPayload,
   buildGoalCreatePayload,
@@ -78,6 +79,7 @@ import {
 import {
   enqueueApprovalFollowUpJob,
   enqueueApprovalNotificationJob,
+  enqueueDeploymentCanaryJob,
   enqueueGitHubIssueIntakeJob,
   respondToApprovalAndEnqueueFollowUpJob
 } from "./job-dispatch";
@@ -120,6 +122,7 @@ export {
   respondToApprovalAndEnqueueFollowUpJob,
   enqueueAutopilotProcessJob,
   enqueueBriefingCreateJob,
+  enqueueDeploymentCanaryJob,
   enqueueDocsRenderJob,
   enqueueGitHubIssueIntakeJob,
   enqueueGoalCreateJob,
@@ -184,7 +187,8 @@ export const workerJobKindValues = [
   "approval_follow_up",
   "approval_notification",
   "privacy_operation",
-  "public_share_view"
+  "public_share_view",
+  "deployment_canary"
 ] as const;
 
 export type WorkerRuntimeResult = {
@@ -1396,7 +1400,19 @@ export function createWorkerJobHandlers(params: {
         repository: params.repository,
         job,
         signal: context?.signal
-      }))
+      })),
+    deployment_canary: wrapHandler("deployment_canary", async (job, context) => {
+      if (job.kind !== "deployment_canary" || job.payload.type !== "deployment_canary") {
+        throw new Error(`Expected a deployment_canary payload for job ${job.id}.`);
+      }
+
+      context?.signal?.throwIfAborted();
+      buildDeploymentCanaryPayload({
+        requestId: job.payload.requestId,
+        traceId: job.payload.traceId,
+        enqueuedAt: job.payload.enqueuedAt
+      });
+    })
   };
 }
 export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<WorkerRuntimeResult> {

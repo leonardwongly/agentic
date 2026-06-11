@@ -68,6 +68,7 @@ import {
   executeApprovalNotificationJob,
   enqueueBriefingCreateJob,
   enqueueAutopilotProcessJob,
+  enqueueDeploymentCanaryJob,
   enqueueDocsRenderJob,
   enqueueGitHubIssueIntakeJob,
   enqueueGoalCreateJob,
@@ -769,6 +770,39 @@ describe("worker runtime", () => {
     expect(persistedBundle?.goal.status).not.toBe("completed");
     expect(memories).toHaveLength(memoryCountBefore);
     expect(episodes).toHaveLength(episodeCountBefore);
+  });
+
+  it("processes deployment canary jobs through the worker loop", async () => {
+    const { repository, selfImprovementRepository } = await createTestRuntime();
+    const queued = await enqueueDeploymentCanaryJob({
+      repository,
+      userId: DEFAULT_OWNER_USER_ID,
+      actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID, "deployment-canary-request-1"),
+      requestId: "deployment-canary-request-1",
+      traceId: "deployment-canary-trace-1",
+      idempotencyKey: "deploy-canary:worker-runtime-test"
+    });
+
+    const result = await runWorkerRuntime({
+      repository,
+      selfImprovementRepository,
+      runnerId: "worker-runtime-canary-test",
+      maxJobs: 1,
+      pollIntervalMs: 50
+    });
+    const persistedJob = await repository.getJob(queued.id, DEFAULT_OWNER_USER_ID);
+
+    expect(result).toEqual({
+      processedCount: 1,
+      stopReason: "max_jobs"
+    });
+    expect(persistedJob).toMatchObject({
+      id: queued.id,
+      kind: "deployment_canary",
+      status: "completed",
+      attemptCount: 1,
+      idempotencyKey: "deploy-canary:worker-runtime-test"
+    });
   });
 
   it("rejects stale queued goal jobs that reference missing or non-active agents", async () => {

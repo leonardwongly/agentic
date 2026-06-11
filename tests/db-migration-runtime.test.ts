@@ -61,6 +61,21 @@ class FakeMigrationClient {
       return { rows: this.state.appliedRows };
     }
 
+    if (normalized.includes("from unnest($1::text[]) as object_names(object_name)")) {
+      const objectNames = (params ?? [])[0] as string[] | undefined;
+      expect(objectNames).toEqual([...REQUIRED_AUTH_RUNTIME_TABLES, ...REQUIRED_AUTH_RUNTIME_INDEXES]);
+
+      return {
+        rows: (objectNames ?? []).map((objectName) => {
+          expect(objectName).not.toMatch(/^public\./u);
+          return {
+            name: objectName,
+            exists: this.state.schemaObjects.has(objectName) ? objectName : null
+          };
+        })
+      };
+    }
+
     if (normalized === "select to_regclass($1) as exists") {
       const objectName = String((params ?? [])[0] ?? "");
       expect(objectName).not.toMatch(/^public\./u);

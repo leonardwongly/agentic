@@ -7,6 +7,7 @@ import {
   runWorkerRuntime
 } from "@agentic/worker-runtime";
 import { authenticatedJson } from "../../../../lib/api-response";
+import { getRuntimeEnvValue } from "../../../../lib/cloudflare-runtime";
 import { createGovernedMutationRoute } from "../../../../lib/governed-route";
 import { getSeededRepository, getSeededSelfImprovementRepository } from "../../../../lib/server";
 
@@ -22,7 +23,7 @@ const WATCHER_SCHEDULER_DISABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 
 function isWatcherSchedulerDisabled(): boolean {
   return WATCHER_SCHEDULER_DISABLED_VALUES.has(
-    process.env.AGENTIC_WATCHER_SCHEDULER_DISABLED?.trim().toLowerCase() ?? ""
+    getRuntimeEnvValue("AGENTIC_WATCHER_SCHEDULER_DISABLED")?.trim().toLowerCase() ?? ""
   );
 }
 
@@ -61,7 +62,7 @@ export const POST = createGovernedMutationRoute(
     const maxJobs = body?.maxJobs ?? DEFAULT_TICK_MAX_JOBS;
     const maxDurationMs = body?.maxDurationMs ?? DEFAULT_TICK_MAX_DURATION_MS;
     const runWatchers = (body?.runWatchers ?? false) && !isWatcherSchedulerDisabled();
-    const runnerId = process.env.AGENTIC_WORKER_TICK_RUNNER_ID?.trim() || "web-worker-tick";
+    const runnerId = getRuntimeEnvValue("AGENTIC_WORKER_TICK_RUNNER_ID")?.trim() || "web-worker-tick";
     const [repository, selfImprovementRepository] = await Promise.all([
       getSeededRepository(),
       getSeededSelfImprovementRepository()

@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     const principal = await requireApiSession(request);
 
     if (!isSlackReady()) {
-      throw new ApiRouteError(503, "Slack integration is not configured. Set SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET.");
+      throw new ApiRouteError(409, "Slack integration is not configured. Set SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET.");
     }
 
     const body = await parseJsonBody(request, NotifyBodySchema);

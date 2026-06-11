@@ -5,13 +5,21 @@
   // F2/F3 follow-ups; this minimal config is enough to build and boot the app.
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "main": "worker.ts",
-  "name": "agentic-web",
+  "name": "agentic",
   // Cloudflare Cron Trigger (F3 / #980). Drives POST /api/worker/tick (drain
   // durable jobs + one watcher pass) via worker.ts scheduled(). Tune cadence to
   // your queue latency; minimum granularity is 1 minute. Requires the
   // AGENTIC_WORKER_TICK_TOKEN secret + a matching AGENTIC_MACHINE_TOKENS_JSON entry.
   "triggers": {
     "crons": ["*/5 * * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "persist": true,
+      "invocation_logs": true
+    }
   },
   // Must be >= 2024-09-23 for @opennextjs/cloudflare; >= 2025-05-05 so that
   // FinalizationRegistry/WeakRef (used by React 19 / Next 16) are available.
@@ -32,23 +40,21 @@
   "vars": {
     "AGENTIC_TRUST_PROXY_HEADERS": "true",
     "AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED": "true",
-    "AGENTIC_TRUSTED_CLIENT_IP_HEADER": "cf-connecting-ip"
+    "AGENTIC_TRUSTED_CLIENT_IP_HEADER": "cf-connecting-ip",
+    "AGENTIC_GITHUB_ISSUE_ALLOWED_REPOSITORIES": "leonardwongly/agentic"
   },
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"
-  }
-  // Hyperdrive binding for Postgres (F2 / #978). Provision once with:
-  //   wrangler hyperdrive create agentic-db --connection-string="postgres://USER:PASS@HOST:5432/agentic"
-  // then uncomment and set "id". The web app reads env.HYPERDRIVE.connectionString
-  // per request (see apps/web/lib/server.ts), creating a request-scoped pool so a
-  // connection is never reused across requests. localConnectionString lets
-  // `cf:preview` talk to a local Postgres.
-  // ,"hyperdrive": [
-  //   {
-  //     "binding": "HYPERDRIVE",
-  //     "id": "<your-hyperdrive-id>",
-  //     "localConnectionString": "postgres://user:password@localhost:5432/agentic"
-  //   }
-  // ]
+  },
+  // Hyperdrive binding for Postgres (#978): request-scoped pool from
+  // env.HYPERDRIVE.connectionString (see apps/web/lib/server.ts). Query caching
+  // is disabled on the config for transactional correctness (job leases,
+  // If-Match stale-write checks).
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "819b9b7ecf14441cbbd1e456ed3e50d1"
+    }
+  ]
 }

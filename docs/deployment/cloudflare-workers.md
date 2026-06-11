@@ -16,12 +16,16 @@ shared server chunks are deduped rather than duplicated per route, as Turbopack
 did). This produces a **~2.4 MiB gzipped worker** — under both the 3 MiB free and
 10 MiB paid limits — enforced by `npm run cf:check-size`.
 
-One prerequisite remains that can only be completed against a live Cloudflare
+Two prerequisites remain that can only be completed against a live Cloudflare
 account:
 
 - **Hyperdrive + Postgres.** Workers cannot reuse a pg connection across
   requests; the app resolves a per-request (request-scoped) pool from a Hyperdrive
   binding. Provision Hyperdrive over your Postgres before deploying.
+- **Workers CPU budget.** The app can upload on Workers Free, but production
+  proof routes such as authenticated session creation, goal enqueue, and async
+  canary polling can exceed the Free 10 ms CPU ceiling and return Cloudflare
+  1102. Use Workers Paid or another higher-CPU target for production proof.
 
 ## Runtime shape on Cloudflare
 
@@ -100,6 +104,20 @@ npx wrangler versions upload          # preview a version without promoting
 npx wrangler deploy                   # promote to production
 ```
 
+For Workers Paid, keep the CPU budget explicit if authenticated routes hit
+Cloudflare 1102 under load or cold-start conditions:
+
+```jsonc
+{
+  "limits": {
+    "cpu_ms": 30000
+  }
+}
+```
+
+Do not commit that block while deploying on Workers Free: Cloudflare rejects
+`limits.cpu_ms` on Free with API error `100328`.
+
 The Cron Trigger (`apps/web/wrangler.jsonc` → `triggers.crons`, default every 5
 minutes) drives `POST /api/worker/tick`. Tune cadence to your queue latency and
 set `AGENTIC_READY_WORKER_HEARTBEAT_STALE_MS` to ~2–3× the interval.
@@ -117,6 +135,18 @@ curl https://<your-worker-domain>/api/ready
 
 After at least one cron run, authenticated `/api/ready/details` shows a fresh
 `worker_heartbeat` with `details.source: "database"`.
+
+For the GitHub issue-sync completion audit, generate the Cloudflare
+alternate-provider evidence from the checked-in Worker config rather than
+hand-editing JSON:
+
+```bash
+export AGENTIC_DEPLOYMENT_PROVIDER_EVIDENCE_JSON="$(npm run --silent cloudflare:provider-evidence)"
+```
+
+The command reads `apps/web/wrangler.jsonc` and emits only non-secret evidence:
+provider name, Worker/cron roles, Hyperdrive-backed Postgres configuration,
+stable ingress, secret-management posture, and rollback authority.
 
 ## Live deploy validation checklist (runtime-only)
 
