@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reviewedAt": "2026-04-28",
+  "reviewedAt": "2026-06-14",
   "repository": "leonardwongly/agentic",
   "program": "Agentic OS remediation",
   "itemIdPolicy": {
@@ -399,6 +399,90 @@
         "Governance simulation tests",
         "Policy regression suite",
         "CI/report output with measurable decision quality metrics"
+      ]
+    },
+    {
+      "id": "AOS-19",
+      "issue": 995,
+      "title": "Connect a real watcher signal evaluator (perception)",
+      "lane": "execution-spine",
+      "phase": "Phase 6 - Cognitive core activation",
+      "priority": "high",
+      "dependencies": ["AOS-11"],
+      "validationGates": [
+        "npx vitest run tests/watcher-scheduler.test.ts",
+        "Dry-run emits no side effects; a real condition triggers a deduped autopilot event",
+        "npm run test:security:regression"
+      ]
+    },
+    {
+      "id": "AOS-20",
+      "issue": 996,
+      "title": "Wire the WorkflowDag engine into the live execution path",
+      "lane": "execution-spine",
+      "phase": "Phase 6 - Cognitive core activation",
+      "priority": "high",
+      "dependencies": ["AOS-10"],
+      "validationGates": [
+        "npx vitest run tests/workflow-dag.test.ts",
+        "Integration test: a real goal creates and advances a WorkflowDag instance with status parity",
+        "Pause/resume/cancel transitions and compensation covered"
+      ]
+    },
+    {
+      "id": "AOS-21",
+      "issue": 997,
+      "title": "Structured AgentResultEnvelope contract",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 6 - Cognitive core activation",
+      "priority": "high",
+      "dependencies": ["AOS-08"],
+      "validationGates": [
+        "npx vitest run tests/agents.test.ts tests/orchestrator.test.ts",
+        "AgentResultSchema contract tests for the additive envelope fields",
+        "Repository persistence parity (file-backed + Postgres)"
+      ]
+    },
+    {
+      "id": "AOS-22",
+      "issue": 998,
+      "title": "Model-backed planner to replace the scenarioCatalog regex",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 6 - Cognitive core activation",
+      "priority": "high",
+      "dependencies": ["AOS-20", "AOS-21"],
+      "validationGates": [
+        "Planner output schema- and DAG-validated; policy gating still applied",
+        "Golden tests: model plans remain policy-equivalent to scenario baselines",
+        "Abuse tests: prompt-injection, oversized/malformed output, capability escalation rejected; deterministic fallback covered"
+      ]
+    },
+    {
+      "id": "AOS-23",
+      "issue": 999,
+      "title": "Model-backed agent runners for core specialists and custom agents",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 6 - Cognitive core activation",
+      "priority": "high",
+      "dependencies": ["AOS-21"],
+      "validationGates": [
+        "Per-agent eval tests (run-agent-with-model)",
+        "Outputs are schema-valid JSON inside the capability envelope",
+        "Abuse tests for capability misuse; draft downgrade on low confidence"
+      ]
+    },
+    {
+      "id": "AOS-24",
+      "issue": 1000,
+      "title": "Memory belief-revision and outcome feedback flywheel",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 6 - Cognitive core activation",
+      "priority": "medium",
+      "dependencies": ["AOS-13"],
+      "validationGates": [
+        "npx vitest run tests/memory.test.ts tests/memory-capture.test.ts",
+        "Migration tests (fresh + existing databases)",
+        "Versioning/supersession yields no read-time conflict for a corrected memory"
       ]
     }
   ]
