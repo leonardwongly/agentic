@@ -58,6 +58,17 @@ export { executeApprovedTask, executeApprovedTasks, reconcileExecutionResults, t
 export { generateBriefing, generateMorningBriefing } from "./morning-briefing";
 export { refineGoal } from "./goal-refinement";
 export { createGoalTemplate, interpolateTemplate, computeNextRun, shouldTemplateRun } from "./goal-templates";
+export {
+  WORKFLOW_DAG_CONTROL_LOG_KIND,
+  WorkflowDagControlError,
+  applyWorkflowDagControl,
+  buildWorkflowDagFromBundle,
+  projectWorkflowDagInstance,
+  readLatestWorkflowDagControl,
+  summarizeWorkflowDag,
+  type WorkflowDagControlAction,
+  type WorkflowDagControlResult
+} from "./workflow-dag-projection";
 
 export type ScenarioKey =
   | "inbox-triage"
