@@ -194,14 +194,18 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run browser E2E
-        # Run the E2E stack (web + worker) against a shared file-backed store, the
-        # configuration these UI/async-loop specs are validated under. Postgres
-        # parity is covered by the unit/integration suite; with an empty DATABASE_URL,
-        # playwright.config pins a shared AGENTIC_RUNTIME_STORE_PATH so the web app and
-        # worker share one backend and async goal jobs complete deterministically.
+        # Run the E2E stack (web + worker) against a single shared file-backed store,
+        # the configuration these UI/async-loop specs are validated under. Postgres
+        # parity is covered by the unit/integration suite. Both DATABASE_URL and the
+        # Hyperdrive local connection string must be empty here: the web app's DB
+        # resolver prefers the Hyperdrive binding (populated from
+        # CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE by the OpenNext dev
+        # integration), so leaving it set would point the web app at Postgres while the
+        # worker stays file-backed — a split store where async goal jobs never complete.
         run: npm run test:e2e
         env:
           DATABASE_URL: ""
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ""
 
       - name: Build container image
         run: docker build --build-arg NODE_OPTIONS="$NODE_OPTIONS" -t agentic-ci:${{ github.sha }} .
