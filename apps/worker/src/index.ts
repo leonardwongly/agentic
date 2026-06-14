@@ -4,6 +4,7 @@ import { logError, logInfo, withTelemetryContext } from "@agentic/observability"
 import { createRepository } from "@agentic/repository";
 import { createSelfImprovementRepository } from "@agentic/self-improvement-memory";
 import {
+  createDeadlineWatcherSignalEvaluator,
   createFileWorkerRuntimeHealthSink,
   createRepositoryWorkerRuntimeHealthSink,
   createWorkerRuntimeHealthSnapshot,
@@ -80,6 +81,7 @@ async function main() {
   await ensureWorkerRepositoryReady();
   const repository = createRepository();
   const selfImprovementRepository = createSelfImprovementRepository();
+  const watcherSignalEvaluator = createDeadlineWatcherSignalEvaluator({ repository });
   const controller = new AbortController();
   const runnerId = process.env.AGENTIC_WORKER_RUNNER_ID?.trim() || `worker-${process.pid}`;
   const pollIntervalMs = parsePositiveIntEnv("AGENTIC_WORKER_POLL_INTERVAL_MS", 1_000);
@@ -216,6 +218,7 @@ async function main() {
                 repository,
                 runnerId,
                 leaseMs: watcherSchedulerLeaseMs,
+                evaluator: watcherSignalEvaluator,
                 signal: controller.signal
               });
               await writeSchedulerHealth({
@@ -266,6 +269,7 @@ async function main() {
           intervalMs: watcherSchedulerIntervalMs,
           timeoutMs: watcherSchedulerTimeoutMs,
           leaseMs: watcherSchedulerLeaseMs,
+          evaluator: watcherSignalEvaluator,
           signal: controller.signal,
           onRunStart: (startedAt) =>
             writeSchedulerHealth({

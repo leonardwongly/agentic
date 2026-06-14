@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { logError, logInfo } from "@agentic/observability";
 import {
+  createDeadlineWatcherSignalEvaluator,
   createRepositoryWorkerRuntimeHealthSink,
   resolveWorkerConcurrencyPolicy,
   runWatcherSchedulerOnce,
@@ -81,6 +82,7 @@ export const POST = createGovernedMutationRoute(
           repository,
           runnerId,
           leaseMs: TICK_WATCHER_LEASE_MS,
+          evaluator: createDeadlineWatcherSignalEvaluator({ repository }),
           signal: controller.signal
         });
         return schedulerResult.decisions.length;
