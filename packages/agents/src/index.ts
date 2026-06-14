@@ -22,6 +22,7 @@ import {
   type Task
 } from "@agentic/contracts";
 import { assertCapabilitiesWithinAllowlist } from "@agentic/integrations";
+import { z } from "zod";
 import { isModelConfigured, runTextModel } from "./model-runner";
 
 export {
@@ -423,6 +424,40 @@ function contentForBuiltInAgent(task: Task, scenario: string): AgentContent {
   }
 }
 
+const AGENT_RISK_ORDER: Record<string, number> = { R1: 1, R2: 2, R3: 3, R4: 4 };
+
+// AOS-23: derive the structured AgentResult envelope (AOS-21 contract) from the
+// runner output. This surfaces the previously-hidden action intent into
+// proposedActions and reflects the approval gate via status/riskFlags. It never
+// escalates: an action proposed at a higher risk than the task grant stays gated
+// (status needs_approval), and capability/risk enforcement remains in the runner
+// permission checks and the downstream policy/approval path.
+function deriveAgentResultEnvelope(
+  task: Task,
+  result: AgentContent,
+  artifactId: string
+): Pick<AgentResult, "status" | "resultType" | "proposedActions" | "riskFlags" | "evidenceRefs"> {
+  const hasAction = Boolean(result.actionIntent);
+  const highRisk = (AGENT_RISK_ORDER[task.riskClass] ?? 2) >= AGENT_RISK_ORDER.R3;
+  const needsApproval =
+    result.executionMode === "manual_review_required" || (hasAction && (task.requiresApproval || highRisk));
+  const riskFlags: string[] = [];
+  if (highRisk) {
+    riskFlags.push("external_action_requires_approval");
+  }
+  if (task.requiresApproval) {
+    riskFlags.push("human_approval_required");
+  }
+
+  return {
+    status: needsApproval ? "needs_approval" : result.confidence < 0.4 ? "needs_clarification" : "success",
+    resultType: hasAction ? "action_result" : "recommendation",
+    proposedActions: result.actionIntent ? [result.actionIntent] : [],
+    riskFlags,
+    evidenceRefs: [`task:${task.id}`, `artifact:${artifactId}`]
+  };
+}
+
 function buildAgentResult(task: Task, result: AgentContent, agentDefinition?: AgentDefinition | null): AgentResult {
   const implementationTier = deriveAgentImplementationTier(result.executionMode);
 
@@ -446,7 +481,8 @@ function buildAgentResult(task: Task, result: AgentContent, agentDefinition?: Ag
     artifacts: [artifact],
     proposedToolCalls: [],
     nextSteps: result.nextSteps,
-    explanation: result.explanation
+    explanation: result.explanation,
+    ...deriveAgentResultEnvelope(task, result, artifact.id)
   });
 }
 
@@ -844,13 +880,96 @@ export async function runAgentWithModel(
       ? { ...baseArtifact.metadata, actionIntent: proposedIntent, executionIntent: proposedIntent }
       : baseArtifact.metadata;
 
-    return AgentResultSchema.parse({
+    const enhanced = AgentResultSchema.parse({
       ...baseline,
       artifacts: baseline.artifacts.map((artifact, index) =>
         index === 0 ? { ...artifact, content: text.slice(0, 4000), metadata: nextMetadata } : artifact
       )
     });
+    return await enrichAgentResultEnvelopeWithModel(enhanced, modelScenario);
   } catch {
     return baseline;
+  }
+}
+
+const EnvelopeEnrichmentSchema = z
+  .object({
+    assumptions: z.array(z.string().min(1).max(300)).max(8).default([]),
+    riskFlags: z.array(z.string().min(1).max(120)).max(8).default([])
+  })
+  .strict();
+
+export type EnvelopeModelClient = (request: { prompt: string; maxTokens: number }) => Promise<string | null>;
+
+function buildEnvelopeEnrichmentPrompt(result: AgentResult, scenario: string): string {
+  return [
+    "Review the agent result below and list the key assumptions it relies on and any risk flags",
+    "an operator should see before acting. Do NOT propose actions or change any decision.",
+    'Return ONLY minified JSON: {"assumptions":string[],"riskFlags":string[]}.',
+    "",
+    `Agent: ${result.agent}`,
+    `Scenario: ${scenario.slice(0, 500)}`,
+    `Summary: ${result.summary.slice(0, 800)}`
+  ].join("\n");
+}
+
+/**
+ * AOS-23: optionally enrich the structured envelope's assumptions/riskFlags with a model.
+ * The model client is injectable (defaults to runTextModel) so the model path is testable
+ * with a fake. It only augments assumptions/riskFlags (union) and never changes status,
+ * confidence, proposedActions, executionMode, or capability/risk gating, so it cannot
+ * escalate. Any failure (unconfigured, disabled, malformed, oversized) returns the result
+ * unchanged.
+ */
+export async function enrichAgentResultEnvelopeWithModel(
+  result: AgentResult,
+  scenario: string,
+  options: { modelClient?: EnvelopeModelClient; isConfigured?: () => boolean; enabled?: boolean } = {}
+): Promise<AgentResult> {
+  const modelClient = options.modelClient ?? ((request) => runTextModel(request));
+  const isConfigured = options.isConfigured ?? isModelConfigured;
+  const enabled = options.enabled ?? (process.env.NODE_ENV !== "test" && isConfigured());
+
+  if (!enabled || !isConfigured()) {
+    return result;
+  }
+
+  let raw: string | null;
+  try {
+    raw = await modelClient({ prompt: buildEnvelopeEnrichmentPrompt(result, scenario), maxTokens: 400 });
+  } catch {
+    return result;
+  }
+
+  if (!raw || raw.length > 4_000) {
+    return result;
+  }
+
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end < start) {
+    return result;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return result;
+  }
+
+  const enrichment = EnvelopeEnrichmentSchema.safeParse(parsed);
+  if (!enrichment.success) {
+    return result;
+  }
+
+  try {
+    return AgentResultSchema.parse({
+      ...result,
+      assumptions: Array.from(new Set([...result.assumptions, ...enrichment.data.assumptions])).slice(0, 12),
+      riskFlags: Array.from(new Set([...result.riskFlags, ...enrichment.data.riskFlags])).slice(0, 12)
+    });
+  } catch {
+    return result;
   }
 }

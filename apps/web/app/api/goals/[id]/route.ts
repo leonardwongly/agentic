@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { summarizeWorkflowDag } from "@agentic/orchestrator";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError } from "../../../../lib/api-response";
 import { getSeededRepository } from "../../../../lib/server";
@@ -17,7 +18,9 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       throw new ApiRouteError(404, `Goal ${goalId} was not found.`);
     }
 
-    return authenticatedJson({ bundle });
+    // AOS-20: run the WorkflowDag engine on the live bundle and return the
+    // process-graph projection (status + per-node counts) alongside the bundle.
+    return authenticatedJson({ bundle, workflowDag: summarizeWorkflowDag(bundle) });
   } catch (error) {
     return handleApiError(error, "Failed to load goal.");
   }

@@ -31,7 +31,13 @@ describe("AOS remediation tracker", () => {
 
     expect(validateAosTracker(tracker)).toEqual([]);
     expect(tracker.itemIdPolicy.requiredIds).toEqual(requiredIds);
-    expect(tracker.items.map((item) => item.id).sort()).toEqual(requiredIds);
+    // The manifest scales beyond the original 19-item baseline (see #721): the
+    // required baseline must stay fully covered, while later canonical AOS items
+    // (AOS-19+) may extend the tracker.
+    const itemIds = new Set(tracker.items.map((item) => item.id));
+    for (const requiredId of requiredIds) {
+      expect(itemIds.has(requiredId)).toBe(true);
+    }
     expect(new Set(tracker.items.map((item) => item.issue)).size).toBe(tracker.items.length);
   });
 
@@ -40,9 +46,9 @@ describe("AOS remediation tracker", () => {
     const expandedTracker = structuredClone(tracker);
 
     expandedTracker.items.push({
-      id: "AOS-19",
+      id: "AOS-90",
       issue: 721,
-      title: "Scale remediation tracker beyond 19 AOS items",
+      title: "Scale remediation tracker beyond the AOS baseline",
       lane: "shell",
       phase: "Phase 4 - Shell and maintainability",
       priority: "critical",
@@ -56,15 +62,15 @@ describe("AOS remediation tracker", () => {
       lane: "shell",
       phase: "Phase 4 - Shell and maintainability",
       priority: "medium",
-      dependencies: ["AOS-19"],
+      dependencies: ["AOS-90"],
       validationGates: ["npx vitest run tests/aos-remediation-dashboard.test.ts"]
     });
 
     expect(validateAosTracker(expandedTracker)).toEqual([]);
-    expect(summarizeAosTracker(expandedTracker).totalItems).toBe(21);
+    expect(summarizeAosTracker(expandedTracker).totalItems).toBe(tracker.items.length + 2);
     const dashboard = renderAosDashboard(expandedTracker);
-    expect(dashboard).toContain("| AOS-19 | #721 | shell | critical | AOS-18 |");
-    expect(dashboard.indexOf("| AOS-19 |")).toBeLessThan(dashboard.indexOf("| AOS-100 |"));
+    expect(dashboard).toContain("| AOS-90 | #721 | shell | critical | AOS-18 |");
+    expect(dashboard.indexOf("| AOS-90 |")).toBeLessThan(dashboard.indexOf("| AOS-100 |"));
   });
 
   it("keeps strategic artifacts separate from implementation proof", () => {
@@ -93,11 +99,11 @@ describe("AOS remediation tracker", () => {
     const tracker = loadAosTracker();
     const summary = summarizeAosTracker(tracker);
 
-    expect(summary.totalItems).toBe(19);
+    expect(summary.totalItems).toBe(25);
     expect(summary.byLane).toMatchObject({
       "trust-spine": 7,
-      "execution-spine": 6,
-      "intelligence-fabric": 4,
+      "execution-spine": 8,
+      "intelligence-fabric": 8,
       shell: 2
     });
     expect(summary.blockedByBaseline).toEqual(["AOS-01", "AOS-02", "AOS-03", "AOS-05", "AOS-06"]);
@@ -298,23 +304,23 @@ describe("AOS remediation tracker", () => {
             url: `https://github.com/leonardwongly/agentic/issues/${item.issue}`
           })),
           {
-            number: 999,
+            number: 9991,
             title: "[AOS-010] Duplicate padded remediation issue",
             labels: [{ name: "aos-remediation" }],
-            url: "https://github.com/leonardwongly/agentic/issues/999"
+            url: "https://github.com/leonardwongly/agentic/issues/9991"
           },
           {
-            number: 1000,
+            number: 9992,
             title: "[AOS-100] Future remediation issue",
             labels: [{ name: "aos-remediation" }],
-            url: "https://github.com/leonardwongly/agentic/issues/1000"
+            url: "https://github.com/leonardwongly/agentic/issues/9992"
           }
         ]
       ]),
       stderr: ""
     });
 
-    expect(verifyLiveIssueCoverage(tracker)).toEqual(["Unexpected live AOS issue id AOS-010 on #999."]);
+    expect(verifyLiveIssueCoverage(tracker)).toEqual(["Unexpected live AOS issue id AOS-010 on #9991."]);
   });
 
   it("references repo files that exist for local baseline evidence", () => {

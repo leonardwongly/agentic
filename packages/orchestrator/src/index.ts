@@ -39,6 +39,7 @@ import {
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { runAgentWithModel } from "@agentic/agents";
+import { createModelPlanner, type Planner } from "./model-planner";
 import { createTask, createWorkflowState, recomputeWorkflowStatuses, transitionTaskState } from "@agentic/execution";
 import { inferCapabilitiesFromRequest, planActionExecution } from "@agentic/integrations";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
@@ -58,6 +59,24 @@ export { executeApprovedTask, executeApprovedTasks, reconcileExecutionResults, t
 export { generateBriefing, generateMorningBriefing } from "./morning-briefing";
 export { refineGoal } from "./goal-refinement";
 export { createGoalTemplate, interpolateTemplate, computeNextRun, shouldTemplateRun } from "./goal-templates";
+export {
+  WORKFLOW_DAG_CONTROL_LOG_KIND,
+  WorkflowDagControlError,
+  applyWorkflowDagControl,
+  buildWorkflowDagFromBundle,
+  projectWorkflowDagInstance,
+  readLatestWorkflowDagControl,
+  summarizeWorkflowDag,
+  type WorkflowDagControlAction,
+  type WorkflowDagControlResult
+} from "./workflow-dag-projection";
+export {
+  createModelPlanner,
+  type Planner,
+  type PlannerInput,
+  type PlannerModelClient,
+  type PlannerTask
+} from "./model-planner";
 
 export type ScenarioKey =
   | "inbox-triage"
@@ -770,6 +789,7 @@ export async function processUserRequest(params: {
   governance?: WorkspaceGovernance | null;
   goalId?: string;
   workflowId?: string;
+  planner?: Planner;
 }): Promise<GoalBundle> {
   const request = normalizeRequest(params.request);
 
@@ -799,6 +819,21 @@ export async function processUserRequest(params: {
   const relevantMemories = contextPack.selectedMemories;
   const scenario = await detectScenario(request);
   const catalog = scenarioCatalog[scenario];
+  // AOS-22: for the general-coordination lane, a model-backed planner may replace
+  // the static catalog tasks. Output is validated through policy + DAG inside the
+  // planner; any failure falls back to the deterministic catalog. The default
+  // planner is flag-gated and a no-op in tests/unconfigured runs.
+  const planner = params.planner ?? createModelPlanner();
+  const plannedBaseTasks = scenario === "general-coordination" ? await planner.plan({ request }) : null;
+  const baseTasks: PlannedTask[] = plannedBaseTasks
+    ? plannedBaseTasks.map((task) => ({
+        title: task.title,
+        summary: task.summary,
+        assignedAgent: task.assignedAgent,
+        capabilities: task.capabilities,
+        confidence: task.confidence
+      }))
+    : catalog.tasks;
   const goalId = params.goalId ?? crypto.randomUUID();
   const workspaceId = params.workspaceId ?? null;
   const workflow = createWorkflowState(goalId, scenario, workspaceId, params.workflowId);
@@ -817,7 +852,7 @@ export async function processUserRequest(params: {
         })
       : null;
   const plannedTasks = expandPlannedTasks({
-    baseTasks: catalog.tasks,
+    baseTasks,
     subAgentPlan
   });
   const subAgentTaskIds = new Map<string, string>();

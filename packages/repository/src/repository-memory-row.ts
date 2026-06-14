@@ -27,6 +27,9 @@ export function mapMemoryRow(row: MemoryRow): MemoryRecord {
     agentScope: typeof row.agent_scope === "string" ? row.agent_scope : "global",
     reviewAt: nullableIsoFromDbTimestamp(row.review_at),
     expiryAt: nullableIsoFromDbTimestamp(row.expiry_at),
+    version: row.version == null ? undefined : Number(row.version),
+    supersedes: typeof row.supersedes === "string" ? row.supersedes : null,
+    validFrom: nullableIsoFromDbTimestamp(row.valid_from),
     createdAt: isoFromDbTimestamp(row.created_at),
     updatedAt: isoFromDbTimestamp(row.updated_at)
   });

@@ -154,8 +154,14 @@ export {
   runWatcherSchedulerLoop,
   runWatcherSchedulerOnce,
   type WatcherSchedulerResult,
-  type WatcherSchedulerDecision
+  type WatcherSchedulerDecision,
+  type WatcherSignalEvaluator
 } from "./watcher-scheduler";
+export {
+  createDeadlineWatcherSignalEvaluator,
+  type WatcherSignalRepositoryPort,
+  type DeadlineWatcherSignalEvaluatorOptions
+} from "./watcher-signal-evaluator";
 export {
   createFileWorkerRuntimeHealthSink,
   createRepositoryWorkerRuntimeHealthSink,

@@ -375,6 +375,7 @@ export function queryContextPackets(records: MemoryRecord[], query: ContextPacke
     ? new Set(query.allowedSensitivities.map((sensitivity) => normalizeSensitivity(sensitivity)))
     : null;
   const limit = Math.max(0, Math.min(Math.trunc(query.limit ?? 50), 200));
+  const supersededIds = new Set(records.map((record) => record.supersedes).filter((id): id is string => Boolean(id)));
 
   return records
     .filter((record) => {
@@ -382,7 +383,11 @@ export function queryContextPackets(records: MemoryRecord[], query: ContextPacke
         return false;
       }
 
-      if (!query.includeExpired && isMemoryExpired(record, now)) {
+      if (record.memoryType === "contradicted" || supersededIds.has(record.id)) {
+        return false;
+      }
+
+      if (!query.includeExpired && (isMemoryExpired(record, now) || record.memoryType === "expired")) {
         return false;
       }
 
@@ -399,6 +404,55 @@ export function queryContextPackets(records: MemoryRecord[], query: ContextPacke
 
 export function canAgentAccessMemory(record: MemoryRecord, agent: AgentName): boolean {
   return record.permissions.includes(agent);
+}
+
+/**
+ * AOS-24: supersede a prior memory with a corrected record. The prior is marked
+ * `contradicted` (so it drops out of active retrieval) and the replacement records
+ * a bumped version + a `supersedes` link + `validFrom`. This is "supersede-on-write":
+ * a correction replaces the belief instead of creating a conflicting peer.
+ */
+export function supersedeMemory(
+  prior: MemoryRecord,
+  replacement: MemoryRecord,
+  now = nowIso()
+): { contradicted: MemoryRecord; replacement: MemoryRecord } {
+  return {
+    contradicted: MemoryRecordSchema.parse({ ...prior, memoryType: "contradicted", updatedAt: now }),
+    replacement: MemoryRecordSchema.parse({
+      ...replacement,
+      version: (prior.version ?? 1) + 1,
+      supersedes: prior.id,
+      validFrom: replacement.validFrom ?? now,
+      updatedAt: now
+    })
+  };
+}
+
+// Records that should never surface in active retrieval: date-expired, revised
+// (`contradicted`/`expired` assertion states), or superseded by a newer record.
+function filterRetrievableMemories(records: MemoryRecord[], options: { agent?: AgentName; now: number }): MemoryRecord[] {
+  const supersededIds = new Set(records.map((record) => record.supersedes).filter((id): id is string => Boolean(id)));
+
+  return records.filter((record) => {
+    if (isMemoryExpired(record, options.now)) {
+      return false;
+    }
+
+    if (record.memoryType === "contradicted" || record.memoryType === "expired") {
+      return false;
+    }
+
+    if (supersededIds.has(record.id)) {
+      return false;
+    }
+
+    if (options.agent && !canAgentAccessMemory(record, options.agent)) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 export function scoreMemoryRecord(query: string, record: MemoryRecord, now = Date.now()): number {
@@ -436,17 +490,7 @@ export function rankRelevantMemories(
 ): MemoryRecord[] {
   const resolvedNow = options?.now ?? Date.now();
   const resolvedLimit = Math.max(0, Math.min(Math.trunc(limit), 50));
-  const accessibleRecords = records.filter((record) => {
-    if (isMemoryExpired(record, resolvedNow)) {
-      return false;
-    }
-
-    if (options?.agent && !canAgentAccessMemory(record, options.agent)) {
-      return false;
-    }
-
-    return true;
-  });
+  const accessibleRecords = filterRetrievableMemories(records, { agent: options?.agent, now: resolvedNow });
 
   return accessibleRecords
     .map((record) => ({
@@ -466,17 +510,7 @@ export function detectMemoryConflicts(
   }
 ): MemoryConflict[] {
   const resolvedNow = options?.now ?? Date.now();
-  const accessibleRecords = records.filter((record) => {
-    if (isMemoryExpired(record, resolvedNow)) {
-      return false;
-    }
-
-    if (options?.agent && !canAgentAccessMemory(record, options.agent)) {
-      return false;
-    }
-
-    return true;
-  });
+  const accessibleRecords = filterRetrievableMemories(records, { agent: options?.agent, now: resolvedNow });
   const groupedClaims = new Map<
     string,
     {

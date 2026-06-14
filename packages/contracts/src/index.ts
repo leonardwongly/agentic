@@ -32,7 +32,7 @@ export const goalWedgeKeyValues = [
   "briefing"
 ] as const;
 export const goalWedgeSelectionValues = ["selected_production", "supporting"] as const;
-export const memoryTypeValues = ["observed", "inferred", "confirmed"] as const;
+export const memoryTypeValues = ["observed", "inferred", "confirmed", "contradicted", "expired"] as const;
 export const agentMemoryScopeValues = ["global", "agent-only", "agent-preferred"] as const;
 export const approvalDecisionValues = ["pending", "approved", "rejected"] as const;
 export const approvalActionTypeValues = ["send", "schedule", "create", "update", "delete", "draft", "artifact-only"] as const;
@@ -266,6 +266,44 @@ export const ArtifactSchema = z.object({
   createdAt: z.string().datetime()
 });
 
+export const agentResultStatusValues = [
+  "success",
+  "partial",
+  "failed",
+  "needs_clarification",
+  "needs_approval"
+] as const;
+export const AgentResultStatusSchema = z.enum(agentResultStatusValues);
+
+export const agentResultTypeValues = [
+  "answer",
+  "draft",
+  "plan",
+  "recommendation",
+  "artifact",
+  "action_result"
+] as const;
+export const AgentResultTypeSchema = z.enum(agentResultTypeValues);
+
+export const AgentMemoryUpdateProposalSchema = z
+  .object({
+    category: z.string().min(1).max(120),
+    memoryType: z.enum(memoryTypeValues),
+    summary: z.string().min(1).max(500),
+    confidence: z.number().min(0).max(1).default(0.5),
+    sensitivity: z.string().min(1).max(40).nullable().default(null)
+  })
+  .strict();
+
+export const AgentWatcherRecommendationSchema = z
+  .object({
+    targetEntity: z.string().min(1).max(200),
+    condition: z.string().min(1).max(500),
+    triggerAction: z.string().min(1).max(300),
+    frequency: z.lazy(() => WatcherFrequencySchema)
+  })
+  .strict();
+
 export const AgentResultSchema = z.object({
   agent: AgentNameSchema,
   summary: z.string().min(1),
@@ -275,7 +313,20 @@ export const AgentResultSchema = z.object({
   artifacts: z.array(ArtifactSchema).default([]),
   proposedToolCalls: z.array(ToolInvocationSchema).default([]),
   nextSteps: z.array(z.string()).default([]),
-  explanation: z.string().min(1)
+  explanation: z.string().min(1),
+  // AOS-21: structured agent result envelope. All fields are additive and
+  // backward-compatible (optional or defaulted) so legacy producers that build
+  // results via AgentResultSchema.parse keep working; model-backed runners
+  // (AOS-23) and the planner (AOS-22) populate them.
+  status: AgentResultStatusSchema.optional(),
+  resultType: AgentResultTypeSchema.optional(),
+  structuredResult: z.record(z.string(), z.unknown()).nullable().default(null),
+  evidenceRefs: z.array(z.string().min(1).max(500)).default([]),
+  assumptions: z.array(z.string().min(1).max(500)).default([]),
+  riskFlags: z.array(z.string().min(1).max(200)).default([]),
+  proposedActions: z.array(z.lazy(() => ActionIntentSchema)).default([]),
+  memoryUpdates: z.array(AgentMemoryUpdateProposalSchema).default([]),
+  watcherRecommendations: z.array(AgentWatcherRecommendationSchema).default([])
 });
 
 export const SubAgentCoordinationStrategySchema = z.enum(["parallel", "sequential", "hybrid"]);
@@ -850,6 +901,12 @@ export const MemoryRecordSchema = z.object({
   agentScope: AgentMemoryScopeSchema.default("global"),
   reviewAt: z.string().datetime().nullable().default(null),
   expiryAt: z.string().datetime().nullable().default(null),
+  // AOS-24: belief-revision metadata. version increments on supersede; supersedes
+  // links to the record this one replaces; validFrom marks when the assertion took
+  // effect. All defaulted, so legacy records parse unchanged.
+  version: z.number().int().min(1).default(1),
+  supersedes: z.string().min(1).nullable().default(null),
+  validFrom: z.string().datetime().nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });
@@ -3800,6 +3857,10 @@ export type AgentName = z.infer<typeof AgentNameSchema>;
 export type ToolInvocation = z.infer<typeof ToolInvocationSchema>;
 export type Artifact = z.infer<typeof ArtifactSchema>;
 export type AgentResult = z.infer<typeof AgentResultSchema>;
+export type AgentResultStatus = z.infer<typeof AgentResultStatusSchema>;
+export type AgentResultType = z.infer<typeof AgentResultTypeSchema>;
+export type AgentMemoryUpdateProposal = z.infer<typeof AgentMemoryUpdateProposalSchema>;
+export type AgentWatcherRecommendation = z.infer<typeof AgentWatcherRecommendationSchema>;
 export type SubAgentCoordinationStrategy = z.infer<typeof SubAgentCoordinationStrategySchema>;
 export type SubAgentRole = z.infer<typeof SubAgentRoleSchema>;
 export type SubAgentPlan = z.infer<typeof SubAgentPlanSchema>;
