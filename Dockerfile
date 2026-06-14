@@ -25,6 +25,12 @@ FROM deps AS build
 ARG NODE_OPTIONS=--max-old-space-size=4096
 ENV NODE_OPTIONS=${NODE_OPTIONS}
 ENV NEXT_TELEMETRY_DISABLED=1
+# next build (OpenNext/Cloudflare adapter) requires a Hyperdrive local connection
+# string to be present even though it does not connect to the database during the
+# build. Provide a build-only placeholder; the deployed runtime resolves the real
+# HYPERDRIVE binding (Cloudflare) or DATABASE_URL (self-host) instead.
+ARG CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=postgres://build:build@127.0.0.1:5432/agentic_build
+ENV CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=${CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE}
 COPY . .
 RUN npm run build
 
