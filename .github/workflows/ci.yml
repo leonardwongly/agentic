@@ -103,6 +103,7 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/agentic
+      CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: postgres://postgres:postgres@127.0.0.1:5432/agentic
       AGENTIC_ACCESS_KEY: ci-access-key
       NODE_ENV: test
       NODE_OPTIONS: --max-old-space-size=4096
