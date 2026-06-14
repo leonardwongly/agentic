@@ -194,7 +194,14 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run browser E2E
+        # Run the E2E stack (web + worker) against a shared file-backed store, the
+        # configuration these UI/async-loop specs are validated under. Postgres
+        # parity is covered by the unit/integration suite; with an empty DATABASE_URL,
+        # playwright.config pins a shared AGENTIC_RUNTIME_STORE_PATH so the web app and
+        # worker share one backend and async goal jobs complete deterministically.
         run: npm run test:e2e
+        env:
+          DATABASE_URL: ""
 
       - name: Build container image
         run: docker build --build-arg NODE_OPTIONS="$NODE_OPTIONS" -t agentic-ci:${{ github.sha }} .
