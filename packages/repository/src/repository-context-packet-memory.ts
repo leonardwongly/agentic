@@ -64,6 +64,9 @@ function mapMemoryRow(row: Record<string, unknown>): MemoryRecord {
     agentScope: typeof row.agent_scope === "string" ? row.agent_scope : "global",
     reviewAt: row.review_at ? new Date(row.review_at as string | number | Date).toISOString() : null,
     expiryAt: row.expiry_at ? new Date(row.expiry_at as string | number | Date).toISOString() : null,
+    version: row.version == null ? undefined : Number(row.version),
+    supersedes: typeof row.supersedes === "string" ? row.supersedes : null,
+    validFrom: row.valid_from ? new Date(row.valid_from as string | number | Date).toISOString() : null,
     createdAt: new Date(row.created_at as string | number | Date).toISOString(),
     updatedAt: new Date(row.updated_at as string | number | Date).toISOString()
   });

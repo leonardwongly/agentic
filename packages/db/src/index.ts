@@ -137,6 +137,9 @@ export const memoryRecords = pgTable("memory_records", {
   agentScope: text("agent_scope").notNull().default("global"),
   reviewAt: timestamp("review_at", { withTimezone: true }),
   expiryAt: timestamp("expiry_at", { withTimezone: true }),
+  version: integer("version").notNull().default(1),
+  supersedes: text("supersedes"),
+  validFrom: timestamp("valid_from", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull()
 });

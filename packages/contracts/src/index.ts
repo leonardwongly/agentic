@@ -32,7 +32,7 @@ export const goalWedgeKeyValues = [
   "briefing"
 ] as const;
 export const goalWedgeSelectionValues = ["selected_production", "supporting"] as const;
-export const memoryTypeValues = ["observed", "inferred", "confirmed"] as const;
+export const memoryTypeValues = ["observed", "inferred", "confirmed", "contradicted", "expired"] as const;
 export const agentMemoryScopeValues = ["global", "agent-only", "agent-preferred"] as const;
 export const approvalDecisionValues = ["pending", "approved", "rejected"] as const;
 export const approvalActionTypeValues = ["send", "schedule", "create", "update", "delete", "draft", "artifact-only"] as const;
@@ -901,6 +901,12 @@ export const MemoryRecordSchema = z.object({
   agentScope: AgentMemoryScopeSchema.default("global"),
   reviewAt: z.string().datetime().nullable().default(null),
   expiryAt: z.string().datetime().nullable().default(null),
+  // AOS-24: belief-revision metadata. version increments on supersede; supersedes
+  // links to the record this one replaces; validFrom marks when the assertion took
+  // effect. All defaulted, so legacy records parse unchanged.
+  version: z.number().int().min(1).default(1),
+  supersedes: z.string().min(1).nullable().default(null),
+  validFrom: z.string().datetime().nullable().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });

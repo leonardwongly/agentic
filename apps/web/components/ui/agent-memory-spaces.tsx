@@ -619,7 +619,9 @@ export function useMemorySpaces(agents: Array<{ id: string; name: string }>) {
     const byType: Record<MemoryType, number> = {
       observed: 0,
       inferred: 0,
-      confirmed: 0
+      confirmed: 0,
+      contradicted: 0,
+      expired: 0
     };
     spaceMemories.forEach(m => {
       byType[m.memoryType]++;
