@@ -238,6 +238,7 @@ export * from "./google-oauth";
 export * from "@agentic/observability";
 export * from "./provider-credential-secrets";
 export * from "./readiness";
+export * from "./connector-enablement";
 export * from "./connector-errors";
 export * from "./slack";
 export * from "./telegram";
