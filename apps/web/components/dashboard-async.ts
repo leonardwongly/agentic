@@ -2,7 +2,7 @@ import type { BriefingType, GoalTemplate } from "@agentic/contracts";
 import type { DashboardData } from "@agentic/repository";
 import type { DashboardEventBatch, DashboardFreshnessState } from "../lib/dashboard-events";
 
-type QueuedJobStatus = "queued" | "running" | "retrying" | "completed" | "dead_letter";
+type QueuedJobStatus = "queued" | "running" | "retrying" | "completed" | "dead_letter" | "cancelled";
 
 export type NLIntentQueuedJob = {
   id: string;
@@ -152,6 +152,21 @@ export type DashboardEventStreamOptions = {
 const GOAL_JOB_POLL_INTERVAL_MS = 500;
 const GOAL_JOB_POLL_TIMEOUT_MS = 60_000;
 const DASHBOARD_EVENTS_ENDPOINT = "/api/dashboard/events";
+
+// Settled/terminal job statuses. A job that is completed, dead-lettered, or
+// cancelled by operator control will never transition again, so polling and
+// event-stream waits must stop cleanly instead of running to timeout. "cancelled"
+// was previously missing here, which left cancelled jobs polling until the
+// timeout window elapsed (AOS-25 deferral).
+const TERMINAL_JOB_STATUSES: ReadonlySet<QueuedJobStatus> = new Set<QueuedJobStatus>([
+  "completed",
+  "dead_letter",
+  "cancelled"
+]);
+
+function isTerminalJobStatus(status: QueuedJobStatus): boolean {
+  return TERMINAL_JOB_STATUSES.has(status);
+}
 
 export async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T & { error?: string };
@@ -344,7 +359,7 @@ export async function pollJobStatusUntilSettled<T extends { job: { status: Queue
       })
     );
 
-    if (payload.job.status === "completed" || payload.job.status === "dead_letter") {
+    if (isTerminalJobStatus(payload.job.status)) {
       return payload;
     }
 
@@ -413,7 +428,7 @@ async function waitForJobEventStream<T extends { job: { status: QueuedJobStatus 
         return;
       }
 
-      if (payload.job.status !== "completed" && payload.job.status !== "dead_letter") {
+      if (!isTerminalJobStatus(payload.job.status)) {
         return;
       }
 
@@ -438,7 +453,7 @@ function parseJobEventSnapshot(event: Event): { job: { status: QueuedJobStatus }
   try {
     const payload = JSON.parse(event.data) as { job?: { status?: unknown } };
     const status = payload.job?.status;
-    const validStatuses: QueuedJobStatus[] = ["queued", "running", "retrying", "completed", "dead_letter"];
+    const validStatuses: QueuedJobStatus[] = ["queued", "running", "retrying", "completed", "dead_letter", "cancelled"];
 
     if (typeof status === "string" && validStatuses.includes(status as QueuedJobStatus)) {
       return {

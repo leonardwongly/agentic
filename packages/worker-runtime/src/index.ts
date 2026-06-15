@@ -23,6 +23,7 @@ import {
   createJobRecord,
   processNextDurableJob,
   type ClaimNextJobParams,
+  type JobCancellationWatch,
   type JobConcurrencyLimits,
   type JobHandlerContext,
   type JobHandlerMap,
@@ -216,6 +217,12 @@ export type WorkerRuntimeOptions = {
   maxJobs?: number;
   stopWhenIdle?: boolean;
   claim?: ClaimNextJobParams;
+  /**
+   * AOS-25: how often (ms) a running job is re-read so an operator cancellation or
+   * lease takeover aborts the in-flight attempt promptly. Defaults to 1000ms; set to
+   * 0 to disable in-attempt cancellation polling.
+   */
+  cancellationPollIntervalMs?: number;
   immuneSystem?: Partial<WorkerRuntimeImmuneSystemControls>;
   health?: {
     sink: WorkerRuntimeHealthSink;
@@ -1441,6 +1448,17 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
         runnerId: options.runnerId,
         retryPolicy: options.retryPolicy
       });
+      // AOS-25: re-read each running job on an interval so an operator cancellation
+      // (status -> "cancelled") or lease takeover aborts the in-flight attempt and
+      // the dispatcher abandons it without a not_running completeJob/fail. Disabled
+      // only when explicitly set to 0.
+      const cancellation: JobCancellationWatch | undefined =
+        options.cancellationPollIntervalMs === 0
+          ? undefined
+          : {
+              readLatest: (job) => options.repository.getJob(job.id, job.userId),
+              pollIntervalMs: options.cancellationPollIntervalMs
+            };
       const pollIntervalMs = Math.max(50, options.pollIntervalMs ?? 1_000);
       let processedCount = 0;
       const healthReporter = createWorkerRuntimeHealthReporter({
@@ -1482,7 +1500,8 @@ export async function runWorkerRuntime(options: WorkerRuntimeOptions): Promise<W
             claim: {
               ...(options.claim ?? {}),
               kinds: allowedKinds
-            }
+            },
+            cancellation
           });
 
           if (result.claimedJob) {

@@ -843,7 +843,13 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
         setRecommendationResultsByGoal((prev) => {
           const existing = prev[goalId];
 
-          if (existing?.status === "ready" && existing.query === null && existing.recommendations.length === 0 && existing.error === null) {
+          if (
+            existing?.status === "ready" &&
+            existing.query === null &&
+            existing.recommendations.length === 0 &&
+            existing.workflowTrust.length === 0 &&
+            existing.error === null
+          ) {
             return prev;
           }
 
@@ -854,6 +860,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               query: null,
               recommendations: [],
               policyPromotion: null,
+              workflowTrust: [],
               error: null
             }
           };
@@ -875,6 +882,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
           query: queryString,
           recommendations: prev[goalId]?.recommendations ?? [],
           policyPromotion: prev[goalId]?.policyPromotion ?? null,
+          workflowTrust: prev[goalId]?.workflowTrust ?? [],
           error: null
         }
       }));
@@ -898,6 +906,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               query: queryString,
               recommendations: payload.recommendations,
               policyPromotion: payload.policyPromotion,
+              workflowTrust: payload.workflowTrust,
               error: null
             }
           }));
@@ -913,6 +922,7 @@ function DashboardContent({ initialData, initialNotes, initialCommitmentInbox }:
               query: queryString,
               recommendations: [],
               policyPromotion: null,
+              workflowTrust: [],
               error: error instanceof Error ? error.message : "Failed to load recommendation history."
             }
           }));

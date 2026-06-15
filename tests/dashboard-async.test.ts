@@ -123,6 +123,87 @@ describe("dashboard async helpers", () => {
     });
   });
 
+  it("stops polling cleanly when a job is cancelled by operator control", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ job: { status: "running" }, error: null }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ job: { status: "cancelled" }, error: "Job cancelled by operator control." }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        )
+      )
+      .mockResolvedValue(
+        new Response(JSON.stringify({ job: { status: "cancelled" }, error: "Job cancelled by operator control." }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        })
+      );
+
+    const payload = await pollJobStatusUntilSettled<{
+      job: { status: "running" | "cancelled" };
+      error: string | null;
+    }>("/api/goals/jobs/job-cancelled", {
+      fetchImpl,
+      pollIntervalMs: 0,
+      timeoutMs: 1_000,
+      preferEventStream: false
+    });
+
+    // The second poll observes the terminal "cancelled" status and stops; it must
+    // not keep polling to the timeout window.
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(payload).toEqual({
+      job: { status: "cancelled" },
+      error: "Job cancelled by operator control."
+    });
+  });
+
+  it("resolves after a cancelled job event without polling to timeout", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          job: { status: "cancelled" },
+          result: null,
+          error: "Job cancelled by operator control."
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    );
+    const payloadPromise = pollJobStatusUntilSettled<{
+      job: { status: "running" | "cancelled" };
+      result: null;
+      error: string | null;
+    }>("/api/goals/jobs/job-cancelled-stream", {
+      fetchImpl,
+      eventSourceFactory: (url) => new FakeEventSource(url),
+      timeoutMs: 1_000
+    });
+
+    expect(FakeEventSource.instances[0]?.url).toBe("/api/jobs/job-cancelled-stream/events");
+    FakeEventSource.instances[0]?.emit("job.snapshot", { job: { status: "running" } });
+    FakeEventSource.instances[0]?.emit("job.snapshot", { job: { status: "cancelled" } });
+
+    await expect(payloadPromise).resolves.toEqual({
+      job: { status: "cancelled" },
+      result: null,
+      error: "Job cancelled by operator control."
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(FakeEventSource.instances[0]?.closed).toBe(true);
+  });
+
   it("subscribes to job event streams and reads the final typed payload after a terminal event", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
