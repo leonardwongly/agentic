@@ -53,6 +53,7 @@ import {
 } from "@agentic/policy";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import { readWorkflowControlStatusOverride } from "./workflow-dag-projection";
 
 export { captureApprovalOutcomeSignals, captureExecutionOutcomeSignals, captureMemoriesFromBundle, type CapturedMemories } from "./memory-capture";
 export { executeApprovedTask, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "./execution-dispatch";
@@ -66,6 +67,7 @@ export {
   buildWorkflowDagFromBundle,
   projectWorkflowDagInstance,
   readLatestWorkflowDagControl,
+  readWorkflowControlStatusOverride,
   summarizeWorkflowDag,
   type WorkflowDagControlAction,
   type WorkflowDagControlResult
@@ -1273,7 +1275,12 @@ export function respondToApproval(params: {
       responsibility: nextResponsibility
     });
   });
-  const statuses = recomputeWorkflowStatuses(tasks, approvals, bundle.watchers);
+  const statuses = recomputeWorkflowStatuses(
+    tasks,
+    approvals,
+    bundle.watchers,
+    readWorkflowControlStatusOverride(bundle)
+  );
   const transitionLog = taskTransitionLog;
   const approvalResponseLog = ActionLogSchema.parse(
     createActionLog({

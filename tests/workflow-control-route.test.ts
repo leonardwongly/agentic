@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_OWNER_USER_ID, type ActionLog } from "@agentic/contracts";
+import { createJobRecord } from "@agentic/execution";
 import { processUserRequest } from "@agentic/orchestrator";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
@@ -71,6 +72,54 @@ describe("workflow control route (AOS-25)", () => {
     expect(response.status).toBe(200);
     const payload = (await response.json()) as { control: { status: string } };
     expect(payload.control.status).toBe("cancelled");
+  });
+
+  function enqueueGoalJob(goalId: string, workflowId: string, idempotencyKey: string) {
+    return createRouteTestRepository().enqueueJob(
+      createJobRecord({
+        userId: DEFAULT_OWNER_USER_ID,
+        kind: "goal_create",
+        idempotencyKey,
+        payload: {
+          type: "goal_create",
+          goalId,
+          workflowId,
+          request: "Plan my week and prepare for the key client meetings.",
+          workspaceId: null,
+          agentId: null,
+          metadata: {}
+        }
+      })
+    );
+  }
+
+  it("cancels the goal's not-yet-completed jobs and reports the count (AOS-25)", async () => {
+    const bundle = await seedGoal();
+    const queuedJob = await enqueueGoalJob(bundle.goal.id, bundle.workflow.id, "workflow-control-cancel-job");
+
+    const response = await control(bundle.goal.id, { action: "cancel", reason: "duplicate run" });
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as { control: { status: string }; cancelledJobs: number };
+    expect(payload.control.status).toBe("cancelled");
+    expect(payload.cancelledJobs).toBe(1);
+
+    const settled = await createRouteTestRepository().getJob(queuedJob.id, DEFAULT_OWNER_USER_ID);
+    expect(settled?.status).toBe("cancelled");
+  });
+
+  it("does not cancel jobs when pausing a workflow (AOS-25)", async () => {
+    const bundle = await seedGoal();
+    const queuedJob = await enqueueGoalJob(bundle.goal.id, bundle.workflow.id, "workflow-control-pause-job");
+
+    const response = await control(bundle.goal.id, { action: "pause" });
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as { cancelledJobs: number };
+    expect(payload.cancelledJobs).toBe(0);
+
+    const settled = await createRouteTestRepository().getJob(queuedJob.id, DEFAULT_OWNER_USER_ID);
+    expect(settled?.status).toBe("queued");
   });
 
   it("persists the control as an append-only workflow.dag.control action log", async () => {

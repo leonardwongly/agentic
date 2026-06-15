@@ -156,6 +156,10 @@ function buildJobSummary(job: JobRecord): string {
       return `Job ${job.id} completed.`;
     case "queued":
       return `Job ${job.id} queued.`;
+    case "paused":
+      return `Job ${job.id} paused by operator control.`;
+    case "cancelled":
+      return `Job ${job.id} cancelled by operator control.`;
   }
 }
 

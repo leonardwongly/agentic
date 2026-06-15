@@ -152,6 +152,18 @@ export function readLatestWorkflowDagControl(bundle: GoalBundle): PersistedContr
   };
 }
 
+/**
+ * AOS-25: the persisted control status to feed into `recomputeWorkflowStatuses` so a
+ * governed pause/cancel survives the next status recompute. Returns "paused" or
+ * "cancelled" when the latest operator control halts the workflow, and null when the
+ * latest control is a resume (or there is no control), letting normal task-derived
+ * recompute resume.
+ */
+export function readWorkflowControlStatusOverride(bundle: GoalBundle): "paused" | "cancelled" | null {
+  const control = readLatestWorkflowDagControl(bundle);
+  return control?.status === "paused" || control?.status === "cancelled" ? control.status : null;
+}
+
 /** Project a read-model DAG instance whose node statuses mirror live task state. */
 export function projectWorkflowDagInstance(bundle: GoalBundle, now = nowIso()): WorkflowDagInstance | null {
   const dag = buildWorkflowDagFromBundle(bundle);

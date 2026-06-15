@@ -108,6 +108,20 @@ export async function POST(request: Request, context: RouteContext) {
     });
     await repository.appendGoalActionLogs(bundle.goal.id, [controlLog]);
 
+    // AOS-25: a governed cancel also aborts the goal's not-yet-completed durable
+    // jobs so queued/retrying work stops instead of running after the operator
+    // cancelled the workflow. A worker already mid-attempt may finish its current
+    // attempt; in-attempt abort propagation is a tracked follow-up.
+    let cancelledJobs = 0;
+    if (body.action === "cancel") {
+      const cancelled = await repository.cancelJobsForGoal({
+        goalId: bundle.goal.id,
+        userId: principal.userId,
+        reason: body.reason ?? undefined
+      });
+      cancelledJobs = cancelled.length;
+    }
+
     const updatedBundle = { ...bundle, actionLogs: [...bundle.actionLogs, controlLog] };
 
     return authenticatedJson({
@@ -116,6 +130,7 @@ export async function POST(request: Request, context: RouteContext) {
         status: control.status,
         compensations: control.compensations
       },
+      cancelledJobs,
       workflowDag: summarizeWorkflowDag(updatedBundle)
     });
   } catch (error) {

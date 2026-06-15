@@ -12,6 +12,7 @@ import {
   type GoalShareRecord,
   type JobExecutionJournal,
   type JobKind,
+  type JobPayload,
   type JobPriority,
   type JobRecord,
   type JobStatus,
@@ -349,4 +350,82 @@ export function assertRunningJobOwner(job: JobRecord, runnerId: string): void {
   if (job.claimedBy !== runnerId) {
     throw new JobMutationError("not_owner", `Job ${job.id} is claimed by another worker.`);
   }
+}
+
+/** Extract the goalId a job belongs to from its payload, or null when it carries none. */
+export function jobPayloadGoalId(payload: JobPayload): string | null {
+  if (payload && typeof payload === "object" && "goalId" in payload) {
+    const value = (payload as { goalId?: unknown }).goalId;
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+// AOS-25: job statuses that may still be transitioned to "cancelled". This mirrors
+// the authoritative legal job transitions owned by @agentic/execution
+// (`legalJobTransitions`: queued/running/retrying/paused -> cancelled) without a
+// runtime import, preserving the repository package's existing pattern of keeping a
+// local copy of job-lifecycle rules (see isJobClaimableAt/claimJobRecord above). The
+// execution<->repository mirror is locked by a consistency assertion in the tests.
+const CANCELLABLE_JOB_STATUSES: ReadonlySet<JobStatus> = new Set<JobStatus>([
+  "queued",
+  "running",
+  "retrying",
+  "paused"
+]);
+
+/** Whether a job in `status` can be transitioned to "cancelled" by operator control. */
+export function canCancelJobStatus(status: JobStatus): boolean {
+  return CANCELLABLE_JOB_STATUSES.has(status);
+}
+
+/**
+ * Build the cancelled successor record for a job that belongs to `params.goalId`
+ * (and optional `params.userId`) and is still in a cancellable state, or null when
+ * the job does not match or is already terminal. This is a status-only cancel: it
+ * clears the lease (mirroring completeJob) and appends a journal entry, but never
+ * sets completedAt/deadLetteredAt. A worker mid-attempt on a running job may still
+ * finish its current attempt (its later completeJob/retryJob will fail the
+ * not_running owner check, discarding the result); in-attempt AbortController
+ * propagation is intentionally out of scope and tracked as an AOS-25 follow-up.
+ */
+export function buildCancelledJobForGoal(
+  existing: JobRecord,
+  params: { goalId: string; userId?: string; now: string; reason?: string | null }
+): JobRecord | null {
+  if (jobPayloadGoalId(existing.payload) !== params.goalId) {
+    return null;
+  }
+
+  if (params.userId !== undefined && existing.userId !== params.userId) {
+    return null;
+  }
+
+  if (!canCancelJobStatus(existing.status)) {
+    return null;
+  }
+
+  const reason = params.reason?.trim() ? params.reason.trim().slice(0, 1000) : null;
+  const summary = (reason ? `Job cancelled by operator control: ${reason}` : "Job cancelled by operator control.").slice(
+    0,
+    280
+  );
+
+  return JobRecordSchema.parse({
+    ...existing,
+    status: "cancelled",
+    leaseExpiresAt: null,
+    journal: buildJobLifecycleJournal({
+      job: existing,
+      status: "cancelled",
+      at: params.now,
+      summary,
+      error: reason,
+      metadata: { reason, cancelledFromStatus: existing.status }
+    }),
+    updatedAt: params.now
+  });
 }

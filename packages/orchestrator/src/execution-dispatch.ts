@@ -21,6 +21,7 @@ import {
   type ActionExecutionConnectorReadiness,
   type ActionExecutionSideEffectLedger
 } from "@agentic/integrations";
+import { readWorkflowControlStatusOverride } from "./workflow-dag-projection";
 import { createActionLog } from "@agentic/observability";
 import { getGovernanceApprovalReason } from "@agentic/policy";
 
@@ -396,7 +397,12 @@ export function reconcileExecutionResults(params: {
     return nextTask;
   });
 
-  const statuses = recomputeWorkflowStatuses(tasks, bundle.approvals, bundle.watchers);
+  const statuses = recomputeWorkflowStatuses(
+    tasks,
+    bundle.approvals,
+    bundle.watchers,
+    readWorkflowControlStatusOverride(bundle)
+  );
   const hasFailures = results.some((result) => result.kind === "execution.failed");
   const hasSkips = results.some((result) => result.kind === "execution.skipped");
   const hasPendingApprovals = bundle.approvals.some((approval) => approval.decision === "pending");
