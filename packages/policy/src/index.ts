@@ -13,6 +13,7 @@ import {
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { createMemoryRecord, getMemoryFreshness } from "@agentic/memory";
+import { type WorkflowOutcomeAggregate } from "@agentic/self-improvement-memory";
 export {
   buildPrivacyControlSummary,
   applyLearningPrivacyToMemoryRecord,
@@ -367,6 +368,258 @@ export function computeTrustFromScorecard(metrics: AgentMetrics | null | undefin
 
 function riskExceedsLimit(riskClass: RiskClass, maxAutoRunRiskClass: RiskClass): boolean {
   return riskClassOrder[riskClass] > riskClassOrder[maxAutoRunRiskClass];
+}
+
+// ---------------------------------------------------------------------------
+// AOS-27: the outcome-to-trust flywheel.
+//
+// computeWorkflowTrust generalizes the approval-only trust signal above into a
+// per-workflow trust score that combines the four captured stages — draft
+// accept, approval approve, execution success — and applies a correction/rework
+// penalty, weighted by how much evidence the workflow has accumulated.
+//
+// recommendWorkflowPromotion then turns that trust into a manual -> automation
+// promotion recommendation, but only after a set of guardrails designed to stop
+// false-positive promotions: a minimum sample size, a recent-negative-outcome
+// veto, a risk-class ceiling, and a sustained-trust requirement so a single
+// lucky streak cannot promote a workflow.
+//
+// Both functions are pure: they take a WorkflowOutcomeAggregate (produced by
+// aggregateWorkflowOutcomes in @agentic/self-improvement-memory, which in turn
+// reuses calculateNegativeOutcomeRate for the recent-negative window) and
+// return a plain decision object with no I/O.
+// ---------------------------------------------------------------------------
+
+export type WorkflowTrustComponents = {
+  draftAcceptRate: number;
+  approvalApproveRate: number;
+  executionSuccessRate: number;
+  reworkRate: number;
+};
+
+export type WorkflowTrustResult = {
+  workflowId: string;
+  trustScore: number;
+  sampleCount: number;
+  /** How many of the draft/approval/execution stages produced at least one observation. */
+  stageCoverage: number;
+  riskClass: string | null;
+  components: WorkflowTrustComponents;
+  rationale: string;
+};
+
+const WORKFLOW_TRUST_STAGE_WEIGHTS = {
+  draft: 0.2,
+  approval: 0.35,
+  execution: 0.45
+} as const;
+const WORKFLOW_TRUST_CORRECTION_PENALTY = 0.5;
+const WORKFLOW_TRUST_FULL_CONFIDENCE_SAMPLES = 5;
+
+function clampUnit(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+export function computeWorkflowTrust(aggregate: WorkflowOutcomeAggregate): WorkflowTrustResult {
+  const components: WorkflowTrustComponents = {
+    draftAcceptRate: clampUnit(aggregate.draft.rate),
+    approvalApproveRate: clampUnit(aggregate.approval.rate),
+    executionSuccessRate: clampUnit(aggregate.execution.rate),
+    reworkRate:
+      aggregate.correction.total === 0
+        ? 0
+        : clampUnit(aggregate.correction.negative / aggregate.correction.total)
+  };
+
+  // Renormalize the stage weights over the stages that actually have evidence
+  // so a workflow that never needed an approval is not penalized for it.
+  const presentStages: Array<{ weight: number; rate: number }> = [];
+  if (aggregate.draft.total > 0) {
+    presentStages.push({ weight: WORKFLOW_TRUST_STAGE_WEIGHTS.draft, rate: components.draftAcceptRate });
+  }
+  if (aggregate.approval.total > 0) {
+    presentStages.push({ weight: WORKFLOW_TRUST_STAGE_WEIGHTS.approval, rate: components.approvalApproveRate });
+  }
+  if (aggregate.execution.total > 0) {
+    presentStages.push({ weight: WORKFLOW_TRUST_STAGE_WEIGHTS.execution, rate: components.executionSuccessRate });
+  }
+
+  const stageCoverage = presentStages.length;
+  const weightTotal = presentStages.reduce((sum, stage) => sum + stage.weight, 0);
+  const base =
+    weightTotal === 0 ? 0 : presentStages.reduce((sum, stage) => sum + stage.weight * stage.rate, 0) / weightTotal;
+  const penalty = components.reworkRate * WORKFLOW_TRUST_CORRECTION_PENALTY;
+  const quality = clampUnit(base - penalty);
+
+  // Volume weight shrinks trust toward 0 until enough samples accumulate, so a
+  // tiny run of good luck cannot read as fully trusted.
+  const volumeWeight = clampUnit(aggregate.sampleCount / WORKFLOW_TRUST_FULL_CONFIDENCE_SAMPLES);
+  const trustScore = clampUnit(quality * volumeWeight);
+
+  const rationale =
+    stageCoverage === 0
+      ? "No staged outcomes have been captured for this workflow yet."
+      : `Trust ${trustScore.toFixed(2)} from ${aggregate.sampleCount} sample${aggregate.sampleCount === 1 ? "" : "s"} across ${stageCoverage} stage${stageCoverage === 1 ? "" : "s"} (draft ${components.draftAcceptRate.toFixed(2)}, approval ${components.approvalApproveRate.toFixed(2)}, execution ${components.executionSuccessRate.toFixed(2)}, rework ${components.reworkRate.toFixed(2)}).`;
+
+  return {
+    workflowId: aggregate.workflowId,
+    trustScore,
+    sampleCount: aggregate.sampleCount,
+    stageCoverage,
+    riskClass: aggregate.riskClass,
+    components,
+    rationale
+  };
+}
+
+export type WorkflowPromotionRecommendation = "promote" | "hold" | "not_ready";
+
+export type WorkflowPromotionGuardrail =
+  | "minimum_sample_size"
+  | "recent_negative_outcomes"
+  | "risk_class_ceiling"
+  | "sustained_trust"
+  | "trust_threshold";
+
+export type WorkflowPromotionThresholds = {
+  /** (a) Minimum distinct outcome samples before promotion is even considered. */
+  minimumSampleSize: number;
+  /** (b) Recent-negative-outcome veto ceiling. */
+  maximumRecentNegativeRate: number;
+  /** (c) Highest risk class eligible for an automation-promotion suggestion. */
+  maxAutoPromoteRiskClass: RiskClass;
+  /** Composite trust score required to promote. */
+  minimumTrustScore: number;
+  /** (d) Sustained execution evidence required (not a single lucky streak). */
+  minimumExecutionSamples: number;
+  /** (d) Distinct stages that must carry evidence (not a single lucky streak). */
+  minimumStageCoverage: number;
+};
+
+export type WorkflowPromotionOptions = Partial<WorkflowPromotionThresholds>;
+
+export type WorkflowPromotionDecision = {
+  workflowId: string;
+  recommendation: WorkflowPromotionRecommendation;
+  trust: WorkflowTrustResult;
+  riskClass: string | null;
+  reasons: string[];
+  guardrailsTripped: WorkflowPromotionGuardrail[];
+  thresholds: WorkflowPromotionThresholds;
+};
+
+export const DEFAULT_WORKFLOW_PROMOTION_THRESHOLDS: WorkflowPromotionThresholds = {
+  minimumSampleSize: 5,
+  maximumRecentNegativeRate: 0.2,
+  maxAutoPromoteRiskClass: "R2",
+  minimumTrustScore: 0.75,
+  minimumExecutionSamples: 4,
+  minimumStageCoverage: 2
+};
+
+function rankPromotionRiskClass(riskClass: string | null): number | null {
+  if (!riskClass) {
+    return null;
+  }
+
+  const normalized = riskClass.trim();
+  return Object.prototype.hasOwnProperty.call(riskClassOrder, normalized)
+    ? riskClassOrder[normalized as RiskClass]
+    : null;
+}
+
+export function recommendWorkflowPromotion(params: {
+  aggregate: WorkflowOutcomeAggregate;
+  trust?: WorkflowTrustResult;
+  options?: WorkflowPromotionOptions;
+}): WorkflowPromotionDecision {
+  const thresholds: WorkflowPromotionThresholds = {
+    ...DEFAULT_WORKFLOW_PROMOTION_THRESHOLDS,
+    ...params.options
+  };
+  const aggregate = params.aggregate;
+  const trust = params.trust ?? computeWorkflowTrust(aggregate);
+  const reasons: string[] = [];
+  const guardrailsTripped: WorkflowPromotionGuardrail[] = [];
+
+  // (c) Risk-class ceiling. High-risk classes are never auto-promotion
+  // candidates, and an unknown/unrankable risk class is treated as exceeding
+  // the ceiling so we never promote something we cannot risk-rank.
+  const riskRank = rankPromotionRiskClass(aggregate.riskClass);
+  const ceilingRank = riskClassOrder[thresholds.maxAutoPromoteRiskClass];
+  const riskCeilingTripped = riskRank === null || riskRank > ceilingRank;
+  if (riskCeilingTripped) {
+    guardrailsTripped.push("risk_class_ceiling");
+    reasons.push(
+      riskRank === null
+        ? `Risk class ${aggregate.riskClass ?? "unknown"} cannot be ranked, so automation promotion is withheld.`
+        : `Risk class ${aggregate.riskClass} exceeds the ${thresholds.maxAutoPromoteRiskClass} auto-promotion ceiling.`
+    );
+  }
+
+  // (a) Minimum sample size.
+  const sampleTooSmall = aggregate.sampleCount < thresholds.minimumSampleSize;
+  if (sampleTooSmall) {
+    guardrailsTripped.push("minimum_sample_size");
+    reasons.push(
+      `Only ${aggregate.sampleCount}/${thresholds.minimumSampleSize} outcome samples captured for this workflow.`
+    );
+  }
+
+  // (b) Recent-negative-outcome veto. recentNegativeOutcomeRate is computed by
+  // aggregateWorkflowOutcomes via calculateNegativeOutcomeRate.
+  const recentNegativesTripped = aggregate.recentNegativeOutcomeRate > thresholds.maximumRecentNegativeRate;
+  if (recentNegativesTripped) {
+    guardrailsTripped.push("recent_negative_outcomes");
+    reasons.push(
+      `Recent negative-outcome rate ${aggregate.recentNegativeOutcomeRate.toFixed(2)} exceeds the ${thresholds.maximumRecentNegativeRate.toFixed(2)} veto threshold.`
+    );
+  }
+
+  // (d) Sustained-trust requirement: guard against a single lucky streak by
+  // requiring sustained execution evidence spread across multiple stages.
+  const executionSamples = aggregate.execution.total;
+  const sustainedTripped =
+    executionSamples < thresholds.minimumExecutionSamples || trust.stageCoverage < thresholds.minimumStageCoverage;
+  if (sustainedTripped) {
+    guardrailsTripped.push("sustained_trust");
+    reasons.push(
+      `Trust is not yet sustained (${executionSamples}/${thresholds.minimumExecutionSamples} execution samples across ${trust.stageCoverage}/${thresholds.minimumStageCoverage} stages).`
+    );
+  }
+
+  // Composite trust score threshold.
+  const trustTooLow = trust.trustScore < thresholds.minimumTrustScore;
+  if (trustTooLow) {
+    guardrailsTripped.push("trust_threshold");
+    reasons.push(
+      `Trust score ${trust.trustScore.toFixed(2)} is below the ${thresholds.minimumTrustScore.toFixed(2)} promotion threshold.`
+    );
+  }
+
+  let recommendation: WorkflowPromotionRecommendation;
+  if (riskCeilingTripped || sampleTooSmall) {
+    // Structurally ineligible or not enough evidence to evaluate at all.
+    recommendation = "not_ready";
+  } else if (guardrailsTripped.length > 0) {
+    // Enough evidence, but the signals say not yet.
+    recommendation = "hold";
+  } else {
+    recommendation = "promote";
+    reasons.push(
+      `Trust ${trust.trustScore.toFixed(2)} is sustained across ${trust.stageCoverage} stages with ${aggregate.sampleCount} samples and a recent negative rate of ${aggregate.recentNegativeOutcomeRate.toFixed(2)}; eligible to suggest automation.`
+    );
+  }
+
+  return {
+    workflowId: aggregate.workflowId,
+    recommendation,
+    trust,
+    riskClass: aggregate.riskClass,
+    reasons,
+    guardrailsTripped,
+    thresholds
+  };
 }
 
 function summarizeShadowReplayThresholds(governance: WorkspaceGovernance): string[] {

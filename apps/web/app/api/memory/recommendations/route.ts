@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  aggregateWorkflowOutcomes,
   buildRecommendationPerformanceReport,
   buildPolicyLearningValidation,
   buildRecommendationReplayReport,
@@ -12,6 +13,8 @@ import {
   assessShadowReplayReadiness,
   buildAutonomyBudget,
   comparePolicyWithAndWithoutLearning,
+  computeWorkflowTrust,
+  recommendWorkflowPromotion,
   riskFromCapabilities
 } from "@agentic/policy";
 import { recordHistogram } from "@agentic/observability";
@@ -139,6 +142,14 @@ export async function GET(request: Request) {
       bucketDays: query.bucketDays,
       bucketCount: query.bucketCount
     });
+    // AOS-27: per-workflow outcome-to-trust flywheel. Roll the matched outcome
+    // traces up per workflow, score trust, and surface a guarded manual ->
+    // automation promotion recommendation alongside the reusable recommendations.
+    const workflowTrust = aggregateWorkflowOutcomes(matchedEpisodes).map((aggregate) => {
+      const trust = computeWorkflowTrust(aggregate);
+      const promotion = recommendWorkflowPromotion({ aggregate, trust });
+      return { workflowId: aggregate.workflowId, aggregate, trust, promotion };
+    });
     const goalTitle = query.goalTitle;
     const goalConfidence = query.goalConfidence;
     const policyPromotion =
@@ -226,9 +237,11 @@ export async function GET(request: Request) {
         currentNegativeOutcomeRate: analytics.current.negativeOutcomeRate,
         currentFailureCostRate: analytics.current.failureCostRate,
         driftStatus: analytics.drift.status,
-        returnedCount: recommendations.length
+        returnedCount: recommendations.length,
+        promotionCandidates: workflowTrust.filter((entry) => entry.promotion.recommendation === "promote").length
       },
       analytics,
+      workflowTrust,
       policyPromotion,
       filters: {
         ...query,
