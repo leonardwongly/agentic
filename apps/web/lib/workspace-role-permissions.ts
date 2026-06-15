@@ -10,13 +10,16 @@ export const SHARED_WATCHER_MUTATION_DENIED_REASON =
   "Viewers can inspect shared workflow watchers, but only workspace owners and editors can create or change them.";
 export const SHARED_JOB_REPLAY_DENIED_REASON =
   "Viewers can inspect shared runtime issues, but only workspace owners and editors can replay dead-letter jobs.";
+export const SHARED_WORKFLOW_CONTROL_DENIED_REASON =
+  "Viewers can inspect shared workflows, but only workspace owners and editors can pause, resume, or cancel them.";
 
-export type SharedWorkspaceOperation = "refine_goal" | "manage_watchers" | "replay_dead_letter_job";
+export type SharedWorkspaceOperation = "refine_goal" | "manage_watchers" | "replay_dead_letter_job" | "control_workflow";
 
 const SHARED_WORKFLOW_DENIED_REASON_BY_OPERATION: Record<SharedWorkspaceOperation, string> = {
   refine_goal: SHARED_GOAL_REFINEMENT_DENIED_REASON,
   manage_watchers: SHARED_WATCHER_MUTATION_DENIED_REASON,
-  replay_dead_letter_job: SHARED_JOB_REPLAY_DENIED_REASON
+  replay_dead_letter_job: SHARED_JOB_REPLAY_DENIED_REASON,
+  control_workflow: SHARED_WORKFLOW_CONTROL_DENIED_REASON
 };
 
 export function canManageGoalSharesForRole(role: WorkspaceRole | null | undefined): boolean {
