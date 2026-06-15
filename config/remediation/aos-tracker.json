@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reviewedAt": "2026-06-14",
+  "reviewedAt": "2026-06-15",
   "repository": "leonardwongly/agentic",
   "program": "Agentic OS remediation",
   "itemIdPolicy": {
@@ -483,6 +483,48 @@
         "npx vitest run tests/memory.test.ts tests/memory-capture.test.ts",
         "Migration tests (fresh + existing databases)",
         "Versioning/supersession yields no read-time conflict for a corrected memory"
+      ]
+    },
+    {
+      "id": "AOS-25",
+      "issue": 1005,
+      "title": "Durable job-lifecycle pause/cancel and governed workflow control endpoint",
+      "lane": "execution-spine",
+      "phase": "Phase 6 - Cognitive core activation",
+      "priority": "high",
+      "dependencies": ["AOS-20"],
+      "validationGates": [
+        "npx vitest run tests/workflow-control-route.test.ts tests/execution.test.ts",
+        "Job paused/cancelled transitions and cancel aborts a goal's queued/running jobs",
+        "npm run test:security:regression"
+      ]
+    },
+    {
+      "id": "AOS-26",
+      "issue": 1006,
+      "title": "Enable and evaluate the model-backed planner and agent runners",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 6 - Cognitive core activation",
+      "priority": "medium",
+      "dependencies": ["AOS-22", "AOS-23"],
+      "validationGates": [
+        "Stub-model end-to-end: enabled path yields schema-valid, policy-gated plans and runner envelopes",
+        "npm run test:eval:model is the operator-gated live eval with a provider key",
+        "Deterministic catalog fallback covered"
+      ]
+    },
+    {
+      "id": "AOS-27",
+      "issue": 1007,
+      "title": "Memory outcome-to-trust flywheel with automation-promotion guardrails",
+      "lane": "intelligence-fabric",
+      "phase": "Phase 6 - Cognitive core activation",
+      "priority": "medium",
+      "dependencies": ["AOS-24"],
+      "validationGates": [
+        "npx vitest run tests/workflow-trust-flywheel.test.ts",
+        "Promotion guardrails (min-sample, recent-negative veto, risk ceiling, sustained-trust) each tested",
+        "Per-workflow trust computed from outcome history"
       ]
     }
   ]
