@@ -9,7 +9,9 @@ import type {
 import type {
   PolicyLearningInfluenceComparison,
   PolicyShadowReplayReadiness,
-  PrivacyControlSummary
+  PrivacyControlSummary,
+  WorkflowPromotionDecision,
+  WorkflowTrustResult
 } from "@agentic/policy";
 import type { DashboardData } from "@agentic/repository";
 import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
@@ -32,6 +34,12 @@ export type OperatorProductPayload = {
   templates: GoalTemplate[];
 };
 
+export type GoalWorkflowTrustEntry = {
+  workflowId: string;
+  trust: WorkflowTrustResult;
+  promotion: WorkflowPromotionDecision;
+};
+
 export type GoalRecommendationsApiResponse = {
   recommendations: WorkflowRecommendation[];
   summary: {
@@ -47,6 +55,7 @@ export type GoalRecommendationsApiResponse = {
     currentFailureCostRate: number;
     driftStatus: "improving" | "stable" | "regressing" | "insufficient_data";
     returnedCount: number;
+    promotionCandidates: number;
   };
   analytics: {
     current: {
@@ -68,6 +77,7 @@ export type GoalRecommendationsApiResponse = {
     shadowReplayReadiness: PolicyShadowReplayReadiness;
     comparison: PolicyLearningInfluenceComparison;
   } | null;
+  workflowTrust: GoalWorkflowTrustEntry[];
   filters: Record<string, unknown>;
 };
 

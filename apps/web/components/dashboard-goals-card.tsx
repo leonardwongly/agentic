@@ -6,10 +6,16 @@ import type {
   PolicyDecision,
   PolicyReplayValidation
 } from "@agentic/contracts";
-import type { PolicyLearningInfluenceComparison, PolicyShadowReplayReadiness } from "@agentic/policy";
+import type {
+  PolicyLearningInfluenceComparison,
+  PolicyShadowReplayReadiness,
+  WorkflowPromotionGuardrail,
+  WorkflowPromotionRecommendation
+} from "@agentic/policy";
 import type { DashboardData } from "@agentic/repository";
 import type { WorkflowRecommendation } from "@agentic/self-improvement-memory";
 import type { GoalShareDisclosureReview } from "../lib/share-disclosure";
+import type { GoalWorkflowTrustEntry } from "./dashboard-types";
 import {
   formatRecommendationOperatorActionLabel,
   isGoalRecommendationEligible,
@@ -46,6 +52,7 @@ export type RecommendationLoadState = {
   query: string | null;
   recommendations: WorkflowRecommendation[];
   policyPromotion: GoalRecommendationsPolicyPromotion;
+  workflowTrust: GoalWorkflowTrustEntry[];
   error: string | null;
 };
 
@@ -153,6 +160,69 @@ function getShadowReplayReadinessTone(
 function formatPolicyDecisionSummary(decision: PolicyDecision): string {
   const approvalLabel = decision.requiresApproval ? "approval required" : "no approval";
   return `${decision.outcome.replaceAll("_", " ")} · ${decision.riskClass} · ${approvalLabel}`;
+}
+
+function formatPromotionRecommendationLabel(recommendation: WorkflowPromotionRecommendation): string {
+  switch (recommendation) {
+    case "promote":
+      return "Ready to promote to automation";
+    case "hold":
+      return "Hold for now";
+    case "not_ready":
+      return "Not ready for automation";
+  }
+}
+
+function getPromotionRecommendationTone(
+  recommendation: WorkflowPromotionRecommendation
+): "success" | "warn" | "idle" {
+  switch (recommendation) {
+    case "promote":
+      return "success";
+    case "hold":
+      return "warn";
+    case "not_ready":
+      return "idle";
+  }
+}
+
+function formatPromotionGuardrailLabel(guardrail: WorkflowPromotionGuardrail): string {
+  switch (guardrail) {
+    case "minimum_sample_size":
+      return "Minimum sample size";
+    case "recent_negative_outcomes":
+      return "Recent negative outcomes";
+    case "risk_class_ceiling":
+      return "Risk-class ceiling";
+    case "sustained_trust":
+      return "Sustained trust";
+    case "trust_threshold":
+      return "Trust threshold";
+  }
+}
+
+// AOS-27 trust flywheel: order the per-workflow promotion decisions so the
+// most operator-actionable signal (a promote suggestion) surfaces first, then
+// holds, then structurally not-ready workflows. This is advisory only — the
+// operator decides; nothing here promotes a workflow automatically.
+const WORKFLOW_PROMOTION_RECOMMENDATION_ORDER: Record<WorkflowPromotionRecommendation, number> = {
+  promote: 0,
+  hold: 1,
+  not_ready: 2
+};
+
+function sortWorkflowTrustEntries(entries: GoalWorkflowTrustEntry[]): GoalWorkflowTrustEntry[] {
+  return [...entries].sort((left, right) => {
+    const recommendationDelta =
+      WORKFLOW_PROMOTION_RECOMMENDATION_ORDER[left.promotion.recommendation] -
+      WORKFLOW_PROMOTION_RECOMMENDATION_ORDER[right.promotion.recommendation];
+
+    if (recommendationDelta !== 0) {
+      return recommendationDelta;
+    }
+
+    return right.trust.trustScore - left.trust.trustScore;
+  });
 }
 
 export function DashboardGoalsCard({
@@ -467,6 +537,65 @@ export function DashboardGoalsCard({
                         </small>
                       ) : null}
                     </div>
+                  ) : null}
+                  {recommendationStateForGoal?.status === "ready" &&
+                  recommendationStateForGoal.workflowTrust.length > 0 ? (
+                    <section
+                      className="list-item vertical automation-readiness"
+                      aria-labelledby={`automation-readiness-title-${bundle.goal.id}`}
+                      aria-describedby={`automation-readiness-summary-${bundle.goal.id}`}
+                    >
+                      <div>
+                        <strong id={`automation-readiness-title-${bundle.goal.id}`}>Automation readiness</strong>
+                        <small id={`automation-readiness-summary-${bundle.goal.id}`} className="refinement-log">
+                          Outcome-to-trust scoring is advisory. Promotion to automation is an operator decision — nothing
+                          here is promoted automatically.
+                        </small>
+                      </div>
+                      <div className="list-stack">
+                        {sortWorkflowTrustEntries(recommendationStateForGoal.workflowTrust).map((entry) => (
+                          <div key={entry.workflowId} className="list-item vertical">
+                            <div className="goal-item-actions">
+                              <span
+                                className={`status-chip ${getPromotionRecommendationTone(entry.promotion.recommendation)}`}
+                              >
+                                {formatPromotionRecommendationLabel(entry.promotion.recommendation)}
+                              </span>
+                              <small className="share-metric">
+                                Trust {formatConfidencePercentage(entry.trust.trustScore)} · {entry.trust.sampleCount}{" "}
+                                sample{entry.trust.sampleCount === 1 ? "" : "s"} · {entry.trust.stageCoverage} stage
+                                {entry.trust.stageCoverage === 1 ? "" : "s"}
+                                {entry.trust.riskClass ? ` · ${entry.trust.riskClass}` : ""}
+                              </small>
+                            </div>
+                            {entry.promotion.reasons.length > 0 ? (
+                              <ul className="promotion-reasons">
+                                {entry.promotion.reasons.map((reason, reasonIndex) => (
+                                  <li key={`${entry.workflowId}-reason-${reasonIndex}`}>
+                                    <small className="refinement-log">{reason}</small>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
+                            {entry.promotion.guardrailsTripped.length > 0 ? (
+                              <div className="share-tag-row">
+                                <small className="share-metric">Guardrails holding promotion:</small>
+                                {entry.promotion.guardrailsTripped.map((guardrail) => (
+                                  <span key={`${entry.workflowId}-${guardrail}`} className="pill">
+                                    {formatPromotionGuardrailLabel(guardrail)}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <small className="status-chip success">
+                                All promotion guardrails satisfied — an operator may choose to promote this workflow to
+                                automation.
+                              </small>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
                   ) : null}
                   {recommendationStateForGoal?.status === "error" ? (
                     <small className="status-chip error">

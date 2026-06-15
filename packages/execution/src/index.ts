@@ -176,12 +176,45 @@ export type ProcessNextDurableJobResult = {
   finalJob: JobRecord | null;
 };
 
+// AOS-25: in-attempt cancellation propagation. A job claimed as "running" can be
+// cancelled by operator control (status -> "cancelled") or have its lease taken
+// over by another worker (claimedBy changes) while a handler is mid-flight. The
+// cancellation watch lets the dispatcher re-read the durable record on an interval,
+// abort the handler's AbortSignal promptly, and then abandon the attempt without
+// calling completeJob/retryJob/deadLetterJob (which would throw not_running on a job
+// the worker no longer owns). The watch is optional and entirely additive: when it
+// is absent the dispatcher behaves exactly as before.
+export type JobCancellationWatch = {
+  /** Re-read the latest durable record for the in-flight job; null when it is gone. */
+  readLatest: (job: JobRecord) => Promise<JobRecord | null>;
+  /** How often to re-read the job while a handler runs. Defaults to 1000ms. */
+  pollIntervalMs?: number;
+};
+
 const defaultRetryPolicy: JobRetryPolicy = {
   baseDelayMs: 1_000,
   factor: 2,
   maxDelayMs: 5 * 60_000
 };
 const DEFAULT_TIMEOUT_SETTLEMENT_GRACE_MS = 100;
+const DEFAULT_CANCELLATION_POLL_INTERVAL_MS = 1_000;
+
+class JobCancelledError extends Error {
+  constructor(jobId: string) {
+    super(`Durable job ${jobId} was cancelled while in flight.`);
+    this.name = "JobCancelledError";
+  }
+}
+
+/**
+ * A claimed job is no longer ours to settle once it leaves "running" (an operator
+ * cancel transitions it to "cancelled") or once another worker takes the lease
+ * (claimedBy changes). In both cases the in-flight attempt must be abandoned without
+ * calling completeJob/retryJob/deadLetterJob, which assert the running owner.
+ */
+function isJobOwnershipLost(claimed: JobRecord, current: JobRecord | null): boolean {
+  return current === null || current.status !== "running" || current.claimedBy !== claimed.claimedBy;
+}
 
 function isPositiveInteger(value: number | undefined): boolean {
   return Number.isInteger(value) && value !== undefined && value > 0;
@@ -870,6 +903,7 @@ export async function processNextDurableJob(params: {
   queue: DurableJobQueue;
   handlers: JobHandlerMap;
   claim?: ClaimNextJobParams;
+  cancellation?: JobCancellationWatch;
 }): Promise<ProcessNextDurableJobResult> {
   const job = await params.queue.claimNext(params.claim);
 
@@ -892,6 +926,28 @@ export async function processNextDurableJob(params: {
     };
   }
 
+  // When a cancellation watch is configured, re-read the job after the attempt
+  // settles. If the job was cancelled or its lease was taken over, abandon the
+  // attempt cleanly instead of acknowledging/failing a job we no longer own.
+  const settleIfOwnershipLost = async (): Promise<ProcessNextDurableJobResult | null> => {
+    if (!params.cancellation) {
+      return null;
+    }
+
+    const current = await params.cancellation.readLatest(job);
+    if (!isJobOwnershipLost(job, current)) {
+      return null;
+    }
+
+    recordCounter("durable_job.cancelled.total", 1, {
+      jobKind: job.kind
+    });
+    return {
+      claimedJob: job,
+      finalJob: current
+    };
+  };
+
   try {
     await withTelemetryContext(
       {
@@ -905,14 +961,25 @@ export async function processNextDurableJob(params: {
             jobId: job.id,
             jobKind: job.kind
           },
-          async () => runJobHandlerWithOptionalTimeout(job, handler)
+          async () => runJobHandlerWithOptionalTimeout(job, handler, params.cancellation)
         )
     );
+
+    const cancelled = await settleIfOwnershipLost();
+    if (cancelled) {
+      return cancelled;
+    }
+
     return {
       claimedJob: job,
       finalJob: await params.queue.acknowledge({ jobId: job.id })
     };
   } catch (error) {
+    const cancelled = await settleIfOwnershipLost();
+    if (cancelled) {
+      return cancelled;
+    }
+
     recordCounter("durable_job.failed.total", 1, {
       jobKind: job.kind
     });
@@ -923,40 +990,86 @@ export async function processNextDurableJob(params: {
   }
 }
 
-async function runJobHandlerWithOptionalTimeout(job: JobRecord, handler: JobHandler): Promise<void> {
-  if (!job.timeoutMs) {
+async function runJobHandlerWithOptionalTimeout(
+  job: JobRecord,
+  handler: JobHandler,
+  cancellation?: JobCancellationWatch
+): Promise<void> {
+  // Fast path preserved exactly: no timeout and no cancellation watch means a
+  // fresh, never-aborted signal and a direct await.
+  if (!job.timeoutMs && !cancellation) {
     await handler(job, { signal: new AbortController().signal });
     return;
   }
 
-  let timeout: NodeJS.Timeout | null = null;
   const controller = new AbortController();
-  const timeoutError = new Error(`Durable job ${job.id} timed out after ${job.timeoutMs}ms.`);
   const handlerPromise = Promise.resolve().then(() => handler(job, { signal: controller.signal }));
+  const cleanups: Array<() => void> = [];
+  const timeoutError = new Error(`Durable job ${job.id} timed out after ${job.timeoutMs}ms.`);
+  const cancelledError = new JobCancelledError(job.id);
+  const raceContenders: Array<Promise<void>> = [handlerPromise];
   let timedOut = false;
+  let cancelled = false;
+  let done = false;
 
-  try {
-    await Promise.race([
-      handlerPromise,
+  if (job.timeoutMs) {
+    raceContenders.push(
       new Promise<void>((resolve) => {
-        timeout = setTimeout(() => {
+        const timeout = setTimeout(() => {
           timedOut = true;
           controller.abort(timeoutError);
           resolve();
         }, job.timeoutMs ?? 0);
+        cleanups.push(() => clearTimeout(timeout));
       })
-    ]);
+    );
+  }
 
-    if (timedOut) {
+  if (cancellation) {
+    const pollIntervalMs = Math.max(1, cancellation.pollIntervalMs ?? DEFAULT_CANCELLATION_POLL_INTERVAL_MS);
+    raceContenders.push(
+      new Promise<void>((resolve) => {
+        const interval = setInterval(() => {
+          if (done || timedOut || cancelled) {
+            return;
+          }
+
+          void cancellation
+            .readLatest(job)
+            .then((current) => {
+              if (done || timedOut || cancelled) {
+                return;
+              }
+
+              if (isJobOwnershipLost(job, current)) {
+                cancelled = true;
+                controller.abort(cancelledError);
+                resolve();
+              }
+            })
+            .catch(() => {
+              // A transient read failure must not abort a healthy attempt; keep polling.
+            });
+        }, pollIntervalMs);
+        cleanups.push(() => clearInterval(interval));
+      })
+    );
+  }
+
+  try {
+    await Promise.race(raceContenders);
+
+    if (timedOut || cancelled) {
       const handlerSettled = await waitForHandlerSettlement(handlerPromise, DEFAULT_TIMEOUT_SETTLEMENT_GRACE_MS);
       if (!handlerSettled) {
         handlerPromise.catch(() => undefined);
       }
-      throw timeoutError;
+      throw cancelled ? cancelledError : timeoutError;
     }
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
+    done = true;
+    for (const cleanup of cleanups) {
+      cleanup();
     }
   }
 }
