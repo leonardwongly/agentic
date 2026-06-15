@@ -416,3 +416,193 @@ describe("describeIntegrationReadiness", () => {
     );
   });
 });
+
+describe("messaging connector readiness transitions", () => {
+  function buildMessagingAccount(id: "slack" | "telegram", status: "ready" | "disabled") {
+    return {
+      ...buildDefaultIntegrationAccounts("user-1").find((integration) => integration.id === id)!,
+      status
+    };
+  }
+
+  it("treats a disabled Slack connector as experimental with no supported modes", () => {
+    const slack = buildMessagingAccount("slack", "disabled");
+
+    expect(describeIntegrationReadiness(slack)).toEqual(
+      expect.objectContaining({
+        tier: "experimental",
+        supportedModes: []
+      })
+    );
+    expect(integrationSupportsExecutionMode(slack, "approval")).toBe(false);
+  });
+
+  it("promotes Slack to approval-grade once the connector is ready", () => {
+    const slack = buildMessagingAccount("slack", "ready");
+
+    expect(describeIntegrationReadiness(slack)).toEqual(
+      expect.objectContaining({
+        tier: "approval-grade",
+        supportedModes: ["draft", "approval"]
+      })
+    );
+    expect(integrationSupportsExecutionMode(slack, "approval")).toBe(true);
+    expect(integrationSupportsExecutionMode(slack, "autonomous")).toBe(false);
+  });
+
+  it("applies the same disabled and ready readiness transitions to Telegram", () => {
+    const disabledTelegram = buildMessagingAccount("telegram", "disabled");
+    const readyTelegram = buildMessagingAccount("telegram", "ready");
+
+    expect(describeIntegrationReadiness(disabledTelegram)).toEqual(
+      expect.objectContaining({
+        tier: "experimental",
+        supportedModes: []
+      })
+    );
+    expect(describeIntegrationReadiness(readyTelegram)).toEqual(
+      expect.objectContaining({
+        tier: "approval-grade",
+        supportedModes: ["draft", "approval"]
+      })
+    );
+    expect(integrationSupportsExecutionMode(readyTelegram, "autonomous")).toBe(false);
+  });
+});
+
+describe("managed Google credential recovery states", () => {
+  it("treats a revoked credential as reconnect-required and blocks readiness", () => {
+    const gmail = {
+      ...buildDefaultIntegrationAccounts("user-1").find((integration) => integration.id === "gmail")!,
+      status: "ready" as const,
+      metadata: {
+        provider: "google",
+        managed: true,
+        providerCredentialId: "google:workspace-1:acct-1"
+      }
+    };
+
+    const readiness = describeIntegrationReadiness(gmail, {
+      providerCredential: {
+        credential: buildGoogleCredential({
+          status: "revoked",
+          scopes: ["https://www.googleapis.com/auth/gmail.modify"]
+        }),
+        hasRefreshTokenSecret: true
+      }
+    });
+
+    expect(readiness).toEqual(
+      expect.objectContaining({
+        tier: "experimental",
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "provider_revoked",
+            blocking: true
+          })
+        ]),
+        managedProvider: expect.objectContaining({
+          lifecycleState: "revoked",
+          repairState: "reconnect_required",
+          recoveryActions: expect.arrayContaining([
+            expect.objectContaining({ id: "reconnect_google" })
+          ])
+        })
+      })
+    );
+  });
+
+  it("treats a refresh-failed credential as refresh-repair work and blocks readiness", () => {
+    const gmail = {
+      ...buildDefaultIntegrationAccounts("user-1").find((integration) => integration.id === "gmail")!,
+      status: "ready" as const,
+      metadata: {
+        provider: "google",
+        managed: true,
+        providerCredentialId: "google:workspace-1:acct-1"
+      }
+    };
+
+    const readiness = describeIntegrationReadiness(gmail, {
+      providerCredential: {
+        credential: buildGoogleCredential({
+          status: "refresh_failed",
+          scopes: ["https://www.googleapis.com/auth/gmail.modify"]
+        }),
+        hasRefreshTokenSecret: true
+      }
+    });
+
+    expect(readiness.tier).toBe("experimental");
+    expect(readiness.supportedModes).toEqual([]);
+    expect(readiness.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "provider_refresh_failed", blocking: true })
+      ])
+    );
+    expect(readiness.managedProvider?.repairState).toBe("refresh_repair_required");
+  });
+
+  it("blocks readiness and requests reconnect when the credential status is reconnect_required", () => {
+    const gmail = {
+      ...buildDefaultIntegrationAccounts("user-1").find((integration) => integration.id === "gmail")!,
+      status: "ready" as const,
+      metadata: {
+        provider: "google",
+        managed: true,
+        providerCredentialId: "google:workspace-1:acct-1"
+      }
+    };
+
+    const readiness = describeIntegrationReadiness(gmail, {
+      providerCredential: {
+        credential: buildGoogleCredential({
+          status: "reconnect_required",
+          scopes: ["https://www.googleapis.com/auth/gmail.modify"]
+        }),
+        hasRefreshTokenSecret: true
+      }
+    });
+
+    expect(readiness.tier).toBe("experimental");
+    expect(readiness.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "provider_reconnect_required", blocking: true })
+      ])
+    );
+    expect(readiness.managedProvider?.repairState).toBe("reconnect_required");
+  });
+
+  it("warns on stale validation evidence while keeping a healthy credential approval-grade", () => {
+    const gmail = {
+      ...buildDefaultIntegrationAccounts("user-1").find((integration) => integration.id === "gmail")!,
+      status: "ready" as const,
+      metadata: {
+        provider: "google",
+        managed: true,
+        providerCredentialId: "google:workspace-1:acct-1"
+      }
+    };
+
+    const staleValidatedAt = "2026-01-01T00:00:00.000Z";
+    const readiness = describeIntegrationReadiness(gmail, {
+      providerCredential: {
+        credential: buildGoogleCredential({
+          status: "connected",
+          scopes: ["https://www.googleapis.com/auth/gmail.modify"],
+          lastValidatedAt: staleValidatedAt,
+          updatedAt: staleValidatedAt
+        }),
+        hasRefreshTokenSecret: true
+      }
+    });
+
+    expect(readiness.tier).toBe("approval-grade");
+    expect(readiness.managedProvider?.lifecycleState).toBe("healthy");
+    expect(readiness.managedProvider?.sloGates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "validation_freshness", status: "warn" })
+      ])
+    );
+  });
+});
