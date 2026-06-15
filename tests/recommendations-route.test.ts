@@ -436,4 +436,74 @@ describe("workflow recommendations route", () => {
     expect(payload.policyPromotion?.shadowReplayReadiness.thresholdSummary.length).toBeGreaterThan(0);
     expect(payload.policyPromotion?.comparison.summary).toMatch(/learning/i);
   });
+
+  it("surfaces a guarded per-workflow promotion recommendation from accumulated outcomes", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agentic-recommendations-route-trust-"));
+    tempDirs.push(tempDir);
+    const repository = createSelfImprovementRepository({
+      baseDir: path.join(tempDir, ".agentic", "self-improvement")
+    });
+
+    await repository.seed();
+    // Six governed, low-risk (R2) outcomes for one workflow clear every guardrail.
+    for (let index = 1; index <= 6; index += 1) {
+      await repository.appendEpisode(
+        buildReplayEpisode(`trust-${index}`, {
+          timestamp: `2026-04-${String(20 + index).padStart(2, "0")}T07:00:00.000Z`,
+          recommendation: {
+            key: "execution_path:communications:send_message:R2:send",
+            kind: "execution_path",
+            agent: "communications",
+            action: "send_message",
+            confidence: 0.9,
+            rationale: "Observed governed outbound communications flow.",
+            riskClass: "R2",
+            capabilities: ["send"],
+            sourceGoalId: `goal-trust-${index}`,
+            sourceTaskId: `task-trust-${index}`,
+            fallbackMode: "normal",
+            evidenceHint: "established"
+          },
+          outcomeLink: {
+            goalId: `goal-trust-${index}`,
+            workflowId: "workflow-promote",
+            taskId: `task-trust-${index}`,
+            goalStatus: "completed",
+            taskState: "completed",
+            approvalDecision: "approved",
+            executionKind: "completed",
+            outcomeScore: 1,
+            userCorrection: false,
+            notes: "Validated outbound send."
+          }
+        })
+      );
+    }
+    Reflect.set(globalThis, "__agenticSelfImprovementRepository", repository);
+
+    const response = await recommendationsRoute(
+      buildAuthorizedGetRequest("http://localhost/api/memory/recommendations?minimumEvidence=1&minimumScore=0")
+    );
+    const payload = (await response.json()) as {
+      workflowTrust: Array<{
+        workflowId: string;
+        trust: { trustScore: number; stageCoverage: number };
+        promotion: { recommendation: string; guardrailsTripped: string[]; reasons: string[] };
+      }>;
+      summary: { promotionCandidates: number };
+    };
+
+    expect(response.status).toBe(200);
+    expectNoStoreHeaders(response);
+
+    const promoteEntry = payload.workflowTrust.find((entry) => entry.workflowId === "workflow-promote");
+    expect(promoteEntry).toBeDefined();
+    expect(promoteEntry?.trust.trustScore).toBe(1);
+    expect(promoteEntry?.promotion.recommendation).toBe("promote");
+    expect(promoteEntry?.promotion.guardrailsTripped).toEqual([]);
+    expect(payload.summary.promotionCandidates).toBeGreaterThanOrEqual(1);
+    // The promotion surface must not leak source provenance identifiers.
+    expect(JSON.stringify(payload)).not.toContain("sourceGoalId");
+    expect(JSON.stringify(payload)).not.toContain("sourceTaskId");
+  });
 });

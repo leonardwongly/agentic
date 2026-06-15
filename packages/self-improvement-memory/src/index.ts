@@ -650,7 +650,7 @@ function calculateEpisodeFailureCost(episode: EpisodeRecord & { outcomeLink: Out
   return clamp(cost, 0, 1);
 }
 
-function calculateNegativeOutcomeRate(
+export function calculateNegativeOutcomeRate(
   episodes: Array<EpisodeRecord & { outcomeLink: OutcomeLink }>
 ): number {
   if (episodes.length === 0) {
@@ -1406,6 +1406,201 @@ export function deriveWorkflowRecommendations(
         }
       } satisfies WorkflowRecommendation;
     });
+}
+
+// ---------------------------------------------------------------------------
+// AOS-27: per-workflow outcome aggregation (the outcome-to-trust flywheel).
+//
+// captureMemoriesFromBundle / captureApprovalOutcomeSignals /
+// captureExecutionOutcomeSignals already persist a per-task episodic
+// `outcomeLink` that records the workflow id, approval decision, execution
+// kind and whether the user had to correct the result. This aggregation rolls
+// those signals up per *workflow* across the four stages the issue names —
+// draft, approval, execution and correction — so a downstream trust metric can
+// reason about a whole manual workflow instead of a single approval decision.
+// ---------------------------------------------------------------------------
+
+export type WorkflowStageTally = {
+  /** Episodes that exercised this stage (had a non-null signal for it). */
+  total: number;
+  /**
+   * Positive observations for the stage: draft-accepted, approval-approved,
+   * execution-succeeded, or correction-free.
+   */
+  positive: number;
+  /**
+   * Negative observations for the stage: draft held at draft-only,
+   * approval-rejected, execution-failed, or a user correction/rework.
+   */
+  negative: number;
+  /** positive / total clamped to [0,1]; 0 when the stage has no samples. */
+  rate: number;
+};
+
+export type WorkflowOutcomeAggregate = {
+  workflowId: string;
+  /** Distinct outcome observations linked to this workflow. */
+  sampleCount: number;
+  /** Worst-case (highest) risk class observed across the workflow, e.g. "R3"; null when unknown. */
+  riskClass: string | null;
+  firstObservedAt: string;
+  lastObservedAt: string;
+  /** Draft stage: a drafted task plan that advanced past the draft-only gate. */
+  draft: WorkflowStageTally;
+  /** Approval stage: approve vs reject decisions. */
+  approval: WorkflowStageTally;
+  /** Execution stage: completed vs failed runs. */
+  execution: WorkflowStageTally;
+  /** Correction stage: positive = clean (no correction), negative = user correction/rework. */
+  correction: WorkflowStageTally;
+  /** Negative-outcome rate over the most recent window, via calculateNegativeOutcomeRate. */
+  recentNegativeOutcomeRate: number;
+  /** Number of episodes that fed recentNegativeOutcomeRate. */
+  recentWindowSize: number;
+};
+
+export type AggregateWorkflowOutcomesOptions = {
+  /** How many of the most recent episodes feed the recent-negative-outcome veto. Default 5. */
+  recentWindow?: number;
+};
+
+const RISK_CLASS_RANK_PATTERN = /^R(\d+)$/u;
+
+function workflowRiskClassRank(riskClass: string | null): number {
+  if (!riskClass) {
+    return 0;
+  }
+
+  const match = RISK_CLASS_RANK_PATTERN.exec(riskClass.trim());
+  return match ? Number.parseInt(match[1] ?? "0", 10) : 0;
+}
+
+function worseWorkflowRiskClass(current: string | null, candidate: string | null): string | null {
+  if (!candidate) {
+    return current;
+  }
+
+  if (!current) {
+    return candidate;
+  }
+
+  return workflowRiskClassRank(candidate) > workflowRiskClassRank(current) ? candidate : current;
+}
+
+type MutableStageTally = { total: number; positive: number; negative: number };
+
+function emptyStageTally(): MutableStageTally {
+  return { total: 0, positive: 0, negative: 0 };
+}
+
+function finalizeStageTally(tally: MutableStageTally): WorkflowStageTally {
+  return {
+    total: tally.total,
+    positive: tally.positive,
+    negative: tally.negative,
+    rate: tally.total === 0 ? 0 : clamp(tally.positive / tally.total, 0, 1)
+  };
+}
+
+export function aggregateWorkflowOutcomes(
+  episodes: EpisodeRecord[],
+  options?: AggregateWorkflowOutcomesOptions
+): WorkflowOutcomeAggregate[] {
+  const recentWindow = Math.max(1, Math.trunc(options?.recentWindow ?? 5));
+  const linkedEpisodes = episodes.filter(
+    (episode): episode is EpisodeRecord & { outcomeLink: OutcomeLink } =>
+      Boolean(episode.outcomeLink && episode.outcomeLink.workflowId)
+  );
+
+  const grouped = new Map<string, Array<EpisodeRecord & { outcomeLink: OutcomeLink }>>();
+  for (const episode of linkedEpisodes) {
+    const workflowId = episode.outcomeLink.workflowId as string;
+    const bucket = grouped.get(workflowId);
+    if (bucket) {
+      bucket.push(episode);
+    } else {
+      grouped.set(workflowId, [episode]);
+    }
+  }
+
+  const aggregates: WorkflowOutcomeAggregate[] = [];
+
+  for (const [workflowId, workflowEpisodes] of grouped) {
+    const ordered = [...workflowEpisodes].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    const draft = emptyStageTally();
+    const approval = emptyStageTally();
+    const execution = emptyStageTally();
+    const correction = emptyStageTally();
+    let riskClass: string | null = null;
+
+    for (const episode of ordered) {
+      const link = episode.outcomeLink;
+      riskClass = worseWorkflowRiskClass(riskClass, episode.recommendation?.riskClass ?? null);
+
+      // Draft stage: a drafted task plan is "accepted" when it advanced past
+      // the draft-only fallback gate rather than being held back as a draft.
+      if (episode.recommendation?.kind === "task_plan") {
+        draft.total += 1;
+        if (episode.recommendation.fallbackMode === "draft_only") {
+          draft.negative += 1;
+        } else {
+          draft.positive += 1;
+        }
+      }
+
+      // Approval stage: only episodes that carried an explicit approve/reject.
+      if (link.approvalDecision === "approved") {
+        approval.total += 1;
+        approval.positive += 1;
+      } else if (link.approvalDecision === "rejected") {
+        approval.total += 1;
+        approval.negative += 1;
+      }
+
+      // Execution stage: only episodes that actually ran.
+      if (link.executionKind === "completed") {
+        execution.total += 1;
+        execution.positive += 1;
+      } else if (link.executionKind === "failed") {
+        execution.total += 1;
+        execution.negative += 1;
+      }
+
+      // Correction stage: every linked outcome is an opportunity for rework.
+      correction.total += 1;
+      if (link.userCorrection) {
+        correction.negative += 1;
+      } else {
+        correction.positive += 1;
+      }
+    }
+
+    const recentEpisodes = [...ordered]
+      .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+      .slice(0, recentWindow);
+
+    aggregates.push({
+      workflowId,
+      sampleCount: ordered.length,
+      riskClass,
+      firstObservedAt: ordered[0]?.timestamp ?? "",
+      lastObservedAt: ordered.at(-1)?.timestamp ?? "",
+      draft: finalizeStageTally(draft),
+      approval: finalizeStageTally(approval),
+      execution: finalizeStageTally(execution),
+      correction: finalizeStageTally(correction),
+      recentNegativeOutcomeRate: calculateNegativeOutcomeRate(recentEpisodes),
+      recentWindowSize: recentEpisodes.length
+    });
+  }
+
+  return aggregates.sort((left, right) => {
+    if (right.sampleCount !== left.sampleCount) {
+      return right.sampleCount - left.sampleCount;
+    }
+
+    return left.workflowId.localeCompare(right.workflowId);
+  });
 }
 
 export type ListEpisodesFilters = {
