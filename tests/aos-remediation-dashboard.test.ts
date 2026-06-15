@@ -99,11 +99,11 @@ describe("AOS remediation tracker", () => {
     const tracker = loadAosTracker();
     const summary = summarizeAosTracker(tracker);
 
-    expect(summary.totalItems).toBe(25);
+    expect(summary.totalItems).toBe(28);
     expect(summary.byLane).toMatchObject({
       "trust-spine": 7,
-      "execution-spine": 8,
-      "intelligence-fabric": 8,
+      "execution-spine": 9,
+      "intelligence-fabric": 10,
       shell: 2
     });
     expect(summary.blockedByBaseline).toEqual(["AOS-01", "AOS-02", "AOS-03", "AOS-05", "AOS-06"]);
