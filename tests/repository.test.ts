@@ -428,6 +428,98 @@ describe("repository", () => {
     });
   }
 
+  it("cancels a goal's not-yet-completed jobs and leaves others untouched (AOS-25)", async () => {
+    const repository = createRepository({
+      storePath: path.join(await mkdtemp(path.join(os.tmpdir(), "agentic-repository-cancel-jobs-")), "runtime-store.json")
+    });
+    const userId = DEFAULT_OWNER_USER_ID;
+    const goalId = "goal-cancel-target";
+    const otherGoalId = "goal-untouched";
+
+    const queuedJob = await repository.enqueueJob(
+      createGoalCreateJob({ userId, goalId, idempotencyKey: "cancel-queued" })
+    );
+    const retryingJob = await repository.enqueueJob({
+      ...createGoalCreateJob({ userId, goalId, idempotencyKey: "cancel-retrying" }),
+      status: "retrying"
+    });
+    const runningJob = await repository.enqueueJob({
+      ...createGoalCreateJob({ userId, goalId, idempotencyKey: "cancel-running" }),
+      status: "running",
+      claimedBy: "worker-1",
+      claimedAt: "2026-04-16T03:00:00.000Z",
+      leaseExpiresAt: "2026-04-16T03:05:00.000Z"
+    });
+    const completedJob = await repository.enqueueJob({
+      ...createGoalCreateJob({ userId, goalId, idempotencyKey: "cancel-completed" }),
+      status: "completed",
+      completedAt: "2026-04-16T03:01:00.000Z"
+    });
+    const deadLetterJob = await repository.enqueueJob({
+      ...createGoalCreateJob({ userId, goalId, idempotencyKey: "cancel-dead" }),
+      status: "dead_letter",
+      deadLetteredAt: "2026-04-16T03:02:00.000Z",
+      lastError: "Permanent failure."
+    });
+    const otherGoalJob = await repository.enqueueJob(
+      createGoalCreateJob({ userId, goalId: otherGoalId, idempotencyKey: "cancel-other-goal" })
+    );
+
+    const cancelled = await repository.cancelJobsForGoal({
+      goalId,
+      userId,
+      reason: "Operator cancelled the workflow.",
+      now: "2026-04-16T03:10:00.000Z"
+    });
+
+    expect(cancelled.map((job) => job.id).sort()).toEqual([queuedJob.id, retryingJob.id, runningJob.id].sort());
+    for (const job of cancelled) {
+      expect(job.status).toBe("cancelled");
+      expect(job.updatedAt).toBe("2026-04-16T03:10:00.000Z");
+      expect(job.completedAt).toBeNull();
+      expect(job.deadLetteredAt).toBeNull();
+      expect(job.leaseExpiresAt).toBeNull();
+      expect(job.journal.lifecycleState).toBe("cancelled");
+    }
+
+    await expect(repository.getJob(queuedJob.id, userId)).resolves.toMatchObject({ status: "cancelled" });
+    await expect(repository.getJob(retryingJob.id, userId)).resolves.toMatchObject({ status: "cancelled" });
+    await expect(repository.getJob(runningJob.id, userId)).resolves.toMatchObject({ status: "cancelled" });
+    // Terminal jobs for the same goal are left untouched.
+    await expect(repository.getJob(completedJob.id, userId)).resolves.toMatchObject({ status: "completed" });
+    await expect(repository.getJob(deadLetterJob.id, userId)).resolves.toMatchObject({ status: "dead_letter" });
+    // Jobs for a different goal are left untouched.
+    await expect(repository.getJob(otherGoalJob.id, userId)).resolves.toMatchObject({ status: "queued" });
+
+    // Re-running is a no-op once nothing cancellable remains.
+    await expect(
+      repository.cancelJobsForGoal({ goalId, userId, now: "2026-04-16T03:11:00.000Z" })
+    ).resolves.toHaveLength(0);
+  });
+
+  it("scopes job cancellation to the requesting user when userId is provided (AOS-25)", async () => {
+    const repository = createRepository({
+      storePath: path.join(await mkdtemp(path.join(os.tmpdir(), "agentic-repository-cancel-scope-")), "runtime-store.json")
+    });
+    const goalId = "goal-shared";
+
+    const ownerJob = await repository.enqueueJob(
+      createGoalCreateJob({ userId: DEFAULT_OWNER_USER_ID, goalId, idempotencyKey: "scope-owner" })
+    );
+    const otherUserJob = await repository.enqueueJob(
+      createGoalCreateJob({ userId: "user-other", goalId, idempotencyKey: "scope-other" })
+    );
+
+    const cancelled = await repository.cancelJobsForGoal({
+      goalId,
+      userId: DEFAULT_OWNER_USER_ID,
+      now: "2026-04-16T03:10:00.000Z"
+    });
+
+    expect(cancelled.map((job) => job.id)).toEqual([ownerJob.id]);
+    await expect(repository.getJob(otherUserJob.id, "user-other")).resolves.toMatchObject({ status: "queued" });
+  });
+
   it("summarizes job readiness from aggregate queue state", async () => {
     const repository = createRepository({
       storePath: path.join(await mkdtemp(path.join(os.tmpdir(), "agentic-repository-job-readiness-")), "runtime-store.json")

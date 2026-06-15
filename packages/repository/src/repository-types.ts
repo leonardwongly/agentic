@@ -430,6 +430,12 @@ export type AgenticRepository = {
     deadLetteredAt?: string;
     error: string;
   }): Promise<JobRecord>;
+  cancelJobsForGoal(params: {
+    goalId: string;
+    userId?: string;
+    reason?: string;
+    now?: string;
+  }): Promise<JobRecord[]>;
   listMemory(userId?: string): Promise<MemoryRecord[]>;
   listContextPacketMemory(params: {
     userId: string;
@@ -492,7 +498,7 @@ export type RepositoryLifecyclePort = Pick<AgenticRepository, "backend" | "seedD
 
 export type QueueRepositoryPort = Pick<
   AgenticRepository,
-  "listJobs" | "getJob" | "enqueueJob" | "claimNextJob" | "completeJob" | "retryJob" | "deadLetterJob"
+  "listJobs" | "getJob" | "enqueueJob" | "claimNextJob" | "completeJob" | "retryJob" | "deadLetterJob" | "cancelJobsForGoal"
 >;
 
 export type ApprovalQueueRepositoryPort = Pick<

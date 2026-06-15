@@ -188,7 +188,7 @@ import {
 } from "./repository-readiness-summary";
 import { mapMemoryRow } from "./repository-memory-row";
 import {
-  assertRunningJobOwner, autopilotEventMatchesBudget, buildDeletedWorkspaceTombstone, buildJobLifecycleJournal,
+  assertRunningJobOwner, autopilotEventMatchesBudget, buildCancelledJobForGoal, buildDeletedWorkspaceTombstone, buildJobLifecycleJournal,
   goalShareTerminalAt, isJobScopedToWorkspace, normalizeAutopilotEventDetails, resolveRetentionWindow,
   withAutopilotSuppression, workspaceGoalIdsFromStore
 } from "./repository-runtime-helpers";
@@ -2385,6 +2385,40 @@ class FileRepository implements AgenticRepository {
       return JobRecordSchema.parse(clone(deadLettered));
     });
   }
+
+  async cancelJobsForGoal(params: {
+    goalId: string;
+    userId?: string;
+    reason?: string;
+    now?: string;
+  }): Promise<JobRecord[]> {
+    return this.withMutationLock(async () => {
+      const store = await this.readStore();
+      const now = params.now ?? nowIso();
+      const cancelled: JobRecord[] = [];
+
+      for (const existing of store.jobs) {
+        const next = buildCancelledJobForGoal(existing, {
+          goalId: params.goalId,
+          userId: params.userId,
+          now,
+          reason: params.reason ?? null
+        });
+
+        if (next) {
+          store.jobs = upsertById(store.jobs, next);
+          cancelled.push(JobRecordSchema.parse(clone(next)));
+        }
+      }
+
+      if (cancelled.length > 0) {
+        await this.writeStore(store);
+      }
+
+      return cancelled;
+    });
+  }
+
   async listMemory(userId = DEFAULT_OWNER_USER_ID): Promise<MemoryRecord[]> {
     const store = await this.readStore();
     return sortByCreatedDesc(store.memories.filter((memory) => memory.userId === userId)).map((memory) =>
@@ -7096,6 +7130,54 @@ class PostgresRepository implements AgenticRepository {
       });
       await this.saveJobWithClient(client, deadLettered);
       return JobRecordSchema.parse(clone(deadLettered));
+    });
+  }
+
+  async cancelJobsForGoal(params: {
+    goalId: string;
+    userId?: string;
+    reason?: string;
+    now?: string;
+  }): Promise<JobRecord[]> {
+    return this.withTransaction(async (client) => {
+      const now = params.now ?? nowIso();
+      const values: unknown[] = [params.goalId];
+      let userPredicate = "";
+
+      if (params.userId !== undefined) {
+        values.push(params.userId);
+        userPredicate = `and user_id = $${values.length}`;
+      }
+
+      const result = await client.query(
+        `
+          select *
+          from jobs
+          where payload ->> 'goalId' = $1
+            ${userPredicate}
+            and status in ('queued', 'running', 'retrying', 'paused')
+          order by created_at asc
+          for update
+        `,
+        values
+      );
+
+      const cancelled: JobRecord[] = [];
+      for (const row of result.rows) {
+        const next = buildCancelledJobForGoal(this.mapJobRow(row), {
+          goalId: params.goalId,
+          userId: params.userId,
+          now,
+          reason: params.reason ?? null
+        });
+
+        if (next) {
+          await this.saveJobWithClient(client, next);
+          cancelled.push(JobRecordSchema.parse(clone(next)));
+        }
+      }
+
+      return cancelled;
     });
   }
 

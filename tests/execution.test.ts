@@ -3,11 +3,13 @@ import {
   ApprovalRequestSchema,
   deriveJobRecoveryState,
   JobRecordSchema,
+  jobStatusValues,
   WatcherSchema,
   nowIso
 } from "@agentic/contracts";
 import {
   computeJobRetryDelayMs,
+  canTransitionJobState,
   createDurableJobQueue,
   createJobRecord,
   createTask,
@@ -16,6 +18,7 @@ import {
   recomputeWorkflowStatuses,
   transitionTaskState
 } from "@agentic/execution";
+import { canCancelJobStatus } from "../packages/repository/src/repository-runtime-helpers";
 
 describe("execution", () => {
   it("allows legal approval-related task transitions", () => {
@@ -94,6 +97,82 @@ describe("execution", () => {
       goalStatus: "waiting",
       workflowStatus: "waiting"
     });
+  });
+
+  it("allows legal paused/cancelled durable job transitions (AOS-25)", () => {
+    expect(canTransitionJobState("queued", "cancelled")).toBe(true);
+    expect(canTransitionJobState("running", "paused")).toBe(true);
+    expect(canTransitionJobState("running", "cancelled")).toBe(true);
+    expect(canTransitionJobState("retrying", "cancelled")).toBe(true);
+    expect(canTransitionJobState("paused", "running")).toBe(true);
+    expect(canTransitionJobState("paused", "queued")).toBe(true);
+    expect(canTransitionJobState("paused", "cancelled")).toBe(true);
+  });
+
+  it("rejects illegal paused/cancelled durable job transitions (AOS-25)", () => {
+    expect(canTransitionJobState("cancelled", "running")).toBe(false);
+    expect(canTransitionJobState("cancelled", "queued")).toBe(false);
+    expect(canTransitionJobState("cancelled", "completed")).toBe(false);
+    expect(canTransitionJobState("completed", "cancelled")).toBe(false);
+    expect(canTransitionJobState("dead_letter", "cancelled")).toBe(false);
+    expect(canTransitionJobState("queued", "paused")).toBe(false);
+  });
+
+  it("keeps repository canCancelJobStatus in sync with execution legal transitions (AOS-25)", () => {
+    // The repository keeps a local cancellable-status guard (to avoid a runtime
+    // dependency on @agentic/execution); this locks it to the authoritative
+    // legalJobTransitions so the two can never drift.
+    for (const status of jobStatusValues) {
+      expect(canCancelJobStatus(status)).toBe(canTransitionJobState(status, "cancelled"));
+    }
+  });
+
+  it("never claims paused or cancelled jobs (AOS-25)", () => {
+    const base = createJobRecord({
+      userId: "user-1",
+      kind: "goal_create",
+      payload: {
+        type: "goal_create",
+        goalId: "goal-1",
+        workflowId: "workflow-1",
+        request: "Plan next week around focus blocks.",
+        workspaceId: null,
+        agentId: null,
+        metadata: {}
+      },
+      maxAttempts: 3
+    });
+    const at = Date.parse(base.availableAt) + 1_000;
+
+    expect(isJobClaimable(base, at)).toBe(true);
+    expect(isJobClaimable(JobRecordSchema.parse({ ...base, journal: undefined, status: "paused" }), at)).toBe(false);
+    expect(isJobClaimable(JobRecordSchema.parse({ ...base, journal: undefined, status: "cancelled" }), at)).toBe(false);
+  });
+
+  it("honors a persisted paused/cancelled control over derived status (AOS-25)", () => {
+    const task = createTask({
+      goalId: "goal-1",
+      workflowId: "workflow-1",
+      title: "Active task",
+      summary: "Work in progress.",
+      assignedAgent: "workflow",
+      riskClass: "R1",
+      requiresApproval: false,
+      toolCapabilities: ["read"],
+      state: "running"
+    });
+
+    expect(recomputeWorkflowStatuses([task], [], [], "paused")).toEqual({
+      goalStatus: "waiting",
+      workflowStatus: "paused"
+    });
+    expect(recomputeWorkflowStatuses([task], [], [], "cancelled")).toEqual({
+      goalStatus: "waiting",
+      workflowStatus: "cancelled"
+    });
+    // A null control (no control, or a resume) falls through to derived status.
+    expect(recomputeWorkflowStatuses([task], [], [], null).workflowStatus).toBe("running");
+    expect(recomputeWorkflowStatuses([task], [], []).workflowStatus).toBe("running");
   });
 
   it("creates claimable goal jobs with bounded retry backoff", () => {

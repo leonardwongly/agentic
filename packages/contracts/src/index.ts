@@ -131,7 +131,15 @@ export const jobKindValues = [
   "public_share_view",
   "deployment_canary"
 ] as const;
-export const jobStatusValues = ["queued", "running", "retrying", "completed", "dead_letter"] as const;
+export const jobStatusValues = [
+  "queued",
+  "running",
+  "retrying",
+  "completed",
+  "dead_letter",
+  "paused",
+  "cancelled"
+] as const;
 export const jobPriorityValues = ["critical", "high", "normal", "low", "maintenance"] as const;
 export const githubIssueAutomationModeValues = ["intake", "plan", "work"] as const;
 export const githubIssueTriggerEventValues = ["issues", "issue_comment"] as const;
@@ -2477,6 +2485,10 @@ function summarizeJobExecutionState(params: {
       return `Job completed successfully on attempt ${params.attemptCount}.`;
     case "dead_letter":
       return `Job dead-lettered after ${params.attemptCount}/${params.maxAttempts} attempts.`;
+    case "paused":
+      return "Job paused by operator control.";
+    case "cancelled":
+      return "Job cancelled by operator control.";
   }
 }
 

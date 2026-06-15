@@ -9,6 +9,7 @@ import {
   buildWorkflowDagFromBundle,
   processUserRequest,
   projectWorkflowDagInstance,
+  readWorkflowControlStatusOverride,
   summarizeWorkflowDag
 } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
@@ -72,6 +73,26 @@ describe("workflow DAG projection (AOS-20)", () => {
       0
     );
     expect(dag!.edges).toHaveLength(expectedEdgeCount);
+  });
+
+  it("exposes a recompute control override only for halting controls (AOS-25)", () => {
+    expect(readWorkflowControlStatusOverride(baseBundle)).toBeNull();
+    expect(
+      readWorkflowControlStatusOverride(
+        withControlLog(baseBundle, { action: "pause", status: "paused", at: "2026-04-16T03:00:00.000Z" })
+      )
+    ).toBe("paused");
+    expect(
+      readWorkflowControlStatusOverride(
+        withControlLog(baseBundle, { action: "cancel", status: "cancelled", at: "2026-04-16T03:00:00.000Z" })
+      )
+    ).toBe("cancelled");
+    // A resume is the latest control, so normal task-derived recompute should resume.
+    const resumed = withControlLog(
+      withControlLog(baseBundle, { action: "pause", status: "paused", at: "2026-04-16T03:00:00.000Z" }),
+      { action: "resume", status: "running", at: "2026-04-16T03:05:00.000Z" }
+    );
+    expect(readWorkflowControlStatusOverride(resumed)).toBeNull();
   });
 
   it("returns null when the bundle has no tasks", () => {

@@ -60,9 +60,11 @@ function buildWorkflowNodeExecutionId(instanceId: string, nodeId: string): strin
 }
 
 const legalJobTransitions: Record<JobStatus, readonly JobStatus[]> = {
-  queued: ["running"],
-  running: ["retrying", "completed", "dead_letter"],
-  retrying: ["running"],
+  queued: ["running", "cancelled"],
+  running: ["retrying", "completed", "dead_letter", "paused", "cancelled"],
+  retrying: ["running", "cancelled"],
+  paused: ["queued", "running", "cancelled"],
+  cancelled: [],
   completed: [],
   dead_letter: []
 };
@@ -1003,8 +1005,23 @@ export function transitionTaskState(task: Task, state: TaskState): Task {
 export function recomputeWorkflowStatuses(
   tasks: Task[],
   approvals: ApprovalRequest[],
-  watchers: Watcher[]
+  watchers: Watcher[],
+  controlStatus?: "paused" | "cancelled" | null
 ): { goalStatus: Goal["status"]; workflowStatus: WorkflowState["status"] } {
+  // AOS-25: a persisted operator pause/cancel control takes precedence over the
+  // status derived from tasks/approvals/watchers, so governed control is never
+  // clobbered back to "running"/"completed" on the next recompute. The Goal status
+  // enum has no paused/cancelled member, so both controls roll up to "waiting" at
+  // the goal level (a non-terminal halt that, unlike "completed", does not trigger
+  // the worker's success-completion side effects); the authoritative paused/cancelled
+  // state lives on the free-form WorkflowState status and the persisted control log.
+  if (controlStatus === "paused") {
+    return { goalStatus: "waiting", workflowStatus: "paused" };
+  }
+  if (controlStatus === "cancelled") {
+    return { goalStatus: "waiting", workflowStatus: "cancelled" };
+  }
+
   const hasPendingApprovals = approvals.some((approval) => approval.decision === "pending");
   const hasBlockedTask = tasks.some((task) => task.state === "blocked");
   const hasOpenWatchers = watchers.some((watcher) => watcher.status === "active");
