@@ -124,6 +124,11 @@ const DEFAULT_RELEASE_FORBIDDEN_EXACT = new Set([
   "docs-preview.md"
 ]);
 
+const DEFAULT_RELEASE_FORBIDDEN_BASENAMES = new Set([
+  ".DS_Store",
+  "Thumbs.db"
+]);
+
 const DEFAULT_RELEASE_FORBIDDEN_EXTENSIONS = [
   ".key",
   ".pem",
@@ -222,6 +227,7 @@ export function checkReleaseContext(paths: string[]) {
   for (const rawPath of paths) {
     const relativePath = normalizeRepoPath(rawPath);
     const lowerPath = relativePath.toLowerCase();
+    const basename = path.posix.basename(relativePath);
 
     if (PROTECTED_RELEASE_EXCEPTIONS.has(relativePath)) {
       continue;
@@ -229,6 +235,7 @@ export function checkReleaseContext(paths: string[]) {
 
     if (
       DEFAULT_RELEASE_FORBIDDEN_EXACT.has(relativePath) ||
+      DEFAULT_RELEASE_FORBIDDEN_BASENAMES.has(basename) ||
       DEFAULT_RELEASE_FORBIDDEN_PREFIXES.some(prefix => lowerPath.startsWith(prefix.toLowerCase()))
     ) {
       issues.push({

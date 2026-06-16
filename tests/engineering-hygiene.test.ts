@@ -128,6 +128,8 @@ describe("engineering hygiene gates", () => {
     const issues = checkReleaseContext([
       "apps/web/app/page.tsx",
       ".env.local",
+      ".github/.DS_Store",
+      "docs/release/Thumbs.db",
       ".antigravitycli/settings.json",
       "artifacts/security/report.json",
       "tmp/private-key.pem",
@@ -139,6 +141,8 @@ describe("engineering hygiene gates", () => {
 
     expect(issues).toEqual([
       expect.objectContaining({ path: ".env.local", kind: "forbidden-path" }),
+      expect.objectContaining({ path: ".github/.DS_Store", kind: "forbidden-path" }),
+      expect.objectContaining({ path: "docs/release/Thumbs.db", kind: "forbidden-path" }),
       expect.objectContaining({ path: ".antigravitycli/settings.json", kind: "forbidden-path" }),
       expect.objectContaining({ path: "artifacts/security/report.json", kind: "forbidden-path" }),
       expect.objectContaining({ path: "tmp/private-key.pem", kind: "forbidden-extension" }),
