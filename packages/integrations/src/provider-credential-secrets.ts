@@ -9,8 +9,12 @@ import {
 const PROVIDER_SECRET_ALGORITHM = "aes-256-gcm";
 const PROVIDER_SECRET_KDF = "scrypt";
 const PROVIDER_SECRET_IV_BYTES = 12;
+const PROVIDER_SECRET_SALT_BYTES = 16;
 const PROVIDER_SECRET_DERIVED_KEY_BYTES = 32;
-const PROVIDER_SECRET_KDF_SALT = "agentic-provider-credentials-v1";
+// Legacy fixed KDF salt used by envelopes written before per-record random salts
+// were introduced. Retained only so those older envelopes remain decryptable;
+// every new envelope now carries its own unique random salt.
+const LEGACY_PROVIDER_SECRET_KDF_SALT = "agentic-provider-credentials-v1";
 const PROVIDER_SECRET_CONTEXT_BINDING_VERSION = "provider-credential-v1";
 const PROVIDER_SECRET_KEYRING_ENV = "AGENTIC_PROVIDER_SECRET_KEYRING";
 
@@ -125,13 +129,13 @@ function parseConfiguredKeyring(): Record<string, string> {
   return keyring;
 }
 
-function deriveProviderSecretKeys(params: { currentKeyVersion: string; currentMasterKey: string; keyring?: Record<string, string> }) {
+function resolveProviderMasterSecrets(params: { currentKeyVersion: string; currentMasterKey: string; keyring?: Record<string, string> }): Map<string, string> {
   const configured = {
     ...parseConfiguredKeyring(),
     ...(params.keyring ?? {}),
     [params.currentKeyVersion]: params.currentMasterKey
   };
-  const derivedKeys = new Map<string, Buffer>();
+  const masterSecrets = new Map<string, string>();
 
   for (const [version, secret] of Object.entries(configured)) {
     const normalizedVersion = version.trim();
@@ -141,13 +145,10 @@ function deriveProviderSecretKeys(params: { currentKeyVersion: string; currentMa
       throw new ProviderCredentialSecretError("Provider credential encryption keyring contains an empty key version or secret.");
     }
 
-    derivedKeys.set(
-      normalizedVersion,
-      crypto.scryptSync(normalizedSecret, PROVIDER_SECRET_KDF_SALT, PROVIDER_SECRET_DERIVED_KEY_BYTES)
-    );
+    masterSecrets.set(normalizedVersion, normalizedSecret);
   }
 
-  return derivedKeys;
+  return masterSecrets;
 }
 
 function decryptWithResult(params: {
@@ -193,12 +194,32 @@ export function createProviderCredentialSecretStore(
     throw new ProviderCredentialSecretError("Provider credential encryption key version is not configured.");
   }
 
-  const derivedKeys = deriveProviderSecretKeys({
+  const masterSecrets = resolveProviderMasterSecrets({
     currentKeyVersion: keyVersion,
     currentMasterKey: masterKey,
     keyring: options?.keyring
   });
-  const currentDerivedKey = derivedKeys.get(keyVersion)!;
+  const derivedKeyCache = new Map<string, Buffer>();
+
+  function resolveDerivedKey(version: string, salt: Buffer): Buffer {
+    const masterSecret = masterSecrets.get(version);
+
+    if (!masterSecret) {
+      throw new ProviderCredentialSecretError(
+        `Provider credential encryption key version ${version} is not configured.`
+      );
+    }
+
+    const cacheKey = `${version}:${salt.toString("base64")}`;
+    let derivedKey = derivedKeyCache.get(cacheKey);
+
+    if (!derivedKey) {
+      derivedKey = crypto.scryptSync(masterSecret, salt, PROVIDER_SECRET_DERIVED_KEY_BYTES);
+      derivedKeyCache.set(cacheKey, derivedKey);
+    }
+
+    return derivedKey;
+  }
 
   return {
     currentKeyVersion: keyVersion,
@@ -213,7 +234,9 @@ export function createProviderCredentialSecretStore(
       }
 
       const iv = crypto.randomBytes(PROVIDER_SECRET_IV_BYTES);
-      const cipher = crypto.createCipheriv(PROVIDER_SECRET_ALGORITHM, currentDerivedKey, iv);
+      const salt = crypto.randomBytes(PROVIDER_SECRET_SALT_BYTES);
+      const derivedKey = resolveDerivedKey(keyVersion, salt);
+      const cipher = crypto.createCipheriv(PROVIDER_SECRET_ALGORITHM, derivedKey, iv);
       const additionalData = buildSecretAdditionalData(context);
 
       if (additionalData) {
@@ -230,19 +253,17 @@ export function createProviderCredentialSecretStore(
         ciphertext: ciphertext.toString("base64"),
         iv: iv.toString("base64"),
         authTag: authTag.toString("base64"),
+        salt: salt.toString("base64"),
         contextBinding: buildContextBinding(context)
       });
     },
 
     decrypt(envelope: EncryptedSecretEnvelope, context?: ProviderCredentialSecretContext): string {
       const validated = EncryptedSecretEnvelopeSchema.parse(envelope);
-      const derivedKey = derivedKeys.get(validated.keyVersion);
-
-      if (!derivedKey) {
-        throw new ProviderCredentialSecretError(
-          `Provider credential encryption key version ${validated.keyVersion} is not configured.`
-        );
-      }
+      const salt = validated.salt
+        ? Buffer.from(validated.salt, "base64")
+        : Buffer.from(LEGACY_PROVIDER_SECRET_KDF_SALT, "utf8");
+      const derivedKey = resolveDerivedKey(validated.keyVersion, salt);
 
       try {
         const decipher = crypto.createDecipheriv(

@@ -34,7 +34,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
 
     requireUpdatedAtPrecondition(request, existing.updatedAt);
 
-    await repository.deleteTemplate(templateId);
+    await repository.deleteTemplate(templateId, principal.userId);
 
     return authenticatedJson({
       deleted: templateId,

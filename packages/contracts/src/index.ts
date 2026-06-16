@@ -3188,6 +3188,10 @@ export const EncryptedSecretEnvelopeSchema = z.object({
   ciphertext: z.string().min(1),
   iv: z.string().min(1),
   authTag: z.string().min(1),
+  // Per-record random KDF salt (base64). Optional for backward compatibility:
+  // envelopes written before salts were introduced derive the key from a fixed
+  // legacy salt instead.
+  salt: z.string().min(1).max(100).optional(),
   contextBinding: z
     .object({
       version: z.literal("provider-credential-v1"),

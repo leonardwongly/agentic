@@ -168,13 +168,19 @@ export function getServerSigningSecret(scope: "session" | "share" | "oauth" = "s
     throw new AuthError("AGENTIC_ACCESS_KEY is not configured for this runtime.");
   }
 
+  // Token-signing material can be rotated independently of the API access key by
+  // setting AGENTIC_SESSION_SIGNING_KEY. When unset it defaults to the access key,
+  // so existing issued session/share/oauth tokens remain valid (backward compatible).
+  // Rotating this value invalidates all previously issued signed tokens by design.
+  const signingKey = getRuntimeEnvValue("AGENTIC_SESSION_SIGNING_KEY")?.trim() || resolved.key;
+
   switch (scope) {
     case "session":
-      return resolved.key;
+      return signingKey;
     case "share":
-      return `${resolved.key}:agentic-share-v1`;
+      return `${signingKey}:agentic-share-v1`;
     case "oauth":
-      return `${resolved.key}:agentic-oauth-v1`;
+      return `${signingKey}:agentic-oauth-v1`;
   }
 }
 
