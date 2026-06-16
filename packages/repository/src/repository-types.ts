@@ -474,7 +474,7 @@ export type AgenticRepository = {
   updateProviderSideEffect(params: UpdateProviderSideEffectParams): Promise<ProviderSideEffectRecord>;
   listTemplates(userId?: string): Promise<GoalTemplate[]>;
   saveTemplate(template: GoalTemplate): Promise<GoalTemplate>;
-  deleteTemplate(templateId: string): Promise<void>;
+  deleteTemplate(templateId: string, userId?: string): Promise<void>;
   listWorkflowTemplates(userId?: string): Promise<WorkflowCanvasTemplate[]>;
   getWorkflowTemplate(templateId: string, userId?: string): Promise<WorkflowCanvasTemplate | null>;
   saveWorkflowTemplate(template: WorkflowCanvasTemplate): Promise<WorkflowCanvasTemplate>;

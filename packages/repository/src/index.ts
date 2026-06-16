@@ -2726,10 +2726,12 @@ class FileRepository implements AgenticRepository {
     });
   }
 
-  async deleteTemplate(templateId: string): Promise<void> {
+  async deleteTemplate(templateId: string, userId?: string): Promise<void> {
     await this.withMutationLock(async () => {
       const store = await this.readStore();
-      store.templates = store.templates.filter((template) => template.id !== templateId);
+      store.templates = store.templates.filter(
+        (template) => !(template.id === templateId && (userId === undefined || template.userId === userId))
+      );
       await this.writeStore(store);
     });
   }
@@ -7700,9 +7702,13 @@ class PostgresRepository implements AgenticRepository {
     return GoalTemplateSchema.parse(clone(validated));
   }
 
-  async deleteTemplate(templateId: string): Promise<void> {
+  async deleteTemplate(templateId: string, userId?: string): Promise<void> {
     await this.withTransaction(async (client) => {
-      await client.query("delete from goal_templates where id = $1", [templateId]);
+      if (userId === undefined) {
+        await client.query("delete from goal_templates where id = $1", [templateId]);
+      } else {
+        await client.query("delete from goal_templates where id = $1 and user_id = $2", [templateId, userId]);
+      }
     });
   }
 

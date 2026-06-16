@@ -2,11 +2,14 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: agentic
-      POSTGRES_PASSWORD: agentic
-      POSTGRES_DB: agentic
+      POSTGRES_USER: ${POSTGRES_USER:-agentic}
+      # No default on purpose: operators MUST supply a strong, unique password so
+      # a copied compose file cannot silently ship the weak "agentic" example
+      # credential. Set POSTGRES_PASSWORD in your shell or a .env file.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a strong, unique value (do not reuse the old "agentic" example)}
+      POSTGRES_DB: ${POSTGRES_DB:-agentic}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agentic -d agentic"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentic} -d ${POSTGRES_DB:-agentic}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -23,7 +26,7 @@ services:
     command: ["sh", "-c", "npm run db:migrate && npm run start:web:prod -- --hostname 0.0.0.0 --port 3000"]
     environment:
       NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL:-postgres://agentic:agentic@postgres:5432/agentic}
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agentic}}
       AGENTIC_ACCESS_KEY: ${AGENTIC_ACCESS_KEY:?AGENTIC_ACCESS_KEY is required}
       AGENTIC_BOOTSTRAP_USER_ID: ${AGENTIC_BOOTSTRAP_USER_ID:-owner}
       AGENTIC_BOOTSTRAP_DISPLAY_NAME: ${AGENTIC_BOOTSTRAP_DISPLAY_NAME:-Instance Owner}
@@ -52,7 +55,7 @@ services:
     command: ["npm", "run", "start:worker:prod"]
     environment:
       NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL:-postgres://agentic:agentic@postgres:5432/agentic}
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agentic}}
       AGENTIC_ACCESS_KEY: ${AGENTIC_ACCESS_KEY:?AGENTIC_ACCESS_KEY is required}
       AGENTIC_BOOTSTRAP_USER_ID: ${AGENTIC_BOOTSTRAP_USER_ID:-owner}
       AGENTIC_BOOTSTRAP_DISPLAY_NAME: ${AGENTIC_BOOTSTRAP_DISPLAY_NAME:-Instance Owner}

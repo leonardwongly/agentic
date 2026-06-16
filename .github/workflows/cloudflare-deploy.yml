@@ -94,8 +94,10 @@ jobs:
       - name: Deploy to Cloudflare Workers
         if: steps.guard.outputs.configured == 'true'
         working-directory: apps/web
+        env:
+          DEPLOY_ENVIRONMENT: ${{ github.event.inputs.environment }}
         run: |
-          if [ "${{ github.event.inputs.environment }}" = "production" ]; then
+          if [ "$DEPLOY_ENVIRONMENT" = "production" ]; then
             ../../node_modules/.bin/wrangler deploy
           else
             ../../node_modules/.bin/wrangler versions upload

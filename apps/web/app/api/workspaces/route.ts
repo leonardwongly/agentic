@@ -148,6 +148,12 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "select") {
+      const accessibleWorkspaces = await repository.listWorkspaces(principal.userId);
+
+      if (!accessibleWorkspaces.some((workspace) => workspace.id === body.workspaceId)) {
+        throw new ApiRouteError(404, "Workspace not found.");
+      }
+
       const timestamp = nowIso();
       await repository.saveWorkspaceSelection(
         WorkspaceSelectionSchema.parse({

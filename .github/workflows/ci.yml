@@ -12,11 +12,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NEXT_TELEMETRY_DISABLED: "1"
 
+# Least privilege: every job's default token is read-only. Only the `validate`
+# job opts into the elevated attestation permissions it needs, and those
+# attestation/upload steps are additionally gated to non-pull_request events.
 permissions:
   contents: read
   actions: read
-  attestations: write
-  id-token: write
 
 jobs:
   provenance-gate:
@@ -87,6 +88,10 @@ jobs:
       - provenance-gate
       - issue-theme-gates
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
     services:
       postgres:
         image: postgres:16
