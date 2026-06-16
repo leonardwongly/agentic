@@ -34,6 +34,7 @@ This command fails closed until stable ingress, runtime configuration, deployed 
 
 Run npm run github:app-sync:preflight:collect -- --json first to inspect the live preflight blockers without closing issues.
 Use --remediation-plan to print a deterministic read-only operator checklist derived from failed audit criteria.
+Use --local-only with --remediation-plan to show only safe read-only commands and omit provider, GitHub mutation, runtime config, live smoke, and issue-closeout actions.
 `;
 
 function runCommand(command: string, args: string[]): Promise<CommandResult> {
@@ -143,18 +144,18 @@ function printRemediationPlan(plan: GitHubIssueSyncCompletionRemediationPlan) {
       console.log(`  Failed checks: ${item.failedChecks.join(", ")}`);
     }
 
-    for (const action of item.actions) {
-      console.log(`  - ${action}`);
+    for (const action of item.actionItems) {
+      console.log(`  - [${action.kind}] ${action.action}`);
     }
 
-    for (const validation of item.validation) {
-      console.log(`  validation: ${validation}`);
+    for (const validation of item.validationCommands) {
+      console.log(`  validation [${validation.kind}]: ${validation.command}`);
     }
   }
 
   console.log("Commands:");
-  for (const command of plan.commands) {
-    console.log(`- ${command}`);
+  for (const command of plan.commandItems) {
+    console.log(`- [${command.kind}] ${command.command}`);
   }
 }
 
@@ -166,6 +167,7 @@ async function main() {
 
   const json = process.argv.includes("--json");
   const remediationPlan = process.argv.includes("--remediation-plan");
+  const localOnly = process.argv.includes("--local-only");
   const [issues, preflight] = await Promise.all([collectIssueStates(), collectGitHubAppSyncLivePreflight(process.env)]);
   const releaseCloseoutEvidence = validateReleaseCloseoutEvidenceManifest(
     readReleaseCloseoutEvidenceManifest(DEFAULT_RELEASE_CLOSEOUT_EVIDENCE_PATH),
@@ -174,7 +176,7 @@ async function main() {
   const report = buildGitHubIssueSyncCompletionAudit({ issues, preflight, releaseCloseoutEvidence });
 
   if (remediationPlan) {
-    const plan = buildGitHubIssueSyncRemediationPlan(report);
+    const plan = buildGitHubIssueSyncRemediationPlan(report, { localOnly });
 
     if (json) {
       console.log(JSON.stringify(plan, null, 2));

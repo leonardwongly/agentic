@@ -201,6 +201,7 @@ Use the completion audit as the final issue-sync closeout gate:
 ```bash
 npm run github:issues:completion-audit -- --help
 npm run github:issues:completion-audit -- --json
+npm run github:issues:completion-audit -- --remediation-plan --local-only
 ```
 
 The audit is read-only. It collects the live states for #141, #142, #143,
@@ -210,6 +211,15 @@ non-zero until every tracked issue is closed and every mapped production proof
 gate passes. Do not close #152 from local tests, PR status, a closed release
 issue, or operator intent alone; the completion audit must pass against the
 actual target and the checked-in release evidence package.
+
+Use `--remediation-plan` to print the failed closeout actions with explicit
+authority classes. `local_read_only` entries are safe inventory or audit
+commands. `external_provider`, `external_github_mutation`,
+`external_runtime_config`, `live_smoke_required`, and `issue_closeout` entries
+require the corresponding production authority and should not be run as local
+cleanup. Add `--local-only` when you only want the safe read-only follow-up
+commands and want provider, GitHub mutation, runtime-secret, smoke, and
+issue-closeout steps omitted from the output.
 
 The ordered closeout sequence is:
 

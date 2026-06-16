@@ -31,6 +31,24 @@ export type GitHubIssueSyncCompletionAuditReport = {
   };
 };
 
+export type GitHubIssueSyncRemediationActionKind =
+  | "local_read_only"
+  | "external_provider"
+  | "external_github_mutation"
+  | "external_runtime_config"
+  | "live_smoke_required"
+  | "issue_closeout";
+
+export type GitHubIssueSyncRemediationActionItem = {
+  kind: GitHubIssueSyncRemediationActionKind;
+  action: string;
+};
+
+export type GitHubIssueSyncRemediationCommandItem = {
+  kind: GitHubIssueSyncRemediationActionKind;
+  command: string;
+};
+
 export type GitHubIssueSyncCompletionRemediationPlanItem = {
   issue: GitHubIssueSyncCompletionIssueNumber;
   title: string;
@@ -38,7 +56,9 @@ export type GitHubIssueSyncCompletionRemediationPlanItem = {
   open: boolean;
   failedChecks: GitHubAppSyncLivePreflightCheck["name"][];
   actions: string[];
+  actionItems: GitHubIssueSyncRemediationActionItem[];
   validation: string[];
+  validationCommands: GitHubIssueSyncRemediationCommandItem[];
 };
 
 export type GitHubIssueSyncCompletionRemediationPlan = {
@@ -49,6 +69,7 @@ export type GitHubIssueSyncCompletionRemediationPlan = {
   };
   items: GitHubIssueSyncCompletionRemediationPlanItem[];
   commands: string[];
+  commandItems: GitHubIssueSyncRemediationCommandItem[];
 };
 
 const TRACKED_ISSUES = [141, 142, 143, 144, 145, 146, 152] as const;
@@ -123,6 +144,23 @@ const PREFLIGHT_REMEDIATION_ACTIONS: Record<GitHubAppSyncLivePreflightCheck["nam
     "Run `npm run test:smoke:github-app-sync` against the deployed sync route and export passing JSON as `AGENTIC_GITHUB_APP_SYNC_CANARY_JSON`."
 };
 
+const PREFLIGHT_REMEDIATION_ACTION_KINDS: Record<GitHubAppSyncLivePreflightCheck["name"], GitHubIssueSyncRemediationActionKind> = {
+  sync_url: "external_github_mutation",
+  stable_host: "external_github_mutation",
+  smoke_base_url: "external_runtime_config",
+  workflow_state: "external_github_mutation",
+  github_actions_secret_inventory: "external_github_mutation",
+  runtime_secret_inventory: "external_runtime_config",
+  runtime_secret_shape: "external_runtime_config",
+  smoke_canary_inventory: "external_runtime_config",
+  repository_allowlist: "external_runtime_config",
+  provider_services: "external_provider",
+  provider_configuration: "external_provider",
+  deployment_smoke: "live_smoke_required",
+  deployment_async_canary: "live_smoke_required",
+  github_app_sync_canary: "live_smoke_required"
+};
+
 const PREFLIGHT_REMEDIATION_VALIDATION: Record<GitHubAppSyncLivePreflightCheck["name"], string> = {
   sync_url: "npm run github:app-sync:preflight:collect -- --json",
   stable_host: "npm run github:app-sync:preflight:collect -- --json",
@@ -140,12 +178,34 @@ const PREFLIGHT_REMEDIATION_VALIDATION: Record<GitHubAppSyncLivePreflightCheck["
   github_app_sync_canary: "npm run test:smoke:github-app-sync"
 };
 
+const PREFLIGHT_REMEDIATION_VALIDATION_KINDS: Record<GitHubAppSyncLivePreflightCheck["name"], GitHubIssueSyncRemediationActionKind> = {
+  sync_url: "local_read_only",
+  stable_host: "local_read_only",
+  smoke_base_url: "local_read_only",
+  workflow_state: "local_read_only",
+  github_actions_secret_inventory: "local_read_only",
+  runtime_secret_inventory: "local_read_only",
+  runtime_secret_shape: "local_read_only",
+  smoke_canary_inventory: "local_read_only",
+  repository_allowlist: "local_read_only",
+  provider_services: "local_read_only",
+  provider_configuration: "local_read_only",
+  deployment_smoke: "live_smoke_required",
+  deployment_async_canary: "live_smoke_required",
+  github_app_sync_canary: "live_smoke_required"
+};
+
 const REMEDIATION_PLAN_COMMANDS = [
   "npm run github:app-sync:preflight:collect -- --json",
   "npm run github:issues:completion-audit -- --remediation-plan",
   "npm run github:issues:completion-audit -- --json",
   "npm run release:closeout:evidence -- --json"
 ] as const;
+
+const REMEDIATION_PLAN_COMMAND_ITEMS: GitHubIssueSyncRemediationCommandItem[] = REMEDIATION_PLAN_COMMANDS.map((command) => ({
+  kind: "local_read_only",
+  command
+}));
 
 function normalizeState(state: string): string {
   return state.trim().toUpperCase();
@@ -329,6 +389,13 @@ function releaseCloseoutActions(report: GitHubIssueSyncCompletionAuditReport): s
     : ["Repair the release closeout evidence manifest until `npm run release:closeout:evidence -- --json` reports `ok: true`."];
 }
 
+function releaseCloseoutActionItems(report: GitHubIssueSyncCompletionAuditReport): GitHubIssueSyncRemediationActionItem[] {
+  return releaseCloseoutActions(report).map((action) => ({
+    kind: "local_read_only",
+    action
+  }));
+}
+
 function roadmapActions(criteria: GitHubIssueSyncCompletionAuditCriterion[]): string[] {
   const roadmapBlocked = criteria.some(
     (criterion) =>
@@ -346,8 +413,71 @@ function roadmapActions(criteria: GitHubIssueSyncCompletionAuditCriterion[]): st
     : [];
 }
 
+function roadmapActionItems(criteria: GitHubIssueSyncCompletionAuditCriterion[]): GitHubIssueSyncRemediationActionItem[] {
+  return roadmapActions(criteria).map((action) => ({
+    kind: "issue_closeout",
+    action
+  }));
+}
+
+function uniqueActionItems(items: GitHubIssueSyncRemediationActionItem[]): GitHubIssueSyncRemediationActionItem[] {
+  const seen = new Set<string>();
+
+  return items.filter((item) => {
+    const key = `${item.kind}\u0000${item.action}`;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function uniqueCommandItems(items: GitHubIssueSyncRemediationCommandItem[]): GitHubIssueSyncRemediationCommandItem[] {
+  const seen = new Set<string>();
+
+  return items.filter((item) => {
+    const key = `${item.kind}\u0000${item.command}`;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function localReadOnlyPlan(plan: GitHubIssueSyncCompletionRemediationPlan): GitHubIssueSyncCompletionRemediationPlan {
+  const items = plan.items
+    .map((item) => {
+      const actionItems = item.actionItems.filter((action) => action.kind === "local_read_only");
+      const validationCommands = item.validationCommands.filter((command) => command.kind === "local_read_only");
+
+      return {
+        ...item,
+        actions: actionItems.map((action) => action.action),
+        actionItems,
+        validation: validationCommands.map((command) => command.command),
+        validationCommands
+      };
+    })
+    .filter((item) => item.actionItems.length > 0 || item.validationCommands.length > 0);
+  const commandItems = plan.commandItems.filter((command) => command.kind === "local_read_only");
+
+  return {
+    ...plan,
+    items,
+    commands: commandItems.map((command) => command.command),
+    commandItems
+  };
+}
+
 export function buildGitHubIssueSyncRemediationPlan(
-  report: GitHubIssueSyncCompletionAuditReport
+  report: GitHubIssueSyncCompletionAuditReport,
+  options: { localOnly?: boolean } = {}
 ): GitHubIssueSyncCompletionRemediationPlan {
   const items = TRACKED_ISSUES.map((issue) => {
     const issueState = issueByNumber(report.issues, issue);
@@ -359,16 +489,24 @@ export function buildGitHubIssueSyncRemediationPlan(
     const issueCloseoutActions = open
       ? [`Keep #${issue} open until its issue-specific validation criteria pass; close it only after the audit reports pass for the issue.`]
       : [];
-    const actions = unique([
-      ...issueCloseoutActions,
-      ...failedChecks.map((check) => PREFLIGHT_REMEDIATION_ACTIONS[check]),
-      ...(issue === 146 ? releaseCloseoutActions(report) : []),
-      ...(issue === 152 ? roadmapActions(failedCriteria) : [])
+    const actionItems = uniqueActionItems([
+      ...issueCloseoutActions.map((action) => ({ kind: "issue_closeout" as const, action })),
+      ...failedChecks.map((check) => ({
+        kind: PREFLIGHT_REMEDIATION_ACTION_KINDS[check],
+        action: PREFLIGHT_REMEDIATION_ACTIONS[check]
+      })),
+      ...(issue === 146 ? releaseCloseoutActionItems(report) : []),
+      ...(issue === 152 ? roadmapActionItems(failedCriteria) : [])
     ]);
-    const validation = unique([
-      ...failedChecks.map((check) => PREFLIGHT_REMEDIATION_VALIDATION[check]),
-      ...(issue === 146 ? ["npm run release:closeout:evidence -- --json"] : []),
-      "npm run github:issues:completion-audit -- --json"
+    const validationCommands = uniqueCommandItems([
+      ...failedChecks.map((check) => ({
+        kind: PREFLIGHT_REMEDIATION_VALIDATION_KINDS[check],
+        command: PREFLIGHT_REMEDIATION_VALIDATION[check]
+      })),
+      ...(issue === 146
+        ? [{ kind: "local_read_only" as const, command: "npm run release:closeout:evidence -- --json" }]
+        : []),
+      { kind: "local_read_only" as const, command: "npm run github:issues:completion-audit -- --json" }
     ]);
 
     return {
@@ -377,20 +515,25 @@ export function buildGitHubIssueSyncRemediationPlan(
       blocked: failedCriteria.length > 0,
       open,
       failedChecks,
-      actions,
-      validation
+      actions: actionItems.map((action) => action.action),
+      actionItems,
+      validation: validationCommands.map((command) => command.command),
+      validationCommands
     };
   }).filter((item) => item.blocked || item.open);
 
-  return {
+  const plan = {
     ok: report.ok,
     generatedFrom: {
       checkedIssues: report.summary.checkedIssues,
       failedCriteria: report.summary.failedCriteria
     },
     items,
-    commands: [...REMEDIATION_PLAN_COMMANDS]
+    commands: REMEDIATION_PLAN_COMMAND_ITEMS.map((command) => command.command),
+    commandItems: [...REMEDIATION_PLAN_COMMAND_ITEMS]
   };
+
+  return options.localOnly ? localReadOnlyPlan(plan) : plan;
 }
 
 export const githubIssueSyncCompletionAuditTrackedIssues = TRACKED_ISSUES;
