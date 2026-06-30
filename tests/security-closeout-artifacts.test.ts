@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const pinnedCheckoutV6Pattern = /actions\/checkout@[a-f0-9]{40} # v6(?:\.\d+\.\d+)?/u;
+const pinnedCheckoutV7Pattern = /actions\/checkout@[a-f0-9]{40} # v7(?:\.\d+\.\d+)?/u;
 const pinnedCodeqlInitV4Pattern = /github\/codeql-action\/init@[a-f0-9]{40} # v4(?:\.\d+\.\d+)?/u;
 const pinnedCodeqlAnalyzeV4Pattern = /github\/codeql-action\/analyze@[a-f0-9]{40} # v4(?:\.\d+\.\d+)?/u;
 
@@ -48,7 +48,7 @@ describe("security closeout artifacts", () => {
     expect(workflow).toContain("name: CodeQL");
     expect(workflow).toContain("security-events: write");
     expect(workflow).toContain("contents: read");
-    expect(workflow).toMatch(pinnedCheckoutV6Pattern);
+    expect(workflow).toMatch(pinnedCheckoutV7Pattern);
     expect(workflow).toMatch(pinnedCodeqlInitV4Pattern);
     expect(workflow).toMatch(pinnedCodeqlAnalyzeV4Pattern);
     expect(workflow).toContain("languages: javascript-typescript");
