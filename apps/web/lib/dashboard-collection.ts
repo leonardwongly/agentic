@@ -39,9 +39,14 @@ export type DashboardCollectionPage<TItem> = {
   generatedAt: string;
 };
 
+// The published contract for `limit` is a plain decimal page size (1-100). `Number()` coercion
+// would also accept `0x14`, `0o11`, `0b101`, `1e2`, `+3`, `3.0` and surrounding whitespace, so
+// the raw query text is checked before it is ever converted.
+const DECIMAL_PAGE_LIMIT_PATTERN = /^\d{1,3}$/u;
+
 const DashboardCollectionQuerySchema = z
   .object({
-    limit: z.coerce
+    limit: z
       .number()
       .int()
       .min(1)
@@ -56,6 +61,38 @@ const DashboardCollectionQuerySchema = z
     kind: z.string().trim().min(1).max(64).optional()
   })
   .strict();
+
+/**
+ * Optional query params must treat "present but blank" (`?cursor=`, `?sort=`) the same as
+ * absent: clearing a filter by sending the empty value is the standard reset-to-page-one
+ * request shape, and it must not turn into a hard 400 from `min(1)` / enum checks.
+ */
+function optionalQueryParam(url: URL, key: string): string | undefined {
+  const raw = url.searchParams.get(key);
+
+  if (raw === null) {
+    return undefined;
+  }
+
+  return raw.trim().length > 0 ? raw : undefined;
+}
+
+function pageLimitQueryParam(url: URL): number | undefined {
+  const raw = url.searchParams.get("limit");
+
+  if (raw === null || raw.trim().length === 0) {
+    return undefined;
+  }
+
+  if (!DECIMAL_PAGE_LIMIT_PATTERN.test(raw)) {
+    throw new ApiRouteError(
+      400,
+      `Invalid dashboard limit; expected a decimal page size between 1 and ${MAX_COLLECTION_PAGE_LIMIT}.`
+    );
+  }
+
+  return Number(raw);
+}
 
 function assertAllowedQueryKeys(request: Request, allowedFilters: DashboardCollectionFilter[]) {
   const url = new URL(request.url);
@@ -95,14 +132,14 @@ export function parseDashboardCollectionQuery(
 
   const url = new URL(request.url);
   const parsed = DashboardCollectionQuerySchema.parse({
-    limit: url.searchParams.get("limit") ?? undefined,
-    cursor: url.searchParams.get("cursor"),
-    q: url.searchParams.get("q") ?? undefined,
-    sort: url.searchParams.get("sort") ?? undefined,
-    status: url.searchParams.get("status") ?? undefined,
-    riskClass: url.searchParams.get("riskClass") ?? undefined,
-    bucket: url.searchParams.get("bucket") ?? undefined,
-    kind: url.searchParams.get("kind") ?? undefined
+    limit: pageLimitQueryParam(url),
+    cursor: optionalQueryParam(url, "cursor"),
+    q: optionalQueryParam(url, "q"),
+    sort: optionalQueryParam(url, "sort"),
+    status: optionalQueryParam(url, "status"),
+    riskClass: optionalQueryParam(url, "riskClass"),
+    bucket: optionalQueryParam(url, "bucket"),
+    kind: optionalQueryParam(url, "kind")
   });
 
   assertAllowedValue(parsed.status, options.allowedStatusValues, "status");

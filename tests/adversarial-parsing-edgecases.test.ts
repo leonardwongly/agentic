@@ -1,4 +1,5 @@
 import {
+  DEFAULT_COLLECTION_PAGE_LIMIT,
   MAX_COLLECTION_PAGE_LIMIT,
   riskClassValues
 } from "@agentic/contracts";
@@ -121,7 +122,7 @@ describe("adversarial parsing: idempotency key derivation", () => {
     expect(new Set([shape(null), shape({}), shape([]), shape({ a: null }), shape({ a: undefined })]).size).toBe(5);
   });
 
-  it("exposes a real defect: payloads holding Date/Map/Set instances hash identically, so different writes share one idempotency key", () => {
+  it("guards that payloads holding Date/Map/Set/class instances hash distinctly, so different writes never share one key", () => {
     const derive = (payload: unknown) =>
       deriveIdempotencyKey({
         namespace: "briefing-create",
@@ -134,20 +135,34 @@ describe("adversarial parsing: idempotency key derivation", () => {
     const early = derive({ at: new Date("2026-01-01T00:00:00.000Z"), focus: "urgent" });
     const late = derive({ at: new Date("2099-12-31T23:59:59.999Z"), focus: "urgent" });
     const mapped = derive({ at: new Map([["zone", "Asia/Singapore"]]), focus: "urgent" });
+    const listed = derive({ at: new Set(["Asia/Singapore"]), focus: "urgent" });
     const empty = derive({ at: {}, focus: "urgent" });
 
-    // DEFECT: apps/web/lib/request-idempotency.ts `stableJson()` only understands plain
-    // arrays/objects, so any non-plain object (Date, Map, Set, class instances) serialises
-    // to `{}`. Two genuinely different requests then share one idempotency key, and the
-    // second one is silently replayed/absorbed as a duplicate instead of executing.
-    // Suggested fix: reject non-plain objects (or serialise Date to `toISOString()`,
-    // Map/Set to sorted entries) inside `stableJson`, and hash a type tag.
-    expect(early).toBe(late);
-    expect(early).toBe(mapped);
-    expect(early).toBe(empty);
+    class BriefingSlot {
+      zone = "Asia/Singapore";
+    }
+
+    const instance = derive({ at: new BriefingSlot(), focus: "urgent" });
+
+    // Regression: `stableJson()` serialised every non-plain object (Date, Map, Set, class
+    // instance) to `{}`, so genuinely different requests shared one idempotency key and the
+    // second write was silently absorbed as a duplicate. Each shape now carries a type tag.
+    expect(new Set([early, late, mapped, listed, instance, empty]).size).toBe(6);
+    // Deterministic: equal values keep deriving one key, and Map/Set iteration order is
+    // normalised so a re-built collection cannot split a logical call.
+    expect(early).toBe(derive({ at: new Date("2026-01-01T00:00:00.000Z"), focus: "urgent" }));
+    expect(derive({ at: new Map([["b", 2], ["a", 1]]), focus: "urgent" })).toBe(
+      derive({ at: new Map([["a", 1], ["b", 2]]), focus: "urgent" })
+    );
+    expect(derive({ at: new Set(["b", "a"]), focus: "urgent" })).toBe(
+      derive({ at: new Set(["a", "b"]), focus: "urgent" })
+    );
+    expect(derive({ at: new Date("not-a-date"), focus: "urgent" })).toBe(
+      derive({ at: new Date("also-not-a-date"), focus: "urgent" })
+    );
   });
 
-  it("exposes a real defect: canonically-equivalent unicode keys make the canonicaliser order-dependent, so one logical payload derives two keys", () => {
+  it("guards that canonically-equivalent unicode keys derive one key regardless of insertion order", () => {
     const derive = (payload: Record<string, unknown>) =>
       deriveIdempotencyKey({
         namespace: "approval-decide",
@@ -165,15 +180,16 @@ describe("adversarial parsing: idempotency key derivation", () => {
     nfdFirst["e\u0301"] = 2;
     nfdFirst["\u00e9"] = 1;
 
-    // Same key/value pairs, different insertion order. `stableJson` sorts with
-    // `localeCompare`, and ICU collation reports precomposed "\u00e9" and decomposed
-    // "e\u0301" as equal, so the (stable) sort keeps the host-dependent insertion order
-    // and the emitted canonical form is no longer canonical.
-    // DEFECT: apps/web/lib/request-idempotency.ts `stableJson()` must order keys with a
-    // locale-free comparator (e.g. `codePointAt`/`<` compare, or sort NFC-normalised keys)
-    // so retries that re-serialise the body do not bypass idempotency.
+    // Precomposed "\u00e9" and decomposed "e\u0301" collide under ICU collation ...
     expect("\u00e9".localeCompare("e\u0301")).toBe(0);
-    expect(derive(nfdFirst)).not.toBe(derive(nfcFirst));
+
+    // Regression: `stableJson()` sorted keys with `localeCompare`, so that tie left the
+    // (stable) sort in the caller's insertion order and one logical payload derived two keys
+    // depending on how the body was re-serialised between retries. Ordering is now a
+    // locale-free code-unit comparison, which is a total order.
+    expect(derive(nfdFirst)).toBe(derive(nfcFirst));
+    // Distinct values behind those keys are still never conflated.
+    expect(derive({ "\u00e9": 2, "e\u0301": 1 })).not.toBe(derive(nfcFirst));
   });
 });
 
@@ -194,37 +210,55 @@ describe("adversarial parsing: dashboard collection query", () => {
     expect(() => limitOf("?limit=Infinity")).toThrow();
   });
 
-  it("exposes a real defect: z.coerce lets a caller express the page limit in hex, octal, binary or exponent notation", () => {
+  it("guards that the page limit must be written as a plain decimal number, not a JS numeric literal", () => {
     const limitOf = (search: string) =>
       parseDashboardCollectionQuery(buildGetRequest(`/api/dashboard/goals${search}`), {}).limit;
 
-    // DEFECT: apps/web/lib/dashboard-collection.ts uses `z.coerce.number()` for `limit`,
-    // which is `Number(input)` and therefore accepts every JS numeric literal form plus
-    // surrounding whitespace. The public contract says "1-100", but `?limit=0x14` silently
-    // means 20 and `?limit= 1e2 ` means 100; a client cannot rely on the documented shape
-    // and validators/logs that pattern-match decimal limits miss the traffic.
-    // Suggested fix: validate the raw query string with /^\d{1,3}$/u before coercing.
-    expect(limitOf("?limit=0x14")).toBe(20);
-    expect(limitOf("?limit=0o11")).toBe(9);
-    expect(limitOf("?limit=0b101")).toBe(5);
-    expect(limitOf("?limit=1e2")).toBe(MAX_COLLECTION_PAGE_LIMIT);
-    expect(limitOf("?limit=%207%20")).toBe(7);
-    expect(limitOf("?limit=+3")).toBe(3);
-    expect(limitOf("?limit=3.0")).toBe(3);
+    expect(limitOf("?limit=7")).toBe(7);
+
+    // Regression: `limit` used `z.coerce.number()`, which is `Number(input)` and therefore
+    // accepted every JS numeric literal form plus surrounding whitespace. The public contract
+    // says "1-100 decimal", so the raw query text is now shape-checked before it is coerced.
+    for (const search of [
+      "?limit=0x14",
+      "?limit=0o11",
+      "?limit=0b101",
+      "?limit=1e2",
+      "?limit=%207%20",
+      "?limit=+3",
+      "?limit=3.0",
+      "?limit=1_0",
+      "?limit=7d",
+      "?limit=0007"
+    ]) {
+      expect(() => limitOf(search)).toThrow(ApiRouteError);
+    }
+
+    // Range violations keep going through the schema bound, so the message stays the documented one.
+    expect(() => limitOf(`?limit=${MAX_COLLECTION_PAGE_LIMIT + 1}`)).toThrow();
+    expect(() => limitOf("?limit=0")).toThrow();
   });
 
-  it("exposes a real defect: present-but-empty query parameters are a hard 400 instead of the default/first page", () => {
-    expect(parseDashboardCollectionQuery(buildGetRequest("/api/dashboard/goals?q="), {}).q).toBe("");
+  it("guards that present-but-empty query parameters reset to the default instead of failing", () => {
+    const parse = (search: string) =>
+      parseDashboardCollectionQuery(buildGetRequest(`/api/dashboard/goals${search}`), {
+        allowedFilters: ["status", "riskClass", "bucket", "kind"]
+      });
 
-    // DEFECT: `cursor`/`sort` are read with `searchParams.get(...)` without the
-    // `?? undefined` normalisation used by `limit`/`q`, so a client that clears a cursor
-    // or sort by sending `?cursor=`/`?sort=` (the standard "reset" request shape) gets a
-    // validation error instead of page one / the default sort.
-    // Suggested fix: map empty strings to undefined for optional query params.
-    expect(() => parseDashboardCollectionQuery(buildGetRequest("/api/dashboard/goals?cursor="), {})).toThrow();
-    expect(() => parseDashboardCollectionQuery(buildGetRequest("/api/dashboard/goals?sort="), {})).toThrow();
-    expect(parseDashboardCollectionQuery(buildGetRequest("/api/dashboard/goals"), {}).cursor).toBeNull();
-    expect(parseDashboardCollectionQuery(buildGetRequest("/api/dashboard/goals"), {}).sort).toBe("created_desc");
+    expect(parse("?q=").q).toBe("");
+
+    // Regression: `cursor`/`sort` were read with `searchParams.get(...)` without the blank
+    // normalisation applied to `limit`/`q`, so the standard reset request shape (`?cursor=`,
+    // i.e. "go back to page one") failed validation with a hard 400 instead of the default.
+    expect(parse("?cursor=").cursor).toBeNull();
+    expect(parse("?sort=").sort).toBe("created_desc");
+    expect(parse("?limit=").limit).toBe(DEFAULT_COLLECTION_PAGE_LIMIT);
+    expect(parse("?cursor=%20").cursor).toBeNull();
+    expect(parse("?status=&riskClass=&bucket=&kind=").status).toBeUndefined();
+    // Blank resets still compose with real values on the same request.
+    expect(parse("?cursor=&sort=updated_asc&limit=5").sort).toBe("updated_asc");
+    expect(parse("").cursor).toBeNull();
+    expect(parse("").sort).toBe("created_desc");
   });
 
   it("guards that unknown, duplicate and prototype-named query parameters are refused before they reach the schema", () => {
@@ -302,31 +336,37 @@ describe("adversarial parsing: shared UTC date formatter", () => {
     expect(formatDate(undefined as unknown as string)).toBe("");
   });
 
-  it("exposes a real defect: an impossible calendar date is silently rolled over into a different real date", () => {
-    const rolledOver = formatDate("2026-02-30");
-
-    // DEFECT: apps/web/lib/format-date.ts `toDate()` only checks `Number.isNaN`, and V8's
-    // legacy fallback parser rolls out-of-range day-of-month input over ("2026-02-30"
-    // becomes 2026-03-02), so a malformed timestamp from an external payload renders as a
+  it("guards that an impossible calendar date renders empty instead of rolling over", () => {
+    // Regression: `toDate()` only checked `Number.isNaN`, and the JS date parser rolls
+    // out-of-range components over into a neighbouring real date ("2026-02-30" becomes
+    // 2026-03-02), so a malformed timestamp from an external payload rendered as a
     // plausible-but-wrong date instead of the empty string the helper promises.
-    // Suggested fix: require an ISO match (e.g. /^\d{4}-\d{2}-\d{2}([T ]|$)/u plus a
-    // round-trip `Date.prototype.toISOString()` check) before formatting.
-    expect(rolledOver).not.toBe("");
-    expect(rolledOver).toMatch(/2026/u);
-    expect(rolledOver).not.toBe(formatDate("2026-02-28"));
-    expect(formatDate("2025-02-29")).not.toBe("");
+    expect(formatDate("2026-02-30")).toBe("");
+    expect(formatDate("2026-02-30T10:00:00Z")).toBe("");
+    expect(formatDate("2025-02-29")).toBe("");
+    expect(formatDate("2026-00-10")).toBe("");
+    expect(formatDate("2026-13-01")).toBe("");
+    expect(formatDate("2026-06-31")).toBe("");
+    expect(formatDate("2026-06-09T25:00:00Z")).toBe("");
+    // Real instants still format, including a genuine leap day, plain dates and offsets.
+    expect(formatDate("2026-02-28")).toBe("Feb 28, 2026");
+    expect(formatDate("2024-02-29")).toBe("Feb 29, 2024");
+    expect(formatDate("2026-06-09")).toBe("Jun 9, 2026");
+    expect(formatDate("2026-06-09T16:25:00+02:00")).toBe("Jun 9, 2026");
+    // Host-independent: a zone-less ISO datetime is read as UTC, never in the machine's zone.
+    expect(formatDateTime("2026-06-09T16:25")).toBe(formatDateTime("2026-06-09T16:25:00Z"));
   });
 
-  it("exposes a real defect: null is formatted as the unix epoch while undefined formats as empty", () => {
-    // DEFECT: `toDate(null)` reaches `new Date(null)` ( == epoch 0 ) because the nullish
-    // guard is `input instanceof Date ? input : new Date(input)`, so a nullable timestamp
-    // that arrives as `null` renders "Jan 1, 1970" in the UI instead of being hidden, while
-    // the equivalent `undefined` renders nothing.
-    // Suggested fix: return null from `toDate` for `null`/`undefined` before constructing
-    // the Date, and let callers show their own placeholder.
-    expect(formatDate(null as unknown as string)).toBe("Jan 1, 1970");
-    expect(formatDateTime(null as unknown as string)).toContain("1970");
+  it("guards that null-ish timestamps render empty instead of the unix epoch", () => {
+    // Regression: `toDate(null)` reached `new Date(null)` (epoch 0) because there was no
+    // nullish guard, so a nullable timestamp arriving as `null` rendered "Jan 1, 1970" while
+    // the equivalent `undefined` rendered nothing.
+    expect(formatDate(null as unknown as string)).toBe("");
+    expect(formatDateTime(null as unknown as string)).toBe("");
+    expect(formatTime(null as unknown as string)).toBe("");
     expect(formatDate(undefined as unknown as string)).toBe("");
+    // A real epoch instant is still a real date.
     expect(formatDate(0)).toBe("Jan 1, 1970");
+    expect(formatDate(new Date(0))).toBe("Jan 1, 1970");
   });
 });

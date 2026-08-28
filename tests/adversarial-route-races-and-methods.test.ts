@@ -242,23 +242,45 @@ describe("adversarial route handlers: races & double-submit", () => {
     expect(replayedJobs).toHaveLength(1);
   });
 
-  it("reflects an unbounded hostile job id in the replay 404 body", async () => {
-    // Sibling routes bound path ids (memory/[id] uses MemoryIdSchema max 200 and
-    // truncates oversized ids out with a 400). The replay route only checks
-    // `!id.trim()` and then interpolates the RAW path param into the error body,
-    // so an attacker-sized id is echoed back verbatim. This pins TRUE current
-    // behavior as a regression tripwire for a bounded-message fix.
-    // DEFECT (LOW, information hygiene): apps/web/app/api/jobs/[id]/replay/route.ts
-    //   fix: validate `id` with a bounded schema (e.g. z.string().trim().min(1).max(200))
-    //   before use, and/or do not interpolate the raw id into 404/409 messages.
+  it("refuses an oversized hostile job id with a clean 400 instead of reflecting it", async () => {
     const giantId = "x".repeat(5_000);
     const response = await replayJobRoute(authorizedJsonRequest(`http://localhost/api/jobs/${giantId}/replay`, {}), {
       params: Promise.resolve({ id: giantId })
     });
     const payload = (await response.json()) as { error?: string };
 
-    expect(response.status).toBe(404);
-    expect(payload.error).toBe(`Job ${giantId} was not found.`);
+    // Regression: the replay route guarded only `!id.trim()` and then interpolated the RAW path
+    // param into the 404 body, so an attacker-sized id was echoed back verbatim (response
+    // amplification / log poisoning). Path ids are now bounded like the sibling routes.
+    expect(response.status).toBe(400);
+    expect(payload.error ?? "").not.toContain(giantId);
+    expect((payload.error ?? "").length).toBeLessThan(200);
     expectNoStoreHeaders(response);
+
+    // A well-formed but unknown id keeps the documented 404 shape.
+    const missing = await replayJobRoute(authorizedJsonRequest("http://localhost/api/jobs/job-missing/replay", {}), {
+      params: Promise.resolve({ id: "job-missing" })
+    });
+
+    expect(missing.status).toBe(404);
+    await expect(missing.json()).resolves.toMatchObject({ error: "Job job-missing was not found." });
+
+    // Whitespace-only ids are refused, and the bound is exact rather than truncating: a
+    // 200-character id is still looked up (and 404s) instead of being rejected.
+    const blank = await replayJobRoute(authorizedJsonRequest("http://localhost/api/jobs/%20/replay", {}), {
+      params: Promise.resolve({ id: "   " })
+    });
+
+    expect(blank.status).toBe(400);
+    await expect(blank.json()).resolves.toMatchObject({ error: "Job id must be 1-200 characters." });
+
+    const boundary = "y".repeat(200);
+    const boundaryResponse = await replayJobRoute(
+      authorizedJsonRequest(`http://localhost/api/jobs/${boundary}/replay`, {}),
+      { params: Promise.resolve({ id: boundary }) }
+    );
+
+    expect(boundaryResponse.status).toBe(404);
+    await expect(boundaryResponse.json()).resolves.toMatchObject({ error: `Job ${boundary} was not found.` });
   });
 });
