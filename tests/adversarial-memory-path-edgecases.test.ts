@@ -130,7 +130,7 @@ describe("adversarial local notes path edges", () => {
     expect(await readdir(basePath)).toEqual(["inside.md"]);
   });
 
-  it("lists stray markdown files that its own read path refuses to open", async () => {
+  it("lists only notes that its own read path can open", async () => {
     const basePath = await createScratchDir("notes-stray");
     const created = await createLocalNote({ title: "Owned Note", content: "written by the adapter" }, basePath);
 
@@ -141,28 +141,19 @@ describe("adversarial local notes path edges", () => {
 
     const listed = await listLocalNotes(basePath);
 
-    // A directory whose name ends in .md is skipped instead of crashing the listing.
-    expect(listed.map((note) => note.id).sort()).toEqual(
-      ["Meeting Notes", "Roadmap_v2", "Ünicode", created.slug].sort()
-    );
+    // Regression: the lister now filters through the same slug contract that readLocalNote()
+    // enforces, so externally added files whose names contain a space, an underscore, or a
+    // non-ASCII character are no longer advertised (and handed to consumers) as openable ids.
+    // A directory whose name ends in .md is likewise skipped.
+    expect(listed.map((note) => note.id)).toEqual([created.slug]);
 
-    // DEFECT: the lister accepts any *.md file, but readLocalNote() validates the slug against
-    // /^[a-z0-9-]+$/. Every externally added file whose name contains a space, an underscore or
-    // a non-ASCII character is therefore advertised by listLocalNotes()/searchLocalNotes() (and
-    // handed to consumers as an openable id) while reading it back throws. Suggested fix: apply
-    // the same slug contract while listing (skip + log), or relax the read contract to whatever
-    // basename the lister was willing to surface.
     for (const note of listed) {
-      if (note.id === created.id) {
-        expect(await readLocalNote(note.id, basePath)).toMatchObject({ id: created.id });
-        continue;
-      }
-
-      expect(note.id).not.toMatch(/^[a-z0-9-]+$/);
-      await expect(readLocalNote(note.id, basePath)).rejects.toThrow();
+      expect(note.id).toMatch(/^[a-z0-9-]+$/);
+      await expect(readLocalNote(note.id, basePath)).resolves.toMatchObject({ id: note.id });
     }
 
-    expect(await searchLocalNotes("stray", basePath)).toHaveLength(3);
+    // Search borrows the lister, so it stays consistent and no longer surfaces unreadable ids.
+    expect(await searchLocalNotes("stray", basePath)).toHaveLength(0);
   });
 
   it("skips symlinked markdown entries in listings but still opens them by slug", async () => {
@@ -216,29 +207,24 @@ describe("adversarial local notes path edges", () => {
     expect(updated.content).toBe("# Release Plan\n\nShip on Wednesday\n");
   });
 
-  // DEFECT: parseLocalNote() finds the heading with `line.trim().startsWith("# ")` but strips the
-  // marker with `titleLine.replace(/^#\s+/, "")` against the *raw* line. U+FEFF is ECMAScript
-  // whitespace, so a BOM-prefixed file matches the finder yet defeats the anchored replace: the
-  // document id/slug stay correct but the title is reported as "# Release Plan". Worse,
-  // updateLocalNote() reuses `existing.title` and re-prefixes it, so the first edit permanently
-  // rewrites the file heading to "# # Release Plan" (it then plateaus, but the note can never
-  // self-heal and every consumer sees the marker in the title).
-  // Suggested fix: strip a leading BOM once after readFile (or normalise `titleLine.trim()`
-  // before the replace) so detection and stripping operate on the same string.
-  it("reports a BOM-prefixed heading as part of the title and bakes it into the file", async () => {
+  // Regression: parseLocalNote() now strips a leading BOM once after readFile and trims the
+  // heading line before the anchored `^#\s+` replace, so detection and stripping operate on the
+  // same string. The BOM no longer leaks into the title and updateLocalNote() no longer re-prefixes
+  // a stale "# " marker into a permanent "# # Release Plan" heading.
+  it("strips a leading BOM so the title and rewrites stay clean", async () => {
     const basePath = await createScratchDir("notes-bom");
 
     await writeFile(path.join(basePath, "bom-note.md"), "\uFEFF# Release Plan\n\nShip on Tuesday\n", "utf8");
 
     const note = await readLocalNote("bom-note", basePath);
 
-    expect(note).toMatchObject({ slug: "bom-note", title: "# Release Plan" });
-    expect(note.content.startsWith("\uFEFF")).toBe(true);
+    expect(note).toMatchObject({ slug: "bom-note", title: "Release Plan" });
+    expect(note.content.startsWith("\uFEFF")).toBe(false);
 
     const updated = await updateLocalNote({ slug: "bom-note", content: "Ship on Wednesday" }, basePath);
 
-    expect(updated.title).toBe("# Release Plan");
-    expect(updated.content.startsWith("# # Release Plan")).toBe(true);
+    expect(updated.title).toBe("Release Plan");
+    expect(updated.content).toBe("# Release Plan\n\nShip on Wednesday\n");
   });
 
   it("keeps concurrent note writes atomic and leaves no temp files behind", async () => {
@@ -340,7 +326,7 @@ describe("adversarial self-improvement memory paths", () => {
     await expect(repository.listEpisodes({ year: "2099" })).resolves.toEqual([]);
   });
 
-  it("silently overwrites a stored episode when sanitised slug collisions exhaust the single retry", async () => {
+  it("keeps every sanitised-slug collision instead of silently overwriting one", async () => {
     const sharedShape = { skill: "collision-probe", task: "Same task text", timestamp: "2026-04-04T09:00:00.000Z" };
     const first = buildEpisode({ ...sharedShape, id: "ep-alpha!" });
     const second = buildEpisode({ ...sharedShape, id: "ep-alpha?" });
@@ -349,13 +335,10 @@ describe("adversarial self-improvement memory paths", () => {
     await expect(repository.appendEpisode(first)).resolves.toMatchObject({ id: first.id });
     await expect(repository.appendEpisode(second)).resolves.toMatchObject({ id: second.id });
 
-    // DEFECT: appendEpisode() disambiguates only once. sanitizeSlug() maps "ep-alpha!",
-    // "ep-alpha?" and "ep-alpha." to the same "ep-alpha" suffix, so the third write reuses the
-    // second write's already-taken path and renames over it: the call resolves (no
-    // SelfImprovementConflictError), the second episode is destroyed, and it can no longer be
-    // found by id. Suggested fix: keep escalating the suffix (counter or stable hash of the
-    // full id) until the path is free, and raise a conflict if the chosen path already holds a
-    // different episode id.
+    // Regression: appendEpisode() escalates the disambiguation counter until a free slot is found
+    // (only trying once used to map "ep-alpha!", "ep-alpha?" and "ep-alpha." to the same
+    // "ep-alpha" suffix, so a third write renamed straight over the second episode with no error).
+    // All three distinct ids now coexist with no silent data loss.
     await expect(repository.appendEpisode(third)).resolves.toMatchObject({ id: third.id });
 
     const alphaIds = (await repository.listEpisodes({ year: "2026" }))
@@ -363,36 +346,37 @@ describe("adversarial self-improvement memory paths", () => {
       .map((episode) => episode.id)
       .sort();
 
-    expect(alphaIds).toEqual([first.id, third.id].sort());
-    await expect(repository.getEpisode(second.id, "2026")).resolves.toBeNull();
+    expect(alphaIds).toEqual([first.id, second.id, third.id].sort());
+    await expect(repository.getEpisode(second.id, "2026")).resolves.toMatchObject({ id: second.id });
   });
 
-  it("cannot read any episode when a stray non-directory entry sits under episodic/", async () => {
+  it("ignores a stray non-directory entry under episodic/ for unhinted reads", async () => {
     const strayPath = path.join(baseDir, "episodic", "README.txt");
 
     await writeFile(strayPath, "dropped in by an operator (or a macOS .DS_Store)\n", "utf8");
 
-    // DEFECT: listEpisodeFiles() assumes every entry under episodic/ is a year directory.
-    // readdir() on a plain file throws ENOTDIR, which escapes without even being wrapped in
-    // SelfImprovementStorageError, so one stray entry - opening the folder in Finder on macOS
-    // is enough to create one - breaks listEpisodes(), getEpisode() and learning export for
-    // every healthy episode. Suggested fix: restrict the year listing to /^\d{4}$/ entries
-    // (YearSchema already encodes that) or filter to directories and tolerate failures.
-    await expect(repository.listEpisodes()).rejects.toThrow(/ENOTDIR/);
-    await expect(repository.getEpisode(hostileEpisodes[0]!.id)).rejects.toThrow(/ENOTDIR/);
-    await expect(repository.exportLearningEpisodes!({ userId: "owner", workspaceId: null })).rejects.toThrow(/ENOTDIR/);
+    // Regression: listEpisodeFiles() now restricts the year listing to well-formed 4-digit year
+    // directories, so one stray file (opening the folder in Finder on macOS is enough to create
+    // one) can no longer throw a raw, untyped ENOTDIR and break listEpisodes(), getEpisode() and
+    // learning export for every healthy episode.
+    expect((await repository.listEpisodes()).length).toBeGreaterThan(0);
+    await expect(repository.getEpisode(hostileEpisodes[0]!.id)).resolves.toMatchObject({
+      id: hostileEpisodes[0]!.id
+    });
+
+    const exported = await repository.exportLearningEpisodes!({ userId: "owner", workspaceId: null });
+    expect(Array.isArray(exported)).toBe(true);
 
     await rm(strayPath, { force: true });
 
     expect((await repository.listEpisodes({ year: "2026" })).length).toBeGreaterThan(0);
-    // A caller that supplies the year hint bypasses the poisoned enumeration entirely,
-    // which is why the failure looks random to operators.
+    // A caller that supplies the year hint still resolves normally.
     await expect(repository.getEpisode(hostileEpisodes[0]!.id, "2026")).resolves.toMatchObject({
       id: hostileEpisodes[0]!.id
     });
   });
 
-  it("resolves unknown semantic pattern ids through the prototype chain", async () => {
+  it("resolves unknown semantic pattern ids to null instead of the prototype", async () => {
     const stored = await repository.upsertSemanticPattern({
       id: "pattern-real",
       name: "Real pattern",
@@ -413,13 +397,11 @@ describe("adversarial self-improvement memory paths", () => {
     expect(stored.id).toBe("pattern-real");
     await expect(repository.getSemanticPattern("pattern-missing")).resolves.toBeNull();
 
-    // DEFECT: getSemanticPattern() indexes the parsed `patterns` record with a caller-supplied
-    // key, so inherited Object.prototype members are returned as if they were SemanticPattern
-    // records. Callers reading .confidence/.updatedAt off the result get undefined instead of
-    // the documented null. Suggested fix: guard with Object.hasOwn(patterns, id) (or keep
-    // patterns in a null-prototype object / Map).
-    await expect(repository.getSemanticPattern("__proto__")).resolves.toBe(Object.prototype);
-    await expect(repository.getSemanticPattern("constructor")).resolves.toBe(Object);
+    // Regression: getSemanticPattern() guards the parsed `patterns` record with Object.hasOwn,
+    // so inherited Object.prototype members are no longer returned as if they were SemanticPattern
+    // records; unknown ids now return the documented null.
+    await expect(repository.getSemanticPattern("__proto__")).resolves.toBeNull();
+    await expect(repository.getSemanticPattern("constructor")).resolves.toBeNull();
 
     // Upserting a hostile id must not pollute shared prototypes either.
     await expect(
@@ -485,12 +467,10 @@ describe("adversarial memory core degenerate inputs", () => {
     expect(() => MemoryRecordSchema.parse({ ...wireRecord, version: 1.5 })).toThrow();
     expect(MemoryRecordSchema.parse({ ...wireRecord, supersedes: "m-other" }).supersedes).toBe("m-other");
 
-    // DEFECT: MemoryRecordSchema validates identity/content with z.string().min(1) and never
-    // trims first (unlike LocalNoteMutationSchema and self-improvement-memory's boundedString,
-    // which both trim), so whitespace-only ids, userIds and content are legal persisted state.
-    // Such a record can be written but never addressed by a route that trims its params, and
-    // " " vs "  " stay distinct ids for upsertById while being indistinguishable in the UI.
-    // Suggested fix: z.string().trim().min(1) for id/userId/category/content/source/sensitivity.
+    // Regression: MemoryRecordSchema now validates identity/content with z.string().trim().min(1)
+    // (matching LocalNoteMutationSchema and self-improvement-memory's boundedString), so
+    // whitespace-only ids, userIds, content and categories are rejected instead of becoming legal
+    // persisted state that a route which trims its params can never address.
     const whitespaceRecord = MemoryRecordSchema.safeParse({
       ...wireRecord,
       id: "   ",
@@ -499,7 +479,7 @@ describe("adversarial memory core degenerate inputs", () => {
       category: "\t"
     });
 
-    expect(whitespaceRecord.success).toBe(true);
+    expect(whitespaceRecord.success).toBe(false);
 
     // A self-superseding record is filtered out of retrieval rather than looping forever.
     const loop = MemoryRecordSchema.parse({ ...wireRecord, id: "m-loop", supersedes: "m-loop" });

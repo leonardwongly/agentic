@@ -142,7 +142,7 @@ describe("adversarial runtime store integrity", () => {
     expect(Array.prototype.slice).toBeTypeOf("function");
   });
 
-  it("writes to disk from a read-only call while another writer holds the store lock", async () => {
+  it("does not write to disk from a read-only call even while another writer holds the store lock", async () => {
     const tempDir = await createScratchDir("read-write");
     const storePath = path.join(tempDir, "runtime-store.json");
     const repository = createRepository({ storePath });
@@ -152,14 +152,12 @@ describe("adversarial runtime store integrity", () => {
 
     await expect(repository.listMemory(DEFAULT_OWNER_USER_ID)).resolves.toEqual([]);
 
-    // DEFECT: FileRepository.readStore() auto-initialises a missing store by calling
-    // writeStore() from inside the *read* path, which is never wrapped in
-    // withMutationLock(). A read-only API therefore (a) requires write access, and
-    // (b) can rename an empty store over a concurrent committed mutation (lost update).
-    // Repro above: the store file appears even though the lock was held by "someone else".
-    const persisted = JSON.parse(await readFile(storePath, "utf8")) as { memories: unknown[] };
-
-    expect(persisted.memories).toEqual([]);
+    // Regression: FileRepository.readStore() no longer auto-initialises a missing store by
+    // calling writeStore() from inside the read path. A missing store is now a lazy in-memory
+    // default persisted only by lock-guarded mutation paths, so a read-only API neither requires
+    // write access nor risks renaming an empty store over a concurrent committed mutation.
+    await expect(readFile(storePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(tempDir)).not.toContain("runtime-store.json");
 
     await rmdir(`${storePath}.lock`);
   });
@@ -240,7 +238,7 @@ describe("adversarial runtime store integrity", () => {
     await expect(stat(lockPath)).rejects.toThrow();
   });
 
-  it("silently replaces another user's memory when record ids collide", async () => {
+  it("keeps distinct users' memories apart when record ids collide", async () => {
     const tempDir = await createScratchDir("id-collision");
     const storePath = path.join(tempDir, "runtime-store.json");
     const repository = createRepository({ storePath });
@@ -249,14 +247,16 @@ describe("adversarial runtime store integrity", () => {
     await repository.saveMemory(buildMemory({ id: sharedId, userId: "user-alpha", content: "Alpha preference." }));
     await repository.saveMemory(buildMemory({ id: sharedId, userId: "user-beta", content: "Beta preference." }));
 
-    // DEFECT: FileRepository.saveMemory() de-duplicates with upsertById(), which keys on
-    // `id` alone. Memory ids are caller-supplied (capture paths derive deterministic ids),
-    // so user-beta's write destroys user-alpha's record with no error. Sibling collections
-    // in the same file already key by `${userId}:${id}` (integrationStoreKey,
-    // providerCredentialStoreKey). Fix: key memories by user + id, or reject a save whose
-    // id already belongs to a different userId.
-    await expect(repository.listMemory("user-alpha")).resolves.toEqual([]);
-    await expect(repository.listMemory("user-beta")).resolves.toHaveLength(1);
+    // Regression: saveMemory() de-duplicates with upsertByKey() on the compound `userId:id` key
+    // (matching integrationStoreKey / providerCredentialStoreKey), so a caller-supplied id shared
+    // across users no longer lets user-beta's write destroy user-alpha's record. Public ids are
+    // preserved; both records survive under their own owner.
+    await expect(repository.listMemory("user-alpha")).resolves.toEqual([
+      expect.objectContaining({ id: sharedId, userId: "user-alpha", content: "Alpha preference." })
+    ]);
+    await expect(repository.listMemory("user-beta")).resolves.toEqual([
+      expect.objectContaining({ id: sharedId, userId: "user-beta", content: "Beta preference." })
+    ]);
   });
 
   it("rejects malformed record boundaries before touching the store file", async () => {
@@ -280,12 +280,10 @@ describe("adversarial runtime store integrity", () => {
       ).rejects.toThrow();
     }
 
-    const persisted = JSON.parse(await readFile(storePath, "utf8")) as { memories: unknown[] };
-
-    // Rejected mutations must not leave a half-written record or orphaned temp files behind.
-    // (The store file itself exists only because of the read-path auto-init defect documented
-    // above; validation still runs before any write of the candidate record.)
-    expect(persisted.memories).toEqual([]);
+    // Rejected mutations must not create or half-write a store file, nor leave orphaned temp
+    // files behind: saveMemory() validates the candidate record before it reads (or auto-creates)
+    // the store.
+    await expect(readFile(storePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect((await readdir(tempDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
@@ -320,7 +318,7 @@ describe("adversarial runtime store integrity", () => {
     expect((await readdir(tempDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
-  it("bricks the aggregate goal read when one goal's workflow reference is orphaned", async () => {
+  it("degrades gracefully when one goal's workflow reference is orphaned", async () => {
     const tempDir = await createScratchDir("orphan");
     const storePath = path.join(tempDir, "runtime-store.json");
     const repository = createRepository({ storePath });
@@ -359,14 +357,16 @@ describe("adversarial runtime store integrity", () => {
       goal: { id: healthyBundle.goal.id }
     });
 
-    // DEFECT: ... but bundleFromStore() throws for a missing workflow, so a single orphaned
-    // goal reference takes down listGoals() (and therefore the dashboard) for the whole
-    // workspace with no operator repair path. Suggested fix: skip + surface a diagnostic
-    // (or auto-repair) for dangling workflow references the same way orphan tasks are
-    // filtered, instead of throwing inside the .map().
-    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).rejects.toThrow(
-      new RegExp(`Workflow ${orphanedBundle.workflow.id} is missing for goal ${orphanedBundle.goal.id}`)
-    );
+    // Regression: bundleFromStore() no longer throws for a missing workflow. A goal whose
+    // workflowId reference is orphaned is skipped (mirroring the tolerated orphan-task path) so a
+    // single dangling reference cannot take down listGoals() (and the dashboard) for the whole
+    // workspace. The healthy goal is still returned and the aggregate read succeeds.
+    await expect(repository.listGoals(DEFAULT_OWNER_USER_ID)).resolves.toEqual([
+      expect.objectContaining({ goal: expect.objectContaining({ id: healthyBundle.goal.id }) })
+    ]);
+
+    // The orphaned goal is individually skipped rather than bricking every other goal.
+    await expect(repository.getGoalBundle(orphanedBundle.goal.id)).resolves.toBeNull();
   });
 
   it("normalises hostile page limits and behaves sanely at the beyond-end cursor edge", () => {
