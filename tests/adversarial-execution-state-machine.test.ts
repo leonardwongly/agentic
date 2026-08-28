@@ -16,6 +16,10 @@ import {
   type JobQueueStore
 } from "@agentic/execution";
 import { JobMutationError, createRepository } from "@agentic/repository";
+import {
+  claimNextJobFromStoreWithOutcome,
+  claimNextJobWithClient
+} from "../packages/repository/src/repository-job-claim";
 
 // ---------------------------------------------------------------------------
 // Adversarial sweep #1: durable job state machine + queue settlement races.
@@ -223,23 +227,15 @@ describe("adversarial durable job state machine", () => {
     expect(persisted?.journal).toEqual(completed.journal);
   });
 
-  it("lets lease takeovers run past the attempt cap and wedges the whole queue", async () => {
-    // DEFECT: claimJobRecord() unconditionally does attemptCount + 1 and the claim
-    // predicate has no "attemptCount < maxAttempts" guard, while JobRecordSchema
-    // (attemptCount) and the execution journal (attempt) both cap the counter at 25.
-    // A job whose workers keep dying mid-lease (exactly the
-    // scenario lease takeover exists for) therefore reaches attempt 25 and every
-    // subsequent claim throws a schema error out of claimNextJob. Because the poison
-    // record sorts first, no other job in scope can be claimed any more and the job is
-    // never dead-lettered, so the queue is permanently wedged instead of failing over.
-    // Suggested fix: in claimNextJobFromStore/claimNextJobWithClient treat a job whose
-    // attemptCount >= maxAttempts as non-claimable and dead-letter it on claim (or cap
-    // takeover attempts) instead of incrementing past the schema bound.
+  it("dead-letters a job that spent its attempt budget instead of wedging the queue", async () => {
+    // Regression: claimJobRecord() bumped attemptCount unconditionally with no
+    // "attemptCount < maxAttempts" guard, while JobRecordSchema (attemptCount) and the
+    // execution journal (attempt) both cap the counter at 25 - so the 26th lease takeover
+    // threw a raw ZodError out of claimNextJob. The poison record sorted first, was never
+    // dead-lettered, and permanently blocked every other job in scope.
     const repository = await createJobRepository();
     const queue = createDurableJobQueue(repository, { runnerId: "repeater", leaseMs: 1_000 });
-    const poison = await repository.enqueueJob(
-      docsJob("attempt-cap-poison", { availableAt: T0, maxAttempts: 25 })
-    );
+    const poison = await repository.enqueueJob(docsJob("attempt-cap-poison", { availableAt: T0, maxAttempts: 25 }));
     const healthy = await repository.enqueueJob(docsJob("behind-the-poison", { availableAt: at(500) }));
 
     for (let attempt = 1; attempt <= 25; attempt += 1) {
@@ -248,35 +244,127 @@ describe("adversarial durable job state machine", () => {
       expect(claimed?.attemptCount).toBe(attempt);
     }
 
-    const wedgeError = await queue
-      .claimNext({ now: at(25_000) })
-      .then(() => null, (error: unknown) => error);
-    // A raw schema rejection escapes the claim path instead of a typed JobMutationError.
-    expect(wedgeError).toBeInstanceOf(Error);
-    expect((wedgeError as Error).name).not.toBe("JobMutationError");
-    expect((wedgeError as Error).message).toMatch(/too_big[\s\S]*"attempt(Count)?"/);
+    // The 26th takeover refuses the exhausted job, dead-letters it on the spot and hands out
+    // the healthy job that used to be stuck behind it - all inside the same tick.
+    const recovered = await queue.claimNext({ now: at(25_000) });
+    expect(recovered?.id).toBe(healthy.id);
+    expect(recovered?.attemptCount).toBe(1);
 
-    // The poison is still "running" (never dead-lettered) and it also blocks the
-    // healthy job queued behind it.
     const persistedPoison = await repository.getJob(poison.id, DEFAULT_OWNER_USER_ID);
-    expect(persistedPoison?.status).toBe("running");
+    expect(persistedPoison?.status).toBe("dead_letter");
     expect(persistedPoison?.attemptCount).toBe(25);
-    // The healthy job is claimable at this instant but never surfaces: the poison
-    // record sorts first and its claim throws, so the tick dies every time.
+    expect(persistedPoison?.leaseExpiresAt).toBeNull();
+    expect(persistedPoison?.deadLetteredAt).toBe(at(25_000));
+    expect(persistedPoison?.lastError).toMatch(/attempt budget/i);
+    expect(persistedPoison?.journal.entries.at(-1)?.state).toBe("dead_letter");
+
+    // No wedge: the queue keeps answering instead of throwing on every cycle.
     expect(Date.parse(healthy.availableAt)).toBeLessThan(Date.parse(at(26_000)));
-    await expect(queue.claimNext({ now: at(26_000) })).rejects.toThrow();
+    expect(await queue.claimNext({ now: at(25_500) })).toBeNull();
   });
 
-  it("aborts the tick instead of settling the job when the ownership re-read fails", async () => {
-    // DEFECT: the cancellation poller swallows transient readLatest failures, but
-    // settleIfOwnershipLost() awaits readLatest outside any try/catch. A single
-    // transient store read failure right after a *successful* handler makes
-    // processNextDurableJob reject without acknowledge/fail, so the job stays
-    // "running" until its lease expires and the worker loop sees an unexpected
-    // rejection. On the failure path the read error also masks the real handler
-    // error. Suggested fix: wrap the settle re-read in try/catch (treat an
-    // unreadable record as "ownership intact" like the poller does, or fall back to
-    // queue.fail with the original handler error).
+  it("skips a poison candidate that cannot be materialised instead of throwing on every tick", async () => {
+    // Regression: a corrupt field made claimJobRecord() throw its raw ZodError straight out
+    // of claimNextJob, so a poison record that sorted first broke every *other* job in scope.
+    // The claim loop now skips it, and only surfaces the violation as a typed JobMutationError
+    // on a tick that has nothing else to hand out.
+    const poison = {
+      ...docsJob("store-poison", { availableAt: T0 }),
+      lastError: "x".repeat(2_000)
+    } as unknown as JobRecord;
+    const healthy = docsJob("store-healthy", { availableAt: at(100) });
+
+    const outcome = claimNextJobFromStoreWithOutcome(
+      { jobs: [poison, healthy] },
+      { runnerId: "poison-reader", leaseMs: 1_000, now: at(1_000) }
+    );
+
+    expect(outcome.claimed?.id).toBe(healthy.id);
+    expect(outcome.claimed?.attemptCount).toBe(1);
+    expect(outcome.deadLettered).toHaveLength(0);
+
+    expect(() =>
+      claimNextJobFromStoreWithOutcome(
+        { jobs: [poison] },
+        { runnerId: "poison-reader", leaseMs: 1_000, now: at(1_000) }
+      )
+    ).toThrowError(JobMutationError);
+  });
+
+  it("applies the same attempt-budget guard and typed poison translation in the SQL claim path", async () => {
+    // Regression: the Postgres claim had no `attempt_count < max_attempts` predicate at all,
+    // so a lease takeover of an exhausted row reached the same ZodError wedge as the store path.
+    const exhausted = JobRecordSchema.parse({
+      ...docsJob("sql-poison", { availableAt: T0, maxAttempts: 2 }),
+      status: "running",
+      attemptCount: 2,
+      claimedBy: "runner-that-died",
+      claimedAt: T0,
+      leaseExpiresAt: at(500)
+    });
+    const healthy = docsJob("sql-healthy", { availableAt: at(600) });
+    const sql: string[] = [];
+    const saved: JobRecord[] = [];
+    let sweepServed = false;
+
+    const mapRow = (row: Record<string, unknown>): JobRecord => {
+      if (!row.job) {
+        throw new Error("jobs row is missing its record payload");
+      }
+      return row.job as JobRecord;
+    };
+    const save = async (_client: unknown, job: JobRecord) => {
+      saved.push(job);
+    };
+    const client = {
+      query: async (text: string) => {
+        sql.push(text);
+        if (text.includes("attempt_count >= max_attempts")) {
+          const rows = sweepServed ? [] : [{ job: exhausted }];
+          sweepServed = true;
+          return { rows };
+        }
+        if (text.includes("attempt_count < max_attempts")) {
+          return { rows: [{ job: healthy }] };
+        }
+        return { rows: [] };
+      }
+    } as unknown as Parameters<typeof claimNextJobWithClient>[0];
+
+    const claimed = await claimNextJobWithClient(
+      client,
+      { runnerId: "sql-worker", leaseMs: 1_000, now: at(1_000) },
+      mapRow,
+      save
+    );
+
+    expect(claimed?.id).toBe(healthy.id);
+    expect(claimed?.attemptCount).toBe(1);
+    expect(sql.join(" ")).toContain("attempt_count >= max_attempts");
+    expect(sql.join(" ")).toContain("attempt_count < max_attempts");
+    expect(saved.map((job) => [job.id, job.status])).toEqual([
+      [exhausted.id, "dead_letter"],
+      [healthy.id, "running"]
+    ]);
+
+    // A row that cannot be mapped at all is still a typed error, never a raw schema throw.
+    const brokenClient = {
+      query: async (text: string) => ({
+        rows: text.includes("attempt_count < max_attempts") ? [{ corrupt: true }] : []
+      })
+    } as unknown as Parameters<typeof claimNextJobWithClient>[0];
+
+    await expect(
+      claimNextJobWithClient(brokenClient, { runnerId: "sql-worker", leaseMs: 1_000, now: at(1_000) }, mapRow, save)
+    ).rejects.toBeInstanceOf(JobMutationError);
+  });
+
+  it("settles the job when the ownership re-read fails transiently", async () => {
+    // Regression: settleIfOwnershipLost() awaited readLatest outside any try/catch, so a
+    // single transient store read failure right after a *successful* handler rejected
+    // processNextDurableJob without acknowledge/fail, leaving the job "running" until its
+    // lease expired. An unreadable record is not evidence of lost ownership - the
+    // cancellation poller already treats read failures that way.
     const runnerId = "settle-read-failure";
     const claimed = claimedRunningJob(runnerId);
     const completeJob = vi.fn<() => Promise<JobRecord>>(async () => claimed);
@@ -307,16 +395,24 @@ describe("adversarial durable job state machine", () => {
       }
     });
 
-    await expect(result).rejects.toThrow("transient store read failure");
+    const outcome = await result;
+
+    expect(outcome.claimedJob?.id).toBe(claimed.id);
     expect(reads).toBeGreaterThan(0);
-    expect(completeJob).not.toHaveBeenCalled();
+    expect(completeJob).toHaveBeenCalledTimes(1);
     expect(retryJob).not.toHaveBeenCalled();
   });
 
-  it("masks the real handler error when the ownership re-read also fails", async () => {
+  it("preserves the real handler error when the ownership re-read also fails", async () => {
+    // Regression: the read failure used to replace the handler rejection, so the tick threw
+    // "store unavailable", never reached queue.fail, and the attempt lost its real cause.
     const runnerId = "masked-handler-error";
     const claimed = claimedRunningJob(runnerId, { maxAttempts: 3 });
-    const retryJob = vi.fn<() => Promise<JobRecord>>(async () => claimed);
+    const retryErrors: string[] = [];
+    const retryJob = vi.fn<JobQueueStore["retryJob"]>(async (params) => {
+      retryErrors.push(params.error);
+      return claimed;
+    });
     const queue = createDurableJobQueue(
       {
         enqueueJob: async (job) => job,
@@ -328,24 +424,24 @@ describe("adversarial durable job state machine", () => {
       { runnerId }
     );
 
-    await expect(
-      processNextDurableJob({
-        queue,
-        cancellation: {
-          readLatest: async () => {
-            throw new Error("store unavailable");
-          },
-          pollIntervalMs: 5
+    const outcome = await processNextDurableJob({
+      queue,
+      cancellation: {
+        readLatest: async () => {
+          throw new Error("store unavailable");
         },
-        handlers: {
-          docs_render: async () => {
-            throw new Error("provider rejected the send");
-          }
+        pollIntervalMs: 5
+      },
+      handlers: {
+        docs_render: async () => {
+          throw new Error("provider rejected the send");
         }
-      })
-    ).rejects.toThrow("store unavailable");
+      }
+    });
 
-    expect(retryJob).not.toHaveBeenCalled();
+    expect(outcome.claimedJob?.id).toBe(claimed.id);
+    expect(retryErrors).toHaveLength(1);
+    expect(retryErrors[0]).toContain("provider rejected the send");
   });
 
   it("normalizes poison throws (undefined, string, non-Error object, blank, oversized) into bounded errors", async () => {
@@ -526,5 +622,30 @@ describe("adversarial durable job state machine", () => {
     expect(exhausted.calls.retried).toHaveLength(0);
     expect(exhausted.calls.deadLettered).toHaveLength(1);
     expect(second.finalJob?.status).toBe("dead_letter");
+  });
+
+  it("keys public share views by shareId, not the shared goalId, so the enqueue-time concurrency key cannot diverge from contracts", () => {
+    // Regression: deriveJobSideEffectTarget() here kept the generic `"goalId" in payload`
+    // branch ABOVE the public_share_view branch. Because PublicShareViewJobPayload carries
+    // BOTH shareId and goalId, every view of one goal collapsed onto `goal:<id>`, serialising
+    // unrelated share links behind a single concurrency key and making `share:<id>` dead code.
+    // @agentic/contracts already resolved type-specific targets first; this locks the two
+    // independent copies to the same ordering.
+    const sharePayload = (shareId: string): JobRecord["payload"] => ({
+      type: "public_share_view",
+      shareId,
+      goalId: "goal-shared",
+      tokenFingerprint: "a1b2c3d4e5f6",
+      viewedAt: T0,
+      metadata: {}
+    });
+
+    const alpha = createJobRecord({ userId: "user-1", kind: "public_share_view", payload: sharePayload("share-alpha") });
+    const beta = createJobRecord({ userId: "user-1", kind: "public_share_view", payload: sharePayload("share-beta") });
+
+    expect(alpha.concurrencyKey).toBe("user-1:share:share-alpha");
+    expect(beta.concurrencyKey).toBe("user-1:share:share-beta");
+    expect(alpha.concurrencyKey).not.toBe(beta.concurrencyKey);
+    expect(alpha.journal.sideEffectTarget).toBe("share:share-alpha");
   });
 });

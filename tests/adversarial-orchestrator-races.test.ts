@@ -14,11 +14,13 @@ import {
   nowIso,
   type ActionIntent,
   type GoalBundle,
+  type JobRecord,
   type Task,
   type TaskState
 } from "@agentic/contracts";
 import type { ActionExecutionAdapters, ActionExecutionConnectorReadiness } from "@agentic/integrations";
 import {
+  ApprovalResponseConflictError,
   executeApprovedTask,
   executeApprovedTasks,
   reconcileExecutionResults,
@@ -210,35 +212,36 @@ async function createApprovalRepository() {
 }
 
 describe("adversarial approval/orchestrator hand-off", () => {
-  it("makes a pending approval permanently unanswerable once its task has advanced", async () => {
-    // DEFECT: respondToApproval() hard-transitions the approval's task to "queued"
-    // (approve) or "blocked" (reject) with transitionTaskState(), which throws a raw
-    // Error("Illegal task transition ..."). Nothing in the schema/store keeps the
-    // invariant "a pending approval's task must still be answerable" - saveGoalBundle()
-    // accepts a bundle whose task already advanced - so from that moment on every
-    // reviewer response throws, the approval stays pending forever and
-    // recomputeWorkflowStatuses() keeps the goal pinned in "waiting": the only way out
-    // is deleting the goal. It is also asymmetric: from "failed"/"retrying" a reviewer can
-    // still reject but can never approve.
-    // Suggested fix: guard with canTransitionTaskState() and either leave the task
-    // untouched (logging why) or throw a typed ApprovalMutationError so the route layer
-    // can surface a reconcilable 409 instead of an unhandled 500.
+  it("refuses a stale approval with a typed conflict instead of stranding it", async () => {
+    // Regression: respondToApproval() hard-transitioned the gated task to "queued"/"blocked"
+    // with transitionTaskState(), so a reviewer answering an approval whose task had already
+    // advanced threw a raw Error("Illegal task transition ...") - the route 500ed, nothing was
+    // persisted, the approval stayed pending forever and the goal was pinned in "waiting".
     const actor = createHumanActorContext(DEFAULT_OWNER_USER_ID);
     const pending = buildPendingBundle();
 
     for (const state of ["running", "retrying", "failed", "completed"] as const) {
+      const untouched = withTaskState(pending, state);
+
       expect(() =>
         respondToApproval({
-          bundle: withTaskState(pending, state),
+          bundle: untouched,
           approvalId: "approval-pending",
           decision: "approved",
           actor
         })
-      ).toThrow(/Illegal task transition from "[a-z_]+" to "queued"/);
+      ).toThrow(ApprovalResponseConflictError);
+      expect(() =>
+        respondToApproval({ bundle: untouched, approvalId: "approval-pending", decision: "approved", actor })
+      ).toThrow(new RegExp(`Cannot approve approval "approval-pending": task "${TASK_ID}" is "${state}"`));
+
+      // The guard fires before anything is mutated, so the caller's bundle stays consistent.
+      expect(untouched.approvals[0]?.decision).toBe("pending");
+      expect(untouched.tasks[0]?.state).toBe(state);
     }
 
-    // Rejection survives two of those states, proving the asymmetry is the transition
-    // table rather than a general "no answers after execution" rule.
+    // Rejection stays available wherever the transition table allows it - the guard follows
+    // the table symmetrically instead of blanket-banning answers after execution started.
     const rejectedFromRunning = respondToApproval({
       bundle: withTaskState(pending, "running"),
       approvalId: "approval-pending",
@@ -253,10 +256,10 @@ describe("adversarial approval/orchestrator hand-off", () => {
         decision: "rejected",
         actor
       })
-    ).toThrow(/Illegal task transition from "completed" to "blocked"/);
+    ).toThrow(ApprovalResponseConflictError);
 
-    // Same escape through the durable path: the store accepts the advanced task, then
-    // the answer throws an untyped error and persists nothing.
+    // Same path through the durable mutation: the repository translates the conflict into its
+    // own typed error (routes answer 409) and persists nothing.
     const repository = await createApprovalRepository();
     const bundle = buildPendingBundle();
     await repository.saveGoalBundle(bundle);
@@ -267,9 +270,9 @@ describe("adversarial approval/orchestrator hand-off", () => {
       .respondToApproval({ approvalId: approval.id, decision: "approved", actor })
       .then(() => null, (error: unknown) => error);
 
-    expect(failure).toBeInstanceOf(Error);
-    expect(failure).not.toBeInstanceOf(ApprovalMutationError);
-    expect((failure as Error).message).toMatch(/Illegal task transition/);
+    expect(failure).toBeInstanceOf(ApprovalMutationError);
+    expect((failure as ApprovalMutationError).code).toBe("conflict");
+    expect((failure as Error).message).toMatch(/Cannot approve approval "approval-pending"/);
 
     const stranded = await repository.getGoalBundleForUser(GOAL_ID, DEFAULT_OWNER_USER_ID);
     expect(stranded?.approvals.find((candidate) => candidate.id === approval.id)?.decision).toBe("pending");
@@ -277,16 +280,11 @@ describe("adversarial approval/orchestrator hand-off", () => {
     expect(stranded?.workflow.status).toBe("waiting");
   });
 
-  it("silently drops every approved action after the first one on a task", async () => {
-    // DEFECT: findApprovedApproval()/resolveActionIntent() resolve the action by
-    // taskId and take the first approved approval in array order, while the worker
-    // dispatches one follow-up job per approval with approvedTaskIds: [approval.taskId].
-    // The approval that actually triggered the job is therefore discarded: the second
-    // approved action can never be executed (its job re-runs the first action instead),
-    // yet it is marked answered. Nothing in GoalBundleSchema forbids two approvals on
-    // one task, so the data model and the dispatcher disagree.
-    // Suggested fix: thread the triggering approvalId through the follow-up payload and
-    // select the intent by approval id (or reject/merge multi-approval tasks at plan time).
+  it("executes every approved action of a task once the approval is threaded through", async () => {
+    // Regression: findApprovedApproval()/resolveActionIntent() resolved by taskId and took the
+    // first approved approval in array order, so a second approved action on the same task
+    // could never execute - its follow-up job re-ran the first intent forever while marking
+    // itself answered. The follow-up payload now carries the approvalId that selected it.
     const firstApproved = buildApproval({
       id: "approval-note",
       taskId: TASK_ID,
@@ -307,42 +305,59 @@ describe("adversarial approval/orchestrator hand-off", () => {
       calendar: { createEvent, updateEvent: vi.fn(), listUpcomingEvents: vi.fn() }
     };
 
-    // Two follow-up jobs -> two dispatches of the same task, one per approved approval.
+    // Two follow-up jobs -> two dispatches of the same task, each naming its own approval.
     const dispatches = await executeApprovedTasks({
       bundle,
-      approvedTaskIds: [TASK_ID, TASK_ID],
+      approvedTaskIds: [TASK_ID],
+      approvalId: "approval-note",
+      adapters,
+      connectorReadiness: approvalGradeConnectors
+    });
+    const secondDispatch = await executeApprovedTasks({
+      bundle,
+      approvedTaskIds: [TASK_ID],
+      approvalId: "approval-calendar",
       adapters,
       connectorReadiness: approvalGradeConnectors
     });
 
-    expect(dispatches.results).toHaveLength(2);
-    expect(dispatches.results.every((result) => result.action === "create_note")).toBe(true);
-    expect(dispatches.results.every((result) => result.success)).toBe(true);
-    expect(createLocalNote).toHaveBeenCalledTimes(2);
-    expect(createEvent).not.toHaveBeenCalled();
+    expect(dispatches.results.map((result) => result.action)).toEqual(["create_note"]);
+    expect(secondDispatch.results.map((result) => result.action)).toEqual(["schedule_event"]);
+    expect(secondDispatch.results.every((result) => result.success)).toBe(true);
+    expect(createLocalNote).toHaveBeenCalledTimes(1);
+    expect(createEvent).toHaveBeenCalledTimes(1);
 
-    // The loss is positional, not semantic: reversing the array swaps the victim.
+    // The loss used to be positional, not semantic: array order no longer decides the victim.
     const reversed = buildBundle({ approvals: [secondApproved, firstApproved] });
-    const single = await executeApprovedTask({
+    const byId = await executeApprovedTask({
+      task: reversed.tasks[0]!,
+      bundle: reversed,
+      approvalId: "approval-note",
+      adapters,
+      connectorReadiness: approvalGradeConnectors
+    });
+
+    expect(byId.result.action).toBe("create_note");
+    expect(createLocalNote).toHaveBeenCalledTimes(2);
+    expect(createEvent).toHaveBeenCalledTimes(1);
+
+    // Backwards compatibility: callers that cannot name an approval keep the historical
+    // first-match resolution instead of failing.
+    const legacy = await executeApprovedTask({
       task: reversed.tasks[0]!,
       bundle: reversed,
       adapters,
       connectorReadiness: approvalGradeConnectors
     });
-
-    expect(single.result.action).toBe("schedule_event");
-    expect(createLocalNote).toHaveBeenCalledTimes(2);
-    expect(createEvent).toHaveBeenCalledTimes(1);
+    expect(legacy.result.action).toBe("schedule_event");
+    expect(createEvent).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the first result envelope per task and discards the authoritative one", async () => {
-    // DEFECT: reconcileExecutionResults() picks results.find(taskId) - first match wins -
-    // while executeApprovedTasks() happily emits one result per requested id. So a
-    // duplicate delivery whose first attempt failed and whose retry actually created the
-    // external artifact leaves the durable task "failed" (the success envelope is dropped
-    // entirely), and in the reverse order the discarded failure still pollutes the audit
-    // log. Suggested fix: reduce to one result per taskId (prefer the latest timestamp /
-    // the successful one), and only derive hasFailures from applied results.
+  it("keeps the authoritative result envelope per task when deliveries duplicate", async () => {
+    // Regression: reconcileExecutionResults() took results.find(taskId) - first match wins -
+    // while executeApprovedTasks() emits one result per requested id. A duplicate delivery
+    // whose first attempt failed and whose retry actually created the external artifact left
+    // the durable task "failed" and pinned the workflow in "execution-recovery".
     const bundle = buildBundle();
     const createLocalNote = vi
       .fn()
@@ -357,14 +372,12 @@ describe("adversarial approval/orchestrator hand-off", () => {
     expect(results.map((result) => result.kind)).toEqual(["execution.failed", "execution.completed"]);
 
     const reconciled = reconcileExecutionResults({ bundle, results, logs });
-    expect(reconciled.tasks[0]?.state).toBe("failed");
-    expect(reconciled.workflow.checkpoint).toBe("execution-recovery");
+    expect(reconciled.tasks[0]?.state).toBe("completed");
+    expect(reconciled.workflow.checkpoint).toBe("done");
     expect(reconciled.actionLogs.filter((log) => log.kind === "task.state_changed")).toHaveLength(1);
 
-    // Reverse arrival order (out-of-order callbacks): the task does land on completed and
-    // the stale failure envelope is dropped from the state machine, but its audit log is
-    // still appended - so the history shows a failure that reconciliation ignored while
-    // the checkpoint quietly returns to "done".
+    // Reverse arrival order (out-of-order callbacks) reconciles to the same authoritative
+    // state: one effective result per task, whichever order the envelopes arrived in.
     const reversedBundle = buildBundle();
     const reversed = reconcileExecutionResults({
       bundle: reversedBundle,
@@ -374,14 +387,15 @@ describe("adversarial approval/orchestrator hand-off", () => {
 
     expect(reversed.tasks[0]?.state).toBe("completed");
     expect(reversed.workflow.checkpoint).toBe("done");
+    // The failed attempt really happened, so its audit entry stays in the history; only the
+    // effective result drives task state and recovery checkpoint.
     expect(reversed.actionLogs.filter((log) => log.kind === "execution.failed")).toHaveLength(1);
   });
 
-  it("flips the recovery checkpoint for a failure envelope that matches no task", () => {
-    // A result for a foreign/unknown task can never move a task, but it still counts
-    // towards hasFailures, so one poison envelope rewrites the workflow checkpoint of an
-    // untouched bundle. Reconciliation must attribute results before deriving recovery
-    // state.
+  it("ignores a failure envelope that matches no task in the bundle", () => {
+    // Regression: a result for a foreign/unknown task could never move a task, but it still
+    // counted towards hasFailures, so one poison envelope rewrote the workflow checkpoint of
+    // an untouched bundle. Reconciliation attributes results before deriving recovery state.
     const bundle = buildBundle();
 
     const reconciled = reconcileExecutionResults({
@@ -391,7 +405,16 @@ describe("adversarial approval/orchestrator hand-off", () => {
 
     expect(reconciled.tasks).toEqual(bundle.tasks);
     expect(reconciled.actionLogs).toHaveLength(0);
-    expect(reconciled.workflow.checkpoint).toBe("execution-recovery");
+    expect(reconciled.workflow.checkpoint).not.toBe("execution-recovery");
+    expect(reconciled.workflow.checkpoint).toBe("resumed-after-approval");
+
+    // A failure that does belong to a task still drives the recovery checkpoint.
+    const attributed = reconcileExecutionResults({
+      bundle: buildBundle(),
+      results: [executionResult({ taskId: TASK_ID, kind: "execution.failed" })]
+    });
+    expect(attributed.tasks[0]?.state).toBe("failed");
+    expect(attributed.workflow.checkpoint).toBe("execution-recovery");
 
     // Boundary: an empty batch with no logs is a true no-op (identity, not a rewrite).
     expect(reconcileExecutionResults({ bundle, results: [], logs: [] })).toBe(bundle);
@@ -463,21 +486,17 @@ describe("adversarial approval/orchestrator hand-off", () => {
     expect(reconciled.workflow.checkpoint).toBe("execution-recovery");
   });
 
-  it("loses an approved action forever when the fallback enqueue fails", async () => {
-    // DEFECT: when a port only implements respondToApproval + enqueueJob, the helper
-    // commits the decision first and enqueues the follow-up job second. If that second
-    // write fails, the decision is durable, no job exists, and the reviewer cannot retry
-    // (already_handled) - so the approved action never executes and, unlike a
-    // dead-lettered job, there is nothing left to replay: the task stays "queued"
-    // forever. Suggested fix: keep the two-step fallback but recover by writing the job
-    // first as a "pending-decision" record, or re-drive the follow-up from the persisted
-    // approval instead of requiring a second mutation.
+  it("re-drives the follow-up job when the fallback enqueue is lost", async () => {
+    // Regression: with a port that only implements respondToApproval + enqueueJob, the helper
+    // committed the decision first and enqueued second. If that second write failed the
+    // decision was durable, no job existed, and every later response was rejected as
+    // already_handled - the approved action was lost with nothing left to replay.
     const bundle = buildBundle({
       tasks: [buildTask({ state: "waiting" })],
       approvals: [buildApproval({ id: "approval-fallback", taskId: TASK_ID, decision: "pending" })]
     });
     let stored = bundle;
-    const jobs: Array<{ id: string; idempotencyKey: string | null }> = [];
+    const jobs: JobRecord[] = [];
     let breakEnqueue = true;
     const actor = createHumanActorContext(DEFAULT_OWNER_USER_ID);
 
@@ -502,8 +521,21 @@ describe("adversarial approval/orchestrator hand-off", () => {
           throw new Error("store write failed");
         }
 
-        jobs.push({ id: job.id, idempotencyKey: job.idempotencyKey ?? null });
+        // Mirrors the real store: enqueueJob dedupes on the deterministic idempotency key.
+        const existing = jobs.find((candidate) => candidate.idempotencyKey === job.idempotencyKey);
+
+        if (existing) {
+          return existing;
+        }
+
+        jobs.push(job);
         return job;
+      },
+      async listApprovals() {
+        return stored.approvals;
+      },
+      async getGoalBundleForUser(goalId) {
+        return stored.goal.id === goalId ? stored : null;
       }
     };
 
@@ -516,14 +548,33 @@ describe("adversarial approval/orchestrator hand-off", () => {
     };
 
     await expect(respondToApprovalAndEnqueueFollowUpJob(params)).rejects.toThrow("store write failed");
-    // The decision survived the failed enqueue, and the follow-up job does not exist.
+    // The decision survived the failed enqueue, and the follow-up job does not exist yet.
     expect(stored.approvals[0]?.decision).toBe("approved");
     expect(stored.tasks[0]?.state).toBe("queued");
     expect(jobs).toHaveLength(0);
 
-    // Every later attempt is now rejected as a duplicate answer, so the action is lost.
-    await expect(respondToApprovalAndEnqueueFollowUpJob(params)).rejects.toThrowError(ApprovalMutationError);
-    expect(jobs).toHaveLength(0);
+    // Once the store is writable again, the next response re-drives the lost job from the
+    // durable decision instead of being rejected as a duplicate answer.
+    breakEnqueue = false;
+    const redriven = await respondToApprovalAndEnqueueFollowUpJob(params);
+
+    expect(redriven.job.kind).toBe("approval_follow_up");
+    expect(redriven.job.maxAttempts).toBe(1);
+    expect(redriven.job.payload).toMatchObject({
+      type: "approval_follow_up",
+      approvalId: "approval-fallback",
+      goalId: GOAL_ID,
+      taskId: TASK_ID,
+      decision: "approved"
+    });
+    expect(redriven.job.idempotencyKey).toMatch(/^approval-follow-up:approval-fallback:/);
+    expect(redriven.bundle.approvals[0]?.decision).toBe("approved");
+    expect(jobs).toHaveLength(1);
+
+    // A further replay of the same response stays harmless: exactly one job exists.
+    const replayed = await respondToApprovalAndEnqueueFollowUpJob(params);
+    expect(replayed.job.id).toBe(jobs[0]!.id);
+    expect(jobs).toHaveLength(1);
   });
 
   it("commits decision plus exactly one follow-up job through the atomic port", async () => {

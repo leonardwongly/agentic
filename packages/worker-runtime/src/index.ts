@@ -1088,6 +1088,10 @@ export async function executeApprovalFollowUpJob(params: {
     const { results, logs } = await executeApprovedTasks({
       bundle,
       approvedTaskIds: [approval.taskId],
+      // The follow-up job was created for exactly this approval, so the typed intent must be
+      // resolved from it: a task can hold more than one approved approval and a task-id only
+      // lookup would keep replaying the first approval's action for every later one.
+      approvalId: approval.id,
       adapters: {
         gmail: googleAdapters?.gmail,
         calendar: googleAdapters?.calendar,

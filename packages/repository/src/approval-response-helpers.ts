@@ -12,7 +12,7 @@ import {
   type GoalBundle,
   type JobRecord
 } from "@agentic/contracts";
-import { respondToApproval as applyApprovalResponse } from "@agentic/orchestrator";
+import { ApprovalResponseConflictError, respondToApproval as applyApprovalResponse } from "@agentic/orchestrator";
 import { ApprovalMutationError } from "./repository-types";
 
 function subjectUserIdForActor(actor: ActorContext): string {
@@ -99,14 +99,27 @@ export function buildApprovalResponseMutation(params: {
     throw new ApprovalMutationError("not_found", `Approval ${params.approvalId} was not found.`);
   }
 
-  const updatedBundle = applyApprovalResponse({
-    bundle: params.bundle,
-    approvalId: params.approvalId,
-    decision: params.decision,
-    actor: params.actor,
-    scope: params.scope,
-    rationale: params.rationale
-  });
+  // A reviewer answering an approval whose task has already advanced is a reconcilable
+  // conflict, not a server fault: translate the orchestrator's typed error into the
+  // repository error family so routes answer 409 and nothing is half-persisted.
+  let updatedBundle: GoalBundle;
+
+  try {
+    updatedBundle = applyApprovalResponse({
+      bundle: params.bundle,
+      approvalId: params.approvalId,
+      decision: params.decision,
+      actor: params.actor,
+      scope: params.scope,
+      rationale: params.rationale
+    });
+  } catch (error) {
+    if (error instanceof ApprovalResponseConflictError) {
+      throw new ApprovalMutationError("conflict", error.message);
+    }
+
+    throw error;
+  }
 
   return {
     updatedBundle,

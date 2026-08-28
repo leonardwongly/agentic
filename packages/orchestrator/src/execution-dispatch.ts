@@ -42,12 +42,32 @@ export type ExecutionResult = {
   dryRunSummary?: string;
 };
 
-function findApprovedApproval(task: Task, bundle: GoalBundle): ApprovalRequest | null {
-  return bundle.approvals.find((candidate) => candidate.taskId === task.id && candidate.decision === "approved") ?? null;
+/**
+ * Resolve the approved approval that authorises this dispatch.
+ *
+ * When the caller knows which approval triggered the follow-up job it must be honoured:
+ * a task can carry more than one approved approval (nothing in GoalBundleSchema forbids it)
+ * and a taskId-first match would permanently execute the wrong intent. Without an id the
+ * historical first-match-by-task behaviour is kept so existing callers stay valid.
+ */
+function findApprovedApproval(task: Task, bundle: GoalBundle, approvalId?: string | null): ApprovalRequest | null {
+  if (approvalId) {
+    const selected = bundle.approvals.find(
+      (candidate) => candidate.id === approvalId && candidate.taskId === task.id && candidate.decision === "approved"
+    );
+
+    if (selected) {
+      return selected;
+    }
+  }
+
+  return (
+    bundle.approvals.find((candidate) => candidate.taskId === task.id && candidate.decision === "approved") ?? null
+  );
 }
 
-function resolveActionIntent(task: Task, bundle: GoalBundle): ActionIntent {
-  const approvedApproval = findApprovedApproval(task, bundle);
+function resolveActionIntent(task: Task, bundle: GoalBundle, approvalId?: string | null): ActionIntent {
+  const approvedApproval = findApprovedApproval(task, bundle, approvalId);
   const approval = approvedApproval ?? bundle.approvals.find((candidate) => candidate.taskId === task.id);
 
   if (approvedApproval?.actionIntent) {
@@ -201,6 +221,8 @@ function buildResult(params: {
 export async function executeApprovedTask(params: {
   task: Task;
   bundle: GoalBundle;
+  /** Approval that authorised this dispatch; wins over the first approved approval of the task. */
+  approvalId?: string | null;
   adapters: ActionExecutionAdapters;
   connectorReadiness?: ActionExecutionConnectorReadiness;
   governance?: WorkspaceGovernance | null;
@@ -208,8 +230,8 @@ export async function executeApprovedTask(params: {
   signal?: AbortSignal;
 }): Promise<{ result: ExecutionResult; log: ActionLog }> {
   const { task, bundle, adapters, connectorReadiness, governance, sideEffectLedger, signal } = params;
-  const actionIntent = resolveActionIntent(task, bundle);
-  const approvedApproval = findApprovedApproval(task, bundle);
+  const actionIntent = resolveActionIntent(task, bundle, params.approvalId);
+  const approvedApproval = findApprovedApproval(task, bundle, params.approvalId);
   const governanceApprovalReason = getGovernanceApprovalReason({
     capabilities: task.toolCapabilities,
     riskClass: task.riskClass,
@@ -301,13 +323,20 @@ export async function executeApprovedTask(params: {
 export async function executeApprovedTasks(params: {
   bundle: GoalBundle;
   approvedTaskIds: string[];
+  /**
+   * Approval that authorised the batch. Production dispatch is one job per approval, so a
+   * single id is enough to disambiguate tasks that hold several approved approvals; batches
+   * that mix approvals keep the historical first-match resolution for the other ids.
+   */
+  approvalId?: string | null;
   adapters: ActionExecutionAdapters;
   connectorReadiness?: ActionExecutionConnectorReadiness;
   governance?: WorkspaceGovernance | null;
   sideEffectLedger?: ActionExecutionSideEffectLedger;
   signal?: AbortSignal;
 }): Promise<{ results: ExecutionResult[]; logs: ActionLog[] }> {
-  const { bundle, approvedTaskIds, adapters, connectorReadiness, governance, sideEffectLedger, signal } = params;
+  const { bundle, approvedTaskIds, approvalId, adapters, connectorReadiness, governance, sideEffectLedger, signal } =
+    params;
   const results: ExecutionResult[] = [];
   const logs: ActionLog[] = [];
 
@@ -321,6 +350,7 @@ export async function executeApprovedTasks(params: {
     const { result, log } = await executeApprovedTask({
       task,
       bundle,
+      approvalId,
       adapters,
       connectorReadiness,
       governance,
@@ -346,6 +376,58 @@ function resolveTaskTerminalState(kind: ExecutionResult["kind"]): TaskState {
   }
 }
 
+/**
+ * A completed envelope reports a real external effect, so it outranks a skipped or failed
+ * envelope for the same task no matter how the callbacks were ordered.
+ */
+const resultAuthority: Record<ExecutionResult["kind"], number> = {
+  "execution.failed": 0,
+  "execution.skipped": 1,
+  "execution.completed": 2
+};
+
+function isMoreAuthoritativeResult(candidate: ExecutionResult, current: ExecutionResult): boolean {
+  if (resultAuthority[candidate.kind] !== resultAuthority[current.kind]) {
+    return resultAuthority[candidate.kind] > resultAuthority[current.kind];
+  }
+
+  const candidateAt = Date.parse(candidate.timestamp);
+  const currentAt = Date.parse(current.timestamp);
+
+  if (Number.isFinite(candidateAt) && Number.isFinite(currentAt) && candidateAt !== currentAt) {
+    return candidateAt > currentAt;
+  }
+
+  // Same rank and indistinguishable timestamps: the later delivery wins.
+  return true;
+}
+
+/**
+ * Collapse duplicate/out-of-order envelopes to one effective result per task.
+ *
+ * `executeApprovedTasks()` emits one envelope per requested id, so retries and replayed
+ * deliveries routinely produce several envelopes for a single task. First-match-wins let a
+ * discarded failure overwrite the success that the retry really produced, and let a foreign
+ * envelope - for a task this bundle never contained - rewrite the recovery checkpoint.
+ */
+function selectEffectiveResults(results: ExecutionResult[], knownTaskIds: Set<string>): Map<string, ExecutionResult> {
+  const effective = new Map<string, ExecutionResult>();
+
+  for (const result of results) {
+    if (!knownTaskIds.has(result.taskId)) {
+      continue;
+    }
+
+    const current = effective.get(result.taskId);
+
+    if (!current || isMoreAuthoritativeResult(result, current)) {
+      effective.set(result.taskId, result);
+    }
+  }
+
+  return effective;
+}
+
 export function reconcileExecutionResults(params: {
   bundle: GoalBundle;
   results: ExecutionResult[];
@@ -357,10 +439,11 @@ export function reconcileExecutionResults(params: {
     return bundle;
   }
 
+  const effectiveResults = selectEffectiveResults(results, new Set(bundle.tasks.map((task) => task.id)));
   const baseActionLogs = [...bundle.actionLogs, ...logs];
   const stateTransitionLogs: ActionLog[] = [];
   const tasks = bundle.tasks.map((task) => {
-    const result = results.find((candidate) => candidate.taskId === task.id);
+    const result = effectiveResults.get(task.id);
 
     if (!result) {
       return task;
@@ -403,8 +486,12 @@ export function reconcileExecutionResults(params: {
     bundle.watchers,
     readWorkflowControlStatusOverride(bundle)
   );
-  const hasFailures = results.some((result) => result.kind === "execution.failed");
-  const hasSkips = results.some((result) => result.kind === "execution.skipped");
+  // Recovery state is derived only from the results that were actually attributed to a
+  // task of this bundle: superseded duplicates and foreign envelopes must not flip the
+  // checkpoint of work that reconciled cleanly.
+  const appliedResults = [...effectiveResults.values()];
+  const hasFailures = appliedResults.some((result) => result.kind === "execution.failed");
+  const hasSkips = appliedResults.some((result) => result.kind === "execution.skipped");
   const hasPendingApprovals = bundle.approvals.some((approval) => approval.decision === "pending");
   const checkpoint =
     statuses.workflowStatus === "completed"

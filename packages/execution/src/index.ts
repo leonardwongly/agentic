@@ -245,16 +245,25 @@ function deriveJobSideEffectTarget(payload: JobPayload): string | null {
     return `github-issue:${payload.repository.fullName.toLowerCase()}#${payload.issue.number}`;
   }
 
-  if ("goalId" in payload && typeof payload.goalId === "string" && payload.goalId.trim()) {
-    return `goal:${payload.goalId}`;
-  }
-
+  // Type-specific targets must be resolved before the generic goal fallback below,
+  // otherwise any payload that also carries a `goalId` (public share views do) would be
+  // collapsed onto `goal:<id>` and every distinct sub-object would share one target.
+  // Mirrors deriveJobExecutionSideEffectTarget() in @agentic/contracts so the enqueue-time
+  // concurrency key can never diverge from the execution-time one.
   if (payload.type === "privacy_operation") {
     return `privacy:${payload.operationId}`;
   }
 
   if (payload.type === "public_share_view") {
     return `share:${payload.shareId}`;
+  }
+
+  if (payload.type === "deployment_canary") {
+    return `deployment-canary:${payload.requestId}`;
+  }
+
+  if ("goalId" in payload && typeof payload.goalId === "string" && payload.goalId.trim()) {
+    return `goal:${payload.goalId}`;
   }
 
   return null;
@@ -697,6 +706,13 @@ export function inspectWorkflowDagInstance(instance: WorkflowDagInstance) {
 }
 
 export function isJobClaimable(job: JobRecord, now = Date.now()): boolean {
+  // A job that already spent its whole attempt budget must never be claimed again:
+  // the claim would bump attemptCount past the schema bound (25) and throw a raw
+  // ZodError out of claimNextJob, which wedges every other job behind it.
+  if (job.attemptCount >= job.maxAttempts) {
+    return false;
+  }
+
   const availableAt = Date.parse(job.availableAt);
 
   if (!Number.isFinite(availableAt)) {
@@ -926,15 +942,39 @@ export async function processNextDurableJob(params: {
     };
   }
 
-  // When a cancellation watch is configured, re-read the job after the attempt
-  // settles. If the job was cancelled or its lease was taken over, abandon the
-  // attempt cleanly instead of acknowledging/failing a job we no longer own.
+  // A claimed job is no longer ours to settle once it leaves "running" (an operator
+  // cancel transitions it to "cancelled") or once another worker takes the lease
+  // (claimedBy changes). In both cases the in-flight attempt must be abandoned without
+  // calling completeJob/retryJob/deadLetterJob, which assert the running owner.
+  //
+  // The re-read is best-effort: a transient store failure makes the record unreadable,
+  // which is not evidence that ownership was lost. The cancellation poller already
+  // swallows read failures for exactly this reason, so the settle re-read must not abort
+  // an otherwise healthy tick (nor mask the original handler error) when the store blips.
+  const readLatestForSettlement = async (): Promise<JobRecord | null | undefined> => {
+    if (!params.cancellation) {
+      return undefined;
+    }
+
+    try {
+      return await params.cancellation.readLatest(job);
+    } catch {
+      return undefined;
+    }
+  };
+
   const settleIfOwnershipLost = async (): Promise<ProcessNextDurableJobResult | null> => {
     if (!params.cancellation) {
       return null;
     }
 
-    const current = await params.cancellation.readLatest(job);
+    const current = await readLatestForSettlement();
+
+    if (current === undefined) {
+      // Unreadable record: assume ownership is intact and settle normally.
+      return null;
+    }
+
     if (!isJobOwnershipLost(job, current)) {
       return null;
     }

@@ -35,12 +35,14 @@ import {
   type SubAgentPlan,
   type SubAgentRole,
   type Task,
+  type TaskState,
   type Watcher,
   type WorkspaceGovernance
 } from "@agentic/contracts";
 import { runAgentWithModel } from "@agentic/agents";
 import { createModelPlanner, type Planner } from "./model-planner";
-import { createTask, createWorkflowState, recomputeWorkflowStatuses, transitionTaskState } from "@agentic/execution";
+import { canTransitionTaskState, createTask, createWorkflowState, recomputeWorkflowStatuses, transitionTaskState } from "@agentic/execution";
+import { ApprovalResponseConflictError } from "./approval-errors";
 import { inferCapabilitiesFromRequest, planActionExecution } from "@agentic/integrations";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
 import { createActionLog } from "@agentic/observability";
@@ -57,6 +59,7 @@ import { readWorkflowControlStatusOverride } from "./workflow-dag-projection";
 
 export { captureApprovalOutcomeSignals, captureExecutionOutcomeSignals, captureMemoriesFromBundle, type CapturedMemories } from "./memory-capture";
 export { executeApprovedTask, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "./execution-dispatch";
+export { ApprovalResponseConflictError } from "./approval-errors";
 export { generateBriefing, generateMorningBriefing } from "./morning-briefing";
 export { refineGoal } from "./goal-refinement";
 export { createGoalTemplate, interpolateTemplate, computeNextRun, shouldTemplateRun } from "./goal-templates";
@@ -1190,7 +1193,25 @@ export function respondToApproval(params: {
   }
 
   if (new Date(approval.expiryAt).getTime() <= Date.now()) {
-    throw new Error(`Approval ${params.approvalId} has expired and can no longer be actioned.`);
+    throw new Error(`Approval ${approval.id} has expired and can no longer be actioned.`);
+  }
+
+  // A pending approval can outlive the state its reviewer was asked to leave: the task may
+  // already be running, retried to failure, completed or cancelled by the worker while the
+  // request sat in the queue. Guard the decision against the transition table up front and
+  // fail with a typed conflict *before* anything is mutated, so the bundle stays consistent
+  // and the route layer can answer 409 instead of leaking an unhandled 500.
+  const gatedTask = bundle.tasks.find((task) => task.id === approval.taskId);
+  const targetTaskState: TaskState = params.decision === "approved" ? "queued" : "blocked";
+
+  if (gatedTask && !canTransitionTaskState(gatedTask.state, targetTaskState)) {
+    throw new ApprovalResponseConflictError({
+      approvalId: approval.id,
+      taskId: gatedTask.id,
+      fromState: gatedTask.state,
+      toState: targetTaskState,
+      decision: params.decision
+    });
   }
 
   const respondedAt = nowIso();
