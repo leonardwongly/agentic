@@ -3,16 +3,20 @@ import {
   ApprovalNotificationJobPayloadSchema,
   BriefingPreferencesSchema,
   BriefingScheduleEntrySchema,
+  CreateNoteActionIntentSchema,
   DeleteRecordActionIntentSchema,
   JobRecordSchema,
   SendMessageActionIntentSchema,
   UpdateRecordActionIntentSchema,
+  WorkflowScheduleSchema,
   appendJobExecutionJournalEntry,
   buildApprovalNotificationDeliveryTarget,
   createJobExecutionJournal,
   createUserResponsibilityAssignee,
+  createSystemResponsibilityAssignee,
   deriveGoalContract,
-  deriveGoalResponsibility
+  deriveGoalResponsibility,
+  deriveJobRecoveryState
 } from "@agentic/contracts";
 
 /**
@@ -68,7 +72,7 @@ describe("adversarial contract validation: derived job side-effect targets", () 
     expect(autopilotJob.journal.sideEffectTarget).toBe("autopilot-event:evt-1");
   });
 
-  it("exposes a real defect: public_share_view jobs never reach the `share:` branch, so all views of one goal share a single target", () => {
+  it("resolves public_share_view jobs to their per-share target, not to the shared goal target", () => {
     const buildShareJob = (shareId: string, jobId: string) =>
       JobRecordSchema.parse(
         baseJobRecord({
@@ -87,56 +91,83 @@ describe("adversarial contract validation: derived job side-effect targets", () 
 
     const first = buildShareJob("share-alpha", "job-share-alpha");
     const second = buildShareJob("share-beta", "job-share-beta");
+    const firstPayload = first.payload;
+    const secondPayload = second.payload;
 
-    // DEFECT: packages/contracts/src/index.ts `deriveJobExecutionSideEffectTarget()`
-    // tests the generic `"goalId" in payload` branch before the `public_share_view`
-    // branch, so the documented `share:${shareId}` target is dead code. Two unrelated
-    // shares of the same goal collapse onto `goal:goal-shared`, which is also fed into
-    // concurrency/ledger keys (the same ordering exists in packages/execution).
-    // Suggested fix: move the type-specific branches (privacy_operation,
-    // public_share_view, deployment_canary) above the generic goalId fallback.
-    expect(first.journal.sideEffectTarget).toBe("goal:goal-shared");
-    expect(second.journal.sideEffectTarget).toBe("goal:goal-shared");
-    expect(first.journal.sideEffectTarget).not.toBe("share:share-alpha");
-    expect(first.payload.shareId).not.toBe(second.payload.shareId);
+    if (firstPayload.type !== "public_share_view" || secondPayload.type !== "public_share_view") {
+      throw new Error("Public-share-view jobs must carry a public_share_view payload.");
+    }
+
+    // Regression: `deriveJobExecutionSideEffectTarget()` used to test the generic
+    // `"goalId" in payload` branch before the `public_share_view` branch, so the documented
+    // `share:${shareId}` target was dead code and two unrelated shares of one goal collapsed
+    // onto `goal:goal-shared` (which also feeds concurrency/ledger keys). The type-specific
+    // branches (privacy_operation, public_share_view, deployment_canary) now resolve before
+    // the generic goal fallback.
+    expect(first.journal.sideEffectTarget).toBe("share:share-alpha");
+    expect(second.journal.sideEffectTarget).toBe("share:share-beta");
+    expect(first.journal.sideEffectTarget).not.toBe("goal:goal-shared");
+    expect(first.journal.sideEffectTarget).not.toBe(second.journal.sideEffectTarget);
+    expect(firstPayload.shareId).not.toBe(secondPayload.shareId);
   });
 
-  it("exposes a real defect: a payload-valid replayedFromJobId longer than the journal cap makes the whole job record unparseable", () => {
+  it("caps replayedFromJobId at the journal bound so a stored approval job stays parseable", () => {
     const longReplayRef = "j".repeat(240);
-    const payload = ApprovalNotificationJobPayloadSchema.parse({
+    const boundaryReplayRef = "j".repeat(200);
+    const buildPayload = (replayedFromJobId: string) => ({
       type: "approval_notification",
       channel: "slack",
       approvalId: "approval-1",
       goalId: "goal-1",
       taskId: "task-1",
       decision: "approved",
-      metadata: { replayedFromJobId: longReplayRef }
+      metadata: { replayedFromJobId }
     });
 
-    // The payload contract itself accepts the value (no max on replayedFromJobId).
-    expect(payload.metadata.replayedFromJobId).toBe(longReplayRef);
+    // Regression: `ApprovalNotificationMetadataSchema` allowed an unbounded
+    // `replayedFromJobId`, while `createJobExecutionJournal()` pipes it into
+    // `JobExecutionJournalSchema.replayedFromJobId` (max 200) and into the queued-state
+    // summary (max 280). A stored row like this parsed fine as a payload and then threw
+    // inside the JobRecordSchema transform, so the record could never be read back.
+    expect(ApprovalNotificationJobPayloadSchema.safeParse(buildPayload(longReplayRef)).success).toBe(false);
 
-    // DEFECT: packages/contracts/src/index.ts `ApprovalNotificationMetadataSchema`
-    // allows an unbounded `replayedFromJobId`, but `createJobExecutionJournal()` pipes
-    // it into `JobExecutionJournalSchema.replayedFromJobId` (max 200) and into the
-    // queued-state summary (max 280). A stored row like this parses fine as a payload
-    // and then throws inside the JobRecordSchema transform, so the record can never be
-    // read back: the API/worker fails hard instead of degrading.
-    // Suggested fix: cap `replayedFromJobId` at 200 in the payload schema (or truncate
-    // defensively in deriveReplayedFromJobId) so validation and derivation agree.
-    expect(() =>
-      JobRecordSchema.parse(
-        baseJobRecord({
-          kind: "approval_notification",
-          status: "queued",
-          completedAt: null,
-          payload
-        })
-      )
-    ).toThrow(/too_big|at most|maximum|replayedFromJobId|summary/iu);
+    const payload = ApprovalNotificationJobPayloadSchema.parse(buildPayload(boundaryReplayRef));
+    expect(payload.metadata.replayedFromJobId).toBe(boundaryReplayRef);
+
+    const record = JobRecordSchema.parse(
+      baseJobRecord({
+        kind: "approval_notification",
+        status: "queued",
+        completedAt: null,
+        payload
+      })
+    );
+
+    expect(record.journal.replayedFromJobId).toHaveLength(200);
+    expect(record.journal.entries[0]?.summary).toBe(`Replay queued from job ${boundaryReplayRef}.`);
+    expect((record.journal.entries[0]?.summary ?? "").length).toBeLessThanOrEqual(280);
+
+    // Defensive half of the fix: a legacy row that already carries an over-long reference
+    // (approval_follow_up metadata is still permissive) is truncated by the derivation
+    // instead of throwing inside `JobRecordSchema.parse`.
+    const legacyRecovery = deriveJobRecoveryState({
+      jobId: "job-legacy-replay",
+      status: "retrying",
+      payload: {
+        type: "approval_follow_up",
+        approvalId: "approval-1",
+        goalId: "goal-1",
+        taskId: "task-1",
+        decision: "approved",
+        workspaceId: null,
+        metadata: { replayedFromJobId: longReplayRef, actionId: null }
+      }
+    });
+
+    expect(legacyRecovery?.replayedFromJobId).toBe(boundaryReplayRef);
   });
 
-  it("exposes a real defect: colon-bearing ids make approval-notification delivery targets collide across different approvals", () => {
+  it("refuses separator-bearing notification segments so delivery targets cannot collide", () => {
     const parsePayload = (input: Record<string, unknown>) =>
       ApprovalNotificationJobPayloadSchema.parse({
         type: "approval_notification",
@@ -146,51 +177,89 @@ describe("adversarial contract validation: derived job side-effect targets", () 
         ...input
       });
 
-    const nestedApproval = parsePayload({
+    // Regression: `buildApprovalNotificationDeliveryTarget()` joins attacker-influenced
+    // segments with `:` while `approvalId` (min 1, no charset) and `slackChannelId`
+    // (min 1/max 80, no charset) accepted colons. Two different approvals/threads then
+    // produced one identical idempotency target and a legitimate second receipt could be
+    // treated as an already-delivered side effect. Every segment is now charset-validated,
+    // which makes the composed target injective.
+    expect(() =>
+      parsePayload({
+        channel: "slack_receipt",
+        approvalId: "ap",
+        slackChannelId: "b:slack_receipt:c",
+        slackMessageTs: "1710000000.000100"
+      })
+    ).toThrow(/slackChannelId/iu);
+    expect(() =>
+      parsePayload({
+        channel: "slack_receipt",
+        approvalId: "ap:slack_receipt:b",
+        slackChannelId: "c",
+        slackMessageTs: "1710000000.000100"
+      })
+    ).toThrow(/approvalId/iu);
+    expect(() =>
+      parsePayload({
+        channel: "telegram_receipt",
+        approvalId: "ap",
+        telegramChatId: "-100:123",
+        telegramMessageId: 7
+      })
+    ).toThrow(/telegramChatId/iu);
+
+    const receipt = parsePayload({
       channel: "slack_receipt",
       approvalId: "ap",
-      slackChannelId: "b:slack_receipt:c",
+      slackChannelId: "C123",
       slackMessageTs: "1710000000.000100"
     });
-    const flatApproval = parsePayload({
+    const otherApproval = parsePayload({
       channel: "slack_receipt",
-      approvalId: "ap:slack_receipt:b",
-      slackChannelId: "c",
+      approvalId: "ap-2",
+      slackChannelId: "C123",
+      slackMessageTs: "1710000000.000100"
+    });
+    const otherThread = parsePayload({
+      channel: "slack_receipt",
+      approvalId: "ap",
+      slackChannelId: "C456",
       slackMessageTs: "1710000000.000100"
     });
 
-    // DEFECT: `buildApprovalNotificationDeliveryTarget()` joins attacker-influenced
-    // segments with `:` while `approvalId` (min 1, no charset) and `slackChannelId`
-    // (min 1/max 80, no charset) accept colons. Two different approvals/threads produce
-    // one identical idempotency target, so a legitimate second receipt can be treated as
-    // an already-delivered side effect.
-    // Suggested fix: validate `approvalId`/`slackChannelId` against a colon-free charset
-    // (or hash the segments) before composing the delivery target.
-    expect(flatApproval.approvalId).not.toBe(nestedApproval.approvalId);
-    expect(flatApproval.slackChannelId).not.toBe(nestedApproval.slackChannelId);
-    expect(buildApprovalNotificationDeliveryTarget(nestedApproval)).toBe(
-      buildApprovalNotificationDeliveryTarget(flatApproval)
+    expect(buildApprovalNotificationDeliveryTarget(receipt)).toBe(
+      "approval-notification:ap:slack_receipt:C123:1710000000.000100"
     );
-    expect(buildApprovalNotificationDeliveryTarget(flatApproval)).toBe(
-      "approval-notification:ap:slack_receipt:b:slack_receipt:c:1710000000.000100"
-    );
+    expect(
+      new Set([receipt, otherApproval, otherThread].map((payload) => buildApprovalNotificationDeliveryTarget(payload)))
+        .size
+    ).toBe(3);
+
+    // Surrounding blanks are normalised away, so one logical thread cannot be split in two,
+    // while an invisible character smuggled inside a segment is refused outright.
+    expect(
+      buildApprovalNotificationDeliveryTarget(parsePayload({ channel: "slack", approvalId: "  ap  " }))
+    ).toBe(buildApprovalNotificationDeliveryTarget(parsePayload({ channel: "slack", approvalId: "ap" })));
+    expect(() => parsePayload({ channel: "slack", approvalId: "ap\u200b" })).toThrow(/approvalId/iu);
   });
 });
 
 describe("adversarial contract validation: blank and invisible identity fields", () => {
-  it("exposes a real defect: responsibility assignees accept blank ids that every other contract id trims away", () => {
-    const nbspUserId = createUserResponsibilityAssignee("\u00a0\u00a0", "Goal owner");
-    const zwspResponsibility = deriveGoalResponsibility({ userId: "\u200b" });
+  it("rejects blank and invisible-only responsibility assignee ids like every other contract id", () => {
+    // Regression: `WorkflowResponsibilityAssigneeSchema.userId` (and `systemActor`) used
+    // `z.string().min(1)` with no `.trim()`, unlike action-intent ids which are
+    // `.trim().min(1)`. A whitespace-only or zero-width user id was stored as a real
+    // accountable owner, so ownership/handoff audits could point at an invisible actor.
+    // Both identity fields are now trimmed, non-blank, and require a visible code point.
+    expect(() => createUserResponsibilityAssignee("\u00a0\u00a0", "Goal owner")).toThrow(/userId/iu);
+    expect(() => createUserResponsibilityAssignee("\u200b", "Goal owner")).toThrow(/userId/iu);
+    expect(() => createSystemResponsibilityAssignee("\u200b\u200e", "Nightly reconciler")).toThrow(/systemActor/iu);
+    expect(() => deriveGoalResponsibility({ userId: "\u200b" })).toThrow(/userId/iu);
+    expect(() => deriveGoalResponsibility({ userId: "\u00a0\u00a0" })).toThrow(/userId/iu);
 
-    // DEFECT: packages/contracts/src/index.ts `WorkflowResponsibilityAssigneeSchema.userId`
-    // (and `systemActor`) use `z.string().min(1)` with no `.trim()`, unlike action-intent
-    // ids which are `.trim().min(1)`. A whitespace-only or zero-width user id is stored as
-    // a real accountable owner, so ownership/handoff audits can point at an invisible actor.
-    // Suggested fix: `.trim().min(1)` (plus a non-blank guard for format-only input) on
-    // identity fields that are rendered or compared downstream.
-    expect(nbspUserId.userId).toBe("\u00a0\u00a0");
-    expect(zwspResponsibility.owner.userId).toBe("\u200b");
-    expect(zwspResponsibility.escalationOwner?.userId).toBe("\u200b");
+    // Real actors keep working, and surrounding blanks are normalised instead of stored.
+    expect(createUserResponsibilityAssignee("  owner  ", "Goal owner").userId).toBe("owner");
+    expect(deriveGoalResponsibility({ userId: "owner" }).escalationOwner?.userId).toBe("owner");
 
     // Contrast: the typed-action boundary rejects the same shape.
     expect(() =>
@@ -203,8 +272,8 @@ describe("adversarial contract validation: blank and invisible identity fields",
     ).toThrow(/targetId|too_small|at least/iu);
   });
 
-  it("exposes a real defect: required user-facing text passes when it contains only invisible Unicode format characters", () => {
-    const zeroWidthSubject = SendMessageActionIntentSchema.parse({
+  it("rejects required user-facing text that contains only invisible Unicode characters", () => {
+    const zeroWidthSubject = SendMessageActionIntentSchema.safeParse({
       type: "send_message",
       to: "client@example.com",
       subject: "\u200b\u200e\u2060",
@@ -217,14 +286,41 @@ describe("adversarial contract validation: blank and invisible identity fields",
       body: "Approved response body."
     });
 
-    // Invisible-character policy is inconsistent: `String.prototype.trim` strips NBSP
-    // (so the blank subject below is rejected), but U+200B/U+200E/U+2060 are not
-    // whitespace, so a subject that renders as nothing is accepted and forwarded to a
-    // real outbound email draft.
-    // DEFECT: add a shared "must contain at least one visible code point" guard
-    // (e.g. /\p{L}|\p{N}|\p{Pp}/u) to trimmed min(1) text fields in the action intents.
+    // Regression: invisible-character policy used to be inconsistent. `String.prototype.trim`
+    // strips NBSP (so the blank subject was rejected), but U+200B/U+200E/U+2060 are not
+    // whitespace, so a subject that renders as nothing was accepted and forwarded to a real
+    // outbound email draft. Every trimmed required action-intent text field now also needs at
+    // least one visible code point, so both shapes fail the same way.
     expect(nbspSubject.success).toBe(false);
-    expect(zeroWidthSubject.subject).toBe("\u200b\u200e\u2060");
+    expect(zeroWidthSubject.success).toBe(false);
+    if (!zeroWidthSubject.success) {
+      expect(zeroWidthSubject.error.issues.map((issue) => issue.path)).toEqual([["subject"]]);
+    }
+
+    // Sibling required text is held to the same contract, and ordinary text (including
+    // punctuation-only and non-Latin scripts) still passes.
+    expect(() => CreateNoteActionIntentSchema.parse({ type: "create_note", title: "\u2060", content: "Notes." })).toThrow(
+      /title/iu
+    );
+    expect(() =>
+      ActionIntentSchema.parse({
+        type: "schedule_event",
+        summary: "\u200b",
+        start: "2026-06-09T12:00:00.000Z",
+        end: "2026-06-09T12:30:00.000Z"
+      })
+    ).toThrow(/summary/iu);
+    expect(
+      SendMessageActionIntentSchema.safeParse({
+        type: "send_message",
+        to: "client@example.com",
+        subject: "Re: \u200bquarterly plan \u00e9t \u53cd\u9988",
+        body: "Approved response body."
+      }).success
+    ).toBe(true);
+    expect(CreateNoteActionIntentSchema.safeParse({ type: "create_note", title: "...", content: "Notes." }).success).toBe(
+      true
+    );
   });
 
   it("guards that RTL overrides, homoglyphs and control-looking text cannot smuggle an adapter or risk class", () => {
@@ -426,40 +522,35 @@ describe("adversarial contract validation: time, timezone and numeric boundaries
     }
   });
 
-  it("exposes a real defect: briefing preferences accept any non-blank timezone string that the scheduler cannot resolve", () => {
+  it("refuses briefing and workflow timezones that the scheduler cannot resolve", () => {
     const scheduleTypes = ["startup", "midday", "pre_meeting", "end_of_day", "next_day"] as const;
-    const prefs = BriefingPreferencesSchema.parse({
+    const buildPreferences = (timezone: string) => ({
       userId: "owner",
-      timezone: "Mars/Olympus_Mons",
-      focus: "balanced",
-      schedules: scheduleTypes.map((type) => ({ type, enabled: true, time: "08:30" })),
-      createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
-    });
-    const blankPrefs = BriefingPreferencesSchema.safeParse({
-      userId: "owner",
-      timezone: "\u00a0",
+      timezone,
       focus: "balanced",
       schedules: scheduleTypes.map((type) => ({ type, enabled: true, time: "08:30" })),
       createdAt: "2026-06-09T12:00:00.000Z",
       updatedAt: "2026-06-09T12:00:00.000Z"
     });
 
-    expect(prefs.timezone).toBe("Mars/Olympus_Mons");
-    expect(blankPrefs.success).toBe(true);
+    // Regression: `BriefingPreferencesSchema.timezone` was `z.string().min(1)` (and the
+    // workflow/template schedule timezones were unvalidated strings), so a typo'd or
+    // whitespace-only zone was persisted and only exploded at briefing generation time as a
+    // RangeError inside `Intl.DateTimeFormat`. The contract now trims the value and probes it
+    // with the same `Intl.DateTimeFormat` call its consumers make.
+    expect(() => BriefingPreferencesSchema.parse(buildPreferences("Mars/Olympus_Mons"))).toThrow(/timezone/iu);
+    expect(BriefingPreferencesSchema.safeParse(buildPreferences("\u00a0")).success).toBe(false);
+    expect(BriefingPreferencesSchema.safeParse(buildPreferences("\u200b")).success).toBe(false);
+    expect(BriefingPreferencesSchema.safeParse(buildPreferences("America/New_York")).success).toBe(true);
 
-    // Harm proof: the accepted value is unusable downstream
-    // (packages/orchestrator/src/morning-briefing.ts builds an Intl formatter with it).
-    expect(() =>
-      new Intl.DateTimeFormat("en-US", { timeZone: prefs.timezone, hour: "2-digit" })
-    ).toThrow(RangeError);
+    // The stored value is the trimmed identifier the formatter can actually use.
+    expect(BriefingPreferencesSchema.parse(buildPreferences("  Asia/Singapore  ")).timezone).toBe("Asia/Singapore");
 
-    // DEFECT: packages/contracts/src/index.ts `BriefingPreferencesSchema.timezone` is
-    // `z.string().min(1)` (and WorkflowSchedule timezone/cron are unbounded-ish strings
-    // too), so a typo'd or whitespace-only zone is persisted and only explodes at
-    // briefing generation time as a RangeError.
-    // Suggested fix: validate against `Intl.supportedValuesOf("timeZone")` (or a
-    // try/catch Intl.DateTimeFormat probe) in a schema refine, and `.trim()` the value.
+    // Workflow schedule timezones are held to the identical contract.
+    expect(() => WorkflowScheduleSchema.parse({ timezone: "Mars/Olympus_Mons" })).toThrow(/timezone/iu);
+    expect(() => WorkflowScheduleSchema.parse({ timezone: "\u00a0\u00a0" })).toThrow(/timezone/iu);
+    expect(WorkflowScheduleSchema.parse({}).timezone).toBe("UTC");
+    expect(WorkflowScheduleSchema.parse({ timezone: "  Europe/London  " }).timezone).toBe("Europe/London");
   });
 
   it("guards the datetime contract at epoch, leap-day and non-UTC edges before the start/end ordering refine", () => {
