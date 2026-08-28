@@ -3,6 +3,7 @@ import {
   PolicyDecisionSchema,
   PolicyDecisionTraceSchema,
   WorkspaceGovernanceSchema,
+  WorkspaceShadowReplayPolicySchema,
   defaultWorkspaceShadowReplayPolicy,
   type AgentMetrics,
   type AutonomyBudget,
@@ -39,6 +40,36 @@ const riskClassOrder: Record<RiskClass, number> = {
   R3: 3,
   R4: 4
 };
+
+type WorkspaceShadowReplayPolicy = WorkspaceGovernance["shadowReplayPolicy"];
+
+const ShadowReplayPolicyWithDefaultsSchema = WorkspaceShadowReplayPolicySchema.catch(defaultWorkspaceShadowReplayPolicy);
+
+/**
+ * Stored governance records can predate the nested `shadowReplayPolicy` object (or carry a partial
+ * one). Zod only back-fills nested fields when the whole object is parsed, so normalize through the
+ * schema here: a legacy record resolves to the enterprise posture instead of throwing or silently
+ * widening autonomy. `null`/`undefined` stays `null` so callers keep their explicit no-governance path.
+ */
+function normalizeGovernanceForPolicy(governance: WorkspaceGovernance | null | undefined): WorkspaceGovernance | null {
+  if (!governance) {
+    return null;
+  }
+
+  const parsed = WorkspaceGovernanceSchema.safeParse(governance);
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  const declared: unknown = governance.shadowReplayPolicy;
+  const partial = declared && typeof declared === "object" && !Array.isArray(declared) ? declared : {};
+  const shadowReplayPolicy: WorkspaceShadowReplayPolicy = ShadowReplayPolicyWithDefaultsSchema.parse({
+    ...defaultWorkspaceShadowReplayPolicy,
+    ...partial
+  });
+
+  return { ...governance, shadowReplayPolicy };
+}
 
 type AgentPoisoningDetection = {
   signals: Array<"bribery" | "corruption" | "collusion" | "intent_override">;
@@ -546,14 +577,18 @@ export function recommendWorkflowPromotion(params: {
   // candidates, and an unknown/unrankable risk class is treated as exceeding
   // the ceiling so we never promote something we cannot risk-rank.
   const riskRank = rankPromotionRiskClass(aggregate.riskClass);
-  const ceilingRank = riskClassOrder[thresholds.maxAutoPromoteRiskClass];
-  const riskCeilingTripped = riskRank === null || riskRank > ceilingRank;
+  // A configured ceiling that cannot be ranked (typo, or an inherited property name such as
+  // "constructor") must keep the guardrail instead of silently disabling it, so treat it as tripped.
+  const ceilingRank = rankPromotionRiskClass(thresholds.maxAutoPromoteRiskClass);
+  const riskCeilingTripped = riskRank === null || ceilingRank === null || riskRank > ceilingRank;
   if (riskCeilingTripped) {
     guardrailsTripped.push("risk_class_ceiling");
     reasons.push(
       riskRank === null
         ? `Risk class ${aggregate.riskClass ?? "unknown"} cannot be ranked, so automation promotion is withheld.`
-        : `Risk class ${aggregate.riskClass} exceeds the ${thresholds.maxAutoPromoteRiskClass} auto-promotion ceiling.`
+        : ceilingRank === null
+          ? `Configured auto-promotion ceiling ${String(thresholds.maxAutoPromoteRiskClass)} is not a rankable risk class, so automation promotion is withheld.`
+          : `Risk class ${aggregate.riskClass} exceeds the ${thresholds.maxAutoPromoteRiskClass} auto-promotion ceiling.`
     );
   }
 
@@ -1751,12 +1786,15 @@ export function simulateTaskPolicy(params: {
   learningValidation?: PolicyReplayValidation | null;
 }): PolicySimulationResult {
   const riskClass = riskFromCapabilities(params.capabilities);
-  const autonomyBudget = buildAutonomyBudget(params.governance);
+  // Parse governance once at entry; every nested read below uses the normalized record so a stored
+  // record without `shadowReplayPolicy` resolves to the enterprise default instead of throwing.
+  const governance = normalizeGovernanceForPolicy(params.governance);
+  const autonomyBudget = buildAutonomyBudget(governance);
   const trust = params.memories
     ? computeTrustFromMemories(params.memories, params.title, params.capabilities)
     : { approvedCount: 0, rejectedCount: 0, trustScore: 0 };
   const scorecardTrust = computeTrustFromScorecard(params.scorecard);
-  const conformance = assessWorkspaceGovernanceConformance(params.governance);
+  const conformance = assessWorkspaceGovernanceConformance(governance);
   const learningValidation = params.learningValidation ?? null;
   const checks: PolicySimulationCheck[] = [
     {
@@ -1880,8 +1918,8 @@ export function simulateTaskPolicy(params: {
   if (riskClass === "R3") {
     // Scorecards only strengthen autonomy when memory trust is already strong.
     if (trust.trustScore >= 0.7 && trust.approvedCount >= 3 && scorecardTrust.strong) {
-      const learningPromotionMode = params.governance?.shadowReplayPolicy.promotionMode ?? "validated_autonomy";
-      const learningRollbackOutcome = params.governance?.shadowReplayPolicy.rollbackOutcome ?? "allowed_with_confirmation";
+      const learningPromotionMode = governance?.shadowReplayPolicy.promotionMode ?? "validated_autonomy";
+      const learningRollbackOutcome = governance?.shadowReplayPolicy.rollbackOutcome ?? "allowed_with_confirmation";
 
       if (learningPromotionMode === "disabled") {
         checks.push({
@@ -1959,11 +1997,11 @@ export function simulateTaskPolicy(params: {
       }
 
       const shadowReplayReadiness = assessShadowReplayReadiness({
-        governance: params.governance,
+        governance,
         learningValidation
       });
 
-      if (params.governance?.maxAutoRunRiskClass === "R3" && shadowReplayReadiness.status !== "ready") {
+      if (governance?.maxAutoRunRiskClass === "R3" && shadowReplayReadiness.status !== "ready") {
         checks.push({
           id: "shadow-replay-gate",
           stage: "trust",
@@ -2013,7 +2051,7 @@ export function simulateTaskPolicy(params: {
         };
       }
 
-      const replayPolicy = params.governance?.shadowReplayPolicy ?? defaultWorkspaceShadowReplayPolicy;
+      const replayPolicy = governance?.shadowReplayPolicy ?? defaultWorkspaceShadowReplayPolicy;
       const replayThresholdFailures = collectReplayThresholdFailures(learningValidation, replayPolicy);
 
       if (replayThresholdFailures.length > 0) {
@@ -2212,6 +2250,7 @@ export function comparePolicyWithAndWithoutLearning(params: {
     governance: params.governance
   }).decision;
   const influenced = simulateTaskPolicy(params).decision;
+  const governance = normalizeGovernanceForPolicy(params.governance);
   const changed =
     baseline.outcome !== influenced.outcome ||
     baseline.requiresApproval !== influenced.requiresApproval ||
@@ -2220,7 +2259,7 @@ export function comparePolicyWithAndWithoutLearning(params: {
   const rollbackApplied =
     influenced.outcome === "downgrade_to_draft" &&
     baseline.outcome !== "downgrade_to_draft" &&
-    (params.governance?.shadowReplayPolicy.rollbackOutcome ?? "allowed_with_confirmation") === "downgrade_to_draft";
+    (governance?.shadowReplayPolicy.rollbackOutcome ?? "allowed_with_confirmation") === "downgrade_to_draft";
 
   const summary = promoted
     ? "Replay-validated learning widened the task from approval-required to autonomous execution."

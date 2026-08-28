@@ -173,11 +173,30 @@ function sha256File(filePath: string): string {
   return hash.digest("hex");
 }
 
-function inspectReference(cwd: string, relativePath: string): ComplianceReferenceStatus {
+function normalizeDeclaredPath(declaredPath: string): string {
+  return path.posix.normalize(declaredPath.replaceAll("\\", "/").replace(/^\.\/+/u, "").trim());
+}
+
+function escapesAuditedRoot(relativePath: string): boolean {
+  return path.posix.isAbsolute(relativePath) || relativePath.split("/").includes("..");
+}
+
+function inspectReference(cwd: string, declaredPath: string): ComplianceReferenceStatus {
+  const relativePath = normalizeDeclaredPath(declaredPath);
+  // A registry entry is a promise about a file inside the audited tree. Resolving `../x` or an
+  // absolute path against `cwd` would certify (and hash) something the audit has no authority over.
+  if (!relativePath || relativePath === "." || escapesAuditedRoot(relativePath)) {
+    return {
+      path: declaredPath,
+      exists: false,
+      kind: "missing"
+    };
+  }
+
   const resolvedPath = path.resolve(cwd, relativePath);
   if (!existsSync(resolvedPath)) {
     return {
-      path: relativePath,
+      path: declaredPath,
       exists: false,
       kind: "missing"
     };
@@ -186,22 +205,57 @@ function inspectReference(cwd: string, relativePath: string): ComplianceReferenc
   const stats = statSync(resolvedPath);
   if (stats.isDirectory()) {
     return {
-      path: relativePath,
+      path: declaredPath,
       exists: true,
       kind: "directory"
     };
   }
 
   return {
-    path: relativePath,
+    path: declaredPath,
     exists: true,
     kind: "file",
     sha256: sha256File(resolvedPath)
   };
 }
 
+function inspectArtifactReference(cwd: string, declaredPath: string): ComplianceReferenceStatus {
+  const status = inspectReference(cwd, declaredPath);
+  // Evidence artifacts name a file: `""` and `"."` resolve to the audited root itself, which always
+  // exists as a directory, so a required artifact that names no file at all must not read as
+  // satisfied evidence.
+  if (status.kind !== "file") {
+    return {
+      path: declaredPath,
+      exists: false,
+      kind: "missing"
+    };
+  }
+
+  return status;
+}
+
 function isApiRoutePath(relativePath: string): boolean {
   return relativePath.startsWith("apps/web/app/api/") && relativePath.endsWith("/route.ts");
+}
+
+function assertCompliancePathsContained(control: ComplianceControl): void {
+  const declaredPaths: Array<[string, string | undefined]> = [
+    ...control.codePaths.map((entry): [string, string] => ["codePaths", entry]),
+    ...control.runbooks.map((entry): [string, string] => ["runbooks", entry]),
+    ...control.traceability.routePaths.map((entry): [string, string] => ["traceability.routePaths", entry]),
+    ...control.automatedChecks.flatMap(
+      (check): Array<[string, string]> => (check.sourcePaths ?? []).map((entry): [string, string] => [`automatedChecks.${check.id}.sourcePaths`, entry])
+    ),
+    ...control.evidenceArtifacts.map((artifact): [string, string | undefined] => ["evidenceArtifacts", artifact.path])
+  ];
+
+  for (const [field, declaredPath] of declaredPaths) {
+    const relativePath = typeof declaredPath === "string" ? normalizeDeclaredPath(declaredPath) : "";
+    if (!relativePath || relativePath === "." || escapesAuditedRoot(relativePath)) {
+      throw new Error(`Control ${control.id} declares an out-of-tree ${field} path: ${JSON.stringify(declaredPath)}.`);
+    }
+  }
 }
 
 function assertComplianceTraceability(control: ComplianceControl) {
@@ -281,6 +335,7 @@ export function loadComplianceControlRegistry(filePath: string): ComplianceContr
     }
 
     assertComplianceTraceability(control);
+    assertCompliancePathsContained(control);
   }
 
   return raw;
@@ -372,7 +427,7 @@ export function buildComplianceEvidenceBundle(
       sourcePaths: check.sourcePaths.map((entry) => inspectReference(cwd, entry))
     }));
     const evidenceArtifacts = control.evidenceArtifacts.map<ComplianceArtifactStatus>((artifact) => {
-      const status = inspectReference(cwd, artifact.path);
+      const status = inspectArtifactReference(cwd, artifact.path);
       const required = artifact.required !== false;
       if (required) {
         totalRequiredArtifacts += 1;

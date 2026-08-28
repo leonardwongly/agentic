@@ -124,10 +124,13 @@ const DEFAULT_RELEASE_FORBIDDEN_EXACT = new Set([
   "docs-preview.md"
 ]);
 
-const DEFAULT_RELEASE_FORBIDDEN_BASENAMES = new Set([
-  ".DS_Store",
-  "Thumbs.db"
-]);
+// Basenames are compared lower-cased: Explorer writes `THUMBS.DB` on some volumes and `.ds_store`
+// variants show up in archives, and both are the same junk file.
+const DEFAULT_RELEASE_FORBIDDEN_BASENAMES = new Set([".ds_store", "thumbs.db"]);
+
+// Environment files are forbidden wherever they live - `deploy/.env` leaks exactly as badly as a
+// root-level one - so the `.env*` family is matched as a basename instead of a root-level path.
+const RELEASE_FORBIDDEN_BASENAME_PATTERNS = [/^\.env(?:[._-].*)?$/iu];
 
 const DEFAULT_RELEASE_FORBIDDEN_EXTENSIONS = [
   ".key",
@@ -175,6 +178,22 @@ const PRIMARY_NODE_MAJOR = 22;
 export function normalizeRepoPath(value: string) {
   const normalized = value.replaceAll("\\", "/").replace(/^\.\/+/u, "").trim();
   return path.posix.normalize(normalized);
+}
+
+function escapesRepoRoot(relativePath: string) {
+  return path.posix.isAbsolute(relativePath) || relativePath.split("/").includes("..");
+}
+
+function isProtectedReleaseException(relativePath: string) {
+  return PROTECTED_RELEASE_EXCEPTIONS.has(path.posix.basename(relativePath).toLowerCase());
+}
+
+function isForbiddenReleaseBasename(relativePath: string) {
+  const basename = path.posix.basename(relativePath);
+  return (
+    DEFAULT_RELEASE_FORBIDDEN_BASENAMES.has(basename.toLowerCase()) ||
+    RELEASE_FORBIDDEN_BASENAME_PATTERNS.some(pattern => pattern.test(basename))
+  );
 }
 
 export function isTextLikePath(relativePath: string) {
@@ -227,15 +246,25 @@ export function checkReleaseContext(paths: string[]) {
   for (const rawPath of paths) {
     const relativePath = normalizeRepoPath(rawPath);
     const lowerPath = relativePath.toLowerCase();
-    const basename = path.posix.basename(relativePath);
 
-    if (PROTECTED_RELEASE_EXCEPTIONS.has(relativePath)) {
+    // Every lookup below is keyed on a repository-relative path, so an absolute path or a `..`
+    // segment silently re-keys all of them and lets generated, local, or out-of-tree files pass.
+    if (escapesRepoRoot(relativePath)) {
+      issues.push({
+        path: relativePath,
+        kind: "forbidden-path",
+        message: "Release context paths must stay inside the repository root."
+      });
+      continue;
+    }
+
+    if (isProtectedReleaseException(relativePath)) {
       continue;
     }
 
     if (
       DEFAULT_RELEASE_FORBIDDEN_EXACT.has(relativePath) ||
-      DEFAULT_RELEASE_FORBIDDEN_BASENAMES.has(basename) ||
+      isForbiddenReleaseBasename(relativePath) ||
       DEFAULT_RELEASE_FORBIDDEN_PREFIXES.some(prefix => lowerPath.startsWith(prefix.toLowerCase()))
     ) {
       issues.push({
@@ -270,6 +299,7 @@ export function checkReleaseContext(paths: string[]) {
 export function validateIssueEvidenceMap(map: IssueEvidenceMap, options: { cwd: string }) {
   const issues: IssueEvidenceMapIssue[] = [];
   const seenIssues = new Set<number>();
+  const mapPath = "config/engineering-hygiene/w10-evidence-map.json";
 
   if (map.version !== 1) {
     issues.push({
@@ -286,46 +316,80 @@ export function validateIssueEvidenceMap(map: IssueEvidenceMap, options: { cwd: 
   }
 
   for (const entry of map.entries) {
-    if (seenIssues.has(entry.issue)) {
+    // Identifiers are the key of every dedupe and parent-linking rule below, so they have to be
+    // validated before they are trusted: `Set` uses SameValueZero (NaN never dedupes) and a string
+    // "246" would otherwise certify the same issue twice next to numeric 246.
+    const rawIssue: unknown = entry.issue;
+    if (typeof rawIssue !== "number" || !Number.isInteger(rawIssue) || rawIssue <= 0) {
       issues.push({
-        issue: entry.issue,
-        path: "config/engineering-hygiene/w10-evidence-map.json",
-        message: `Issue #${entry.issue} appears more than once.`
+        path: mapPath,
+        message: `Evidence map entry identifier "${String(rawIssue)}" (type ${typeof rawIssue}) must be a positive integer.`
+      });
+      continue;
+    }
+
+    const issue = rawIssue;
+
+    if (seenIssues.has(issue)) {
+      issues.push({
+        issue,
+        path: mapPath,
+        message: `Issue #${issue} appears more than once.`
       });
     }
-    seenIssues.add(entry.issue);
+    seenIssues.add(issue);
 
-    if (entry.issue !== 199 && entry.parent !== 199) {
-      issues.push({
-        issue: entry.issue,
-        path: "config/engineering-hygiene/w10-evidence-map.json",
-        message: `Issue #${entry.issue} must link back to parent #199.`
-      });
+    if (issue !== 199) {
+      const rawParent: unknown = entry.parent;
+      if (typeof rawParent !== "number" || !Number.isInteger(rawParent) || rawParent <= 0) {
+        issues.push({
+          issue,
+          path: mapPath,
+          message: `Issue #${issue} must declare a positive integer parent link.`
+        });
+      } else if (rawParent !== 199) {
+        issues.push({
+          issue,
+          path: mapPath,
+          message: `Issue #${issue} must link back to parent #199.`
+        });
+      }
     }
 
     if (entry.status === "blocked" && (entry.blockers ?? []).length === 0) {
       issues.push({
-        issue: entry.issue,
-        path: "config/engineering-hygiene/w10-evidence-map.json",
-        message: `Issue #${entry.issue} is blocked but has no blocker note.`
+        issue,
+        path: mapPath,
+        message: `Issue #${issue} is blocked but has no blocker note.`
       });
     }
 
     if (entry.evidence.length === 0) {
       issues.push({
-        issue: entry.issue,
-        path: "config/engineering-hygiene/w10-evidence-map.json",
-        message: `Issue #${entry.issue} must include at least one evidence reference.`
+        issue,
+        path: mapPath,
+        message: `Issue #${issue} must include at least one evidence reference.`
       });
     }
 
     for (const evidence of entry.evidence) {
       const evidencePath = normalizeRepoPath(evidence.path);
+      // `path.join` happily walks out of `options.cwd`, so an escaping reference must be rejected
+      // before it is ever resolved against the filesystem.
+      if (escapesRepoRoot(evidencePath)) {
+        issues.push({
+          issue,
+          path: evidencePath,
+          message: `Issue #${issue} references evidence path ${evidencePath}, which escapes the validated repository root.`
+        });
+        continue;
+      }
+
       if (!existsSync(path.join(options.cwd, evidencePath))) {
         issues.push({
-          issue: entry.issue,
+          issue,
           path: evidencePath,
-          message: `Issue #${entry.issue} references missing evidence path ${evidencePath}.`
+          message: `Issue #${issue} references missing evidence path ${evidencePath}.`
         });
       }
     }

@@ -108,12 +108,35 @@ type LearningCaptureBoundaryParams = {
   executionResultTaskIds?: string[];
 };
 
+// Quoted values are the common YAML/env spelling (`api_key: "ABC..."`), so the value class needs an
+// explicit quoted-span alternative next to the bare-token alternative.
 const SECRET_ASSIGNMENT_PATTERN =
-  /\b(api[_-]?key|authorization|bearer|cookie|password|secret|session[_-]?id|token)\b\s*[:=]\s*([^\s,;"')\]}]+)/giu;
+  /\b(api[_-]?key|authorization|bearer|cookie|password|secret|session[_-]?id|token)\b\s*[:=]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s,;"')\]}]+)/giu;
 const BEARER_TOKEN_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gu;
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
 const PRIVATE_KEY_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu;
-const SENSITIVE_METADATA_KEY_PATTERN = /\b(api[_-]?key|authorization|cookie|password|secret|session[_-]?id|token)\b/iu;
+// Boundaries are expressed as "anything that is not alphanumeric" because `_` is a word character,
+// so `\b` would reject `x_api_key` and never split camelCase (see normalizeMetadataKey).
+const SENSITIVE_METADATA_KEY_PATTERN =
+  /(?:^|[^a-z0-9])(api[_-]?key|authorization|cookie|password|secret|session[_-]?id|token)(?:[^a-z0-9]|$)/u;
+
+/**
+ * Metadata keys arrive as camelCase, snake_case, or SCREAMING_SNAKE_CASE. `\b` never matches a
+ * lowercase→uppercase boundary, so compound keys such as `accessToken`/`authorizationHeader` used
+ * to survive key-based redaction. Normalising to snake_case first keeps every existing form and
+ * still refuses unrelated words that merely contain a match (`tokenizer` stays untouched).
+ */
+function normalizeMetadataKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/gu, "$1_$2")
+    .replace(/[^A-Za-z0-9]+/gu, "_")
+    .toLowerCase();
+}
+
+function isSensitiveMetadataKey(key: string): boolean {
+  return SENSITIVE_METADATA_KEY_PATTERN.test(normalizeMetadataKey(key));
+}
 
 function addDays(isoTimestamp: string, days: number): string {
   const timestampMs = Date.parse(isoTimestamp);
@@ -240,7 +263,7 @@ export function redactLearningCaptureJson(value: unknown, depth = 0): unknown {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
       key,
-      SENSITIVE_METADATA_KEY_PATTERN.test(key) ? "[redacted-secret]" : redactLearningCaptureJson(entry, depth + 1)
+      isSensitiveMetadataKey(key) ? "[redacted-secret]" : redactLearningCaptureJson(entry, depth + 1)
     ])
   );
 }

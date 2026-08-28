@@ -171,30 +171,44 @@ describe("adversarial release-context hygiene", () => {
       expect.objectContaining({ kind: "forbidden-path" }),
     ]);
 
-    // DEFECT: the forbidden-*base*namen set is compared case-sensitively while only the
-    // *prefix* check is lower-cased, so a case-variant junk file that c9af564 was meant to
-    // catch survives ("THUMBS.DB" is exactly what Explorer writes on some volumes).
-    // Suggested fix: compare `basename.toLowerCase()` against a lower-cased basename set.
+    // Regression: the forbidden-basename set is compared lower-cased, so the case variants Explorer
+    // and archive tools actually write are caught like the canonical spelling.
     expect(
       checkReleaseContext(["Nested/DEEP/THUMBS.DB", "docs/.ds_store"]),
-    ).toEqual([]);
+    ).toEqual([
+      expect.objectContaining({
+        path: "Nested/DEEP/THUMBS.DB",
+        kind: "forbidden-path",
+      }),
+      expect.objectContaining({
+        path: "docs/.ds_store",
+        kind: "forbidden-path",
+      }),
+    ]);
 
-    // DEFECT: `.env` / `.env.local` are in FORBIDDEN_EXACT, which is matched against the whole
-    // normalized path, so any nested environment file (the realistic leak) is accepted as
-    // release context even though the root-level one is blocked.
-    // Suggested fix: move dotfile env names into the basename set (case-insensitively).
+    // Regression: `.env*` is forbidden as a *basename*, so a nested environment file (the realistic
+    // leak) can no longer be passed as release context, while reviewed templates stay allowed.
     expect(
       checkReleaseContext([
         "deploy/.env",
         "apps/web/.env.local",
         "packages/api/.env.production",
       ]),
-    ).toEqual([]);
+    ).toEqual([
+      expect.objectContaining({ path: "deploy/.env", kind: "forbidden-path" }),
+      expect.objectContaining({
+        path: "apps/web/.env.local",
+        kind: "forbidden-path",
+      }),
+      expect.objectContaining({
+        path: "packages/api/.env.production",
+        kind: "forbidden-path",
+      }),
+    ]);
+    expect(checkReleaseContext(["deploy/.env.example"])).toEqual([]);
 
-    // DEFECT: there is no root containment, and every prefix is anchored, so an absolute path
-    // (or "../" traversal) re-keys the whole prefix/lookup: generated artifacts, node_modules
-    // and secrets all walk free. ".DS_Store" is only caught here by accident of basename().
-    // Suggested fix: reject `path.posix.isAbsolute(relativePath)` and any "../" segment.
+    // Regression: every lookup is now keyed on a contained repository-relative path, so absolute
+    // and "../"-prefixed entries are rejected instead of re-keying the prefix checks to zero hits.
     expect(
       checkReleaseContext([
         "/Users/x/repo/artifacts/security/report.json",
@@ -202,10 +216,31 @@ describe("adversarial release-context hygiene", () => {
         "/Users/x/repo/.env",
         "../../somewhere/else/.env",
       ]),
-    ).toEqual([]);
+    ).toEqual([
+      expect.objectContaining({
+        path: "/Users/x/repo/artifacts/security/report.json",
+        kind: "forbidden-path",
+        message: expect.stringContaining("repository root"),
+      }),
+      expect.objectContaining({
+        path: "/Users/x/repo/node_modules/left-pad/index.js",
+        kind: "forbidden-path",
+        message: expect.stringContaining("repository root"),
+      }),
+      expect.objectContaining({
+        path: "/Users/x/repo/.env",
+        kind: "forbidden-path",
+        message: expect.stringContaining("repository root"),
+      }),
+      expect.objectContaining({
+        path: "../../somewhere/else/.env",
+        kind: "forbidden-path",
+        message: expect.stringContaining("repository root"),
+      }),
+    ]);
   });
 
-  it("accepts evidence references that escape the validated root", () => {
+  it("rejects evidence references that escape the validated root", () => {
     const root = scratch();
     materializeControlTargets(root);
     const outsideFile = writeFileAt(
@@ -237,16 +272,19 @@ describe("adversarial release-context hygiene", () => {
       }),
     );
 
-    // DEFECT: validateIssueEvidenceMap only asserts existsSync(cwd + evidencePath), and
-    // path.join happily walks out of the root, so a hostile evidence map can certify issues
-    // against files that are not part of the repository at all.
-    // Suggested fix: after normalizeRepoPath, reject absolute paths and any "../" segment
-    // before touching the filesystem.
-    expect(validateIssueEvidenceMap(map, { cwd: root })).toEqual([]);
+    // Regression: an evidence reference is contained before the filesystem is touched, so a path
+    // that leaves the validated root is reported instead of certifying an out-of-tree file.
+    expect(validateIssueEvidenceMap(map, { cwd: root })).toEqual([
+      expect.objectContaining({
+        issue: 245,
+        path: escaping,
+        message: expect.stringContaining("escapes the validated repository root"),
+      }),
+    ]);
 
-    // TRUE BEHAVIOR: an absolute evidence path is silently re-interpreted as repo-relative
-    // (path.join(root, "/etc/x") === root + "/etc/x"), so the reported finding names a path
-    // that nobody referenced and the real target is never checked.
+    // Regression: an absolute evidence path used to be silently re-interpreted as repo-relative by
+    // path.join(root, "/etc/x"), which named a path nobody referenced; it is now rejected as an
+    // escape without ever reaching the filesystem.
     const absolute = evidenceMap(
       fullEvidenceMap({
         245: [
@@ -270,12 +308,12 @@ describe("adversarial release-context hygiene", () => {
       expect.objectContaining({
         issue: 245,
         path: "/etc/agentic-does-not-exist",
-        message: expect.stringContaining("missing evidence path"),
+        message: expect.stringContaining("escapes the validated repository root"),
       }),
     ]);
   });
 
-  it("validates nothing about evidence-map entry shape, so garbage identifiers slip through", () => {
+  it("validates evidence-map entry identifiers and parent links before trusting them", () => {
     const root = scratch();
     materializeControlTargets(root);
 
@@ -295,17 +333,42 @@ describe("adversarial release-context hygiene", () => {
       { cwd: root },
     );
 
-    // DEFECT: the only identifier findings are the duplicate #246 and the missing #245.
-    // NaN is never deduplicated (Set uses SameValueZero), -5 / 245.5 / the string "246" are all
-    // accepted as issue identifiers, and the "must link back to parent #199" rule is silently
-    // skipped for NaN because every comparison against NaN is false. A string "246" also evades
-    // the duplicate check against numeric 246, so the same issue can be certified twice.
-    // Suggested fix: validate each entry up front with Number.isInteger(entry.issue) &&
-    // entry.issue > 0 (plus typeof entry.parent === "number" for non-workstream entries).
-    expect(issues.map((issue) => issue.issue)).toEqual([246, 245]);
+    // Regression: each entry identifier is validated up front (positive integer, typed), so the
+    // garbage identifiers are reported and can no longer key the dedupe or the parent-link rule.
+    // The string "246" is rejected instead of evading the duplicate check against numeric 246.
+    expect(issues.map((issue) => issue.issue)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      246,
+      245,
+    ]);
     expect(issues.map((issue) => issue.message)).toEqual([
+      'Evidence map entry identifier "NaN" (type number) must be a positive integer.',
+      'Evidence map entry identifier "-5" (type number) must be a positive integer.',
+      'Evidence map entry identifier "245.5" (type number) must be a positive integer.',
+      'Evidence map entry identifier "246" (type string) must be a positive integer.',
       "Issue #246 appears more than once.",
       "Issue #245 is missing from the evidence map.",
+    ]);
+
+    // A non-workstream entry must also carry a typed, positive-integer parent link.
+    const untypedParent = validateIssueEvidenceMap(
+      evidenceMap(
+        fullEvidenceMap({
+          245: [
+            {
+              ...validEvidenceEntry(245),
+              parent: "199",
+            } as unknown as IssueEvidenceEntry,
+          ],
+        }),
+      ),
+      { cwd: root },
+    );
+    expect(untypedParent.map((issue) => issue.message)).toEqual([
+      "Issue #245 must declare a positive integer parent link.",
     ]);
   });
 
@@ -422,7 +485,9 @@ describe("adversarial release-context hygiene", () => {
 // ---------------------------------------------------------------------------
 
 describe("adversarial SBOM inputs", () => {
-  it("copies unverified integrity and identifier data straight into the SPDX document", () => {
+  it("publishes only verifiable integrity data, purls, and unique element ids", () => {
+    const sha512Digest = createHash("sha512").update("left-pad").digest("base64");
+    const sha256Digest = createHash("sha256").update("good-sha256").digest("base64");
     const document = buildSpdxDocument(
       {
         lockfileVersion: 3,
@@ -431,6 +496,18 @@ describe("adversarial SBOM inputs", () => {
           "node_modules/legacy-md5": {
             version: "1.0.0",
             integrity: "md5-ZmFrZWhhc2h2YWx1ZQ==",
+          },
+          "node_modules/truncated-sha512": {
+            version: "1.0.0",
+            integrity: "sha512-ZmFrZQ==",
+          },
+          "node_modules/good-sha512": {
+            version: "1.0.0",
+            integrity: `sha512-${sha512Digest}`,
+          },
+          "node_modules/good-sha256": {
+            version: "1.0.0",
+            integrity: `sha256-${sha256Digest}`,
           },
           "node_modules/@broken": { version: "2.0.0" },
           "node_modules/a-b": { version: "1.0.0" },
@@ -441,49 +518,58 @@ describe("adversarial SBOM inputs", () => {
       new Date("2026-06-01T00:00:00.000Z"),
     );
 
-    const truncated = document.packages.find(
-      (entry) => entry.SPDXID === "SPDXRef-Package-node_modules-left-pad",
-    );
-    const foreignAlgorithm = document.packages.find(
-      (entry) => entry.SPDXID === "SPDXRef-Package-node_modules-legacy-md5",
-    );
-    const brokenScope = document.packages.find(
-      (entry) => entry.name === "@broken",
-    );
-    const collidedIds = document.packages.filter(
-      (entry) => entry.SPDXID === "SPDXRef-Package-node_modules-a-b",
-    );
+    const packageByName = (name: string) =>
+      document.packages.find((entry) => entry.name === name);
 
-    // DEFECT: `dependency.integrity` is copied verbatim and always labelled "SHA512" after only
-    // stripping a leading "sha512-", so a truncated digest becomes an empty checksumValue and a
-    // foreign-algorithm digest is published as a SHA512 checksum with "md5-" welded into the
-    // value. An SBOM consumer cannot tell the difference and verification fails on garbage.
-    // Suggested fix: parse `<alg>-<digest>`, emit only recognised algorithms, and require the
-    // expected digest shape before emitting a checksum entry.
-    expect(truncated?.checksums).toEqual([
-      { algorithm: "SHA512", checksumValue: "" },
+    // Regression: `integrity` is parsed as `<alg>-<base64 digest>` and an SPDX checksum is emitted
+    // only for a recognised algorithm whose digest decodes to that algorithm's exact byte length,
+    // so neither a digest-less `sha512-` nor a foreign `md5-…` can be welded into a "SHA512" value
+    // that a consumer cannot verify. Well-formed ssri values still publish unchanged.
+    expect(packageByName("left-pad")?.checksums).toBeUndefined();
+    expect(packageByName("legacy-md5")?.checksums).toBeUndefined();
+    expect(packageByName("truncated-sha512")?.checksums).toBeUndefined();
+    expect(packageByName("good-sha512")?.checksums).toEqual([
+      { algorithm: "SHA512", checksumValue: sha512Digest },
     ]);
-    expect(foreignAlgorithm?.checksums).toEqual([
-      { algorithm: "SHA512", checksumValue: "md5-ZmFrZWhhc2h2YWx1ZQ==" },
+    expect(packageByName("good-sha256")?.checksums).toEqual([
+      { algorithm: "SHA256", checksumValue: sha256Digest },
     ]);
 
-    // DEFECT: a scope-only package name contains no "/", so name.split("/") yields an undefined
-    // package segment and the published purl silently becomes ".../undefined@<version>".
-    // Suggested fix: require a package segment after the scope, else emit NOASSERTION.
-    expect(brokenScope?.externalRefs?.[0]?.referenceLocator).toBe(
-      "pkg:npm/%40broken/undefined@2.0.0",
+    // Regression: a scope-only package name has no segment after the "/", so no purl is published
+    // at all instead of the fabricated `pkg:npm/%40broken/undefined@2.0.0` locator.
+    expect(packageByName("@broken")?.externalRefs).toBeUndefined();
+    expect(packageByName("left-pad")?.externalRefs?.[0]?.referenceLocator).toBe(
+      "pkg:npm/left-pad@1.3.0",
     );
 
-    // DEFECT: slugify() is lossy, so two distinct lockfile paths collapse onto one SPDXID and
-    // break the SPDX ID-uniqueness invariant (a consumer resolves one entry and silently drops
-    // the other, together with its DEPENDS_ON relationship).
-    // Suggested fix: derive the ID from a hash of the full package path, or escape "/" uniquely.
-    expect(collidedIds).toHaveLength(2);
+    // Regression: element ids append a digest of the exact lockfile path, so `node_modules/a-b` and
+    // `node_modules/a/b` no longer collapse onto one SPDXID and the document-wide ID-uniqueness
+    // invariant (with both DEPENDS_ON relationships) holds.
+    const collidedPair = document.packages.filter((entry) =>
+      entry.SPDXID.startsWith("SPDXRef-Package-node_modules-a-b-"),
+    );
+    expect(collidedPair.map((entry) => entry.name).sort()).toEqual([
+      "a-b",
+      "a/b",
+    ]);
     expect(
-      document.relationships.filter(
-        (rel) => rel.relatedSpdxElement === "SPDXRef-Package-node_modules-a-b",
+      new Set(collidedPair.map((entry) => entry.SPDXID)).size,
+    ).toBe(collidedPair.length);
+    expect(
+      document.relationships.filter((relationship) =>
+        collidedPair.some(
+          (entry) => entry.SPDXID === relationship.relatedSpdxElement,
+        ),
       ),
     ).toHaveLength(2);
+    expect(
+      new Set(document.packages.map((entry) => entry.SPDXID)).size,
+    ).toBe(document.packages.length);
+    expect(
+      document.relationships.filter(
+        (relationship) => relationship.relationshipType === "DEPENDS_ON",
+      ),
+    ).toHaveLength(document.packages.length - 1);
   });
 });
 
@@ -623,7 +709,7 @@ describe("adversarial compliance registry inputs", () => {
     expect(() => loadComplianceControlRegistry(smuggledPath)).not.toThrow();
   });
 
-  it("certifies files outside the audited repository root with no containment check", () => {
+  it("refuses to certify files outside the audited repository root", () => {
     const root = scratch();
     materializeControlTargets(root);
     const outsideFile = writeFileAt(
@@ -646,73 +732,93 @@ describe("adversarial compliance registry inputs", () => {
       }),
     ]) as never;
 
-    // DEFECT: declared paths are resolved with path.resolve(cwd, entry) and never contained, so
-    // both escapes read as perfectly valid references: the missing-reference audit reports
-    // nothing, and the bundle hashes and certifies a file that lives outside the audited root.
-    // The same hole means a "../" runbook that lands on a real repo file is accepted, while a
-    // "./"-prefixed sibling would be reported as missing purely because of its spelling.
-    // Suggested fix: normalize each declared path at load time and reject absolute entries or
-    // entries containing a ".." segment, next to the existing duplicate-id checks.
+    // Regression: every declared path is normalised and contained at the audited root before it
+    // touches the filesystem, so both escapes now surface as missing references, the bundle
+    // refuses to publish, and the loader rejects the registry outright instead of letting a
+    // crafted `../` entry hash and certify a file the audit has no authority over.
     expect(
       findMissingComplianceRegistryReferences(hostileRegistry, { cwd: root }),
-    ).toEqual([]);
+    ).toEqual([
+      {
+        controlId: "GOV-02",
+        kind: "codePath",
+        path: escapingCodePath,
+      },
+      {
+        controlId: "GOV-02",
+        kind: "runbook",
+        path: escapingRunbook,
+      },
+    ]);
 
-    const bundle = buildComplianceEvidenceBundle(hostileRegistry, {
-      cwd: root,
-      now: new Date("2026-06-01T00:00:00.000Z"),
-    });
+    const hostileRegistryPath = writeJsonFile(
+      path.join(root, "registry-out-of-tree.json"),
+      hostileRegistry,
+    );
+    expect(() =>
+      loadComplianceControlRegistry(hostileRegistryPath),
+    ).toThrow(/out-of-tree codePaths path/u);
 
-    const outsideContents = readFileSync(outsideFile);
-    expect(bundle.controls[0]?.codePaths[0]).toEqual({
-      path: escapingCodePath,
-      exists: true,
-      kind: "file",
-      sha256: createHash("sha256").update(outsideContents).digest("hex"),
-    });
-    expect(bundle.controls[0]?.runbooks[0]?.exists).toBe(true);
-    expect(bundle.summary.missingReferences).toBe(0);
-    expect(bundle.controls[0]?.status).toBe("ready");
+    expect(() =>
+      buildComplianceEvidenceBundle(hostileRegistry, {
+        cwd: root,
+        now: new Date("2026-06-01T00:00:00.000Z"),
+      }),
+    ).toThrow(/contains 2 missing file references/iu);
+
+    // Negative control: the target really exists outside the audited root - it was the missing
+    // containment check, not a missing file, that used to make it certify.
+    expect(existsSync(outsideFile)).toBe(true);
+    expect(
+      createHash("sha256").update(readFileSync(outsideFile)).digest("hex"),
+    ).toHaveLength(64);
   });
 
-  it("certifies a required evidence artifact that points at nothing", () => {
+  it("refuses to certify a required evidence artifact that points at nothing", () => {
     const root = scratch();
     materializeControlTargets(root);
 
-    const bundle = buildComplianceEvidenceBundle(
-      registryDocument([
-        compliantControl({
-          evidenceArtifacts: [
-            {
-              path: "",
-              description: "Empty path resolves to the working directory",
-              required: true,
-            },
-            { path: ".", description: "Directory itself", required: true },
-          ],
-        }),
-      ]) as never,
-      {
+    const emptyArtifactRegistry = registryDocument([
+      compliantControl({
+        evidenceArtifacts: [
+          {
+            path: "",
+            description: "Empty path resolves to the working directory",
+            required: true,
+          },
+          { path: ".", description: "Directory itself", required: true },
+        ],
+      }),
+    ]) as never;
+
+    // Regression: a declared evidence artifact must name a non-empty path that resolves to an
+    // existing *file*, so `""` and `"."` (which resolve to the audited root directory) are published
+    // as missing and the strict `requireArtifacts` gate fails closed instead of certifying nothing.
+    expect(() =>
+      buildComplianceEvidenceBundle(emptyArtifactRegistry, {
         cwd: root,
         now: new Date("2026-06-01T00:00:00.000Z"),
         requireArtifacts: true,
-      },
-    );
+      }),
+    ).toThrow(/missing 2 required artifact/iu);
 
-    // DEFECT: an empty (or ".") artifact path resolves to the cwd, which always exists as a
-    // directory, so a required evidence artifact that names no file at all is published as
-    // satisfied and the strict `requireArtifacts` gate stays green. `findMissingCompliance…`
-    // never looks at evidenceArtifacts either, so nothing else catches it.
-    // Suggested fix: require a non-empty normalized relative path that resolves to an existing
-    // *file* (kind === "file") for every declared evidence artifact.
+    const bundle = buildComplianceEvidenceBundle(emptyArtifactRegistry, {
+      cwd: root,
+      now: new Date("2026-06-01T00:00:00.000Z"),
+    });
     expect(
       bundle.controls[0]?.evidenceArtifacts.map((artifact) => artifact.exists),
-    ).toEqual([true, true]);
+    ).toEqual([false, false]);
     expect(bundle.summary.totalRequiredArtifacts).toBe(2);
-    expect(bundle.summary.missingRequiredArtifacts).toBe(0);
-    expect(bundle.controls[0]?.status).toBe("ready");
+    expect(bundle.summary.missingRequiredArtifacts).toBe(2);
+    expect(bundle.controls[0]?.status).toBe("missing-artifacts");
+    expect(bundle.controls[0]?.missingRequiredArtifactPaths).toEqual([
+      "",
+      ".",
+    ]);
 
-    // Contrast: a whitespace path (which a typo is just as likely to produce) is reported, so
-    // the hole is specifically the empty/"." spelling rather than "any odd string".
+    // Contrast: a whitespace path was already reported, so the empty/"." spellings now join it
+    // instead of being the only artefact spellings that slip through as satisfied.
     const whitespace = buildComplianceEvidenceBundle(
       registryDocument([
         compliantControl({
@@ -733,7 +839,7 @@ describe("adversarial compliance registry inputs", () => {
 // ---------------------------------------------------------------------------
 
 describe("adversarial runtime vulnerability exceptions", () => {
-  it("accepts a package-only exception as a wildcard for every advisory and severity", () => {
+  it("rejects a package-only exception that would waive every advisory and severity", () => {
     const report = {
       auditReportVersion: 2,
       vulnerabilities: {
@@ -805,27 +911,29 @@ describe("adversarial runtime vulnerability exceptions", () => {
       },
     );
 
+    // Regression: the loader now refuses an exception that names no advisory and no severity, so a
+    // blanket waiver can no longer be smuggled in through one config line.
+    expect(() => loadRuntimeAuditExceptionFile(wildcardPath)).toThrow(
+      /must be scoped to an advisoryId and severity/u,
+    );
+
+    // Defence in depth: even a hand-built file that bypasses the loader cannot match, because
+    // `findMatchingException` requires the advisory id and an equal (never lower) severity - a
+    // critical advisory can no longer be silenced by an exception that never mentions a severity.
     const evaluation = evaluateRuntimeAuditReport(
       report,
-      loadRuntimeAuditExceptionFile(wildcardPath),
+      { version: 1, exceptions: [{ package: "left-pad", owner: "team", reason: "blanket waiver", expiresAt: "2099-01-01T00:00:00.000Z" }] } as never,
       {
         minimumSeverity: "moderate",
         now: new Date("2026-06-01T00:00:00.000Z"),
       },
     );
 
-    // DEFECT: loadRuntimeAuditExceptionFile does not require `advisoryId` or `severity`, and
-    // findMatchingException treats their absence as "matches anything", so one config line
-    // waives every current *and future* advisory on a package at every severity - scope
-    // escalation through a file that is meant to be narrow and time-boxed. Note a critical
-    // advisory was silenced by an exception that never mentions a severity at all.
-    // Suggested fix: require advisoryId + severity in the loader, and refuse to match an
-    // exception whose severity is lower than the finding's.
     expect(evaluation.summary).toMatchObject({
       findings: 3,
-      allowedFindings: 3,
-      blockingFindings: 0,
-      activeExceptions: 3,
+      allowedFindings: 0,
+      blockingFindings: 3,
+      activeExceptions: 0,
       expiredExceptions: 0,
     });
 

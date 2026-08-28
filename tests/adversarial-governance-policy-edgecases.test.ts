@@ -205,17 +205,35 @@ describe("adversarial governance policy edge cases", () => {
 
     // Same workspace settings, but the record is passed through without schema normalization:
     // buildAutonomyBudget()/assessWorkspaceGovernanceConformance() normalize internally, while
-    // the trust branch of simulateTaskPolicy reads the raw record.
-    // DEFECT: packages/policy/src/index.ts:1883-1884 evaluates
-    // `params.governance?.shadowReplayPolicy.promotionMode`, so a stored record whose
-    // `shadowReplayPolicy` object is absent throws TypeError instead of using the enterprise default
-    // (and a record with a partial object would silently fall through to the most permissive
-    // "validated_autonomy"/"allowed_with_confirmation" fallbacks on the next lines).
-    // Suggested fix: parse once at entry - `const governance = params.governance ? WorkspaceGovernanceSchema.parse(params.governance) : null`
-    // - and read promotionMode/rollbackOutcome/thresholds off that normalized value everywhere.
-    expect(() =>
-      simulateTaskPolicy({ ...strongSignals, governance: legacy }),
-    ).toThrow(TypeError);
+    // the trust branch of simulateTaskPolicy used to read the raw record.
+    // Regression: simulateTaskPolicy normalizes governance once at entry, so a stored record whose
+    // `shadowReplayPolicy` object is absent resolves to the enterprise default instead of throwing,
+    // and a record carrying a partial object can no longer fall through to the permissive
+    // "validated_autonomy"/"allowed_with_confirmation" fallbacks.
+    const legacyResult = simulateTaskPolicy({
+      ...strongSignals,
+      governance: legacy,
+    });
+    expect(legacyResult.decision).toEqual(parsedResult.decision);
+    expect(legacyResult.checks.map((check) => check.id)).toContain(
+      "learning-shadow-only",
+    );
+    expect(legacyResult.autonomyBudget?.shadowReplay.promotionMode).toBe(
+      "shadow_only",
+    );
+
+    const partialRecord = {
+      ...legacy,
+      shadowReplayPolicy: { enabled: true },
+    } as unknown as WorkspaceGovernance;
+    const partialResult = simulateTaskPolicy({
+      ...strongSignals,
+      governance: partialRecord,
+    });
+    expect(partialResult.decision).toEqual(parsedResult.decision);
+    expect(partialResult.autonomyBudget?.shadowReplay.thresholdSummary).toEqual(
+      parsedResult.autonomyBudget?.shadowReplay.thresholdSummary,
+    );
   });
 
   it("keeps the R4 auto-run ceiling from reading as a compliant workspace posture", () => {
@@ -360,6 +378,8 @@ describe("adversarial governance policy edge cases", () => {
     // config/governance/defaults.json cannot see the autonomy-widening thresholds.
     // Suggested fix: add classification entries for these keys to config/governance/defaults.json
     // so the documented posture covers every enterprise default.
+    // Left pinned in this sweep: config/** is audited data and read-only for the code-owner agents,
+    // so this one needs an operator data change rather than a code fix.
     expect(undocumented).toEqual([
       "shadowReplayPolicy.enabled",
       "shadowReplayPolicy.minimumMatchedEpisodes",
@@ -375,15 +395,21 @@ describe("adversarial governance policy edge cases", () => {
       options: { maxAutoPromoteRiskClass: "constructor" } as never,
     });
 
-    // TRUE BEHAVIOR (defect): the aggregate side of the same comparison is guarded with
-    // hasOwnProperty (rankPromotionRiskClass -> unrankable means "ceiling tripped"), but the
-    // ceiling side reads `riskClassOrder[thresholds.maxAutoPromoteRiskClass]` directly, so an
-    // inherited property name yields a function and `rank > fn` coerces to NaN -> never tripped.
-    // DEFECT: packages/policy/src/index.ts:549 `const ceilingRank = riskClassOrder[thresholds.maxAutoPromoteRiskClass];`
-    // Suggested fix: `const ceilingRank = rankPromotionRiskClass(thresholds.maxAutoPromoteRiskClass) ?? Infinity;`
-    // so an unrankable configured ceiling keeps (or tightens) the guardrail instead of disabling it.
-    expect(decision.guardrailsTripped).toEqual([]);
-    expect(decision.recommendation).toBe("promote");
+    // Regression: both sides of the ceiling comparison go through the hasOwnProperty-guarded
+    // ranker, and an unrankable configured ceiling is treated as tripped (fail-closed) instead of
+    // coercing to `NaN > fn` and silently disabling the guardrail.
+    expect(decision.guardrailsTripped).toEqual(["risk_class_ceiling"]);
+    expect(decision.recommendation).toBe("not_ready");
+    expect(decision.reasons).toContain(
+      "Configured auto-promotion ceiling constructor is not a rankable risk class, so automation promotion is withheld.",
+    );
+
+    // Contrast: a correctly configured ceiling still ranks and the guardrail behaves normally.
+    const ranked = recommendWorkflowPromotion({
+      aggregate: buildAggregate({ riskClass: "R2" }),
+      options: { maxAutoPromoteRiskClass: "R2" },
+    });
+    expect(ranked.guardrailsTripped).not.toContain("risk_class_ceiling");
   });
 });
 
@@ -392,21 +418,24 @@ describe("adversarial governance policy edge cases", () => {
 // ---------------------------------------------------------------------------
 
 describe("adversarial privacy and learning-capture controls", () => {
-  it("documents how quoted secret assignments survive learning-capture redaction", () => {
+  it("redacts quoted secret assignments in learning-capture text", () => {
     const unquoted = redactLearningCaptureText(
       "bootstrap api_key: ABC123DEF456",
     );
     expect(unquoted).toBe("bootstrap api_key=[redacted-secret]");
 
-    // DEFECT: the secret-value character class `[^\s;"')\]}]+` excludes quotes, so once a
-    // value starts with a quote the match yields zero characters and the whole quoted secret
-    // is captured verbatim (only the "token=" / "token:" inline form below is caught).
-    // Suggested fix: add an alternative that consumes an optional quoted span, e.g.
-    // `\b(key|token|...)\b\s*[:=]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s,"')\]}]+)`.
+    // Regression: the value class now carries an explicit quoted alternative, so the common
+    // YAML/env spelling of a secret assignment is redacted exactly like the bare-token form
+    // (previously the quote swallowed the match and the secret survived verbatim).
     const quoted = redactLearningCaptureText(
       'bootstrap api_key: "ABC123DEF456"',
     );
-    expect(quoted).toBe('bootstrap api_key: "ABC123DEF456"');
+    expect(quoted).toBe("bootstrap api_key=[redacted-secret]");
+
+    const singleQuoted = redactLearningCaptureText(
+      "bootstrap api_key: 'ABC123DEF456'",
+    );
+    expect(singleQuoted).toBe("bootstrap api_key=[redacted-secret]");
 
     const equalsForm = redactLearningCaptureText(
       "bootstrap token=abc123def456;",
@@ -414,27 +443,28 @@ describe("adversarial privacy and learning-capture controls", () => {
     expect(equalsForm).toBe("bootstrap token=[redacted-secret];");
   });
 
-  it("documents which secret-bearing metadata keys survive key-based JSON redaction", () => {
+  it("redacts camel-case secret-bearing metadata keys in captured JSON", () => {
     const redacted = redactLearningCaptureJson({
       API_KEY: "ABC123DEF456",
       apiKey: "ABC123DEF456",
       accessToken: "ABC123DEF456",
+      refreshToken: "ABC123DEF456",
+      tokenizer: "gpt-4",
       nested: { authorizationHeader: "ABC123DEF456" },
     }) as Record<string, unknown>;
 
     expect(redacted.API_KEY).toBe("[redacted-secret]");
     expect(redacted.apiKey).toBe("[redacted-secret]");
 
-    // DEFECT: SENSITIVE_METADATA_KEY_PATTERN anchors every alternative on \b, which never
-    // splits camelCase, so compound key names keep the raw secret in exported learning data
-    // ("ABC123DEF456" is readable while sibling keys are masked).
-    // Suggested fix: drop the leading \b and match camel/underscore boundaries, e.g.
-    // /(api[_-]?key|authorization|cookie|password|secret|session[_-]?id|token)/iu
-    // which also covers accessToken, refreshToken, authorizationHeader, xApiKey.
-    expect(redacted.accessToken).toBe("ABC123DEF456");
+    // Regression: sensitive-key matching normalizes the key to snake_case before testing it, so
+    // compound camel-case names are masked next to their snake/upper siblings, while an unrelated
+    // word that merely contains a sensitive token stays readable.
+    expect(redacted.accessToken).toBe("[redacted-secret]");
+    expect(redacted.refreshToken).toBe("[redacted-secret]");
+    expect(redacted.tokenizer).toBe("gpt-4");
     expect(
       (redacted.nested as Record<string, unknown>).authorizationHeader,
-    ).toBe("ABC123DEF456");
+    ).toBe("[redacted-secret]");
   });
 
   it("rejects hostile privacy registry configs instead of accepting an ambiguous inventory", () => {
