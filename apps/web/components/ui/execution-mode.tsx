@@ -117,7 +117,8 @@ export const executionModeFilterOptions: ExecutionModeFilterOption[] = [
 ];
 
 function isAgentExecutionMode(value: unknown): value is AgentExecutionMode {
-  return typeof value === "string" && value in executionModePresentations;
+  // `in` walks the prototype chain ("constructor"/"toString" would pass); Object.hasOwn does not.
+  return typeof value === "string" && Object.hasOwn(executionModePresentations, value);
 }
 
 export function extractArtifactExecutionMode(artifact?: Pick<Artifact, "metadata"> | null): AgentExecutionMode | null {
@@ -137,7 +138,7 @@ export function findTaskExecutionMode(
 }
 
 export function getExecutionModePresentation(mode?: AgentExecutionMode | null): ExecutionModePresentation {
-  if (!mode) {
+  if (!mode || !Object.hasOwn(executionModePresentations, mode)) {
     return unavailableExecutionModePresentation;
   }
 
@@ -145,7 +146,7 @@ export function getExecutionModePresentation(mode?: AgentExecutionMode | null): 
 }
 
 export function getImplementationTierPresentation(mode?: AgentExecutionMode | null): ImplementationTierPresentation {
-  if (!mode) {
+  if (!mode || !Object.hasOwn(executionModePresentations, mode)) {
     return unavailableImplementationTierPresentation;
   }
 
@@ -203,7 +204,18 @@ export function approvalMatchesExecutionModeFilter(
 }
 
 export function formatConfidencePercentage(confidence: number): string {
-  return `${Math.round(confidence * 100)}%`;
+  const percent = Math.round(confidence * 100);
+  // Never state absolute certainty (or impossibility) for a value that is only *near* the
+  // boundary: a 99.5% signal must not read "100%" beside an approval decision, and a 0.4% signal
+  // must not read "0%". Exact 0 and 1 stay exact so genuine zero rates (e.g. a 0 negative-outcome
+  // rate) still read truthfully.
+  if (percent >= 100 && confidence < 1) {
+    return "99%";
+  }
+  if (percent <= 0 && confidence > 0) {
+    return "1%";
+  }
+  return `${percent}%`;
 }
 
 export function ExecutionModeBadge({ mode }: { mode?: AgentExecutionMode | null }) {
