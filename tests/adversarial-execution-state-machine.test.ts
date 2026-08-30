@@ -359,6 +359,71 @@ describe("adversarial durable job state machine", () => {
     ).rejects.toBeInstanceOf(JobMutationError);
   });
 
+  it("skips an unmaterialisable exhausted row in the SQL sweep instead of wedging the worker tick", async () => {
+    // Regression: deadLetterExhaustedJobsWithClient re-threw on a mapJobRow failure, so a single
+    // exhausted row that no longer parses rolled back the whole claim transaction and re-appeared
+    // at the top of the next tick - permanently halting the Postgres queue. The sweep must skip
+    // the poison row and keep draining, surfacing the residual error only on an idle tick.
+    const healthy = docsJob("sql-sweep-healthy", { availableAt: at(600) });
+    const mapRow = (row: Record<string, unknown>): JobRecord => {
+      if (!row.job) {
+        throw new Error("jobs row is missing its record payload");
+      }
+      return row.job as JobRecord;
+    };
+
+    const saved: JobRecord[] = [];
+    const save = async (_client: unknown, job: JobRecord) => {
+      saved.push(job);
+    };
+
+    let sweepCalls = 0;
+    const client = {
+      query: async (text: string) => {
+        if (text.includes("attempt_count >= max_attempts")) {
+          sweepCalls += 1;
+          // First sweep select hits the poison row; once it is excluded the sweep is empty.
+          return { rows: sweepCalls === 1 ? [{ id: "poison-exhausted", corrupt: true }] : [] };
+        }
+        if (text.includes("attempt_count < max_attempts")) {
+          return { rows: [{ job: healthy }] };
+        }
+        return { rows: [] };
+      }
+    } as unknown as Parameters<typeof claimNextJobWithClient>[0];
+
+    const claimed = await claimNextJobWithClient(
+      client,
+      { runnerId: "sql-worker", leaseMs: 1_000, now: at(1_000) },
+      mapRow,
+      save
+    );
+
+    // The queue kept draining: the healthy job was claimed and the poison row was NOT dead-lettered.
+    expect(claimed?.id).toBe(healthy.id);
+    expect(sweepCalls).toBeGreaterThanOrEqual(2);
+    expect(saved.map((job) => job.id)).toEqual([healthy.id]);
+
+    // When the sweep's poison row is the only thing in the queue and nothing can be claimed, the
+    // deferred violation is still surfaced - as a typed error, not a raw schema throw.
+    let idleSweepCalls = 0;
+    const idleClient = {
+      query: async (text: string) => {
+        if (text.includes("attempt_count >= max_attempts")) {
+          idleSweepCalls += 1;
+          return { rows: idleSweepCalls === 1 ? [{ id: "poison-exhausted", corrupt: true }] : [] };
+        }
+        return { rows: [] };
+      }
+    } as unknown as Parameters<typeof claimNextJobWithClient>[0];
+
+    await expect(
+      claimNextJobWithClient(idleClient, { runnerId: "sql-worker", leaseMs: 1_000, now: at(1_000) }, mapRow, save)
+    ).rejects.toBeInstanceOf(JobMutationError);
+    // Only the healthy claim from the first half was ever persisted.
+    expect(saved.map((job) => job.id)).toEqual([healthy.id]);
+  });
+
   it("settles the job when the ownership re-read fails transiently", async () => {
     // Regression: settleIfOwnershipLost() awaited readLatest outside any try/catch, so a
     // single transient store read failure right after a *successful* handler rejected
@@ -647,5 +712,21 @@ describe("adversarial durable job state machine", () => {
     expect(beta.concurrencyKey).toBe("user-1:share:share-beta");
     expect(alpha.concurrencyKey).not.toBe(beta.concurrencyKey);
     expect(alpha.journal.sideEffectTarget).toBe("share:share-alpha");
+  });
+
+  it("clamps an over-long replayedFromJobId at enqueue time like contracts instead of throwing", () => {
+    // Regression: execution's deriveReplayedFromJobId returned the unclamped value while
+    // @agentic/contracts truncated to 200, so createJobRecord threw ZodError(too_big) on an
+    // over-long legacy reference that JobRecordSchema.parse accepted - the enqueue path and the
+    // read path disagreed. Both now clamp to the journal cap (max 200).
+    const longRef = "job-replayed-from-".padEnd(250, "x");
+    const record = createJobRecord({
+      userId: "user-1",
+      kind: "docs_render",
+      payload: { type: "docs_render", metadata: { replayedFromJobId: longRef } }
+    });
+
+    expect(record.journal.replayedFromJobId).toHaveLength(200);
+    expect(record.journal.replayedFromJobId).toBe(longRef.slice(0, 200));
   });
 });

@@ -274,7 +274,10 @@ function deriveReplayedFromJobId(payload: JobPayload): string | null {
     payload.metadata && typeof payload.metadata.replayedFromJobId === "string"
       ? payload.metadata.replayedFromJobId.trim()
       : "";
-  return candidate || null;
+  // Mirrors deriveReplayedFromJobId() in @agentic/contracts: truncating keeps the derived value
+  // inside the journal cap (replayedFromJobId max 200) so createJobRecord cannot throw on an
+  // over-long legacy reference that JobRecordSchema.parse would accept.
+  return candidate ? candidate.slice(0, 200) : null;
 }
 
 function deriveJobConcurrencyKey(userId: string, kind: JobKind, payload: JobPayload): string {

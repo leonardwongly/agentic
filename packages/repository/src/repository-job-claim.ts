@@ -111,7 +111,15 @@ export function claimNextJobFromStoreWithOutcome(store: JobStore, params: ClaimN
 
   for (const candidate of candidates) {
     if (isJobAttemptBudgetExhausted(candidate)) {
-      deadLettered.push(buildExhaustedJobDeadLetter(candidate, { at: claimedAt, runnerId: params.runnerId }));
+      // Bound the dead-letter work per tick (parity with the SQL sweep) and guard the
+      // re-parse so one unmaterialisable record cannot escape the whole claim.
+      if (deadLettered.length < MAX_EXHAUSTED_SWEEP_PER_TICK) {
+        try {
+          deadLettered.push(buildExhaustedJobDeadLetter(candidate, { at: claimedAt, runnerId: params.runnerId }));
+        } catch (error) {
+          claimFailure ??= describeClaimFailure(candidate, error);
+        }
+      }
       continue;
     }
 
@@ -145,9 +153,10 @@ export async function claimNextJobWithClient(
   const kinds = params.kinds?.map((kind) => JobKindSchema.parse(kind)) ?? [];
 
   // Same recovery contract as the file-backed claim: dead-letter jobs that already spent
-  // their attempt budget before looking for a claim, so a poison record can never make the
-  // worker tick throw (and therefore never blocks the jobs queued behind it).
-  await deadLetterExhaustedJobsWithClient(client, params, kinds, claimedAt, mapJobRow, saveJobWithClient);
+  // their attempt budget before looking for a claim. A row that cannot be materialised is
+  // skipped (never thrown) so it cannot wedge the worker tick; the residual error is only
+  // surfaced below, on a tick that produced no progress at all.
+  const sweep = await deadLetterExhaustedJobsWithClient(client, params, kinds, claimedAt, mapJobRow, saveJobWithClient);
 
   const values: unknown[] = [claimedAt];
   const maxRunningPerKind = normalizeSqlConcurrencyLimit(params.concurrencyLimits?.maxRunningPerKind);
@@ -245,6 +254,9 @@ export async function claimNextJobWithClient(
   }
 
   if (!claimable) {
+    if (sweep.swept === 0 && sweep.failure) {
+      throw sweep.failure;
+    }
     return null;
   }
 
@@ -260,6 +272,13 @@ export async function claimNextJobWithClient(
   return claimed;
 }
 
+type DeadLetterSweepOutcome = {
+  /** How many exhausted jobs were dead-lettered this tick. */
+  swept: number;
+  /** The first poison-record error hit, deferred so the caller decides whether to surface it. */
+  failure: JobMutationError | null;
+};
+
 async function deadLetterExhaustedJobsWithClient(
   client: PoolClient,
   params: ClaimNextJobParams,
@@ -267,28 +286,38 @@ async function deadLetterExhaustedJobsWithClient(
   claimedAt: string,
   mapJobRow: (row: Record<string, unknown>) => JobRecord,
   saveJobWithClient: (client: PoolClient, job: JobRecord) => Promise<void>
-): Promise<number> {
-  const values: unknown[] = [claimedAt];
-  const predicates = [CLAIMABLE_STATUS_PREDICATE, `attempt_count >= max_attempts`];
+): Promise<DeadLetterSweepOutcome> {
+  const baseValues: unknown[] = [claimedAt];
+  const basePredicates = [CLAIMABLE_STATUS_PREDICATE, `attempt_count >= max_attempts`];
 
   if (params.userId) {
-    values.push(params.userId);
-    predicates.push(`user_id = $${values.length}`);
+    baseValues.push(params.userId);
+    basePredicates.push(`user_id = $${baseValues.length}`);
   }
 
   if (kinds.length > 0) {
-    values.push(kinds);
-    predicates.push(`kind = any($${values.length}::text[])`);
+    baseValues.push(kinds);
+    basePredicates.push(`kind = any($${baseValues.length}::text[])`);
   }
 
   if (params.queue) {
-    values.push(params.queue);
-    predicates.push(`queue_name = $${values.length}`);
+    baseValues.push(params.queue);
+    basePredicates.push(`queue_name = $${baseValues.length}`);
   }
 
   let swept = 0;
+  let failure: JobMutationError | null = null;
+  const excludedIds: string[] = [];
 
   for (let guard = 0; guard < MAX_EXHAUSTED_SWEEP_PER_TICK; guard += 1) {
+    const values = [...baseValues];
+    const predicates = [...basePredicates];
+
+    if (excludedIds.length > 0) {
+      values.push(excludedIds);
+      predicates.push(`id <> all($${values.length}::text[])`);
+    }
+
     const result = await client.query(
       `
         select * from jobs
@@ -309,7 +338,12 @@ async function deadLetterExhaustedJobsWithClient(
     try {
       exhausted = mapJobRow(result.rows[0]);
     } catch (error) {
-      throw describeRowClaimFailure(error);
+      // A row that cannot be materialised must never wedge the worker tick. Exclude it from the
+      // rest of this sweep so the queue keeps draining, and defer a typed error to the caller,
+      // which surfaces it only on a tick that produced no progress at all.
+      failure ??= describeRowClaimFailure(error);
+      excludedIds.push(String(result.rows[0].id));
+      continue;
     }
 
     if (!isJobAttemptBudgetExhausted(exhausted)) {
@@ -324,5 +358,5 @@ async function deadLetterExhaustedJobsWithClient(
     swept += 1;
   }
 
-  return swept;
+  return { swept, failure };
 }
