@@ -6,6 +6,8 @@ import { createRepository } from "@agentic/repository";
 import { POST as approvalResponseRoute } from "../apps/web/app/api/approvals/[id]/respond/route";
 import { POST as goalsCreateRoute } from "../apps/web/app/api/goals/route";
 import { POST as replayJobRoute } from "../apps/web/app/api/jobs/[id]/replay/route";
+import { GET as genericJobRoute } from "../apps/web/app/api/jobs/[id]/route";
+import { GET as jobEventsRoute } from "../apps/web/app/api/jobs/[id]/events/route";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../apps/web/lib/auth";
 import {
   resetAuthSessionStateStoreForTesting,
@@ -282,5 +284,32 @@ describe("adversarial route handlers: races & double-submit", () => {
 
     expect(boundaryResponse.status).toBe(404);
     await expect(boundaryResponse.json()).resolves.toMatchObject({ error: `Job ${boundary} was not found.` });
+  });
+
+  it("bounds the path id on the job detail and event-stream routes like the replay route", async () => {
+    // Regression: jobs/[id]/route.ts guarded only `!id.trim()` and jobs/[id]/events/route.ts only
+    // trimmed (no length bound), then echoed the raw id in the 404 body and reused it on every SSE
+    // poll. Both now share the replay route's 1-200 JobIdSchema.
+    const getRequest = (url: string) =>
+      new Request(url, { method: "GET", headers: { [AGENTIC_ACCESS_KEY_HEADER]: TEST_ACCESS_KEY } });
+    const giantId = "x".repeat(5_000);
+
+    const detail = await genericJobRoute(getRequest(`http://localhost/api/jobs/${giantId}`), {
+      params: Promise.resolve({ id: giantId })
+    });
+    expect(detail.status).toBe(400);
+    await expect(detail.json()).resolves.toMatchObject({ error: "Job id must be 1-200 characters." });
+
+    const events = await jobEventsRoute(getRequest(`http://localhost/api/jobs/${giantId}/events`), {
+      params: Promise.resolve({ id: giantId })
+    });
+    expect(events.status).toBe(400);
+    await expect(events.json()).resolves.toMatchObject({ error: "Job id must be 1-200 characters." });
+
+    // Whitespace-only ids are refused on the detail surface too.
+    const blankDetail = await genericJobRoute(getRequest("http://localhost/api/jobs/%20"), {
+      params: Promise.resolve({ id: "   " })
+    });
+    expect(blankDetail.status).toBe(400);
   });
 });

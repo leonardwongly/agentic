@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   buildGoalJobResultSummary
 } from "@agentic/worker-runtime";
@@ -16,6 +17,10 @@ type RouteContext = {
     id: string;
   }>;
 };
+
+// Same bound as the replay/events siblings: the raw path param must be normalized before it is
+// used in lookups or echoed in error bodies (response amplification + log poisoning).
+const JobIdSchema = z.string().trim().min(1).max(200);
 
 const APPROVAL_JOB_FAILURE_MESSAGE = "Approval follow-up failed. Replay the job or inspect worker logs.";
 const APPROVAL_NOTIFICATION_FAILURE_MESSAGE = "Approval notification failed. Replay the job or inspect worker logs.";
@@ -50,13 +55,16 @@ export async function GET(request: Request, context: RouteContext) {
   try {
     const principal = await requireApiSession(request);
     const { id } = await context.params;
+    const parsedJobId = JobIdSchema.safeParse(id);
 
-    if (!id.trim()) {
-      throw new ApiRouteError(400, "Job id is required.");
+    if (!parsedJobId.success) {
+      throw new ApiRouteError(400, "Job id must be 1-200 characters.");
     }
 
+    const jobId = parsedJobId.data;
+
     const repository = await getSeededRepository();
-    const job = await repository.getJob(id, principal.userId);
+    const job = await repository.getJob(jobId, principal.userId);
 
     if (job?.kind === "approval_follow_up" && job.payload.type === "approval_follow_up") {
       const followUpPayload = ApprovalFollowUpJobPayloadSchema.parse(job.payload);
@@ -282,7 +290,7 @@ export async function GET(request: Request, context: RouteContext) {
       );
     }
 
-    throw new ApiRouteError(404, `Job ${id} was not found.`);
+    throw new ApiRouteError(404, `Job ${jobId} was not found.`);
   } catch (error) {
     return handleApiError(error, "Failed to load job.");
   }
