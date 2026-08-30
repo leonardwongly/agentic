@@ -52,12 +52,14 @@ export type ExecutionResult = {
  */
 function findApprovedApproval(task: Task, bundle: GoalBundle, approvalId?: string | null): ApprovalRequest | null {
   if (approvalId) {
-    const selected = bundle.approvals.find(
-      (candidate) => candidate.id === approvalId && candidate.taskId === task.id && candidate.decision === "approved"
-    );
+    const named = bundle.approvals.find((candidate) => candidate.id === approvalId && candidate.taskId === task.id);
 
-    if (selected) {
-      return selected;
+    if (named) {
+      // The operator named a specific approval for THIS task: only it may authorise execution. If
+      // it is not approved, do not silently substitute a different approved approval (a rejected
+      // or stale id would otherwise run the wrong intent). A named approval that belongs to a
+      // different task in a mixed batch still falls back to this task's own approved one.
+      return named.decision === "approved" ? named : null;
     }
   }
 

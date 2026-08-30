@@ -353,6 +353,44 @@ describe("adversarial approval/orchestrator hand-off", () => {
     expect(createEvent).toHaveBeenCalledTimes(2);
   });
 
+  it("blocks execution when the named approval for the task is not approved instead of substituting", async () => {
+    // Regression: findApprovedApproval() fell back to the task's first approved approval whenever
+    // the named approvalId did not resolve to an *approved* one, so a stale or rejected id
+    // silently ran a different approved intent. A named-but-not-approved approval for this task
+    // must authorise nothing.
+    const approvedNote = buildApproval({
+      id: "approval-note",
+      taskId: TASK_ID,
+      decision: "approved",
+      actionIntent: noteIntent("Note that must not run")
+    });
+    const rejectedOther = buildApproval({
+      id: "approval-calendar-rejected",
+      taskId: TASK_ID,
+      decision: "rejected",
+      actionIntent: scheduleIntent("Meeting that was rejected")
+    });
+    const bundle = buildBundle({ approvals: [approvedNote, rejectedOther] });
+    const createLocalNote = vi.fn().mockResolvedValue({ slug: "note-must-not-exist" });
+    const createEvent = vi.fn().mockResolvedValue({ id: "event-1", htmlLink: null });
+    const adapters: ActionExecutionAdapters = {
+      notes: { createLocalNote },
+      calendar: { createEvent, updateEvent: vi.fn(), listUpcomingEvents: vi.fn() }
+    };
+
+    const { result } = await executeApprovedTask({
+      task: bundle.tasks[0]!,
+      bundle,
+      approvalId: "approval-calendar-rejected",
+      adapters,
+      connectorReadiness: approvalGradeConnectors
+    });
+
+    // The rejected approval does not authorise the approved note intent.
+    expect(createLocalNote).not.toHaveBeenCalled();
+    expect(result.action).not.toBe("create_note");
+  });
+
   it("keeps the authoritative result envelope per task when deliveries duplicate", async () => {
     // Regression: reconcileExecutionResults() took results.find(taskId) - first match wins -
     // while executeApprovedTasks() emits one result per requested id. A duplicate delivery
