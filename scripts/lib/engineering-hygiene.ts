@@ -258,15 +258,23 @@ export function checkReleaseContext(paths: string[]) {
       continue;
     }
 
+    // Forbidden generated/local directories take precedence over the `.env.example` template
+    // exemption: a same-named file under node_modules/, dist/, etc. leaks exactly as badly, so it
+    // must be refused before the template carve-out is considered.
+    if (DEFAULT_RELEASE_FORBIDDEN_PREFIXES.some(prefix => lowerPath.startsWith(prefix.toLowerCase()))) {
+      issues.push({
+        path: relativePath,
+        kind: "forbidden-path",
+        message: "Local, generated, or environment-specific path must not be part of release context."
+      });
+      continue;
+    }
+
     if (isProtectedReleaseException(relativePath)) {
       continue;
     }
 
-    if (
-      DEFAULT_RELEASE_FORBIDDEN_EXACT.has(relativePath) ||
-      isForbiddenReleaseBasename(relativePath) ||
-      DEFAULT_RELEASE_FORBIDDEN_PREFIXES.some(prefix => lowerPath.startsWith(prefix.toLowerCase()))
-    ) {
+    if (DEFAULT_RELEASE_FORBIDDEN_EXACT.has(relativePath) || isForbiddenReleaseBasename(relativePath)) {
       issues.push({
         path: relativePath,
         kind: "forbidden-path",

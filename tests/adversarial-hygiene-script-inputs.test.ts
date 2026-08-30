@@ -207,6 +207,16 @@ describe("adversarial release-context hygiene", () => {
     ]);
     expect(checkReleaseContext(["deploy/.env.example"])).toEqual([]);
 
+    // Regression: the `.env.example`/`.env.sample` template exemption used to run before the
+    // forbidden-directory check, so a same-named file inside a generated/local directory passed
+    // the gate. Forbidden directories now take precedence over the template carve-out.
+    expect(checkReleaseContext(["node_modules/.env.example"])).toEqual([
+      expect.objectContaining({ path: "node_modules/.env.example", kind: "forbidden-path" }),
+    ]);
+    expect(checkReleaseContext(["dist/secret/.env.sample"])).toEqual([
+      expect.objectContaining({ path: "dist/secret/.env.sample", kind: "forbidden-path" }),
+    ]);
+
     // Regression: every lookup is now keyed on a contained repository-relative path, so absolute
     // and "../"-prefixed entries are rejected instead of re-keying the prefix checks to zero hits.
     expect(
