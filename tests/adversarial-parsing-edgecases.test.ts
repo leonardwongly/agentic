@@ -234,9 +234,12 @@ describe("adversarial parsing: dashboard collection query", () => {
       expect(() => limitOf(search)).toThrow(ApiRouteError);
     }
 
-    // Range violations keep going through the schema bound, so the message stays the documented one.
-    expect(() => limitOf(`?limit=${MAX_COLLECTION_PAGE_LIMIT + 1}`)).toThrow();
-    expect(() => limitOf("?limit=0")).toThrow();
+    // Regression: an out-of-range but decimal-shaped limit used to slip past the shape check and
+    // reject with a raw, field-less Zod message, while a malformed limit got the friendly
+    // ApiRouteError. Both now surface the same bounded ApiRouteError.
+    expect(() => limitOf(`?limit=${MAX_COLLECTION_PAGE_LIMIT + 1}`)).toThrow(ApiRouteError);
+    expect(() => limitOf("?limit=0")).toThrow(ApiRouteError);
+    expect(() => limitOf(`?limit=${MAX_COLLECTION_PAGE_LIMIT + 1}`)).toThrow(/decimal page size between 1 and/);
   });
 
   it("guards that present-but-empty query parameters reset to the default instead of failing", () => {

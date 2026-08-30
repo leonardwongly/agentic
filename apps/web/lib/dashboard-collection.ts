@@ -84,6 +84,9 @@ function pageLimitQueryParam(url: URL): number | undefined {
     return undefined;
   }
 
+  // Validate both shape and range here so every invalid limit surfaces the same bounded
+  // ApiRouteError; otherwise a decimal-but-out-of-range value (e.g. "500") would slip past the
+  // shape check and reject with a raw, field-less Zod message while "abc" got the friendly one.
   if (!DECIMAL_PAGE_LIMIT_PATTERN.test(raw)) {
     throw new ApiRouteError(
       400,
@@ -91,7 +94,16 @@ function pageLimitQueryParam(url: URL): number | undefined {
     );
   }
 
-  return Number(raw);
+  const value = Number(raw);
+
+  if (!Number.isInteger(value) || value < 1 || value > MAX_COLLECTION_PAGE_LIMIT) {
+    throw new ApiRouteError(
+      400,
+      `Invalid dashboard limit; expected a decimal page size between 1 and ${MAX_COLLECTION_PAGE_LIMIT}.`
+    );
+  }
+
+  return value;
 }
 
 function assertAllowedQueryKeys(request: Request, allowedFilters: DashboardCollectionFilter[]) {
