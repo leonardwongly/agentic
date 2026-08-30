@@ -37,6 +37,11 @@ function idSegmentSchema(maxLength: number): z.ZodString {
     .regex(/^[^:\s\p{C}]+$/u, { message: 'Value must not contain ":", whitespace, or invisible characters.' });
 }
 
+const timeZoneResolutionCache = new Map<string, boolean>();
+// Valid IANA zones number only a few hundred; cap the memo so hostile unique inputs cannot grow it
+// without bound.
+const TIME_ZONE_RESOLUTION_CACHE_LIMIT = 2000;
+
 function isResolvableTimeZone(value: string): boolean {
   const candidate = value.trim();
 
@@ -44,14 +49,26 @@ function isResolvableTimeZone(value: string): boolean {
     return false;
   }
 
+  const cached = timeZoneResolutionCache.get(candidate);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  let resolvable: boolean;
   try {
     // Same probe every consumer performs at render time (Intl.DateTimeFormat `timeZone`),
     // so an unresolvable zone can never be persisted and only explode later as RangeError.
     new Intl.DateTimeFormat("en-US", { timeZone: candidate });
-    return true;
+    resolvable = true;
   } catch {
-    return false;
+    resolvable = false;
   }
+
+  if (timeZoneResolutionCache.size < TIME_ZONE_RESOLUTION_CACHE_LIMIT) {
+    timeZoneResolutionCache.set(candidate, resolvable);
+  }
+
+  return resolvable;
 }
 
 /** IANA time zone identifier, trimmed and resolvable by `Intl.DateTimeFormat`. */
@@ -4172,6 +4189,9 @@ export function deriveAgentImplementationTier(executionMode: AgentExecutionMode)
     case "deterministic_scaffold":
     case "custom_prompt_scaffold":
     case "manual_review_required":
+      return "experimental";
+    default:
+      // Unknown/future modes stay on the conservative, non-production tier.
       return "experimental";
   }
 }
