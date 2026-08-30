@@ -236,6 +236,37 @@ describe("adversarial governance policy edge cases", () => {
     );
   });
 
+  it("preserves valid shadow-replay overrides when a sibling field is invalid instead of widening autonomy", () => {
+    // Regression: normalizeGovernanceForPolicy parsed the merged replay policy through
+    // `.catch(defaultWorkspaceShadowReplayPolicy)`, so a single invalid field discarded every
+    // valid override and silently re-enabled replay (enabled:true, precision 0.8) - widening
+    // autonomy. The per-field normalization must keep valid siblings and default only the bad field.
+    const legacy = buildLegacyGovernanceWithoutReplayPolicy();
+    const hostile = {
+      ...legacy,
+      shadowReplayPolicy: {
+        enabled: false,
+        promotionMode: "disabled",
+        minimumPrecision: 0.99,
+        maximumNegativeOutcomeRate: 5, // invalid (> 1): used to poison the whole object
+      },
+    } as unknown as WorkspaceGovernance;
+
+    const result = simulateTaskPolicy({
+      capabilities: ["send"] as ["send"],
+      confidence: 0.95,
+      title: "Send the customer follow-up",
+      memories: buildFreshApprovalMemories(),
+      scorecard: buildScorecard(),
+      learningValidation: buildReplayValidation(),
+      governance: hostile,
+    });
+
+    // Valid overrides survive the invalid sibling; autonomy is NOT widened back to the defaults.
+    expect(result.autonomyBudget?.shadowReplay.enabled).toBe(false);
+    expect(result.autonomyBudget?.shadowReplay.promotionMode).toBe("disabled");
+  });
+
   it("keeps the R4 auto-run ceiling from reading as a compliant workspace posture", () => {
     const report = assessWorkspaceGovernanceConformance(
       WorkspaceGovernanceSchema.parse({

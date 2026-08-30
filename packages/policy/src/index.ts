@@ -43,13 +43,23 @@ const riskClassOrder: Record<RiskClass, number> = {
 
 type WorkspaceShadowReplayPolicy = WorkspaceGovernance["shadowReplayPolicy"];
 
-const ShadowReplayPolicyWithDefaultsSchema = WorkspaceShadowReplayPolicySchema.catch(defaultWorkspaceShadowReplayPolicy);
+type ShadowReplayField = keyof typeof defaultWorkspaceShadowReplayPolicy;
+
+// Each field schema already carries its enterprise default, so parsing a present value through it
+// yields either the validated value or nothing - letting us fall back to the default per-field
+// instead of failing the whole object open.
+const shadowReplayFieldSchemas = WorkspaceShadowReplayPolicySchema.shape as Record<
+  ShadowReplayField,
+  { safeParse: (value: unknown) => { success: true; data: unknown } | { success: false } }
+>;
 
 /**
- * Stored governance records can predate the nested `shadowReplayPolicy` object (or carry a partial
- * one). Zod only back-fills nested fields when the whole object is parsed, so normalize through the
- * schema here: a legacy record resolves to the enterprise posture instead of throwing or silently
- * widening autonomy. `null`/`undefined` stays `null` so callers keep their explicit no-governance path.
+ * Normalize a possibly-partial `shadowReplayPolicy` field-by-field. A present-but-invalid field (or
+ * an unknown key) keeps the enterprise default for that field only, so valid sibling overrides are
+ * preserved. This deliberately never falls back to the whole-object default, because doing so would
+ * widen autonomy (e.g. re-enable replay or lower the precision bar) whenever any single field is
+ * malformed. `null`/`undefined` governance stays `null` so callers keep their explicit
+ * no-governance path.
  */
 function normalizeGovernanceForPolicy(governance: WorkspaceGovernance | null | undefined): WorkspaceGovernance | null {
   if (!governance) {
@@ -62,13 +72,22 @@ function normalizeGovernanceForPolicy(governance: WorkspaceGovernance | null | u
   }
 
   const declared: unknown = governance.shadowReplayPolicy;
-  const partial = declared && typeof declared === "object" && !Array.isArray(declared) ? declared : {};
-  const shadowReplayPolicy: WorkspaceShadowReplayPolicy = ShadowReplayPolicyWithDefaultsSchema.parse({
-    ...defaultWorkspaceShadowReplayPolicy,
-    ...partial
-  });
+  const partial =
+    declared && typeof declared === "object" && !Array.isArray(declared) ? (declared as Record<string, unknown>) : {};
 
-  return { ...governance, shadowReplayPolicy };
+  const shadowReplayPolicy: Record<string, unknown> = { ...defaultWorkspaceShadowReplayPolicy };
+  for (const key of Object.keys(defaultWorkspaceShadowReplayPolicy) as ShadowReplayField[]) {
+    if (!(key in partial)) {
+      continue;
+    }
+    const field = shadowReplayFieldSchemas[key].safeParse(partial[key]);
+    if (field.success) {
+      shadowReplayPolicy[key] = field.data;
+    }
+    // Present-but-invalid values keep the default; unknown keys are never copied over.
+  }
+
+  return { ...governance, shadowReplayPolicy: shadowReplayPolicy as WorkspaceShadowReplayPolicy };
 }
 
 type AgentPoisoningDetection = {
@@ -1887,7 +1906,7 @@ export function simulateTaskPolicy(params: {
   const governanceApprovalReason = getGovernanceApprovalReason({
     capabilities: params.capabilities,
     riskClass,
-    governance: params.governance
+    governance
   });
 
   if (governanceApprovalReason) {
