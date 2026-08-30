@@ -4823,7 +4823,13 @@ class PostgresRepository implements AgenticRepository {
       const workflow = workflowsById.get(goal.workflowId);
 
       if (!workflow) {
-        throw new Error(`Workflow ${goal.workflowId} is missing for goal ${goalId}.`);
+        // Mirror the file store's bundleFromStore: a dangling workflow reference must skip the
+        // goal (degrade like an orphaned task) rather than throw inside this flatMap, or a single
+        // orphaned goal bricks the entire list. Surface a diagnostic so it is not silently swallowed.
+        console.warn(
+          `[repository] skipping goal ${goalId}: workflow ${goal.workflowId} is missing from the runtime store.`
+        );
+        return [];
       }
 
       return [
