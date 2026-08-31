@@ -1847,12 +1847,38 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
 
   async function listEpisodeFiles(yearHint?: string): Promise<string[]> {
     await ensureStoreSeeded();
-    const years = yearHint ? [yearHint] : await readdir(episodicRootPath());
+
+    let years: string[];
+
+    if (yearHint) {
+      years = [yearHint];
+    } else {
+      // Only treat well-formed 4-digit year *directories* as buckets. A stray non-directory
+      // entry (an operator README.txt or a macOS .DS_Store) used to be fed to readdir() and
+      // throw a raw, untyped ENOTDIR that disabled every healthy episode lookup.
+      const rootEntries = await readdir(episodicRootPath(), { withFileTypes: true });
+      years = rootEntries.filter((entry) => entry.isDirectory() && /^\d{4}$/.test(entry.name)).map((entry) => entry.name);
+    }
+
     const files: string[] = [];
 
     for (const year of years) {
       const yearDirectory = episodicYearPath(year);
-      if (!(await pathExists(yearDirectory))) {
+
+      let yearStats;
+      try {
+        yearStats = await stat(yearDirectory);
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+          continue;
+        }
+
+        throw new SelfImprovementStorageError(`Failed to inspect episode year directory ${yearDirectory}.`, error);
+      }
+
+      // With an explicit (already validated) year hint, still tolerate the path being a stray
+      // file rather than a directory instead of throwing ENOTDIR.
+      if (!yearStats.isDirectory()) {
         continue;
       }
 
@@ -1960,13 +1986,16 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
     async getSemanticPattern(id: string) {
       const validatedId = validateInput(boundedString(80), id, "Semantic pattern id is invalid.");
       const semanticFile = await readSemanticFile();
-      return semanticFile.patterns[validatedId] ?? null;
+      // Guard with an own-property check: indexing the parsed record with a caller-supplied key
+      // otherwise returns inherited Object.prototype members (e.g. "__proto__", "constructor")
+      // as if they were SemanticPattern records instead of the documented null.
+      return Object.hasOwn(semanticFile.patterns, validatedId) ? semanticFile.patterns[validatedId] : null;
     },
 
     async upsertSemanticPattern(pattern: SemanticPattern) {
       const validated = validateInput(SemanticPatternSchema, pattern, "Semantic pattern payload is invalid.");
       const semanticFile = await readSemanticFile();
-      const existing = semanticFile.patterns[validated.id];
+      const existing = Object.hasOwn(semanticFile.patterns, validated.id) ? semanticFile.patterns[validated.id] : undefined;
       const normalizedPattern = validateInput(SemanticPatternSchema, {
         ...validated,
         createdAt: existing?.createdAt ?? validated.createdAt,
@@ -1996,13 +2025,28 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
 
       const slug = sanitizeSlug(`${validated.skill}-${validated.task}`);
       const datePrefix = validated.timestamp.slice(0, 10);
+      const idSuffix = sanitizeSlug(validated.id);
       let filePath = resolveWithinBase("episodic", year, `${datePrefix}-${slug}.json`);
 
-      if (await pathExists(filePath)) {
+      // Escalate the disambiguation counter until a free slot is found instead of trying only
+      // once. The single retry mapped several distinct ids to the same sanitised suffix (e.g.
+      // "ep-alpha!", "ep-alpha?", "ep-alpha." all -> "ep-alpha"), so a third collision reused
+      // the second write's still-taken path and renamed straight over it, destroying an episode
+      // with no error raised.
+      for (let attempt = 1; await pathExists(filePath); attempt += 1) {
         const existingEpisodeAtPath = await readEpisodeFile(filePath);
-        if (existingEpisodeAtPath.id !== validated.id) {
-          filePath = resolveWithinBase("episodic", year, `${datePrefix}-${slug}-${sanitizeSlug(validated.id)}.json`);
+
+        if (existingEpisodeAtPath.id === validated.id) {
+          throw new SelfImprovementConflictError(`Episode ${validated.id} already exists.`);
         }
+
+        if (attempt > 1_000) {
+          throw new SelfImprovementConflictError(
+            `Unable to find a free episode path for ${validated.id} after ${attempt} attempts.`
+          );
+        }
+
+        filePath = resolveWithinBase("episodic", year, `${datePrefix}-${slug}-${idSuffix}-${attempt}.json`);
       }
 
       await mkdir(episodicYearPath(year), { recursive: true });

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { createActorContextFromPrincipal } from "../../../../../lib/actor-context";
 import { type AuthPrincipal } from "../../../../../lib/auth";
 import { ApiRouteError, authenticatedJson } from "../../../../../lib/api-response";
@@ -50,20 +51,27 @@ type RouteContext = {
   }>;
 };
 
+// Sibling routes (memory/[id], goals/[id], templates/[id]) bound path ids the same way.
+const JobIdSchema = z.string().trim().min(1).max(200);
+
 async function replayDeadLetterJob(params: { principal: AuthPrincipal; context: RouteContext }) {
   const principal = params.principal;
   const actorContext = createActorContextFromPrincipal(principal);
   const { id } = await params.context.params;
+  // Bound and normalise the raw path param before it is used: an unbounded id would otherwise
+  // be echoed back verbatim in the 404/409 bodies (response amplification + log poisoning).
+  const parsedJobId = JobIdSchema.safeParse(id);
 
-  if (!id.trim()) {
-    throw new ApiRouteError(400, "Job id is required.");
+  if (!parsedJobId.success) {
+    throw new ApiRouteError(400, "Job id must be 1-200 characters.");
   }
 
+  const jobId = parsedJobId.data;
   const repository = await getSeededRepository();
-  const job = await repository.getJob(id, principal.userId);
+  const job = await repository.getJob(jobId, principal.userId);
 
   if (!job) {
-    throw new ApiRouteError(404, `Job ${id} was not found.`);
+    throw new ApiRouteError(404, `Job ${jobId} was not found.`);
   }
 
   const sharedWorkspaceId = "workspaceId" in job.payload ? job.payload.workspaceId ?? null : null;
@@ -78,7 +86,7 @@ async function replayDeadLetterJob(params: { principal: AuthPrincipal; context: 
   }
 
   if (job.status !== "dead_letter") {
-    throw new ApiRouteError(409, `Job ${id} is not dead-lettered and cannot be replayed.`);
+    throw new ApiRouteError(409, `Job ${jobId} is not dead-lettered and cannot be replayed.`);
   }
 
   if (job.kind === "approval_follow_up" && job.payload.type === "approval_follow_up") {
@@ -323,7 +331,7 @@ async function replayDeadLetterJob(params: { principal: AuthPrincipal; context: 
     );
   }
 
-  throw new ApiRouteError(409, `Job ${id} cannot be replayed from this endpoint.`);
+  throw new ApiRouteError(409, `Job ${jobId} cannot be replayed from this endpoint.`);
 }
 
 export const POST = createGovernedMutationRoute<undefined, RouteContext>(

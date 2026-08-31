@@ -208,6 +208,54 @@ export function isJobClaimableAt(job: JobRecord, now: number): boolean {
   return false;
 }
 
+/**
+ * Whether a job has already spent every attempt it is allowed, so a further claim would
+ * be pointless. `claimJobRecord` unconditionally bumps attemptCount, and both
+ * JobRecordSchema (attemptCount) and the execution journal (attempt) are capped at 25, so
+ * claiming past the cap used to throw a raw ZodError out of claimNextJob and wedge every
+ * other job in scope behind the poison record. Mirrors the exhausted-retry predicate the
+ * durable queue already uses when deciding to dead-letter (`attemptCount >= maxAttempts`).
+ */
+export function isJobAttemptBudgetExhausted(job: JobRecord): boolean {
+  return job.attemptCount >= job.maxAttempts;
+}
+
+/**
+ * Build the dead-letter successor for a job whose attempt budget was exhausted while it
+ * held (or had already lost) the lease. Claim-time recovery cannot reuse `deadLetterJob`
+ * because that mutation asserts the *current* owner, and the whole point here is that the
+ * previous owner is gone (expired lease / spent budget).
+ */
+export function buildExhaustedJobDeadLetter(job: JobRecord, params: { at: string; runnerId: string }): JobRecord {
+  const trimmedError = `Claim refused: exhausted attempt budget (${job.attemptCount}/${job.maxAttempts}).`.slice(
+    0,
+    1000
+  );
+
+  return JobRecordSchema.parse({
+    ...job,
+    status: "dead_letter",
+    claimedAt: job.claimedAt,
+    leaseExpiresAt: null,
+    deadLetteredAt: params.at,
+    lastError: trimmedError,
+    journal: buildJobLifecycleJournal({
+      job,
+      status: "dead_letter",
+      at: params.at,
+      summary: `Job dead-lettered after ${job.attemptCount}/${job.maxAttempts} attempts.`,
+      error: trimmedError,
+      metadata: {
+        reason: "attempt_budget_exhausted_on_claim",
+        refusedRunnerId: params.runnerId,
+        exhaustedFromStatus: job.status
+      },
+      retryCount: job.attemptCount
+    }),
+    updatedAt: params.at
+  });
+}
+
 function normalizeConcurrencyLimit(value: number | undefined): number | null {
   if (!Number.isInteger(value) || value === undefined || value <= 0) {
     return null;

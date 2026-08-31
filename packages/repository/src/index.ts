@@ -179,7 +179,7 @@ import {
   recordWorkerRuntimeHealthInStore,
   recordWorkerRuntimeHealthWithClient
 } from "./worker-runtime-health-store";
-import { claimNextJobFromStore, claimNextJobWithClient } from "./repository-job-claim";
+import { claimNextJobFromStoreWithOutcome, claimNextJobWithClient } from "./repository-job-claim";
 import {
   queryJobReadinessSummary,
   queryProviderCredentialReadinessSummary,
@@ -219,6 +219,15 @@ import {
 } from "./repository-types";
 import { buildWorkspaceAuditExport } from "./workspace-audit-export";
 import { acquireFileStoreLock } from "./file-store-lock";
+import { resolveRepositoryDatabaseUrl } from "./repository-database-url-guard";
+import {
+  goalShareFingerprintStoreKey,
+  integrationStoreKey,
+  memoryStoreKey,
+  providerCredentialSecretStoreKey,
+  providerCredentialStoreKey,
+  workspaceMemberStoreKey
+} from "./repository-store-keys";
 const UserRecordSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -351,28 +360,6 @@ function upsertById<T extends { id: string }>(items: T[], nextItem: T): T[] {
 function upsertByKey<T>(items: T[], nextItem: T, getKey: (item: T) => string): T[] {
   const nextKey = getKey(nextItem);
   return [...items.filter((item) => getKey(item) !== nextKey), nextItem];
-}
-
-function integrationStoreKey(account: Pick<IntegrationAccount, "id" | "userId">): string {
-  return `${account.userId}:${account.id}`;
-}
-
-function workspaceMemberStoreKey(member: Pick<WorkspaceMember, "workspaceId" | "userId">): string {
-  return `${member.workspaceId}:${member.userId}`;
-}
-
-function providerCredentialStoreKey(credential: Pick<ProviderCredential, "id" | "userId">): string {
-  return `${credential.userId}:${credential.id}`;
-}
-
-function providerCredentialSecretStoreKey(
-  record: Pick<ProviderCredentialSecretRecord, "credentialId" | "kind" | "userId">
-): string {
-  return `${record.userId}:${record.credentialId}:${record.kind}`;
-}
-
-function goalShareFingerprintStoreKey(share: Pick<GoalShareRecord, "tokenFingerprint">): string {
-  return share.tokenFingerprint.toLowerCase();
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {
@@ -542,7 +529,14 @@ function bundleFromStore(store: RuntimeStore, goalId: string): GoalBundle | null
   const workflow = store.workflows.find((candidate) => candidate.id === goal.workflowId);
 
   if (!workflow) {
-    throw new Error(`Workflow ${goal.workflowId} is missing for goal ${goalId}.`);
+    // A dangling workflow reference must degrade like an orphaned task (skip the goal) rather
+    // than throw inside the aggregate `.map()`; a single corrupt goal used to brick listGoals()
+    // and the whole dashboard with no operator repair path. Surface a diagnostic so it is not
+    // silently swallowed.
+    console.warn(
+      `[repository] skipping goal ${goalId}: workflow ${goal.workflowId} is missing from the runtime store.`
+    );
+    return null;
   }
 
   return normalizeGoalBundleResponsibilities(
@@ -1012,9 +1006,12 @@ class FileRepository implements AgenticRepository {
       const message = error instanceof Error ? error.message : String(error);
 
       if (message.includes("ENOENT")) {
-        const store = createEmptyStore();
-        await this.writeStore(store);
-        return store;
+        // A missing store is a lazy in-memory default. Reads must never persist it: the
+        // auto-init write used to happen outside `withMutationLock()`, so a read-only call
+        // both required write access and could rename an empty store over a concurrent
+        // committed mutation. Auto-init is now deferred to the mutation paths, which call
+        // `writeStore()` while holding the lock.
+        return createEmptyStore();
       }
 
       if (isStoreCorruptionError(error)) {
@@ -2259,8 +2256,16 @@ class FileRepository implements AgenticRepository {
   }): Promise<JobRecord | null> {
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const claimed = claimNextJobFromStore(store, params);
+      // `deadLettered` jobs were attempted past their budget: persisting them here (even on
+      // a tick that found nothing to claim) is what keeps a single poison record from
+      // blocking the rest of the queue forever.
+      const { claimed, deadLettered } = claimNextJobFromStoreWithOutcome(store, params);
+
       if (!claimed) {
+        if (deadLettered.length > 0) {
+          await this.writeStore(store);
+        }
+
         return null;
       }
       store.jobs = upsertById(store.jobs, claimed);
@@ -2459,10 +2464,16 @@ class FileRepository implements AgenticRepository {
   }
 
   async saveMemory(record: MemoryRecord): Promise<MemoryRecord> {
+    // Validate before acquiring the lock or reading the store so a rejected save can never
+    // touch (or create) the persisted file.
+    const validated = MemoryRecordSchema.parse(record);
+
     return this.withMutationLock(async () => {
       const store = await this.readStore();
-      const validated = MemoryRecordSchema.parse(record);
-      store.memories = upsertById(store.memories, validated);
+      // Key on `userId:id` (like integration/provider-credential stores) because memory ids are
+      // caller-supplied and only unique per user; keying on bare `id` let one user's write
+      // silently destroy another user's colliding record. The public `id` field is unchanged.
+      store.memories = upsertByKey(store.memories, validated, memoryStoreKey);
       await this.writeStore(store);
       return MemoryRecordSchema.parse(clone(validated));
     });
@@ -4795,7 +4806,13 @@ class PostgresRepository implements AgenticRepository {
       const workflow = workflowsById.get(goal.workflowId);
 
       if (!workflow) {
-        throw new Error(`Workflow ${goal.workflowId} is missing for goal ${goalId}.`);
+        // Mirror the file store's bundleFromStore: a dangling workflow reference must skip the
+        // goal (degrade like an orphaned task) rather than throw inside this flatMap, or a single
+        // orphaned goal bricks the entire list. Surface a diagnostic so it is not silently swallowed.
+        console.warn(
+          `[repository] skipping goal ${goalId}: workflow ${goal.workflowId} is missing from the runtime store.`
+        );
+        return [];
       }
 
       return [
@@ -8007,10 +8024,7 @@ class PostgresRepository implements AgenticRepository {
 export function createRepository(options?: { storePath?: string; databaseUrl?: string }): AgenticRepository {
   assertWorkspaceGovernanceStartupConfig();
 
-  // Explicit file-backed test stores must win over an ambient DATABASE_URL so
-  // unrelated Postgres-backed suites do not leak pools and state into file mode.
-  const databaseUrl =
-    options?.databaseUrl ?? (options?.storePath === undefined ? process.env.DATABASE_URL : undefined);
+  const databaseUrl = resolveRepositoryDatabaseUrl(options);
 
   if (databaseUrl) {
     return new PostgresRepository(databaseUrl);

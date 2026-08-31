@@ -8,6 +8,8 @@ dist
 build/*.pdf
 build/*.docx
 build/*.json
+build/*.log
+.kiro/
 docs-preview.md
 .env
 .env.local

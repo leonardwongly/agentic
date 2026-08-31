@@ -48,6 +48,18 @@ function isMissingFileError(error: unknown): boolean {
   return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
+// Resolve the readable slug for a directory entry, or null when the file is not a markdown
+// note whose basename satisfies the exact contract enforced by safeNotePath()/readLocalNote().
+// Keeping the lister on the same contract guarantees every surfaced id can be opened back.
+function noteSlugForEntry(entryName: string): string | null {
+  if (!entryName.endsWith(".md")) {
+    return null;
+  }
+
+  const slug = entryName.slice(0, -".md".length);
+  return LocalNoteSlugSchema.safeParse(slug).success ? slug : null;
+}
+
 export function defaultLocalNotesBasePath(): string {
   const configured = process.env.AGENTIC_NOTES_PATH?.trim();
 
@@ -148,9 +160,14 @@ async function parseLocalNote(notePath: string): Promise<LocalNoteDocument> {
     throw error;
   }
 
+  // Strip a leading BOM once so it never leaks into the parsed title or a re-serialised heading.
+  content = content.replace(/^\uFEFF/, "");
+
   const slug = path.basename(notePath, ".md");
   const titleLine = content.split("\n").find((line) => line.trim().startsWith("# "));
-  const title = titleLine ? titleLine.replace(/^#\s+/, "").trim() : slug.replace(/-/g, " ");
+  // Trim before the anchored replace so detection (which trims) and stripping agree; otherwise a
+  // leading-whitespace/BOM line matches the finder yet defeats `^#\s+` and reports "# Title".
+  const title = titleLine ? titleLine.trim().replace(/^#\s+/, "").trim() : slug.replace(/-/g, " ");
 
   return LocalNoteDocumentSchema.parse({
     id: slug,
@@ -174,7 +191,7 @@ export async function listLocalNotes(basePath = defaultLocalNotesBasePath()): Pr
   const entries = await readdir(resolvedBase, { withFileTypes: true });
   const notes = await Promise.all(
     entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .filter((entry) => entry.isFile() && noteSlugForEntry(entry.name) !== null)
       .map((entry) => parseLocalNote(path.join(resolvedBase, entry.name)))
   );
 

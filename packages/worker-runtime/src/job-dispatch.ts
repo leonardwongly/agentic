@@ -24,6 +24,7 @@ import {
 import { createJobRecord } from "@agentic/execution";
 import { logInfo, recordCounter, withSpan } from "@agentic/integrations";
 import type { ApprovalQueueRepositoryPort, QueueRepositoryPort } from "@agentic/repository";
+import { delay } from "./runtime-delay";
 import {
   buildAutopilotProcessJobIdempotencyKey,
   buildAutopilotProcessPayload,
@@ -682,7 +683,9 @@ export async function enqueueApprovalFollowUpJob(params: {
   );
 }
 
-export async function respondToApprovalAndEnqueueFollowUpJob(params: {
+type ApprovalFollowUpBundle = Awaited<ReturnType<ApprovalQueueRepositoryPort["respondToApproval"]>>;
+type ApprovalFollowUpJob = JobRecord & { payload: ApprovalFollowUpJobPayload };
+type ApprovalFollowUpDecisionParams = {
   repository: ApprovalQueueRepositoryPort;
   userId: string;
   approvalId: string;
@@ -690,9 +693,97 @@ export async function respondToApprovalAndEnqueueFollowUpJob(params: {
   actorContext: ActorContext;
   scope?: ApprovalDecisionScope;
   rationale?: string | null;
-}): Promise<{
-  bundle: Awaited<ReturnType<ApprovalQueueRepositoryPort["respondToApproval"]>>;
-  job: JobRecord & { payload: ApprovalFollowUpJobPayload };
+};
+
+// The follow-up job is enqueued after the decision is already durable, so a single lost write
+// would strand the approved task; give the transient store faults a couple of short retries.
+const FOLLOW_UP_ENQUEUE_ATTEMPTS = 3;
+const FOLLOW_UP_ENQUEUE_BACKOFF_MS = [50, 150];
+
+function isAlreadyHandledApprovalError(error: unknown): boolean {
+  // Structural check: `ApprovalMutationError` lives in @agentic/repository, which this package
+  // deliberately depends on type-only to keep the runtime package graph acyclic.
+  return error instanceof Error && (error as { code?: unknown }).code === "already_handled";
+}
+
+async function enqueueFollowUpJobWithRecovery(
+  repository: ApprovalQueueRepositoryPort,
+  job: ApprovalFollowUpJob
+): Promise<ApprovalFollowUpJob> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < FOLLOW_UP_ENQUEUE_ATTEMPTS; attempt += 1) {
+    try {
+      return (await repository.enqueueJob(job)) as ApprovalFollowUpJob;
+    } catch (error) {
+      lastError = error;
+
+      if (attempt + 1 < FOLLOW_UP_ENQUEUE_ATTEMPTS) {
+        await delay(FOLLOW_UP_ENQUEUE_BACKOFF_MS[attempt] ?? 0);
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * Recover an approved action whose follow-up job never landed.
+ *
+ * Without the atomic `respondToApprovalAndEnqueueJob` mutation the fallback commits two
+ * separate writes: decide first, enqueue second. If the enqueue fails the decision is already
+ * durable, so every later response is rejected as `already_handled` and the task stays
+ * "queued" forever with nothing left to replay. Re-drive the job from the persisted decision
+ * instead: the payload is deterministic and `enqueueJob` dedupes on the
+ * `approval-follow-up:<approvalId>:<actionId>:<decision>` idempotency key, so replaying the
+ * missing write yields exactly one job - the guarantee the atomic port gives. Ports without
+ * the optional reads cannot be healed here and keep surfacing the original error.
+ */
+async function redriveLostFollowUpJob(
+  params: ApprovalFollowUpDecisionParams,
+  buildJob: (bundle: ApprovalFollowUpBundle) => ApprovalFollowUpJob
+): Promise<{ bundle: ApprovalFollowUpBundle; job: ApprovalFollowUpJob } | null> {
+  const { repository, userId, approvalId, decision } = params;
+
+  if (!repository.listApprovals || !repository.getGoalBundleForUser) {
+    return null;
+  }
+
+  try {
+    const approvals = await repository.listApprovals(userId);
+    const approval = approvals.find((candidate) => candidate.id === approvalId);
+
+    if (!approval || approval.decision !== decision) {
+      return null;
+    }
+
+    const bundle = await repository.getGoalBundleForUser(approval.goalId, userId);
+    const recordedApproval = bundle?.approvals.find((candidate) => candidate.id === approvalId);
+
+    if (!bundle || !recordedApproval || recordedApproval.decision !== decision) {
+      return null;
+    }
+
+    const job = await enqueueFollowUpJobWithRecovery(repository, buildJob(bundle));
+
+    logInfo("worker.job.approval_follow_up.redriven", {
+      jobId: job.id,
+      jobKind: job.kind,
+      userId,
+      goalId: job.payload.goalId,
+      approvalId
+    });
+    recordCounter("worker.job.approval_follow_up.redriven.total", 1, { jobKind: job.kind });
+    return { bundle, job };
+  } catch {
+    // Never mask the original rejection of the duplicate response with a recovery failure.
+    return null;
+  }
+}
+
+export async function respondToApprovalAndEnqueueFollowUpJob(params: ApprovalFollowUpDecisionParams): Promise<{
+  bundle: ApprovalFollowUpBundle;
+  job: ApprovalFollowUpJob;
 }> {
   return withSpan(
     "worker.job.enqueue.approval_follow_up.after_decision",
@@ -702,7 +793,7 @@ export async function respondToApprovalAndEnqueueFollowUpJob(params: {
       approvalId: params.approvalId
     },
     async () => {
-      const buildJob = (bundle: Awaited<ReturnType<ApprovalQueueRepositoryPort["respondToApproval"]>>) => {
+      const buildJob = (bundle: ApprovalFollowUpBundle) => {
         const approval = bundle.approvals.find((candidate) => candidate.id === params.approvalId);
 
         if (!approval) {
@@ -748,14 +839,32 @@ export async function respondToApprovalAndEnqueueFollowUpJob(params: {
             buildJob
           })
         : await (async () => {
-            const bundle = await params.repository.respondToApproval({
-              approvalId: params.approvalId,
-              decision: params.decision,
-              actor: params.actorContext,
-              scope: params.scope,
-              rationale: params.rationale
-            });
-            const job = await params.repository.enqueueJob(buildJob(bundle));
+            let bundle: ApprovalFollowUpBundle;
+
+            try {
+              bundle = await params.repository.respondToApproval({
+                approvalId: params.approvalId,
+                decision: params.decision,
+                actor: params.actorContext,
+                scope: params.scope,
+                rationale: params.rationale
+              });
+            } catch (error) {
+              // `already_handled` on a two-step port is ambiguous: the reviewer may be
+              // double-clicking, or the previous response committed the decision and lost the
+              // enqueue. Try the second reading first so the approved action still runs.
+              const redriven = isAlreadyHandledApprovalError(error)
+                ? await redriveLostFollowUpJob(params, buildJob)
+                : null;
+
+              if (!redriven) {
+                throw error;
+              }
+
+              return redriven;
+            }
+
+            const job = await enqueueFollowUpJobWithRecovery(params.repository, buildJob(bundle));
             return { bundle, job };
           })();
       const job = result.job as JobRecord & { payload: ApprovalFollowUpJobPayload };

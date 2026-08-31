@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { requireApiSession } from "../../../../../lib/auth";
 import { ApiRouteError, authenticatedStreamResponse, handleApiError, withApiTelemetry } from "../../../../../lib/api-response";
 import {
@@ -14,6 +15,10 @@ type RouteContext = {
   }>;
 };
 
+// Same bound as the sibling job routes: the id is looked up and echoed in the 404 body, and
+// re-used on every poll of the stream, so it must be normalized once up front.
+const JobIdSchema = z.string().trim().min(1).max(200);
+
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_HEARTBEAT_MS = 15_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -25,11 +30,13 @@ export async function GET(request: Request, context: RouteContext) {
     try {
       const principal = await requireApiSession(request);
       const { id } = await context.params;
-      const jobId = id.trim();
+      const parsedJobId = JobIdSchema.safeParse(id);
 
-      if (!jobId) {
-        throw new ApiRouteError(400, "Job id is required.");
+      if (!parsedJobId.success) {
+        throw new ApiRouteError(400, "Job id must be 1-200 characters.");
       }
+
+      const jobId = parsedJobId.data;
 
       const repository = await getSeededRepository();
       const firstJob = await repository.getJob(jobId, principal.userId);

@@ -263,4 +263,101 @@ describe("DashboardOperationsTowerCard", () => {
     expect(html).toContain(SHARED_JOB_REPLAY_DENIED_REASON);
     expect(html).toContain('disabled=""');
   });
+
+  it("shows the permission-denial reason for every gated job remediation, not only replay", () => {
+    // Regression: the visible denial reason rendered only when remediation.kind === "replay_job",
+    // so a gated "release_expired_lease" / "cancel_job" button hid the reason in a title tooltip on
+    // a disabled (non-focusable) button. All three remediation kinds are gated by the same
+    // canReplayDeadLetterJobs flag, so the reason must be visible in the DOM for each of them.
+    const operations = {
+      generatedAt: "2026-04-21T00:00:00.000Z",
+      autonomyPosture: {
+        status: "attention",
+        level: "operator_review",
+        label: "Operator review",
+        summary: "A stale lease is visible, but recovery is restricted.",
+        reasons: [],
+        stats: ["Mode notify only"],
+        overridePaths: []
+      },
+      shellEffectiveness: {
+        status: "attention",
+        summary: "A stale lease still needs recovery.",
+        measurementWindowDays: 30,
+        windowStartedAt: "2026-03-22T00:00:00.000Z",
+        approvalSampleCount: 1,
+        medianApprovalDecisionSeconds: 900,
+        recoveryStartCount: 0,
+        recoveryResolvedCount: 0,
+        medianRecoveryStartSeconds: null,
+        pendingApprovalCount: 0,
+        openRuntimeIssueCount: 1,
+        metrics: ["1 runtime issue"],
+        highlights: ["Viewers can inspect the stale lease, but release remains disabled."]
+      },
+      asyncExecution: {
+        status: "attention",
+        queuedJobs: 0,
+        retryingJobs: 0,
+        runningJobs: 1,
+        deadLetterJobs: 0,
+        expiredLeaseCount: 1,
+        stalePendingCount: 0,
+        issueCount: 1,
+        oldestPendingJobAgeSeconds: null,
+        maxPendingJobAgeSeconds: 900,
+        items: [
+          {
+            id: "operations-job-job-2",
+            jobId: "job-2",
+            label: "Stale lease on outbound job",
+            summary: "The lease expired; the job can be released back to the queue.",
+            severity: "attention",
+            status: "running",
+            updatedAt: "2026-04-21T00:00:00.000Z",
+            target: {
+              section: "operations",
+              itemId: "operations-job-job-2",
+              label: "Inspect job"
+            },
+            remediation: {
+              kind: "release_expired_lease",
+              label: "Release expired lease",
+              permission: "editor",
+              note: "Release remains restricted to recovery-capable workspace roles."
+            }
+          }
+        ]
+      },
+      connectorHealth: {
+        status: "healthy",
+        totalCount: 0,
+        connectedCount: 0,
+        degradedCount: 0,
+        reconnectRequiredCount: 0,
+        refreshFailedCount: 0,
+        revokedCount: 0,
+        expiredCount: 0,
+        validationStaleCount: 0,
+        issueCount: 0,
+        items: []
+      }
+    } satisfies NonNullable<DashboardData["operations"]>;
+
+    const html = renderToStaticMarkup(
+      <DashboardOperationsTowerCard
+        operations={operations}
+        expanded
+        highlightedItemId={null}
+        getItemAnchorId={(itemId) => itemId}
+        navigateToSection={() => undefined}
+        canReplayDeadLetterJobs={false}
+        replayPermissionReason={SHARED_JOB_REPLAY_DENIED_REASON}
+      />
+    );
+
+    expect(html).toContain("Release expired lease");
+    // The denial reason is now visible in the DOM for a non-replay remediation too.
+    expect(html).toContain(SHARED_JOB_REPLAY_DENIED_REASON);
+  });
 });

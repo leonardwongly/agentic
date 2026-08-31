@@ -396,7 +396,7 @@ export function DashboardOperationsTowerCard(props: DashboardOperationsTowerCard
               {item.remediation ? <span className="pill">{item.remediation.permission.replace("_", " ")} access</span> : null}
               {item.remediation ? <span className="pill">{item.remediation.note}</span> : null}
             </div>
-            {item.remediation?.kind === "replay_job" && !canReplayDeadLetterJobs ? (
+            {item.remediation && !canReplayDeadLetterJobs ? (
               <small className="operator-product-subtitle">{replayPermissionReason}</small>
             ) : null}
           </div>

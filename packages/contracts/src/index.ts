@@ -1,5 +1,85 @@
 import { z } from "zod";
 
+/**
+ * Shared text, identity and time-zone guards.
+ *
+ * `String.prototype.trim` strips Unicode whitespace (NBSP, ideographic space, ...) but
+ * leaves zero-width / directional / word-joiner format characters (U+200B, U+200E, U+2060,
+ * U+202E) and control characters alone, so `.trim().min(1)` on its own still accepts text
+ * that renders as nothing. The guards below keep ordinary untrusted free text working
+ * (letters, digits, punctuation, symbols and emoji all count as visible) and only refuse
+ * input that is invisible-only or that would corrupt a `:`-joined composite key.
+ */
+const VISIBLE_CODE_POINT_PATTERN = /\p{L}|\p{N}|\p{P}|\p{S}/u;
+
+function hasVisibleCodePoint(value: string): boolean {
+  return VISIBLE_CODE_POINT_PATTERN.test(value);
+}
+
+/** Trimmed, non-blank text that actually renders as something (invisible-only is rejected). */
+function withVisibleText(schema: z.ZodString): z.ZodString {
+  return schema.refine(hasVisibleCodePoint, {
+    message: "Value must contain at least one visible character."
+  });
+}
+
+/**
+ * Separator-safe id segment. Segments are joined with `:` into delivery / side-effect
+ * targets, so a segment carrying the separator (or invisible characters) lets two
+ * different tuples collapse onto one identical composite target.
+ */
+function idSegmentSchema(maxLength: number): z.ZodString {
+  return z
+    .string()
+    .trim()
+    .min(1)
+    .max(maxLength)
+    .regex(/^[^:\s\p{C}]+$/u, { message: 'Value must not contain ":", whitespace, or invisible characters.' });
+}
+
+const timeZoneResolutionCache = new Map<string, boolean>();
+// Valid IANA zones number only a few hundred; cap the memo so hostile unique inputs cannot grow it
+// without bound.
+const TIME_ZONE_RESOLUTION_CACHE_LIMIT = 2000;
+
+function isResolvableTimeZone(value: string): boolean {
+  const candidate = value.trim();
+
+  if (!candidate) {
+    return false;
+  }
+
+  const cached = timeZoneResolutionCache.get(candidate);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  let resolvable: boolean;
+  try {
+    // Same probe every consumer performs at render time (Intl.DateTimeFormat `timeZone`),
+    // so an unresolvable zone can never be persisted and only explode later as RangeError.
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate });
+    resolvable = true;
+  } catch {
+    resolvable = false;
+  }
+
+  if (timeZoneResolutionCache.size < TIME_ZONE_RESOLUTION_CACHE_LIMIT) {
+    timeZoneResolutionCache.set(candidate, resolvable);
+  }
+
+  return resolvable;
+}
+
+/** IANA time zone identifier, trimmed and resolvable by `Intl.DateTimeFormat`. */
+function timeZoneSchema(maxLength?: number): z.ZodString {
+  const bounded = z.string().trim().min(1);
+
+  return (maxLength === undefined ? bounded : bounded.max(maxLength)).refine(isResolvableTimeZone, {
+    message: 'Value must be a resolvable IANA time zone identifier (e.g. "UTC", "America/New_York").'
+  });
+}
+
 export const capabilityValues = [
   "read",
   "search",
@@ -574,9 +654,11 @@ const defaultWorkflowResponsibilityAudit: {
 export const WorkflowResponsibilityAssigneeSchema = z
   .object({
     kind: WorkflowResponsibilityAssigneeKindSchema,
-    userId: z.string().min(1).nullable().default(null),
+    // Accountability identifiers are stored, rendered and compared downstream, so they
+    // must survive trimming and can never be invisible-only (U+00A0 / U+200B style actors).
+    userId: withVisibleText(z.string().trim().min(1)).nullable().default(null),
     workspaceRole: WorkspaceRoleSchema.nullable().default(null),
-    systemActor: z.string().min(1).max(100).nullable().default(null),
+    systemActor: withVisibleText(z.string().trim().min(1).max(100)).nullable().default(null),
     label: z.string().min(1).max(120)
   })
   .strict()
@@ -889,14 +971,14 @@ export const TaskSchema = TaskInputSchema.transform((task) => ({
 }));
 
 export const MemoryRecordSchema = z.object({
-  id: z.string().min(1),
-  userId: z.string().min(1),
-  category: z.string().min(1),
+  id: z.string().trim().min(1),
+  userId: z.string().trim().min(1),
+  category: z.string().trim().min(1),
   memoryType: MemoryTypeSchema,
-  content: z.string().min(1),
+  content: z.string().trim().min(1),
   confidence: z.number().min(0).max(1),
-  source: z.string().min(1),
-  sensitivity: z.string().min(1),
+  source: z.string().trim().min(1),
+  sensitivity: z.string().trim().min(1),
   permissions: z.array(AgentNameSchema).default([]),
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
   contextPacketConsent: z.object({
@@ -1211,6 +1293,17 @@ const ActionIntentEmailSchema = z.string().trim().email().max(320);
 const ActionIntentSchemaVersionSchema = z.literal("v1");
 const ActionIntentMetadataSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({});
 
+/**
+ * Required action-intent text (subjects, titles, targets, reasons): every field is already
+ * `.trim().min(1)`, and all of them now additionally require one visible code point so that
+ * NBSP-only and zero-width-only input behave identically instead of forwarding a draft that
+ * renders as nothing.
+ */
+const ActionIntentTitleSchema = withVisibleText(z.string().trim().min(1).max(240));
+const ActionIntentReasonSchema = withVisibleText(z.string().trim().min(1).max(1_000));
+const ActionIntentTargetIdSchema = withVisibleText(z.string().trim().min(1).max(200));
+const ActionIntentTargetTypeSchema = withVisibleText(z.string().trim().min(1).max(120));
+
 export const SendMessageActionIntentSchema = z
   .object({
     schemaVersion: ActionIntentSchemaVersionSchema.default("v1"),
@@ -1218,9 +1311,9 @@ export const SendMessageActionIntentSchema = z
     adapter: z.literal("gmail").default("gmail"),
     riskClass: RiskClassSchema.default("R3"),
     to: ActionIntentEmailSchema,
-    subject: z.string().trim().min(1).max(240),
+    subject: ActionIntentTitleSchema,
     body: z.string().min(1).max(20_000),
-    threadId: z.string().trim().min(1).max(200).nullable().default(null),
+    threadId: ActionIntentTargetIdSchema.nullable().default(null),
     mode: z.enum(["draft", "send"]).default("draft"),
     metadata: ActionIntentMetadataSchema
   })
@@ -1232,7 +1325,7 @@ export const ScheduleEventActionIntentSchema = z
     type: z.literal("schedule_event"),
     adapter: z.literal("calendar").default("calendar"),
     riskClass: RiskClassSchema.default("R3"),
-    summary: z.string().trim().min(1).max(240),
+    summary: ActionIntentTitleSchema,
     start: z.string().datetime(),
     end: z.string().datetime(),
     description: z.string().max(10_000).nullable().default(null),
@@ -1251,7 +1344,7 @@ export const CreateNoteActionIntentSchema = z
     type: z.literal("create_note"),
     adapter: z.literal("notes").default("notes"),
     riskClass: RiskClassSchema.default("R2"),
-    title: z.string().trim().min(1).max(240),
+    title: ActionIntentTitleSchema,
     content: z.string().min(1).max(20_000),
     metadata: ActionIntentMetadataSchema
   })
@@ -1276,10 +1369,10 @@ export const UpdateRecordActionIntentSchema = z
     type: z.literal("update_record"),
     adapter: z.literal("workspace").default("workspace"),
     riskClass: RiskClassSchema.default("R3"),
-    targetType: z.string().trim().min(1).max(120),
-    targetId: z.string().trim().min(1).max(200),
+    targetType: ActionIntentTargetTypeSchema,
+    targetId: ActionIntentTargetIdSchema,
     patch: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
-    reason: z.string().trim().min(1).max(1_000),
+    reason: ActionIntentReasonSchema,
     metadata: ActionIntentMetadataSchema
   })
   .strict()
@@ -1294,10 +1387,10 @@ export const DeleteRecordActionIntentSchema = z
     type: z.literal("delete_record"),
     adapter: z.literal("workspace").default("workspace"),
     riskClass: RiskClassSchema.default("R4"),
-    targetType: z.string().trim().min(1).max(120),
-    targetId: z.string().trim().min(1).max(200),
-    reason: z.string().trim().min(1).max(1_000),
-    confirmationToken: z.string().trim().min(8).max(120).nullable().default(null),
+    targetType: ActionIntentTargetTypeSchema,
+    targetId: ActionIntentTargetIdSchema,
+    reason: ActionIntentReasonSchema,
+    confirmationToken: withVisibleText(z.string().trim().min(8).max(120)).nullable().default(null),
     metadata: ActionIntentMetadataSchema
   })
   .strict();
@@ -1308,10 +1401,10 @@ export const MonitorSignalActionIntentSchema = z
     type: z.literal("monitor_signal"),
     adapter: z.literal("watcher").default("watcher"),
     riskClass: RiskClassSchema.default("R2"),
-    targetEntity: z.string().trim().min(1).max(240),
-    condition: z.string().trim().min(1).max(1_000),
-    triggerAction: z.string().trim().min(1).max(1_000),
-    sourceSystems: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
+    targetEntity: ActionIntentTitleSchema,
+    condition: ActionIntentReasonSchema,
+    triggerAction: ActionIntentReasonSchema,
+    sourceSystems: z.array(ActionIntentTargetTypeSchema).max(20).default([]),
     metadata: ActionIntentMetadataSchema
   })
   .strict();
@@ -1865,7 +1958,7 @@ export const BriefingScheduleEntrySchema = z.object({
 
 export const BriefingPreferencesSchema = z.object({
   userId: z.string().min(1),
-  timezone: z.string().min(1),
+  timezone: timeZoneSchema(),
   focus: BriefingFocusSchema,
   schedules: z.array(BriefingScheduleEntrySchema).length(briefingTypeValues.length),
   actorContext: z.lazy(() => ActorContextSchema).nullable().default(null),
@@ -2282,7 +2375,10 @@ export const ApprovalFollowUpJobPayloadSchema = z
 
 const ApprovalNotificationMetadataSchema = z
   .object({
-    replayedFromJobId: z.string().min(1).nullable().default(null)
+    // Bounded by `JobExecutionJournalSchema.replayedFromJobId` (max 200): an over-long
+    // reference that passes here would otherwise throw inside the `JobRecordSchema`
+    // transform, making the stored row permanently unreadable.
+    replayedFromJobId: z.string().min(1).max(200).nullable().default(null)
   })
   .catchall(z.unknown())
   .default({
@@ -2291,7 +2387,9 @@ const ApprovalNotificationMetadataSchema = z
 
 const ApprovalNotificationJobBaseSchema = z.object({
   type: z.literal("approval_notification"),
-  approvalId: z.string().min(1),
+  // `approvalId` is the first segment of `buildApprovalNotificationDeliveryTarget()`, so it
+  // must stay free of the `:` separator used to join the target.
+  approvalId: idSegmentSchema(200),
   goalId: z.string().min(1),
   taskId: z.string().min(1),
   decision: ApprovalDecisionSchema.exclude(["pending"]),
@@ -2305,13 +2403,13 @@ const SlackApprovalNotificationJobPayloadSchema = ApprovalNotificationJobBaseSch
 
 const SlackApprovalReceiptJobPayloadSchema = ApprovalNotificationJobBaseSchema.extend({
   channel: z.literal("slack_receipt"),
-  slackChannelId: z.string().trim().min(1).max(80),
+  slackChannelId: idSegmentSchema(80),
   slackMessageTs: z.string().trim().regex(/^\d+\.\d+$/u)
 }).strict();
 
 const TelegramApprovalReceiptJobPayloadSchema = ApprovalNotificationJobBaseSchema.extend({
   channel: z.literal("telegram_receipt"),
-  telegramChatId: z.string().trim().min(1).max(80),
+  telegramChatId: idSegmentSchema(80),
   telegramMessageId: z.number().int().nonnegative()
 }).strict();
 
@@ -2438,10 +2536,9 @@ function deriveJobExecutionSideEffectTarget(payload: JobPayload): string | null 
     return `github-issue:${payload.repository.fullName.toLowerCase()}#${payload.issue.number}`;
   }
 
-  if ("goalId" in payload && typeof payload.goalId === "string" && payload.goalId.trim()) {
-    return `goal:${payload.goalId}`;
-  }
-
+  // Type-specific targets must be resolved before the generic goal fallback below,
+  // otherwise any payload that also carries a `goalId` (public share views do) would be
+  // collapsed onto `goal:<id>` and every distinct sub-object would share one target.
   if (payload.type === "privacy_operation") {
     return `privacy:${payload.operationId}`;
   }
@@ -2454,6 +2551,10 @@ function deriveJobExecutionSideEffectTarget(payload: JobPayload): string | null 
     return `deployment-canary:${payload.requestId}`;
   }
 
+  if ("goalId" in payload && typeof payload.goalId === "string" && payload.goalId.trim()) {
+    return `goal:${payload.goalId}`;
+  }
+
   return null;
 }
 
@@ -2462,7 +2563,10 @@ function deriveReplayedFromJobId(payload: JobPayload): string | null {
     payload.metadata && typeof payload.metadata.replayedFromJobId === "string"
       ? payload.metadata.replayedFromJobId.trim()
       : "";
-  return candidate || null;
+  // Legacy rows written before the payload cap may still hold an over-long reference;
+  // truncating here keeps the derived journal (max 200) and the queued-state summary
+  // (max 280) inside their bounds instead of throwing inside `JobRecordSchema.parse`.
+  return candidate ? candidate.slice(0, 200) : null;
 }
 
 function summarizeJobExecutionState(params: {
@@ -3259,7 +3363,7 @@ export const GoalTemplateSchema = z.object({
   schedule: z.object({
     enabled: z.boolean().default(false),
     cron: z.string().max(100).default(""),
-    timezone: z.string().max(100).default("UTC"),
+    timezone: timeZoneSchema(100).default("UTC"),
     lastRunAt: z.string().datetime().nullable().default(null),
     nextRunAt: z.string().datetime().nullable().default(null)
   }).default({ enabled: false, cron: "", timezone: "UTC", lastRunAt: null, nextRunAt: null }),
@@ -3733,7 +3837,7 @@ export const WorkflowStepSchema = z.object({
 export const WorkflowScheduleSchema = z.object({
   enabled: z.boolean().default(false),
   cron: z.string().max(100).default(""),
-  timezone: z.string().max(100).default("UTC"),
+  timezone: timeZoneSchema(100).default("UTC"),
   lastRunAt: z.string().datetime().nullable().default(null),
   nextRunAt: z.string().datetime().nullable().default(null),
   runCount: z.number().int().min(0).default(0),
@@ -4085,6 +4189,9 @@ export function deriveAgentImplementationTier(executionMode: AgentExecutionMode)
     case "deterministic_scaffold":
     case "custom_prompt_scaffold":
     case "manual_review_required":
+      return "experimental";
+    default:
+      // Unknown/future modes stay on the conservative, non-production tier.
       return "experimental";
   }
 }

@@ -1,7 +1,7 @@
 # Agentic — Production-Readiness Validation & New-User Feature Test
 
 - **Date:** 2026-06-10
-- **Target DB:** Supabase project `coutcdyxkijfxbowjwty` (region `ap-northeast-2`), Postgres reached via Supavisor pooler (session mode, `sslmode=no-verify`).
+- **Target DB:** Supabase Postgres reached via Supavisor pooler (session mode). Project reference redacted (`<supabase-project-redacted>`); a prior draft of this report named the live project and `sslmode=no-verify`, both since remediated.
 - **App build:** Next.js 16 web + standalone worker, monorepo `@agentic/*`.
 - **Runner:** local macOS, **Node v26.3.0** (note: outside the repo engine range).
 - **Scope:** static gates, production build, full automated suite, security/architecture/performance fitness, capability/maturity, and a live new-user sweep of ~70 API endpoints in production mode against Supabase.

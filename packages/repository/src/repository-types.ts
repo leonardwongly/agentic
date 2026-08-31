@@ -306,7 +306,13 @@ export class JobMutationError extends Error {
 
 export class ApprovalMutationError extends Error {
   constructor(
-    public readonly code: "not_found" | "already_handled" | "expired" | "forbidden",
+    public readonly code:
+      | "not_found"
+      | "already_handled"
+      | "expired"
+      | "forbidden"
+      /** The approval is still pending but the gated task moved to a state the decision cannot produce. */
+      | "conflict",
     message: string
   ) {
     super(message);
@@ -504,7 +510,15 @@ export type QueueRepositoryPort = Pick<
 export type ApprovalQueueRepositoryPort = Pick<
   AgenticRepository,
   "respondToApproval" | "respondToApprovalAndEnqueueJob" | "enqueueJob"
->;
+> &
+  /**
+   * Optional reads. A port that lacks the atomic `respondToApprovalAndEnqueueJob` mutation
+   * answers approvals with two separate writes, and if the second one is lost the decision is
+   * already durable while its follow-up job is not. The worker then re-drives the job from the
+   * persisted decision, which needs to read the approval and its bundle back. Ports that do not
+   * expose them keep the previous behaviour (a stranded decision surfaces as an error).
+   */
+  Partial<Pick<AgenticRepository, "listApprovals" | "getGoalBundleForUser">>;
 
 export type DashboardReadRepositoryPort = Pick<AgenticRepository, "getDashboardData">;
 

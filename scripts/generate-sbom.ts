@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -28,6 +29,13 @@ interface SpdxExternalRef {
   referenceLocator: string;
 }
 
+type SpdxChecksumAlgorithm = "SHA1" | "SHA256" | "SHA384" | "SHA512";
+
+interface SpdxChecksum {
+  algorithm: SpdxChecksumAlgorithm;
+  checksumValue: string;
+}
+
 interface SpdxPackage {
   SPDXID: string;
   name: string;
@@ -36,10 +44,7 @@ interface SpdxPackage {
   filesAnalyzed: false;
   supplier: string;
   externalRefs?: SpdxExternalRef[];
-  checksums?: Array<{
-    algorithm: "SHA512";
-    checksumValue: string;
-  }>;
+  checksums?: SpdxChecksum[];
 }
 
 interface SpdxRelationship {
@@ -87,6 +92,53 @@ function slugify(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]+/gu, "-");
 }
 
+/**
+ * SPDX element IDs must be unique inside a document, but `slugify()` is lossy: `node_modules/a-b`
+ * and `node_modules/a/b` collapse onto the same reference and a consumer then drops one package
+ * (with its relationship). Keep the readable slug and disambiguate with a digest of the exact
+ * lockfile path.
+ */
+function packageSpdxId(packagePath: string): string {
+  const digest = createHash("sha256").update(packagePath).digest("hex").slice(0, 16);
+  return `SPDXRef-Package-${slugify(packagePath)}-${digest}`;
+}
+
+// ssri integrity is `<algorithm>-<base64 digest>`; anything that does not decode to the exact
+// digest length for a known algorithm is published as no checksum at all rather than as a "SHA512"
+// value that no consumer can verify.
+const INTEGRITY_PATTERN = /^([a-z0-9]+)-([A-Za-z0-9+/]+={0,2})$/u;
+const SUPPORTED_INTEGRITY_ALGORITHMS: Record<string, { algorithm: SpdxChecksumAlgorithm; byteLength: number }> = {
+  sha1: { algorithm: "SHA1", byteLength: 20 },
+  sha256: { algorithm: "SHA256", byteLength: 32 },
+  sha384: { algorithm: "SHA384", byteLength: 48 },
+  sha512: { algorithm: "SHA512", byteLength: 64 }
+};
+
+function parseIntegrityChecksum(integrity: string | undefined): SpdxChecksum | null {
+  if (!integrity) {
+    return null;
+  }
+
+  const match = INTEGRITY_PATTERN.exec(integrity.trim());
+  if (!match) {
+    return null;
+  }
+
+  const [, algorithm, digest] = match;
+  const supported = Object.prototype.hasOwnProperty.call(SUPPORTED_INTEGRITY_ALGORITHMS, algorithm ?? "")
+    ? SUPPORTED_INTEGRITY_ALGORITHMS[algorithm as string]
+    : undefined;
+  if (!supported || !digest) {
+    return null;
+  }
+
+  if (Buffer.from(digest, "base64").length !== supported.byteLength) {
+    return null;
+  }
+
+  return { algorithm: supported.algorithm, checksumValue: digest };
+}
+
 function packagePathToName(packagePath: string, dependency: PackageLockDependency): string {
   if (dependency.name) {
     return dependency.name;
@@ -101,13 +153,38 @@ function packagePathToName(packagePath: string, dependency: PackageLockDependenc
   return packagePath || "root";
 }
 
-function toPackageUrl(name: string, version: string): string {
+function toPackageUrl(name: string, version: string): string | null {
   if (name.startsWith("@")) {
     const [scope, packageName] = name.split("/");
+    // A bare scope such as `@broken` has no package segment; publishing `%40broken/undefined` would
+    // point consumers at a package that does not exist.
+    if (!scope || !packageName) {
+      return null;
+    }
+
     return `pkg:npm/${encodeURIComponent(scope)}/${encodeURIComponent(packageName)}@${encodeURIComponent(version)}`;
   }
 
+  if (!name) {
+    return null;
+  }
+
   return `pkg:npm/${encodeURIComponent(name)}@${encodeURIComponent(version)}`;
+}
+
+function packageExternalRefs(name: string, version: string): SpdxExternalRef[] | undefined {
+  const packageUrl = toPackageUrl(name, version);
+  if (!packageUrl) {
+    return undefined;
+  }
+
+  return [
+    {
+      referenceCategory: "PACKAGE-MANAGER",
+      referenceType: "purl",
+      referenceLocator: packageUrl
+    }
+  ];
 }
 
 export function buildSpdxDocument(lockFile: PackageLockFile, packageJson: PackageJson, now: Date = new Date()): SpdxDocument {
@@ -122,13 +199,7 @@ export function buildSpdxDocument(lockFile: PackageLockFile, packageJson: Packag
       downloadLocation: "NOASSERTION",
       filesAnalyzed: false,
       supplier: "NOASSERTION",
-      externalRefs: [
-        {
-          referenceCategory: "PACKAGE-MANAGER",
-          referenceType: "purl",
-          referenceLocator: toPackageUrl(rootName, rootVersion)
-        }
-      ]
+      externalRefs: packageExternalRefs(rootName, rootVersion)
     }
   ];
   const relationships: SpdxRelationship[] = [
@@ -146,7 +217,8 @@ export function buildSpdxDocument(lockFile: PackageLockFile, packageJson: Packag
 
     const name = packagePathToName(packagePath, dependency);
     const version = dependency.version ?? "0.0.0";
-    const packageRef = `SPDXRef-Package-${slugify(packagePath)}`;
+    const packageRef = packageSpdxId(packagePath);
+    const checksum = parseIntegrityChecksum(dependency.integrity);
 
     packages.push({
       SPDXID: packageRef,
@@ -155,21 +227,8 @@ export function buildSpdxDocument(lockFile: PackageLockFile, packageJson: Packag
       downloadLocation: dependency.resolved ?? "NOASSERTION",
       filesAnalyzed: false,
       supplier: "NOASSERTION",
-      externalRefs: [
-        {
-          referenceCategory: "PACKAGE-MANAGER",
-          referenceType: "purl",
-          referenceLocator: toPackageUrl(name, version)
-        }
-      ],
-      checksums: dependency.integrity
-        ? [
-            {
-              algorithm: "SHA512",
-              checksumValue: dependency.integrity.replace(/^sha512-/u, "")
-            }
-          ]
-        : undefined
+      externalRefs: packageExternalRefs(name, version),
+      checksums: checksum ? [checksum] : undefined
     });
 
     relationships.push({

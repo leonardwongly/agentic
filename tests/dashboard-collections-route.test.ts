@@ -244,7 +244,7 @@ describe("dashboard collection routes", () => {
       error: expect.stringContaining("Unknown dashboard query parameter")
     });
     await expect(oversizedPage.json()).resolves.toMatchObject({
-      error: expect.stringContaining("Too big")
+      error: expect.stringContaining("Invalid dashboard limit")
     });
     await expect(invalidCursor.json()).resolves.toMatchObject({
       error: expect.stringContaining("cursor is invalid")
