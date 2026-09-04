@@ -1,4 +1,16 @@
-import { google, type Auth } from "googleapis";
+// Type-only import for type checking without runtime cost
+import type { Auth } from "googleapis";
+
+// Lazy-loaded googleapis module cache
+let googleapisModule: typeof import("googleapis") | null = null;
+
+async function loadGoogleapisModule(): Promise<typeof import("googleapis")> {
+  if (!googleapisModule) {
+    googleapisModule = await import("googleapis");
+  }
+  return googleapisModule;
+}
+
 import { z } from "zod";
 
 const GoogleOAuthTokenResultSchema = z.object({
@@ -44,12 +56,13 @@ export function isGoogleOAuthConfigured(): boolean {
   return Boolean(process.env.GOOGLE_CLIENT_ID?.trim() && process.env.GOOGLE_CLIENT_SECRET?.trim());
 }
 
-export function createGoogleOAuthClient(params?: {
+export async function createGoogleOAuthClient(params?: {
   redirectUri?: string;
   refreshToken?: string;
   accessToken?: string;
-}): Auth.OAuth2Client {
+}): Promise<Auth.OAuth2Client> {
   const credentials = getGoogleClientCredentials();
+  const { google } = await loadGoogleapisModule();
   const oauth2 = new google.auth.OAuth2(credentials.clientId, credentials.clientSecret, params?.redirectUri);
 
   if (params?.refreshToken || params?.accessToken) {
@@ -62,13 +75,13 @@ export function createGoogleOAuthClient(params?: {
   return oauth2;
 }
 
-export function buildGoogleAuthorizationUrl(params: {
+export async function buildGoogleAuthorizationUrl(params: {
   redirectUri: string;
   state: string;
   loginHint?: string;
   scopes?: readonly string[];
-}): string {
-  const oauth2 = createGoogleOAuthClient({ redirectUri: params.redirectUri });
+}): Promise<string> {
+  const oauth2 = await createGoogleOAuthClient({ redirectUri: params.redirectUri });
   return oauth2.generateAuthUrl({
     access_type: "offline",
     include_granted_scopes: true,
@@ -84,7 +97,7 @@ export async function exchangeGoogleAuthorizationCode(params: {
   code: string;
   redirectUri: string;
 }): Promise<GoogleOAuthTokenResult> {
-  const oauth2 = createGoogleOAuthClient({ redirectUri: params.redirectUri });
+  const oauth2 = await createGoogleOAuthClient({ redirectUri: params.redirectUri });
   const response = await oauth2.getToken(params.code);
   const tokens = response.tokens;
 
@@ -103,7 +116,8 @@ export async function fetchGoogleAccountProfile(params: {
   accessToken?: string;
   redirectUri?: string;
 }): Promise<GoogleAccountProfile> {
-  const oauth2 = createGoogleOAuthClient(params);
+  const oauth2 = await createGoogleOAuthClient(params);
+  const { google } = await loadGoogleapisModule();
   const oauth2Api = google.oauth2({ version: "v2", auth: oauth2 });
   const profile = await oauth2Api.userinfo.get();
 

@@ -1,4 +1,13 @@
-import { google } from "googleapis";
+// Lazy-loaded googleapis module cache
+let googleapisModule: typeof import("googleapis") | null = null;
+
+async function loadGoogleapisModule(): Promise<typeof import("googleapis")> {
+  if (!googleapisModule) {
+    googleapisModule = await import("googleapis");
+  }
+  return googleapisModule;
+}
+
 import crypto from "node:crypto";
 import { z } from "zod";
 import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
@@ -38,7 +47,7 @@ const DraftResultSchema = z.object({
 
 export type DraftResult = z.infer<typeof DraftResultSchema>;
 
-function getOAuth2Client(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
+async function getOAuth2Client(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
   const normalizedRefreshToken = refreshToken?.trim();
 
   if (!normalizedRefreshToken) {
@@ -48,9 +57,10 @@ function getOAuth2Client(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
   return createGoogleOAuthClient({ refreshToken: normalizedRefreshToken });
 }
 
-function getGmailClient(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
-  const auth = getOAuth2Client(refreshToken);
+async function getGmailClient(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
+  const auth = await getOAuth2Client(refreshToken);
   if (!auth) return null;
+  const { google } = await loadGoogleapisModule();
   return google.gmail({ version: "v1", auth });
 }
 
@@ -136,7 +146,7 @@ function getHeader(headers: Array<{ name?: string | null; value?: string | null 
 }
 
 async function findDraftByIdempotencyKey(
-  gmail: NonNullable<ReturnType<typeof getGmailClient>>,
+  gmail: NonNullable<Awaited<ReturnType<typeof getGmailClient>>>,
   idempotencyKey: string,
   requestOptions: GmailRequestOptions
 ): Promise<string | null> {
@@ -166,7 +176,7 @@ async function findDraftByIdempotencyKey(
 }
 
 async function findSentMessageByIdempotencyKey(
-  gmail: NonNullable<ReturnType<typeof getGmailClient>>,
+  gmail: NonNullable<Awaited<ReturnType<typeof getGmailClient>>>,
   idempotencyKey: string,
   requestOptions: GmailRequestOptions
 ): Promise<string | null> {
@@ -181,8 +191,8 @@ async function findSentMessageByIdempotencyKey(
 }
 
 export function createGmailAdapter(params: { refreshToken: string }): GmailAdapter {
-  const getClient = () => {
-    const gmail = getGmailClient(params.refreshToken);
+  const getClient = async () => {
+    const gmail = await getGmailClient(params.refreshToken);
 
     if (!gmail) {
       throw new Error("Gmail not configured.");
@@ -245,7 +255,7 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
         hasQuery: Boolean(query)
       },
       async () => {
-        const gmail = getClient();
+        const gmail = await getClient();
 
         const listResponse = await gmail.users.messages.list({
           userId: "me",
@@ -300,7 +310,7 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
           hasIdempotencyKey: Boolean(paramsDraft.idempotencyKey)
         },
         async () => {
-          const gmail = getClient();
+          const gmail = await getClient();
           const idempotencyKey = requireGmailIdempotencyKey("drafts.create", paramsDraft.idempotencyKey);
           const requestOptions = {
             signal: buildGmailMutationSignal(paramsDraft.signal)
@@ -357,7 +367,7 @@ export function createGmailAdapter(params: { refreshToken: string }): GmailAdapt
         "drafts.send",
         { hasIdempotencyKey: Boolean(options?.idempotencyKey) },
         async () => {
-          const gmail = getClient();
+          const gmail = await getClient();
           const idempotencyKey = requireGmailIdempotencyKey("drafts.send", options?.idempotencyKey);
           const requestOptions = {
             signal: buildGmailMutationSignal(options?.signal)

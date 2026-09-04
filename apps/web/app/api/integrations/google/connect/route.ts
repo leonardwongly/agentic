@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       userId: principal.userId,
       workspaceId
     });
-    const authorizationUrl = buildGoogleAuthorizationUrl({
+    const authorizationUrl = await buildGoogleAuthorizationUrl({
       redirectUri: buildGoogleCallbackUrl(request),
       state,
       loginHint: existingCredential?.accountEmail ?? undefined

@@ -1,6 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
-
 /**
  * Provider-neutral model runner.
  *
@@ -8,7 +5,15 @@ import OpenAI from "openai";
  * model deployed in your environment. The defaults below are real, current model
  * identifiers (the Anthropic `-latest` alias auto-tracks the newest snapshot) rather
  * than the previous placeholders, which would fail on the first live request.
+ *
+ * SDK imports are lazy-loaded via dynamic import() to reduce bundle size and
+ * improve cold start times, especially for Cloudflare Workers deployments.
  */
+
+// Type-only imports for type checking without runtime cost
+import type Anthropic from "@anthropic-ai/sdk";
+import type OpenAI from "openai";
+
 export const DEFAULT_ANTHROPIC_MODEL = "claude-3-5-sonnet-latest";
 export const DEFAULT_OPENAI_MODEL = "gpt-4o";
 
@@ -29,21 +34,50 @@ export type ModelTextRequest = { prompt: string; maxTokens: number };
 
 export const DEFAULT_MODEL_TIMEOUT_MS = 30_000;
 
+// Lazy-loaded client caches
 let anthropicClient: { apiKey: string; client: Anthropic } | null = null;
 let openaiClient: { apiKey: string; client: OpenAI } | null = null;
 
-function getAnthropicClient(apiKey: string): Anthropic {
-  if (anthropicClient?.apiKey !== apiKey) {
-    anthropicClient = { apiKey, client: new Anthropic({ apiKey }) };
+// Module-level cache for loaded SDK modules
+let anthropicModule: typeof import("@anthropic-ai/sdk") | null = null;
+let openaiModule: typeof import("openai") | null = null;
+
+/**
+ * Lazily load the Anthropic SDK module.
+ * Uses dynamic import to avoid bundling the SDK unless actually needed.
+ */
+async function loadAnthropicModule(): Promise<typeof import("@anthropic-ai/sdk")> {
+  if (!anthropicModule) {
+    anthropicModule = await import("@anthropic-ai/sdk");
   }
-  return anthropicClient.client;
+  return anthropicModule;
 }
 
-function getOpenAIClient(apiKey: string): OpenAI {
-  if (openaiClient?.apiKey !== apiKey) {
-    openaiClient = { apiKey, client: new OpenAI({ apiKey }) };
+/**
+ * Lazily load the OpenAI SDK module.
+ * Uses dynamic import to avoid bundling the SDK unless actually needed.
+ */
+async function loadOpenAIModule(): Promise<typeof import("openai")> {
+  if (!openaiModule) {
+    openaiModule = await import("openai");
   }
-  return openaiClient.client;
+  return openaiModule;
+}
+
+async function getAnthropicClient(apiKey: string): Promise<Anthropic> {
+  if (anthropicClient?.apiKey !== apiKey) {
+    const AnthropicClass = (await loadAnthropicModule()).default;
+    anthropicClient = { apiKey, client: new AnthropicClass({ apiKey }) };
+  }
+  return anthropicClient!.client;
+}
+
+async function getOpenAIClient(apiKey: string): Promise<OpenAI> {
+  if (openaiClient?.apiKey !== apiKey) {
+    const OpenAIClass = (await loadOpenAIModule()).default;
+    openaiClient = { apiKey, client: new OpenAIClass({ apiKey }) };
+  }
+  return openaiClient!.client;
 }
 
 /**
@@ -66,7 +100,7 @@ export async function runTextModel(
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const client = getAnthropicClient(anthropicApiKey);
+      const client = await getAnthropicClient(anthropicApiKey);
       const response = await client.messages.create(
         {
           model: config.anthropic,
@@ -93,7 +127,7 @@ export async function runTextModel(
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const client = getOpenAIClient(openaiApiKey);
+      const client = await getOpenAIClient(openaiApiKey);
       const response = await client.chat.completions.create(
         {
           model: config.openai,

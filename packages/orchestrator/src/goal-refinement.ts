@@ -20,8 +20,27 @@ import { runAgentWithModel } from "@agentic/agents";
 import { buildWorkflowContextPack, summarizeWorkflowContextPack } from "@agentic/memory";
 import { calculateNormalizedEditDistance, createActionLog } from "@agentic/observability";
 import { buildPolicyDecisionTrace, riskFromCapabilities, simulateTaskPolicy, type PolicyReplayValidation } from "@agentic/policy";
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
+// Type-only imports for type checking without runtime cost
+import type Anthropic from "@anthropic-ai/sdk";
+import type OpenAI from "openai";
+
+// Module-level cache for loaded SDK modules
+let anthropicModule: typeof import("@anthropic-ai/sdk") | null = null;
+let openaiModule: typeof import("openai") | null = null;
+
+async function loadAnthropicModule(): Promise<typeof import("@anthropic-ai/sdk")> {
+  if (!anthropicModule) {
+    anthropicModule = await import("@anthropic-ai/sdk");
+  }
+  return anthropicModule;
+}
+
+async function loadOpenAIModule(): Promise<typeof import("openai")> {
+  if (!openaiModule) {
+    openaiModule = await import("openai");
+  }
+  return openaiModule;
+}
 
 type RefinementChange = {
   updatedTasks: Array<{
@@ -118,7 +137,8 @@ async function detectRefinementLlm(bundle: GoalBundle, refinement: string, memor
 
   try {
     if (process.env.ANTHROPIC_API_KEY) {
-      const client = new Anthropic();
+      const AnthropicClass = (await loadAnthropicModule()).default;
+      const client = new AnthropicClass();
       const response = await client.messages.create({
         model: process.env.ANTHROPIC_MODEL ?? "claude-opus-4-6",
         max_tokens: 1024,
@@ -127,7 +147,8 @@ async function detectRefinementLlm(bundle: GoalBundle, refinement: string, memor
       const text = response.content.find((b) => b.type === "text")?.text?.trim() ?? "{}";
       return parseRefinementResponse(text);
     } else if (process.env.OPENAI_API_KEY) {
-      const client = new OpenAI();
+      const OpenAIClass = (await loadOpenAIModule()).default;
+      const client = new OpenAIClass();
       const response = await client.chat.completions.create({
         model: process.env.OPENAI_MODEL ?? "gpt-5.4",
         max_tokens: 1024,

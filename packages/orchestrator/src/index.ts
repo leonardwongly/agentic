@@ -53,9 +53,28 @@ import {
   simulateTaskPolicy,
   type PolicyReplayValidation
 } from "@agentic/policy";
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
+// Type-only imports for type checking without runtime cost
+import type Anthropic from "@anthropic-ai/sdk";
+import type OpenAI from "openai";
 import { readWorkflowControlStatusOverride } from "./workflow-dag-projection";
+
+// Module-level cache for loaded SDK modules
+let anthropicModule: typeof import("@anthropic-ai/sdk") | null = null;
+let openaiModule: typeof import("openai") | null = null;
+
+async function loadAnthropicModule(): Promise<typeof import("@anthropic-ai/sdk")> {
+  if (!anthropicModule) {
+    anthropicModule = await import("@anthropic-ai/sdk");
+  }
+  return anthropicModule;
+}
+
+async function loadOpenAIModule(): Promise<typeof import("openai")> {
+  if (!openaiModule) {
+    openaiModule = await import("openai");
+  }
+  return openaiModule;
+}
 
 export { captureApprovalOutcomeSignals, captureExecutionOutcomeSignals, captureMemoriesFromBundle, type CapturedMemories } from "./memory-capture";
 export { executeApprovedTask, executeApprovedTasks, reconcileExecutionResults, type ExecutionResult } from "./execution-dispatch";
@@ -337,7 +356,8 @@ Scenario key:`;
 
   try {
     if (process.env.ANTHROPIC_API_KEY) {
-      const client = new Anthropic();
+      const AnthropicClass = (await loadAnthropicModule()).default;
+      const client = new AnthropicClass();
       const response = await client.messages.create({
         model: process.env.ANTHROPIC_MODEL ?? "claude-opus-4-6",
         max_tokens: 20,
@@ -347,7 +367,8 @@ Scenario key:`;
       const matched = validScenarios.find((s) => text.includes(s));
       if (matched) return matched;
     } else if (process.env.OPENAI_API_KEY) {
-      const client = new OpenAI();
+      const OpenAIClass = (await loadOpenAIModule()).default;
+      const client = new OpenAIClass();
       const response = await client.chat.completions.create({
         model: process.env.OPENAI_MODEL ?? "gpt-5.4",
         max_tokens: 20,

@@ -1,4 +1,13 @@
-import { google } from "googleapis";
+// Lazy-loaded googleapis module cache
+let googleapisModule: typeof import("googleapis") | null = null;
+
+async function loadGoogleapisModule(): Promise<typeof import("googleapis")> {
+  if (!googleapisModule) {
+    googleapisModule = await import("googleapis");
+  }
+  return googleapisModule;
+}
+
 import { z } from "zod";
 import { logError, recordCounter, withSpan, withTelemetryContext } from "@agentic/observability";
 import { createGoogleOAuthClient } from "./google-oauth";
@@ -36,7 +45,7 @@ const CreatedEventSchema = z.object({
 
 export type CreatedEvent = z.infer<typeof CreatedEventSchema>;
 
-function getOAuth2Client(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
+async function getOAuth2Client(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
   const normalizedRefreshToken = refreshToken?.trim();
 
   if (!normalizedRefreshToken) {
@@ -46,9 +55,10 @@ function getOAuth2Client(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
   return createGoogleOAuthClient({ refreshToken: normalizedRefreshToken });
 }
 
-function getCalendarClient(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
-  const auth = getOAuth2Client(refreshToken);
+async function getCalendarClient(refreshToken = process.env.GOOGLE_REFRESH_TOKEN) {
+  const auth = await getOAuth2Client(refreshToken);
   if (!auth) return null;
+  const { google } = await loadGoogleapisModule();
   return google.calendar({ version: "v3", auth });
 }
 
@@ -122,8 +132,8 @@ export type GoogleCalendarAdapter = {
 };
 
 export function createCalendarAdapter(params: { refreshToken: string }): GoogleCalendarAdapter {
-  const getClient = () => {
-    const calendar = getCalendarClient(params.refreshToken);
+  const getClient = async () => {
+    const calendar = await getCalendarClient(params.refreshToken);
 
     if (!calendar) {
       throw new Error("Google Calendar not configured.");
@@ -188,7 +198,7 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
           hasTimeMax: Boolean(paramsList?.timeMax)
         },
         async () => {
-          const calendar = getClient();
+          const calendar = await getClient();
           const now = new Date();
           const oneWeekLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
@@ -228,7 +238,7 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
           hasTimeMax: Boolean(paramsSearch?.timeMax)
         },
         async () => {
-          const calendar = getClient();
+          const calendar = await getClient();
           const now = new Date();
           const threeMonthsLater = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
 
@@ -269,7 +279,7 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
           hasIdempotencyKey: Boolean(paramsCreate.idempotencyKey)
         },
         async () => {
-          const calendar = getClient();
+          const calendar = await getClient();
           const idempotencyKey = requireCalendarIdempotencyKey("events.create", paramsCreate.idempotencyKey);
           const isAllDay = paramsCreate.start.length === 10;
           const requestOptions = {
@@ -330,7 +340,7 @@ export function createCalendarAdapter(params: { refreshToken: string }): GoogleC
           hasEnd: typeof paramsUpdate.end === "string"
         },
         async () => {
-          const calendar = getClient();
+          const calendar = await getClient();
           const requestOptions = {
             signal: buildCalendarMutationSignal(paramsUpdate.signal)
           };
