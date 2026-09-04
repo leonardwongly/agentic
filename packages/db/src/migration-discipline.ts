@@ -1,10 +1,29 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { getRuntimeContext, type RuntimeContext } from "@agentic/runtime-adapters";
 import { fileURLToPath } from "node:url";
 import { type DatabaseMigrationFile, listMigrationFiles } from "./migration-runtime";
 
-const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
-const DEFAULT_ROLLBACK_NOTES_PATH = path.join(DEFAULT_MIGRATIONS_DIR, "ROLLBACK.md");
+// Use import.meta.url for ESM compatibility
+const __dirname_fallback = typeof import.meta !== "undefined" && import.meta.url
+  ? fileURLToPath(new URL(".", import.meta.url))
+  : __dirname;
+
+const DEFAULT_MIGRATIONS_DIR = (() => {
+  try {
+    return getRuntimeContext().storage.resolve(__dirname_fallback, "..", "migrations");
+  } catch {
+    return "../migrations";
+  }
+})();
+
+const DEFAULT_ROLLBACK_NOTES_PATH = (() => {
+  try {
+    const runtime = getRuntimeContext();
+    return runtime.storage.join(DEFAULT_MIGRATIONS_DIR, "ROLLBACK.md");
+  } catch {
+    return `${DEFAULT_MIGRATIONS_DIR}/ROLLBACK.md`;
+  }
+})();
+
 const MIGRATION_NAME_PATTERN = /^\d{4}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/u;
 const LEGACY_DUPLICATE_PREFIX_SETS = [
   new Set(["0004_team_responsibility.sql", "0004_workspace_shadow_replay_policy.sql"]),
@@ -131,13 +150,17 @@ export function analyzeMigrationDiscipline(params: {
 export async function checkMigrationDiscipline(options?: {
   migrationsDir?: string;
   rollbackNotesPath?: string;
+  context?: RuntimeContext;
 }): Promise<MigrationDisciplineReport> {
+  const runtime = options?.context ?? getRuntimeContext();
   const migrationsDir = options?.migrationsDir ?? DEFAULT_MIGRATIONS_DIR;
-  const rollbackNotesPath = options?.rollbackNotesPath ?? path.join(migrationsDir, "ROLLBACK.md");
-  const [migrations, rollbackNotes] = await Promise.all([
-    listMigrationFiles({ migrationsDir }),
-    readFile(rollbackNotesPath, "utf8")
+  const rollbackNotesPath = options?.rollbackNotesPath ?? runtime.storage.join(migrationsDir, "ROLLBACK.md");
+  
+  const [migrations, rollbackNotesRaw] = await Promise.all([
+    listMigrationFiles({ migrationsDir, context: runtime }),
+    runtime.storage.readFile(rollbackNotesPath, "utf8")
   ]);
+  const rollbackNotes = rollbackNotesRaw as string;
 
   return analyzeMigrationDiscipline({
     migrations,

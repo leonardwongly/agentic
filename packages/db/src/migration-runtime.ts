@@ -1,6 +1,4 @@
-import crypto from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import path from "node:path";
+import { getRuntimeContext, type RuntimeContext } from "@agentic/runtime-adapters";
 import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 import {
@@ -10,7 +8,23 @@ import {
   type AuthRuntimeSchemaObjectStatus
 } from "./auth-runtime-schema";
 
-const DEFAULT_MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
+// Use import.meta.url for ESM compatibility
+const __filename = typeof import.meta !== "undefined" && import.meta.url 
+  ? fileURLToPath(import.meta.url) 
+  : __dirname + "/migration-runtime.js";
+const __dirname_fallback = typeof import.meta !== "undefined" && import.meta.url
+  ? fileURLToPath(new URL(".", import.meta.url))
+  : __dirname;
+
+const DEFAULT_MIGRATIONS_DIR = (() => {
+  try {
+    return getRuntimeContext().storage.resolve(__dirname_fallback, "..", "migrations");
+  } catch {
+    // Fallback for environments where runtime context isn't available yet
+    return "../migrations";
+  }
+})();
+
 const SCHEMA_MIGRATIONS_TABLE = "agentic_schema_migrations";
 const LEGACY_AGENT_DEFINITIONS_BOOTSTRAP_SQL = `
   create table if not exists agent_definitions (
@@ -88,12 +102,18 @@ export class DatabaseSchemaNotReadyError extends Error {
   }
 }
 
-function resolveMigrationsDir(migrationsDir?: string): string {
-  return path.resolve(migrationsDir ?? DEFAULT_MIGRATIONS_DIR);
+function resolveMigrationsDir(migrationsDir?: string, context?: RuntimeContext): string {
+  const runtime = context ?? getRuntimeContext();
+  return runtime.storage.resolve(migrationsDir ?? DEFAULT_MIGRATIONS_DIR);
 }
 
-function hashMigration(sql: string): string {
-  return crypto.createHash("sha256").update(sql, "utf8").digest("hex");
+async function hashMigration(sql: string): Promise<string> {
+  // Use Web Crypto API for cross-runtime compatibility
+  const encoder = new TextEncoder();
+  const data = encoder.encode(sql);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function isPoolClient(queryable: MigrationQueryable): queryable is PoolClient {
@@ -233,34 +253,46 @@ function buildSchemaNotReadyMessage(status: DatabaseSchemaStatus): string {
 
 let cachedDefaultMigrationFiles: DatabaseMigrationFile[] | null = null;
 
-export async function listMigrationFiles(options?: { migrationsDir?: string }): Promise<DatabaseMigrationFile[]> {
+export async function listMigrationFiles(options?: { migrationsDir?: string; context?: RuntimeContext }): Promise<DatabaseMigrationFile[]> {
+  const runtime = options?.context ?? getRuntimeContext();
+  
   // The checked-in migration files are immutable at runtime, so reading and
   // SHA-256 hashing all of them on every call is wasteful — the readiness probe
   // recomputes schema status frequently. Cache the default-directory result for
   // the process lifetime. The cache is disabled under the test runner (and for
   // explicit migrationsDir overrides) so suites always observe fresh fixtures.
-  const useCache = options?.migrationsDir === undefined && process.env.NODE_ENV !== "test";
+  const useCache = options?.migrationsDir === undefined && runtime.env.NODE_ENV !== "test";
 
   if (useCache && cachedDefaultMigrationFiles) {
     return cachedDefaultMigrationFiles;
   }
 
-  const migrationsDir = resolveMigrationsDir(options?.migrationsDir);
-  const entries = await readdir(migrationsDir, { withFileTypes: true });
-  const migrationNames = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
-    .map((entry) => entry.name)
-    .sort((left, right) => left.localeCompare(right));
+  const migrationsDir = resolveMigrationsDir(options?.migrationsDir, runtime);
+  
+  let entries: Array<{ name: string; isFile: boolean }>;
+  try {
+    const rawEntries = await runtime.storage.readdir(migrationsDir, { withFileTypes: true });
+    entries = (rawEntries as Array<{ name: string; isFile: boolean }>)
+      .filter((entry) => entry.isFile && entry.name.endsWith(".sql"))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch (error) {
+    // If directory doesn't exist, return empty array
+    if (error instanceof Error && ("code" in error && (error as NodeJS.ErrnoException).code === "ENOENT" || error.message.includes("not found"))) {
+      return [];
+    }
+    throw error;
+  }
 
   const files = await Promise.all(
-    migrationNames.map(async (name) => {
-      const absolutePath = path.join(migrationsDir, name);
-      const sql = await readFile(absolutePath, "utf8");
+    entries.map(async (entry) => {
+      const absolutePath = runtime.storage.join(migrationsDir, entry.name);
+      const sqlRaw = await runtime.storage.readFile(absolutePath, "utf8");
+      const sql = sqlRaw as string;
 
       return {
-        name,
+        name: entry.name,
         absolutePath,
-        checksum: hashMigration(sql),
+        checksum: await hashMigration(sql),
         sql
       };
     })
@@ -277,8 +309,9 @@ export async function getDatabaseSchemaStatus(options?: {
   databaseUrl?: string;
   pool?: Pool;
   migrationsDir?: string;
+  context?: RuntimeContext;
 }): Promise<DatabaseSchemaStatus> {
-  const migrationFiles = await listMigrationFiles({ migrationsDir: options?.migrationsDir });
+  const migrationFiles = await listMigrationFiles({ migrationsDir: options?.migrationsDir, context: options?.context });
 
   return withMigrationQueryable(
     {
@@ -364,6 +397,7 @@ export async function assertDatabaseSchemaReady(options?: {
   databaseUrl?: string;
   pool?: Pool;
   migrationsDir?: string;
+  context?: RuntimeContext;
 }): Promise<DatabaseSchemaStatus> {
   const status = await getDatabaseSchemaStatus(options);
 
@@ -378,8 +412,9 @@ export async function runDatabaseMigrations(options?: {
   databaseUrl?: string;
   pool?: Pool;
   migrationsDir?: string;
+  context?: RuntimeContext;
 }): Promise<DatabaseSchemaStatus> {
-  const migrationFiles = await listMigrationFiles({ migrationsDir: options?.migrationsDir });
+  const migrationFiles = await listMigrationFiles({ migrationsDir: options?.migrationsDir, context: options?.context });
 
   await withMigrationQueryable(
     {

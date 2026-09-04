@@ -1,5 +1,4 @@
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { getRuntimeContext, type RuntimeContext } from "@agentic/runtime-adapters";
 import { z } from "zod";
 import { nowIso } from "@agentic/contracts";
 import { LocalNoteDocumentSchema, type LocalNoteDocument } from "./local-notes-schema";
@@ -39,13 +38,22 @@ function isEnabledFlag(value: string | undefined): boolean {
   return LOCAL_NOTES_ENABLE_VALUES.has(value?.trim().toLowerCase() ?? "");
 }
 
-function isPathWithin(candidatePath: string, allowedRoot: string): boolean {
-  const relative = path.relative(path.resolve(allowedRoot), path.resolve(candidatePath));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+function isPathWithin(candidatePath: string, allowedRoot: string, context: RuntimeContext): boolean {
+  const relative = context.storage.relative(context.storage.resolve(allowedRoot), context.storage.resolve(candidatePath));
+  return relative === "" || (!relative.startsWith("..") && !context.storage.isAbsolute(relative));
 }
 
 function isMissingFileError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+  // Check for Node.js ENOENT or generic "not found" errors
+  if (error instanceof Error) {
+    if ("code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return true;
+    }
+    if (error.message.includes("not found") || error.message.includes("File not found")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Resolve the readable slug for a directory entry, or null when the file is not a markdown
@@ -60,23 +68,26 @@ function noteSlugForEntry(entryName: string): string | null {
   return LocalNoteSlugSchema.safeParse(slug).success ? slug : null;
 }
 
-export function defaultLocalNotesBasePath(): string {
-  const configured = process.env.AGENTIC_NOTES_PATH?.trim();
+export function defaultLocalNotesBasePath(context?: RuntimeContext): string {
+  const runtime = context ?? getRuntimeContext();
+  const configured = runtime.env.AGENTIC_NOTES_PATH?.trim();
 
   if (configured) {
-    return path.resolve(configured);
+    return runtime.storage.resolve(configured);
   }
 
-  return path.join(/* turbopackIgnore: true */ process.cwd(), ".agentic", "notes");
+  return runtime.storage.join(runtime.cwd(), ".agentic", "notes");
 }
 
-export function getLocalNotesRuntimeConfig(basePath = defaultLocalNotesBasePath()): LocalNotesRuntimeConfig {
-  const production = process.env.NODE_ENV === "production";
-  const explicitlyEnabled = isEnabledFlag(process.env.AGENTIC_LOCAL_NOTES_ENABLED);
-  const notesPathConfigured = Boolean(process.env.AGENTIC_NOTES_PATH?.trim());
-  const allowedRoot = process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT?.trim();
+export function getLocalNotesRuntimeConfig(basePath?: string, context?: RuntimeContext): LocalNotesRuntimeConfig {
+  const runtime = context ?? getRuntimeContext();
+  const resolvedBasePath = basePath ?? defaultLocalNotesBasePath(runtime);
+  const production = runtime.env.NODE_ENV === "production";
+  const explicitlyEnabled = isEnabledFlag(runtime.env.AGENTIC_LOCAL_NOTES_ENABLED);
+  const notesPathConfigured = Boolean(runtime.env.AGENTIC_NOTES_PATH?.trim());
+  const allowedRoot = runtime.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT?.trim();
   const allowedRootConfigured = Boolean(allowedRoot);
-  const scoped = !production || (allowedRootConfigured && isPathWithin(basePath, allowedRoot!));
+  const scoped = !production || (allowedRootConfigured && isPathWithin(resolvedBasePath, allowedRoot!, runtime));
 
   return {
     enabled: production ? explicitlyEnabled && notesPathConfigured && scoped : true,
@@ -88,8 +99,8 @@ export function getLocalNotesRuntimeConfig(basePath = defaultLocalNotesBasePath(
   };
 }
 
-export function getLocalNotesPublicMetadata(basePath = defaultLocalNotesBasePath()): Record<string, unknown> {
-  const config = getLocalNotesRuntimeConfig(basePath);
+export function getLocalNotesPublicMetadata(basePath?: string, context?: RuntimeContext): Record<string, unknown> {
+  const config = getLocalNotesRuntimeConfig(basePath, context);
 
   return {
     provider: "local-filesystem",
@@ -103,13 +114,14 @@ export function getLocalNotesPublicMetadata(basePath = defaultLocalNotesBasePath
   };
 }
 
-export function isLocalNotesRuntimeEnabled(basePath = defaultLocalNotesBasePath()): boolean {
-  return getLocalNotesRuntimeConfig(basePath).enabled;
+export function isLocalNotesRuntimeEnabled(basePath?: string, context?: RuntimeContext): boolean {
+  return getLocalNotesRuntimeConfig(basePath, context).enabled;
 }
 
-export function assertLocalNotesRuntimeEnabled(basePath = defaultLocalNotesBasePath()): string {
-  const resolved = path.resolve(basePath);
-  const config = getLocalNotesRuntimeConfig(resolved);
+export function assertLocalNotesRuntimeEnabled(basePath?: string, context?: RuntimeContext): string {
+  const runtime = context ?? getRuntimeContext();
+  const resolved = runtime.storage.resolve(basePath ?? defaultLocalNotesBasePath(runtime));
+  const config = getLocalNotesRuntimeConfig(resolved, runtime);
 
   if (!config.enabled) {
     throw new LocalNotesConfigurationError(
@@ -129,29 +141,35 @@ function toSlug(value: string): string {
     .slice(0, 80) || "note";
 }
 
-function safeNotePath(basePath: string, slug: string): string {
-  const resolvedBase = path.resolve(basePath);
-  const candidate = path.resolve(resolvedBase, `${LocalNoteSlugSchema.parse(slug)}.md`);
+function safeNotePath(basePath: string, slug: string, context: RuntimeContext): string {
+  const resolvedBase = context.storage.resolve(basePath);
+  const candidate = context.storage.resolve(resolvedBase, `${LocalNoteSlugSchema.parse(slug)}.md`);
 
-  if (candidate !== resolvedBase && !candidate.startsWith(`${resolvedBase}${path.sep}`)) {
+  if (candidate !== resolvedBase && !candidate.startsWith(`${resolvedBase}${context.storage.sep}`)) {
     throw new Error("Rejected an unsafe note path.");
   }
 
   return candidate;
 }
 
-export async function ensureLocalNotesDirectory(basePath = defaultLocalNotesBasePath()): Promise<string> {
-  const resolved = assertLocalNotesRuntimeEnabled(basePath);
-  await mkdir(resolved, { recursive: true });
+export async function ensureLocalNotesDirectory(basePath?: string, context?: RuntimeContext): Promise<string> {
+  const runtime = context ?? getRuntimeContext();
+  const resolved = assertLocalNotesRuntimeEnabled(basePath, runtime);
+  await runtime.storage.mkdir(resolved, { recursive: true });
   return resolved;
 }
 
-async function parseLocalNote(notePath: string): Promise<LocalNoteDocument> {
+async function parseLocalNote(notePath: string, context: RuntimeContext): Promise<LocalNoteDocument> {
   let content: string;
-  let fileInfo: Awaited<ReturnType<typeof stat>>;
+  let fileInfo: Awaited<ReturnType<RuntimeContext["storage"]["stat"]>>;
 
   try {
-    [content, fileInfo] = await Promise.all([readFile(notePath, "utf8"), stat(notePath)]);
+    const [contentRaw, fileInfoResult] = await Promise.all([
+      context.storage.readFile(notePath, "utf8"),
+      context.storage.stat(notePath)
+    ]);
+    content = contentRaw as string;
+    fileInfo = fileInfoResult;
   } catch (error) {
     if (isMissingFileError(error)) {
       throw new LocalNoteNotFoundError();
@@ -163,7 +181,7 @@ async function parseLocalNote(notePath: string): Promise<LocalNoteDocument> {
   // Strip a leading BOM once so it never leaks into the parsed title or a re-serialised heading.
   content = content.replace(/^\uFEFF/, "");
 
-  const slug = path.basename(notePath, ".md");
+  const slug = context.storage.basename(notePath, ".md");
   const titleLine = content.split("\n").find((line) => line.trim().startsWith("# "));
   // Trim before the anchored replace so detection (which trims) and stripping agree; otherwise a
   // leading-whitespace/BOM line matches the finder yet defeats `^#\s+` and reports "# Title".
@@ -174,33 +192,43 @@ async function parseLocalNote(notePath: string): Promise<LocalNoteDocument> {
     slug,
     title,
     content,
-    createdAt: fileInfo.birthtime.toISOString(),
-    updatedAt: fileInfo.mtime.toISOString()
+    createdAt: new Date(fileInfo.birthtimeMs).toISOString(),
+    updatedAt: new Date(fileInfo.mtimeMs).toISOString()
   });
 }
 
-async function writeNoteAtomically(notePath: string, content: string): Promise<void> {
-  const tempPath = `${notePath}.${crypto.randomUUID()}.tmp`;
-
-  await writeFile(tempPath, content, "utf8");
-  await rename(tempPath, notePath);
+async function writeNoteAtomically(notePath: string, content: string, context: RuntimeContext): Promise<void> {
+  // The adapter's writeFile already handles atomic writes
+  await context.storage.writeFile(notePath, content);
 }
 
-export async function listLocalNotes(basePath = defaultLocalNotesBasePath()): Promise<LocalNoteDocument[]> {
-  const resolvedBase = await ensureLocalNotesDirectory(basePath);
-  const entries = await readdir(resolvedBase, { withFileTypes: true });
+export async function listLocalNotes(basePath?: string, context?: RuntimeContext): Promise<LocalNoteDocument[]> {
+  const runtime = context ?? getRuntimeContext();
+  const resolvedBase = await ensureLocalNotesDirectory(basePath, runtime);
+  
+  let entries: Array<{ name: string; isFile: boolean }>;
+  try {
+    const rawEntries = await runtime.storage.readdir(resolvedBase, { withFileTypes: true });
+    entries = (rawEntries as Array<{ name: string; isFile: boolean }>).filter(
+      (entry) => entry.isFile && noteSlugForEntry(entry.name) !== null
+    );
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return [];
+    }
+    throw error;
+  }
+  
   const notes = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && noteSlugForEntry(entry.name) !== null)
-      .map((entry) => parseLocalNote(path.join(resolvedBase, entry.name)))
+    entries.map((entry) => parseLocalNote(runtime.storage.join(resolvedBase, entry.name), runtime))
   );
 
   return notes.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
-export async function searchLocalNotes(query: string, basePath = defaultLocalNotesBasePath()): Promise<LocalNoteDocument[]> {
+export async function searchLocalNotes(query: string, basePath?: string, context?: RuntimeContext): Promise<LocalNoteDocument[]> {
   const normalized = query.trim().toLowerCase();
-  const notes = await listLocalNotes(basePath);
+  const notes = await listLocalNotes(basePath, context);
 
   if (!normalized) {
     return notes;
@@ -212,43 +240,48 @@ export async function searchLocalNotes(query: string, basePath = defaultLocalNot
   });
 }
 
-export async function readLocalNote(slug: string, basePath = defaultLocalNotesBasePath()): Promise<LocalNoteDocument> {
-  const resolvedBase = await ensureLocalNotesDirectory(basePath);
-  return parseLocalNote(safeNotePath(resolvedBase, slug));
+export async function readLocalNote(slug: string, basePath?: string, context?: RuntimeContext): Promise<LocalNoteDocument> {
+  const runtime = context ?? getRuntimeContext();
+  const resolvedBase = await ensureLocalNotesDirectory(basePath, runtime);
+  return parseLocalNote(safeNotePath(resolvedBase, slug, runtime), runtime);
 }
 
 export async function createLocalNote(
   params: { title: string; content: string },
-  basePath = defaultLocalNotesBasePath()
+  basePath?: string,
+  context?: RuntimeContext
 ): Promise<LocalNoteDocument> {
-  const resolvedBase = await ensureLocalNotesDirectory(basePath);
+  const runtime = context ?? getRuntimeContext();
+  const resolvedBase = await ensureLocalNotesDirectory(basePath, runtime);
   const normalized = LocalNoteMutationSchema.parse(params);
-  const slug = `${toSlug(normalized.title)}-${crypto.randomUUID().slice(0, 8)}`;
-  const notePath = safeNotePath(resolvedBase, slug);
+  const slug = `${toSlug(normalized.title)}-${runtime.randomUUID().slice(0, 8)}`;
+  const notePath = safeNotePath(resolvedBase, slug, runtime);
   const content = `# ${normalized.title}\n\n${normalized.content}\n`;
 
-  await writeNoteAtomically(notePath, content);
-  return readLocalNote(slug, resolvedBase);
+  await writeNoteAtomically(notePath, content, runtime);
+  return readLocalNote(slug, resolvedBase, runtime);
 }
 
 export async function updateLocalNote(
   params: { slug: string; content: string; title?: string },
-  basePath = defaultLocalNotesBasePath()
+  basePath?: string,
+  context?: RuntimeContext
 ): Promise<LocalNoteDocument> {
-  const resolvedBase = await ensureLocalNotesDirectory(basePath);
-  const existing = await parseLocalNote(safeNotePath(resolvedBase, LocalNoteSlugSchema.parse(params.slug)));
+  const runtime = context ?? getRuntimeContext();
+  const resolvedBase = await ensureLocalNotesDirectory(basePath, runtime);
+  const existing = await parseLocalNote(safeNotePath(resolvedBase, LocalNoteSlugSchema.parse(params.slug), runtime), runtime);
   const normalized = LocalNoteMutationSchema.parse({
     title: params.title ?? existing.title,
     content: params.content
   });
   const nextContent = `# ${normalized.title}\n\n${normalized.content}\n`;
 
-  await writeNoteAtomically(safeNotePath(resolvedBase, existing.slug), nextContent);
-  return readLocalNote(existing.slug, resolvedBase);
+  await writeNoteAtomically(safeNotePath(resolvedBase, existing.slug, runtime), nextContent, runtime);
+  return readLocalNote(existing.slug, resolvedBase, runtime);
 }
 
-export async function seedLocalNotes(basePath = defaultLocalNotesBasePath()): Promise<void> {
-  const existing = await listLocalNotes(basePath);
+export async function seedLocalNotes(basePath?: string, context?: RuntimeContext): Promise<void> {
+  const existing = await listLocalNotes(basePath, context);
 
   if (existing.length > 0) {
     return;
@@ -259,6 +292,7 @@ export async function seedLocalNotes(basePath = defaultLocalNotesBasePath()): Pr
       title: "Agentic Operating Notes",
       content: `Updated ${nowIso()}\n\nUse this folder for local notes that should be searchable through the provider-neutral notes adapter.`
     },
-    basePath
+    basePath,
+    context
   );
 }

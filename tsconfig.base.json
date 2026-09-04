@@ -66,6 +66,9 @@
       ],
       "@agentic/self-improvement-memory": [
         "./packages/self-improvement-memory/src/index.ts"
+      ],
+      "@agentic/runtime-adapters": [
+        "./packages/runtime-adapters/src/index.ts"
       ]
     }
   },

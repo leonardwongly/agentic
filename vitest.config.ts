@@ -12,6 +12,10 @@ export default defineConfig({
       "@agentic/self-improvement-memory": path.resolve(
         projectRoot,
         "packages/self-improvement-memory/src/index.ts"
+      ),
+      "@agentic/runtime-adapters": path.resolve(
+        projectRoot,
+        "packages/runtime-adapters/src/index.ts"
       )
     }
   },

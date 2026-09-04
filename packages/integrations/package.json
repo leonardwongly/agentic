@@ -6,5 +6,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts"
+  },
+  "dependencies": {
+    "@agentic/runtime-adapters": "workspace:*",
+    "@agentic/contracts": "workspace:*"
   }
 }

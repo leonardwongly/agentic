@@ -1,5 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
-import path from "node:path";
+import { getRuntimeContext, type RuntimeContext } from "@agentic/runtime-adapters";
 import type { TelemetryExportBatch, TelemetryMetric, TelemetryPrimitive } from "./index";
 
 export type RolloutAlertOperator = "<=" | "<" | ">=" | ">" | "==" | "!=";
@@ -131,15 +130,33 @@ function compare(actual: number, operator: RolloutAlertOperator, threshold: numb
   }
 }
 
-export async function readTelemetryExportBatches(retentionDir: string): Promise<TelemetryExportBatch[]> {
-  const entries = (await readdir(retentionDir, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => entry.name)
-    .sort();
+/**
+ * Read telemetry export batches from a directory using the runtime adapter.
+ */
+export async function readTelemetryExportBatches(
+  retentionDir: string,
+  context?: RuntimeContext
+): Promise<TelemetryExportBatch[]> {
+  const runtime = context ?? getRuntimeContext();
+  
+  let entries: Array<{ name: string; isFile: boolean }>;
+  try {
+    const rawEntries = await runtime.storage.readdir(retentionDir, { withFileTypes: true });
+    entries = (rawEntries as Array<{ name: string; isFile: boolean }>)
+      .filter((entry) => entry.isFile && entry.name.endsWith(".json"))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch (error) {
+    // If directory doesn't exist, return empty array
+    if (error instanceof Error && ("code" in error && (error as NodeJS.ErrnoException).code === "ENOENT" || error.message.includes("not found"))) {
+      return [];
+    }
+    throw error;
+  }
 
   return Promise.all(
-    entries.map(async (entryName) => {
-      const raw = await readFile(path.join(retentionDir, entryName), "utf8");
+    entries.map(async (entry) => {
+      const rawResult = await runtime.storage.readFile(runtime.storage.join(retentionDir, entry.name), "utf8");
+      const raw = rawResult as string;
       return JSON.parse(raw) as TelemetryExportBatch;
     })
   );

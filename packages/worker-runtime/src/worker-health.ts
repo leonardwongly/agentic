@@ -1,6 +1,4 @@
-import crypto from "node:crypto";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { getRuntimeContext, type RuntimeContext } from "@agentic/runtime-adapters";
 import { nowIso, type WorkerRuntimeHealthSnapshot } from "@agentic/contracts";
 
 const MAX_HEALTH_FILE_BYTES = 16 * 1024;
@@ -31,7 +29,7 @@ export function createWorkerRuntimeHealthSnapshot(params: {
   return {
     version: 1,
     runnerId: params.runnerId,
-    pid: process.pid,
+    pid: typeof process !== "undefined" ? process.pid : 0,
     status: params.status ?? "starting",
     startedAt: params.startedAt ?? now,
     updatedAt: now,
@@ -105,8 +103,10 @@ export function createWorkerRuntimeHealthReporter(params: {
       .then(() => health.sink.write(healthSnapshot as WorkerRuntimeHealthSnapshot))
       .then(() => undefined, params.onWriteError);
   };
+  
+  // Use globalThis.setInterval for compatibility across runtimes
   const heartbeatTimer = health
-    ? setInterval(() => {
+    ? globalThis.setInterval(() => {
         const processedCount = params.getProcessedCount();
         write({
           status: processedCount > 0 ? "running" : "idle",
@@ -120,28 +120,36 @@ export function createWorkerRuntimeHealthReporter(params: {
     flush: () => lastHealthWrite,
     close() {
       if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
+        globalThis.clearInterval(heartbeatTimer);
       }
     },
     getSnapshot: () => healthSnapshot
   };
 }
 
-export function createFileWorkerRuntimeHealthSink(filePath: string): WorkerRuntimeHealthSink {
-  const resolvedPath = path.resolve(filePath);
+/**
+ * Create a file-based health sink using the runtime adapter.
+ * Works in both Node.js and Cloudflare Workers environments.
+ */
+export function createFileWorkerRuntimeHealthSink(
+  filePath: string,
+  context?: RuntimeContext
+): WorkerRuntimeHealthSink {
+  const runtime = context ?? getRuntimeContext();
+  const resolvedPath = runtime.storage.resolve(filePath);
 
   return {
     async write(snapshot) {
       const payload = `${JSON.stringify(snapshot)}\n`;
 
-      if (Buffer.byteLength(payload, "utf8") > MAX_HEALTH_FILE_BYTES) {
+      // Check size limit
+      const encoder = new TextEncoder();
+      const encoded = encoder.encode(payload);
+      if (encoded.byteLength > MAX_HEALTH_FILE_BYTES) {
         throw new Error("Worker health snapshot exceeded the bounded file size.");
       }
 
-      await mkdir(path.dirname(resolvedPath), { recursive: true });
-      const tempPath = `${resolvedPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-      await writeFile(tempPath, payload, { mode: 0o600 });
-      await rename(tempPath, resolvedPath);
+      await runtime.storage.writeFile(resolvedPath, payload, { mode: 0o600 });
     }
   };
 }
@@ -175,19 +183,38 @@ function isWorkerRuntimeHealthSnapshot(value: unknown): value is WorkerRuntimeHe
   );
 }
 
-export async function readFileWorkerRuntimeHealthSnapshot(filePath: string): Promise<WorkerRuntimeHealthSnapshot | null> {
-  const resolvedPath = path.resolve(filePath);
-  const fileStat = await stat(resolvedPath);
+/**
+ * Read a worker runtime health snapshot from file using the runtime adapter.
+ */
+export async function readFileWorkerRuntimeHealthSnapshot(
+  filePath: string,
+  context?: RuntimeContext
+): Promise<WorkerRuntimeHealthSnapshot | null> {
+  const runtime = context ?? getRuntimeContext();
+  const resolvedPath = runtime.storage.resolve(filePath);
+  
+  try {
+    const fileStat = await runtime.storage.stat(resolvedPath);
 
-  if (fileStat.size > MAX_HEALTH_FILE_BYTES) {
-    throw new Error("Worker health snapshot exceeded the bounded file size.");
+    if (fileStat.size > MAX_HEALTH_FILE_BYTES) {
+      throw new Error("Worker health snapshot exceeded the bounded file size.");
+    }
+
+    const contentRaw = await runtime.storage.readFile(resolvedPath, "utf8");
+    const content = contentRaw as string;
+    const parsed = JSON.parse(content) as unknown;
+
+    if (!isWorkerRuntimeHealthSnapshot(parsed)) {
+      throw new Error("Worker health snapshot has an invalid shape.");
+    }
+
+    return parsed;
+  } catch (error) {
+    // If file doesn't exist, return null
+    if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    // Re-throw other errors
+    throw error;
   }
-
-  const parsed = JSON.parse(await readFile(resolvedPath, "utf8")) as unknown;
-
-  if (!isWorkerRuntimeHealthSnapshot(parsed)) {
-    throw new Error("Worker health snapshot has an invalid shape.");
-  }
-
-  return parsed;
 }

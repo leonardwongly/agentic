@@ -1,7 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { getRuntimeContext, type RuntimeContext } from "@agentic/runtime-adapters";
 import { z } from "zod";
+
+// Compatibility shims - these will be replaced with direct adapter calls
+// as the migration progresses. For now, we use the adapter through helper functions.
+const _runtime = () => getRuntimeContext();
+const _storage = () => _runtime().storage;
+const _randomUUID = () => _runtime().randomUUID();
 
 const MAX_METADATA_DEPTH = 4;
 const MAX_METADATA_SERIALIZED_LENGTH = 4_000;
@@ -1654,17 +1658,19 @@ export type SelfImprovementRepository = {
   clearWorkingMemory(): Promise<void>;
 };
 
-export function createSelfImprovementRepository(options?: { baseDir?: string }): SelfImprovementRepository {
+export function createSelfImprovementRepository(options?: { baseDir?: string; context?: RuntimeContext }): SelfImprovementRepository {
+  const runtime = options?.context ?? _runtime();
+  const storage = runtime.storage;
   const configuredDir = options?.baseDir?.trim();
   const baseDir = configuredDir
-    ? path.resolve(configuredDir)
-    : path.resolve(/* turbopackIgnore: true */ process.cwd(), ".agentic", "self-improvement");
+    ? storage.resolve(configuredDir)
+    : storage.resolve(runtime.cwd(), ".agentic", "self-improvement");
 
   function resolveWithinBase(...segments: string[]): string {
-    const resolved = path.resolve(baseDir, ...segments);
-    const relative = path.relative(baseDir, resolved);
+    const resolved = storage.resolve(baseDir, ...segments);
+    const relative = storage.relative(baseDir, resolved);
 
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    if (relative.startsWith("..") || storage.isAbsolute(relative)) {
       throw new SelfImprovementStorageError(`Resolved path escaped the self-improvement base directory: ${resolved}`);
     }
 
@@ -1701,10 +1707,10 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
 
   async function pathExists(targetPath: string): Promise<boolean> {
     try {
-      await stat(targetPath);
+      await storage.stat(targetPath);
       return true;
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      if (error instanceof Error && ("code" in error && (error as NodeJS.ErrnoException).code === "ENOENT" || error.message.includes("not found"))) {
         return false;
       }
 
@@ -1713,18 +1719,18 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
   }
 
   async function ensureParentDirectory(targetPath: string): Promise<void> {
-    await mkdir(path.dirname(targetPath), { recursive: true });
+    await storage.mkdir(storage.dirname(targetPath), { recursive: true });
   }
 
   async function writeJsonFile<T>(targetPath: string, value: T): Promise<void> {
-    const tempPath = `${targetPath}.${randomUUID()}.tmp`;
+    const tempPath = `${targetPath}.${runtime.randomUUID()}.tmp`;
 
     try {
       await ensureParentDirectory(targetPath);
-      await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-      await rename(tempPath, targetPath);
+      await storage.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`);
+      await storage.rename(tempPath, targetPath);
     } catch (error) {
-      await unlink(tempPath).catch(() => undefined);
+      await storage.unlink(tempPath).catch(() => undefined);
       throw new SelfImprovementStorageError(`Failed to write self-improvement file ${targetPath}.`, error);
     }
   }
@@ -1733,9 +1739,10 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
     let raw: string;
 
     try {
-      raw = await readFile(targetPath, "utf8");
+      const rawResult = await storage.readFile(targetPath, "utf8");
+      raw = rawResult as string;
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      if (error instanceof Error && ("code" in error && (error as NodeJS.ErrnoException).code === "ENOENT" || error.message.includes("not found"))) {
         throw error;
       }
 
@@ -1789,9 +1796,9 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
   }
 
   async function ensureStoreSeeded(): Promise<void> {
-    await mkdir(baseDir, { recursive: true });
-    await mkdir(episodicRootPath(), { recursive: true });
-    await mkdir(workingRootPath(), { recursive: true });
+    await storage.mkdir(baseDir, { recursive: true });
+    await storage.mkdir(episodicRootPath(), { recursive: true });
+    await storage.mkdir(workingRootPath(), { recursive: true });
 
     if (!(await pathExists(semanticFilePath()))) {
       await writeJsonFile(semanticFilePath(), defaultSemanticPatternsFile());
@@ -1856,8 +1863,9 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
       // Only treat well-formed 4-digit year *directories* as buckets. A stray non-directory
       // entry (an operator README.txt or a macOS .DS_Store) used to be fed to readdir() and
       // throw a raw, untyped ENOTDIR that disabled every healthy episode lookup.
-      const rootEntries = await readdir(episodicRootPath(), { withFileTypes: true });
-      years = rootEntries.filter((entry) => entry.isDirectory() && /^\d{4}$/.test(entry.name)).map((entry) => entry.name);
+      const rawRootEntries = await storage.readdir(episodicRootPath(), { withFileTypes: true });
+      const rootEntries = rawRootEntries as Array<{ name: string; isDirectory: boolean }>;
+      years = rootEntries.filter((entry) => entry.isDirectory && /^\d{4}$/.test(entry.name)).map((entry) => entry.name);
     }
 
     const files: string[] = [];
@@ -1867,9 +1875,9 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
 
       let yearStats;
       try {
-        yearStats = await stat(yearDirectory);
+        yearStats = await storage.stat(yearDirectory);
       } catch (error) {
-        if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        if (error instanceof Error && ("code" in error && (error as NodeJS.ErrnoException).code === "ENOENT" || error.message.includes("not found"))) {
           continue;
         }
 
@@ -1878,11 +1886,12 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
 
       // With an explicit (already validated) year hint, still tolerate the path being a stray
       // file rather than a directory instead of throwing ENOTDIR.
-      if (!yearStats.isDirectory()) {
+      if (!yearStats.isDirectory) {
         continue;
       }
 
-      const entries = await readdir(yearDirectory);
+      const rawEntries = await storage.readdir(yearDirectory);
+      const entries = rawEntries as string[];
 
       for (const entry of entries) {
         if (entry.endsWith(".json")) {
@@ -1961,7 +1970,7 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
         continue;
       }
 
-      await unlink(filePath);
+      await storage.unlink(filePath);
       deletedEpisodeCount += 1;
     }
 
@@ -2049,7 +2058,7 @@ export function createSelfImprovementRepository(options?: { baseDir?: string }):
         filePath = resolveWithinBase("episodic", year, `${datePrefix}-${slug}-${idSuffix}-${attempt}.json`);
       }
 
-      await mkdir(episodicYearPath(year), { recursive: true });
+      await storage.mkdir(episodicYearPath(year), { recursive: true });
       await writeJsonFile(filePath, validated);
 
       return validated;

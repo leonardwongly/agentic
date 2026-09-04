@@ -9,5 +9,8 @@
     "./migration-discipline": "./src/migration-discipline.ts",
     "./migration-runtime": "./src/migration-runtime.ts",
     "./schema-status": "./src/schema-status.ts"
+  },
+  "dependencies": {
+    "@agentic/runtime-adapters": "workspace:*"
   }
 }

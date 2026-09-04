@@ -2,6 +2,9 @@
   "name": "@agentic/repository",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts"
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@agentic/runtime-adapters": "workspace:*"
+  }
 }
 
