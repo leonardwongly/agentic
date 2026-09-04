@@ -52,6 +52,13 @@ export function createWorkerRuntimeImmuneSystem(params: {
         return;
       }
 
+      // Only terminal failure outcomes should trip the breaker. Transient states
+      // like "queued", "running", "retrying", and "paused" are not failures and
+      // must not increment the consecutive failure counter.
+      if (status !== "dead_letter" && status !== "cancelled") {
+        return;
+      }
+
       const nextFailures = existing.consecutiveFailures + 1;
 
       if (nextFailures >= controls.maxConsecutiveFailures) {

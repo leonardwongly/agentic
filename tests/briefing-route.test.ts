@@ -291,6 +291,76 @@ describe("briefing route", () => {
     expect(payload.error).toContain("x-idempotency-key");
   });
 
+  it("rejects oversized briefing request bodies to prevent resource exhaustion", async () => {
+    const oversizedBody = "x".repeat(300_000);
+
+    const response = await briefingRoute(
+      new Request("http://localhost/api/briefing", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: oversizedBody
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(413);
+    expect(payload.error).toMatch(/too large/i);
+  });
+
+  it("rejects invalid briefing types in the request body", async () => {
+    const response = await briefingRoute(
+      new Request("http://localhost/api/briefing", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({ type: "nonexistent_briefing_type" })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
+  it("rejects malformed JSON in briefing request body", async () => {
+    const response = await briefingRoute(
+      new Request("http://localhost/api/briefing", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: "{invalid json"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/valid JSON/i);
+  });
+
+  it("rejects extra fields in briefing request body via strict schema", async () => {
+    const response = await briefingRoute(
+      new Request("http://localhost/api/briefing", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({ type: "startup", unexpectedField: "injection" })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/unrecognized key/i);
+  });
+
   it("rate limits briefing creation with a route-scoped abuse key", async () => {
     const seenKeys: string[] = [];
     const store: AuthSessionStateStore = {

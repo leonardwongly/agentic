@@ -3,6 +3,7 @@ import { WatcherSchema, nowIso } from "@agentic/contracts";
 import { requireApiSession } from "../../../../lib/auth";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../../lib/api-response";
 import { requireJsonContentType } from "../../../../lib/api-errors";
+import { requireUpdatedAtPrecondition } from "../../../../lib/mutation-preconditions";
 import { createActorContextFromPrincipal } from "../../../../lib/actor-context";
 import { getSeededRepository } from "../../../../lib/server";
 import {
@@ -49,6 +50,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         throw new ApiRouteError(403, getSharedWorkflowDeniedReason("manage_watchers"));
       }
     }
+
+    requireUpdatedAtPrecondition(request, existing.updatedAt);
 
     const updated = WatcherSchema.parse({
       ...existing,

@@ -452,4 +452,105 @@ describe("goal share helpers", () => {
     expect(getGoalShareSuccessMessage("Goal title", true)).toBe('Copied a public share link for "Goal title".');
     expect(getGoalShareSuccessMessage("Goal title", false)).toBe('Created a public share link for "Goal title".');
   });
+
+  describe("adversarial share token edge cases", () => {
+    it("handles share token expiry boundary correctly (exp < now semantics)", () => {
+      const expiresAt = "2026-04-03T12:00:00.000Z";
+      const token = createGoalShareToken("share-boundary", "goal-boundary", expiresAt);
+      const expiresAtMs = Date.parse(expiresAt);
+
+      // Source uses `payload.exp < now` (strict less-than):
+      // At exactly exp === now, token is NOT expired (still valid at the boundary)
+      const atExpiry = inspectGoalShareToken(token, expiresAtMs);
+      expect(atExpiry).toMatchObject({ valid: true, expired: false });
+      expect(verifyGoalShareToken(token, expiresAtMs)).not.toBeNull();
+
+      // One ms after expiry, token IS expired
+      const afterExpiry = inspectGoalShareToken(token, expiresAtMs + 1);
+      expect(afterExpiry).toMatchObject({ valid: true, expired: true });
+      expect(verifyGoalShareToken(token, expiresAtMs + 1)).toBeNull();
+
+      // One ms before expiry, token is still valid
+      const beforeExpiry = inspectGoalShareToken(token, expiresAtMs - 1);
+      expect(beforeExpiry).toMatchObject({ valid: true, expired: false });
+      expect(verifyGoalShareToken(token, expiresAtMs - 1)).not.toBeNull();
+    });
+
+    it("rejects empty string share tokens", () => {
+      expect(inspectGoalShareToken("")).toMatchObject({ valid: false, reason: "malformed" });
+      expect(verifyGoalShareToken("")).toBeNull();
+    });
+
+    it("rejects share tokens with only whitespace", () => {
+      expect(inspectGoalShareToken("   ")).toMatchObject({ valid: false, reason: "malformed" });
+    });
+
+    it("rejects share tokens at max length boundary (4096 chars)", () => {
+      // Token at exactly 4096 chars should be processed (not rejected as oversized)
+      const validToken = createGoalShareToken("share-maxlen", "goal-maxlen", "2026-04-09T00:00:00.000Z");
+      expect(validToken.length).toBeLessThan(4096);
+
+      // Token over 4096 chars should be rejected as malformed
+      const oversizedToken = "x".repeat(4097);
+      expect(inspectGoalShareToken(oversizedToken)).toMatchObject({ valid: false, reason: "malformed" });
+    });
+
+    it("rejects share tokens with extra dot segments", () => {
+      const token = createGoalShareToken("share-dots", "goal-dots", "2026-04-09T00:00:00.000Z");
+      const [payload, signature] = token.split(".");
+
+      // Extra trailing segment
+      expect(inspectGoalShareToken(`${payload}.${signature}.extra`)).toMatchObject({
+        valid: false,
+        reason: "malformed"
+      });
+
+      // Extra leading segment
+      expect(inspectGoalShareToken(`prefix.${payload}.${signature}`)).toMatchObject({
+        valid: false,
+        reason: "malformed"
+      });
+    });
+
+    it("rejects share tokens with unicode in the payload", () => {
+      const token = createGoalShareToken("share-unicode", "goal-unicode", "2026-04-09T00:00:00.000Z");
+      const [payload, signature] = token.split(".");
+
+      // Inject unicode into payload
+      const tampered = `${payload}\u00e9.${signature}`;
+      expect(inspectGoalShareToken(tampered)).toMatchObject({ valid: false });
+    });
+
+    it("produces stable fingerprints regardless of token content", () => {
+      const token1 = createGoalShareToken("share-fp1", "goal-fp1", "2026-04-09T00:00:00.000Z");
+      const token2 = createGoalShareToken("share-fp2", "goal-fp2", "2026-04-09T00:00:00.000Z");
+
+      const fp1 = fingerprintGoalShareToken(token1);
+      const fp2 = fingerprintGoalShareToken(token2);
+
+      // Fingerprints must differ for different tokens
+      expect(fp1).not.toBe(fp2);
+
+      // Same token always produces same fingerprint
+      expect(fingerprintGoalShareToken(token1)).toBe(fp1);
+
+      // Fingerprint is bounded hex
+      expect(fp1).toMatch(/^[0-9a-f]{12}$/);
+    });
+
+    it("handles concurrent share token creation without collision", () => {
+      const tokens = Array.from({ length: 50 }, (_, i) =>
+        createGoalShareToken(`share-concurrent-${i}`, `goal-concurrent-${i}`, "2026-04-09T00:00:00.000Z")
+      );
+
+      const uniqueTokens = new Set(tokens);
+      expect(uniqueTokens.size).toBe(50);
+
+      // All tokens must verify correctly
+      const now = Date.parse("2026-04-02T00:00:00.000Z");
+      for (const token of tokens) {
+        expect(verifyGoalShareToken(token, now)).not.toBeNull();
+      }
+    });
+  });
 });

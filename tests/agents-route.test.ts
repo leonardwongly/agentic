@@ -444,6 +444,131 @@ describe("agents routes", () => {
     expect(persisted?.memoryPermissions).toEqual([]);
   });
 
+  it("rejects agent creation with an empty body", async () => {
+    const response = await createAgentRoute(
+      new Request("http://localhost/api/agents", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: "{}"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
+  it("rejects agent creation with invalid JSON body", async () => {
+    const response = await createAgentRoute(
+      new Request("http://localhost/api/agents", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: "{broken json"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/valid JSON/i);
+  });
+
+  it("rejects agent creation with a name exceeding max length", async () => {
+    const response = await createAgentRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/agents", "POST", {
+        name: "a".repeat(65),
+        displayName: "Overflow Agent",
+        systemPrompt: "This agent has a name that exceeds the maximum allowed length for testing."
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
+  it("rejects agent creation with unicode injection in name field", async () => {
+    const response = await createAgentRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/agents", "POST", {
+        name: "agent-🔥-injection",
+        displayName: "Unicode Test",
+        systemPrompt: "Testing unicode handling in name validation regex."
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/lowercase alphanumeric/i);
+  });
+
+  it("rejects agent creation with extra unrecognized fields via strict schema", async () => {
+    const response = await createAgentRoute(
+      buildAuthorizedJsonRequest("http://localhost/api/agents", "POST", {
+        name: "strict-test-agent",
+        displayName: "Strict Test",
+        systemPrompt: "Testing strict schema enforcement for agent creation.",
+        __proto__: { isAdmin: true },
+        unexpectedField: "should be rejected"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/unrecognized key/i);
+  });
+
+  it("rejects agent update with non-existent agent id", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await updateAgentRoute(
+      new Request("http://localhost/api/agents/nonexistent-agent-id", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({ displayName: "Should Fail" })
+      }),
+      { params: Promise.resolve({ id: "nonexistent-agent-id" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(404);
+    expect(payload.error).toBe("Agent not found");
+  });
+
+  it("rejects deleting a built-in agent", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const { DELETE: deleteAgentRoute } = await import("../apps/web/app/api/agents/[id]/route");
+    const response = await deleteAgentRoute(
+      new Request("http://localhost/api/agents/communications", {
+        method: "DELETE",
+        headers: {
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        }
+      }),
+      { params: Promise.resolve({ id: "communications" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(403);
+    expect(payload.error).toMatch(/built-in/i);
+  });
+
   it("returns 404 when the system principal requests another user's custom agent", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH

@@ -1218,4 +1218,28 @@ describe("approval job route", () => {
     expectNoStoreHeaders(queuedStatusResponse);
     expectNoStoreHeaders(replayResponse);
   });
+
+  it("rejects approval job lookup with whitespace-only id", async () => {
+    const response = await approvalJobRoute(
+      buildAuthorizedGetRequest("http://localhost/api/approvals/jobs/%20%20%20"),
+      { params: Promise.resolve({ id: "   " }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/required/i);
+  });
+
+  it("rejects unauthenticated approval job access", async () => {
+    const response = await approvalJobRoute(
+      new Request("http://localhost/api/approvals/jobs/some-job-id", {
+        method: "GET"
+      }),
+      { params: Promise.resolve({ id: "some-job-id" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toMatch(/unauthorized/i);
+  });
 });

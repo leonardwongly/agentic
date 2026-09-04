@@ -27,6 +27,8 @@ export function isModelConfigured(): boolean {
 
 export type ModelTextRequest = { prompt: string; maxTokens: number };
 
+export const DEFAULT_MODEL_TIMEOUT_MS = 30_000;
+
 let anthropicClient: { apiKey: string; client: Anthropic } | null = null;
 let openaiClient: { apiKey: string; client: OpenAI } | null = null;
 
@@ -50,29 +52,67 @@ function getOpenAIClient(apiKey: string): OpenAI {
  * provider is configured or the provider returns no text content. Throws on
  * provider/transport errors so callers can fall back deterministically.
  */
-export async function runTextModel(request: ModelTextRequest): Promise<string | null> {
+export async function runTextModel(
+  request: ModelTextRequest,
+  options?: { timeoutMs?: number }
+): Promise<string | null> {
   const config = getModelConfig();
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   const openaiApiKey = process.env.OPENAI_API_KEY;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS;
 
   if (anthropicApiKey) {
-    const client = getAnthropicClient(anthropicApiKey);
-    const response = await client.messages.create({
-      model: config.anthropic,
-      max_tokens: request.maxTokens,
-      messages: [{ role: "user", content: request.prompt }]
-    });
-    return response.content.find((block) => block.type === "text")?.text?.trim() ?? null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const client = getAnthropicClient(anthropicApiKey);
+      const response = await client.messages.create(
+        {
+          model: config.anthropic,
+          max_tokens: request.maxTokens,
+          messages: [{ role: "user", content: request.prompt }]
+        },
+        { signal: controller.signal }
+      );
+      return response.content.find((block) => block.type === "text")?.text?.trim() ?? null;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(
+          `Anthropic API call timed out after ${timeoutMs}ms for model ${config.anthropic}.`
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   if (openaiApiKey) {
-    const client = getOpenAIClient(openaiApiKey);
-    const response = await client.chat.completions.create({
-      model: config.openai,
-      max_tokens: request.maxTokens,
-      messages: [{ role: "user", content: request.prompt }]
-    });
-    return response.choices[0]?.message?.content?.trim() ?? null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const client = getOpenAIClient(openaiApiKey);
+      const response = await client.chat.completions.create(
+        {
+          model: config.openai,
+          max_tokens: request.maxTokens,
+          messages: [{ role: "user", content: request.prompt }]
+        },
+        { signal: controller.signal }
+      );
+      return response.choices[0]?.message?.content?.trim() ?? null;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(
+          `OpenAI API call timed out after ${timeoutMs}ms for model ${config.openai}.`
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   return null;

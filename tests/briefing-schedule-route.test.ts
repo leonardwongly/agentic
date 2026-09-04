@@ -101,6 +101,77 @@ describe("briefing schedule route", () => {
     expect(persisted.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
   });
 
+  it("rejects unauthenticated briefing schedule access", async () => {
+    const response = await briefingScheduleGetRoute(
+      new Request("http://localhost/api/briefing/schedule", {
+        method: "GET"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toMatch(/unauthorized/i);
+  });
+
+  it("rejects briefing schedule update with invalid timezone", async () => {
+    const response = await briefingSchedulePostRoute(
+      new Request("http://localhost/api/briefing/schedule", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          timezone: "",
+          focus: "balanced"
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
+  it("rejects briefing schedule update with unrecognized fields via strict schema", async () => {
+    const response = await briefingSchedulePostRoute(
+      new Request("http://localhost/api/briefing/schedule", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          timezone: "UTC",
+          unexpectedField: "injection"
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/unrecognized key/i);
+  });
+
+  it("rejects briefing schedule update with invalid focus value", async () => {
+    const response = await briefingSchedulePostRoute(
+      new Request("http://localhost/api/briefing/schedule", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          focus: "nonexistent_focus_mode"
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
   it("rejects incomplete schedule payloads", async () => {
     const response = await briefingSchedulePostRoute(
       new Request("http://localhost/api/briefing/schedule", {

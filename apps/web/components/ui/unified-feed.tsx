@@ -46,23 +46,28 @@ export function UnifiedFeed({
         if (b.priority !== a.priority) {
           return b.priority - a.priority;
         }
-        // Then by timestamp (newer first)
-        return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+        // Then by timestamp (newer first); treat invalid timestamps as oldest
+        // so they never float above valid entries due to NaN comparison.
+        const aTime = new Date(a.timestamp).getTime();
+        const bTime = new Date(b.timestamp).getTime();
+        const aSafe = Number.isFinite(aTime) ? aTime : -Infinity;
+        const bSafe = Number.isFinite(bTime) ? bTime : -Infinity;
+        return bSafe - aSafe;
       })
       .slice(0, maxItems);
   }, [items, maxItems]);
 
   if (sortedItems.length === 0) {
     return (
-      <div className="unified-feed-empty">
-        <span className="unified-feed-empty-icon">✓</span>
+      <div className="unified-feed-empty" role="status">
+        <span className="unified-feed-empty-icon" aria-hidden="true">✓</span>
         <p>{emptyMessage}</p>
       </div>
     );
   }
 
   return (
-    <div className="unified-feed">
+    <div className="unified-feed" role="feed" aria-label="Activity feed">
       {sortedItems.map((item) => (
         <FeedItemCard
           key={item.id}

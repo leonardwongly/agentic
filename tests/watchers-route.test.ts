@@ -106,13 +106,19 @@ describe("watchers route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
-  function buildAuthorizedPatchRequest(watcherId: string, body: unknown) {
+  function buildAuthorizedPatchRequest(watcherId: string, body: unknown, updatedAt?: string) {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+    };
+
+    if (updatedAt) {
+      headers["if-match"] = `"${updatedAt}"`;
+    }
+
     return new Request(`http://localhost/api/watchers/${watcherId}`, {
       method: "PATCH",
-      headers: {
-        "content-type": "application/json",
-        [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
-      },
+      headers,
       body: JSON.stringify(body)
     });
   }
@@ -572,7 +578,7 @@ describe("watchers route", () => {
     await repository.saveWatcher(watcher);
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
-    const response = await watcherUpdateRoute(buildAuthorizedPatchRequest(watcher.id, { action: "pause" }), {
+    const response = await watcherUpdateRoute(buildAuthorizedPatchRequest(watcher.id, { action: "pause" }, watcher.updatedAt), {
       params: Promise.resolve({ id: watcher.id })
     });
     const payload = (await response.json()) as {
@@ -706,5 +712,132 @@ describe("watchers route", () => {
       "Viewers can inspect shared workflow watchers, but only workspace owners and editors can create or change them."
     );
     expect(persisted?.status).toBe("active");
+  });
+
+  it("rejects watcher update without If-Match precondition header", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Watch inbox for missing preconditions.");
+    const watcher = await repository.saveWatcher(
+      WatcherSchema.parse({
+        id: "watcher-precondition-test",
+        goalId: bundle.goal.id,
+        targetEntity: "inbox",
+        condition: "new message arrives",
+        frequency: "hourly",
+        triggerAction: "notify operator",
+        sourceSystems: [],
+        status: "active",
+        expiryAt: null,
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await watcherUpdateRoute(
+      new Request(`http://localhost/api/watchers/${watcher.id}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({ action: "pause" })
+      }),
+      { params: Promise.resolve({ id: watcher.id }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(428);
+    expect(payload.error).toMatch(/if-match/i);
+  });
+
+  it("rejects watcher update with stale If-Match precondition", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Watch inbox for stale preconditions.");
+    const watcher = await repository.saveWatcher(
+      WatcherSchema.parse({
+        id: "watcher-stale-precondition",
+        goalId: bundle.goal.id,
+        targetEntity: "inbox",
+        condition: "new message arrives",
+        frequency: "hourly",
+        triggerAction: "notify operator",
+        sourceSystems: [],
+        status: "active",
+        expiryAt: null,
+        actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await watcherUpdateRoute(
+      new Request(`http://localhost/api/watchers/${watcher.id}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key",
+          "if-match": "\"2020-01-01T00:00:00.000Z\""
+        },
+        body: JSON.stringify({ action: "pause" })
+      }),
+      { params: Promise.resolve({ id: watcher.id }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(412);
+    expect(payload.error).toMatch(/changed before this action/i);
+  });
+
+  it("rejects unauthenticated watcher listing", async () => {
+    const response = await listWatchersRoute(
+      new Request("http://localhost/api/watchers", {
+        method: "GET"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toMatch(/unauthorized/i);
+  });
+
+  it("rejects watcher creation with invalid frequency value", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const bundle = await createGoalForUser(repository, DEFAULT_OWNER_USER_ID, "Watch for invalid frequency test.");
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await watchersRoute(
+      new Request("http://localhost/api/watchers", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          goalId: bundle.goal.id,
+          targetEntity: "inbox",
+          condition: "new message",
+          frequency: "every_second",
+          triggerAction: "notify"
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
   });
 });

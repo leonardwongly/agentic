@@ -501,7 +501,11 @@ export function sanitizeForTelemetry(value: unknown, depth = 0): unknown {
   }
 
   if (typeof value === "string") {
-    return SENSITIVE_VALUE_PATTERN.test(value) ? "[REDACTED]" : value;
+    if (SENSITIVE_VALUE_PATTERN.test(value)) {
+      return "[REDACTED]";
+    }
+
+    return value.length > 200 ? `${value.slice(0, 197)}...` : value;
   }
 
   if (Array.isArray(value)) {
