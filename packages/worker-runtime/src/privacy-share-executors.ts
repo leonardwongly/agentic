@@ -155,7 +155,13 @@ export async function executePublicShareViewJob(params: {
 
   const share = await repository.getGoalShare(job.payload.shareId, job.userId);
 
-  if (!share || share.goalId !== job.payload.goalId || share.status !== "active" || Date.parse(share.expiresAt) <= Date.now()) {
+  if (!share || share.goalId !== job.payload.goalId || share.status !== "active") {
+    return;
+  }
+
+  const expiresAtMs = Date.parse(share.expiresAt);
+
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
     return;
   }
 

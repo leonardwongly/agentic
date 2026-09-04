@@ -29,6 +29,7 @@ html,
 body {
   margin: 0;
   min-height: 100%;
+  overflow-x: clip;
   background:
     radial-gradient(circle at top left, rgba(0, 78, 100, 0.15), transparent 32%),
     radial-gradient(circle at top right, rgba(219, 156, 90, 0.22), transparent 28%),
@@ -213,7 +214,7 @@ button:disabled {
 
   .ui-data-table {
     width: 100%;
-    min-width: 680px;
+    min-width: min(680px, 100%);
     border-collapse: collapse;
     font-size: 0.92rem;
   }
@@ -341,6 +342,7 @@ select {
 
 .dashboard-shell {
   width: min(1380px, calc(100vw - 2rem));
+  max-width: 100%;
   margin: 0 auto;
   padding: 2rem 0 4rem;
   overflow-x: clip;
@@ -357,11 +359,12 @@ select {
 
 .hero-panel {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: 1.5rem;
   padding: 2rem;
   border-radius: calc(var(--radius) + 8px);
   margin-bottom: 1.5rem;
+  min-width: 0;
 }
 
 .eyebrow {
@@ -401,16 +404,19 @@ select {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 1.5rem;
+  min-width: 0;
 }
 
 .card {
   border-radius: var(--radius);
   padding: 1.35rem;
   grid-column: span 4;
+  min-width: 0;
 }
 
 .request-card {
   grid-column: span 8;
+  min-width: 0;
 }
 
 .card-header {
@@ -477,7 +483,7 @@ select {
 
 .command-center-topline {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
   gap: 0.9rem;
 }
 
@@ -509,7 +515,7 @@ select {
 
 .command-center-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: 1rem;
 }
 
@@ -987,7 +993,7 @@ select {
 
 .share-disclosure-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: 0.75rem;
 }
 
@@ -1062,6 +1068,7 @@ select {
 
 .auth-panel {
   width: min(900px, calc(100vw - 2rem));
+  max-width: 100%;
 }
 
 .auth-form {
@@ -1079,6 +1086,10 @@ select {
   gap: 0.75rem;
 }
 
+/* WCAG 2.1 SC 1.4.4: Prevent horizontal overflow at 200% CSS zoom.
+   At 200% zoom the effective CSS viewport is halved, so a 1280px window
+   behaves like 640px. These rules ensure every layout container can shrink
+   to fit without forcing a horizontal scrollbar. */
 @media (max-width: 1100px) {
   .hero-panel,
   .request-card,
@@ -1092,6 +1103,14 @@ select {
 
   .command-center-topline,
   .command-center-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-compare-row {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-compare-caps-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -1165,8 +1184,7 @@ select {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 12px;
-  width: 560px;
-  max-width: calc(100vw - 2rem);
+  width: min(560px, calc(100vw - 2rem));
   max-height: 440px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
   display: flex;
@@ -2527,10 +2545,11 @@ select {
   flex: 1;
   display: flex;
   flex-direction: column;
-  max-width: 1200px;
+  max-width: min(1200px, 100%);
   margin: 0 auto;
   padding: 2rem;
   width: 100%;
+  min-width: 0;
 }
 
 .focus-mode-header {
@@ -4734,7 +4753,7 @@ select {
 /* Agent Comparison */
 .agent-compare {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: 1.5rem;
 }
 
@@ -5028,8 +5047,8 @@ select {
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: var(--shadow);
-  min-width: 280px;
-  max-width: 400px;
+  min-width: min(280px, calc(100vw - 2rem));
+  max-width: min(400px, calc(100vw - 2rem));
 }
 
 .floating-approval-header {
@@ -5432,7 +5451,7 @@ select {
 
 .agent-compare-overview {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -5509,8 +5528,9 @@ select {
 
 .agent-compare-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
   border-bottom: 1px solid var(--line);
+  min-width: 0;
 }
 
 .agent-compare-row:last-child {
@@ -5540,7 +5560,7 @@ select {
 
 .agent-compare-caps-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -5588,7 +5608,7 @@ select {
 
 .agent-compare-prompts-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   gap: 1rem;
 }
 
@@ -6427,7 +6447,7 @@ select {
   position: absolute;
   top: 100%;
   right: 0;
-  width: 360px;
+  width: min(360px, calc(100vw - 2rem));
   max-height: 480px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -7693,7 +7713,7 @@ select {
   background: rgba(255, 255, 255, 0.9);
   border-radius: 12px;
   border: 1px solid var(--line);
-  max-width: 500px;
+  max-width: min(500px, 100%);
   margin: 0 auto;
 }
 
@@ -7716,7 +7736,7 @@ select {
 
 .space-type-options {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
   gap: 0.5rem;
 }
 

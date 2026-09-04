@@ -71,11 +71,12 @@ test("empty note form is rejected inline without creating a note", async ({ page
   await expect(page.getByText("Created a new local note.")).toHaveCount(0);
 });
 
-test("rapid double-submit is guarded: in-flight button disables and only one goal job posts", async ({ page }) => {
+test("rapid double-submit is guarded: only one goal job posts despite repeated clicks", async ({ page }) => {
   // submitGoalRequest() sets isPending(true) and awaits the polled job AFTER the POST
   // response resolves, so "Submit request" stays disabled for the whole flight
   // (dashboard-goals-card.tsx disabled={isPending}) -> a second click cannot fire a
-  // second POST /api/goals.
+  // second POST /api/goals. We verify the invariant (exactly 1 POST) rather than the
+  // intermediate disabled state, which is inherently racy when the job completes fast.
   await unlockDashboard(page);
 
   const goalPosts: string[] = [];
@@ -99,9 +100,8 @@ test("rapid double-submit is guarded: in-flight button disables and only one goa
     submitButton.click()
   ]);
 
-  // Visible double-submit protection while the job is still being polled.
-  await expect(submitButton).toBeDisabled({ timeout: E2E_UI_TIMEOUT_MS });
-  // Hostile immediate second attempt: should be swallowed by the disabled control.
+  // Hostile immediate second attempt: even if the button has already re-enabled
+  // (fast job completion), the guard must prevent a duplicate POST.
   await submitButton.click({ timeout: 800, noWaitAfter: true }).catch(() => {});
 
   await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
@@ -577,19 +577,21 @@ test("submit button shows disabled state during goal creation to prevent confusi
 
 // --- ZOOM ACCESSIBILITY ---
 
-test("dashboard remains usable at 200% browser zoom - critical controls stay visible", async ({ page }) => {
-  // WCAG 2.1 Success Criterion 1.4.4: Text should be readable at 200% zoom.
-  // Critical controls must remain visible and operable.
-  // NOTE: CSS zoom causes horizontal overflow in this app - documented as UX bug.
-  // This test verifies critical controls remain VISIBLE, not that layout is perfect.
+test("dashboard remains usable at 200% browser zoom without horizontal overflow (WCAG 1.4.4)", async ({ page }) => {
+  // WCAG 2.1 Success Criterion 1.4.4: Content must remain usable at 200% zoom
+  // without requiring horizontal scrolling. Fixed by replacing fixed-width layouts
+  // with responsive minmax()/auto-fit grids and adding overflow-x: clip on root.
   await unlockDashboard(page);
 
-  // Set 200% zoom via CDP.
+  // Set 200% zoom via CSS zoom property.
   await page.evaluate(() => {
     document.documentElement.style.zoom = "200%";
   });
 
-  // Critical elements should still be visible (even if layout overflows).
+  // Verify no horizontal overflow at 200% zoom.
+  await expectNoHorizontalOverflow(page);
+
+  // Critical elements should still be visible and operable.
   await expect(page.getByRole("heading", { name: "Command center" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Request work" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Lock session" })).toBeVisible();
@@ -597,6 +599,9 @@ test("dashboard remains usable at 200% browser zoom - critical controls stay vis
   // Request composer should be usable.
   await page.getByRole("button", { name: "Request work" }).click();
   await expect(submitButtonOf(page)).toBeVisible();
+
+  // Layout should still have no horizontal overflow after opening the composer.
+  await expectNoHorizontalOverflow(page);
 
   // Reset zoom for subsequent tests.
   await page.evaluate(() => {
