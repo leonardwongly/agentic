@@ -260,7 +260,32 @@ Worker process:
 npm run start:worker:prod
 ```
 
-Only trust proxy headers after confirming the ingress overwrites the configured client-IP header at the edge. Start with the provider-neutral self-hosting guide in [`docs/deployment/self-hosted.md`](docs/deployment/self-hosted.md). For a completely-free serverless deployment (bounded run-once worker on a free scheduler), see [`docs/deployment/free-tier-serverless.md`](docs/deployment/free-tier-serverless.md). For Cloudflare Workers via the OpenNext adapter, see [`docs/deployment/cloudflare-workers.md`](docs/deployment/cloudflare-workers.md). The deployment runbook is [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md); the Render Blueprint in [`deploy/render/render.yaml`](deploy/render/render.yaml) is one optional provider example.
+Only trust proxy headers after confirming the ingress overwrites the configured client-IP header at the edge. Start with the provider-neutral self-hosting guide in [`docs/deployment/self-hosted.md`](docs/deployment/self-hosted.md). For a completely-free serverless deployment (bounded run-once worker on a free scheduler), see [`docs/deployment/free-tier-serverless.md`](docs/deployment/free-tier-serverless.md). The deployment runbook is [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md); the Render Blueprint in [`deploy/render/render.yaml`](deploy/render/render.yaml) is one optional provider example.
+
+### Cloudflare Workers Deployment
+
+Agentic supports deployment to **Cloudflare Workers** via the `@opennextjs/cloudflare` adapter. This provides edge deployment with:
+
+- **Hyperdrive-backed Postgres**: Per-request connection pooling via Cloudflare Hyperdrive
+- **Cron Trigger**: Replaces the always-on worker process with scheduled invocations
+- **Workers Secrets Store**: Secure secret management integrated with Cloudflare's edge
+
+Quick start:
+
+```bash
+# Build for Workers
+npm run cf:build -w @agentic/web
+
+# Check bundle size (~2.4 MiB gzipped)
+npm run cf:check-size
+
+# Deploy
+cd apps/web && npx wrangler deploy
+```
+
+Full instructions including Hyperdrive setup, secret provisioning, health verification, rollback procedures, and monitoring are in [`docs/deployment/cloudflare-workers.md`](docs/deployment/cloudflare-workers.md).
+
+**Note**: File-backed features (local notes, self-improvement memory) are unsupported on Workers. Use Postgres-backed state for production.
 
 ## Forking And Self-Hosting
 

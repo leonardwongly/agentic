@@ -215,6 +215,55 @@ Rollback restores only the Worker code. Migrations are additive; do not run a
 destructive schema downgrade unless a maintainer rollback note says it is safe.
 Capture the current version id and a database backup id before deploying.
 
+## Monitoring and Alerting
+
+### Workers Observability
+
+Cloudflare provides built-in observability for Workers:
+
+```bash
+# Stream live logs
+npx wrangler tail
+
+# View invocation metrics in dashboard
+# https://dash.cloudflare.com → Workers → <your-worker> → Metrics
+```
+
+Key metrics to monitor:
+- **Invocations**: Request count and error rate
+- **CPU time**: Watch for 1102 errors indicating CPU budget exhaustion
+- **Duration**: P95 latency should stay under 1s for API routes
+- **Cron success rate**: Verify `[cron] worker tick 200` messages
+
+### Application Telemetry
+
+The app emits structured telemetry via `@agentic/observability`:
+
+- `api.worker.tick.completed`: Job drain results with `processedCount`, `ranWatchers`
+- `worker.starting` / `worker.stopped`: Lifecycle events
+- `api.health.read`: Health endpoint invocations
+
+Configure your log aggregation (Datadog, Grafana Cloud, etc.) to ingest
+Workers logs via the Cloudflare Logpush integration or direct API.
+
+### Alerting Thresholds
+
+| Metric | Warning | Critical | Action |
+|--------|---------|----------|--------|
+| Cron tick failures | >5% in 1h | >20% in 1h | Check `wrangler tail` for errors |
+| API error rate | >1% | >5% | Review `/api/ready/details` |
+| Worker heartbeat stale | >2× cron interval | >3× cron interval | Verify cron trigger is registered |
+| CPU time P95 | >20ms | >50ms | Consider Workers Paid tier |
+
+## Related Runbooks
+
+Cross-reference these operational guides:
+
+- **[Worker Durability](../runbooks/worker-durability.md)**: Lease expiry, retry logic, dead-letter handling
+- **[Worker Concurrency Controls](../runbooks/worker-concurrency-controls.md)**: Concurrency limits, backpressure
+- **[Self-Hosted Deployment](./self-hosted.md)**: Alternative deployment with persistent filesystem
+- **[Free-Tier Serverless](./free-tier-serverless.md)**: Vercel/Netlify deployment option
+
 ## Limitations on Workers
 
 - **Bundle size** is kept under the Workers limit by the Webpack build (deduped
@@ -225,3 +274,5 @@ Capture the current version id and a database backup id before deploying.
 - The standalone `apps/worker` process is **not** deployed here; the Cron
   Trigger replaces it. The Docker/Render and free-tier serverless paths remain
   valid and unaffected.
+- **R2 storage** is available but not yet integrated; file-backed features
+  remain disabled until the storage adapter is wired to R2 bindings.
