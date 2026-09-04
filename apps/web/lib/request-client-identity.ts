@@ -107,7 +107,32 @@ function parseTrustedForwardedFor(header: string | null): string | null {
   return normalizeIpCandidate(firstHop);
 }
 
+/**
+ * Extended Request type that includes Cloudflare Workers cf object.
+ * The cf object contains metadata about the request including connectingIp.
+ */
+type RequestWithCf = Request & {
+  cf?: {
+    connectingIp?: string;
+    [key: string]: unknown;
+  };
+};
+
 function getTrustedProxyIp(request: Request): string | null {
+  // Check for Cloudflare Workers cf.connectingIp (most reliable on Workers).
+  // Only use this when proxy headers are trusted, as the cf object could be
+  // spoofed in non-Workers environments or tests.
+  if (shouldTrustProxyHeaders()) {
+    const cfRequest = request as RequestWithCf;
+    if (cfRequest.cf?.connectingIp) {
+      const normalized = normalizeIpCandidate(cfRequest.cf.connectingIp);
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+
+  // Fall back to header-based detection when proxy headers are trusted
   if (!shouldTrustProxyHeaders()) {
     return null;
   }
@@ -121,6 +146,7 @@ function getTrustedProxyIp(request: Request): string | null {
     case "x-forwarded-for":
       return parseTrustedForwardedFor(request.headers.get("x-forwarded-for"));
     default:
+      // No specific header configured - don't guess, return null to use fingerprint
       return null;
   }
 }
