@@ -16,15 +16,17 @@ export async function GET(request: Request, context: RouteContext) {
     const principal = await requireApiSession(request);
     const { id } = await context.params;
 
-    if (!id.trim()) {
+    const trimmedId = id.trim();
+
+    if (!trimmedId) {
       throw new ApiRouteError(400, "Approval job id is required.");
     }
 
     const repository = await getSeededRepository();
-    const job = await repository.getJob(id, principal.userId);
+    const job = await repository.getJob(trimmedId, principal.userId);
 
     if (!isApprovalFollowUpJob(job)) {
-      throw new ApiRouteError(404, `Approval job ${id} was not found.`);
+      throw new ApiRouteError(404, `Approval job ${trimmedId} was not found.`);
     }
 
     const responseBody = {
@@ -58,7 +60,7 @@ export async function GET(request: Request, context: RouteContext) {
       const bundle = await repository.getGoalBundleForUser(job.payload.goalId, principal.userId);
 
       if (!bundle) {
-        throw new Error(`Approval goal ${job.payload.goalId} is missing after job completion.`);
+        throw new ApiRouteError(409, `Approval goal ${job.payload.goalId} is missing after job completion.`);
       }
 
       return authenticatedJson({

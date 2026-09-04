@@ -175,6 +175,67 @@ describe("adversarial UI: confusing copy & visual states", () => {
     expect(markup).not.toContain("NaN");
   });
 
+  it("Regression: formatPercent in policy traces guards NaN, Infinity, and out-of-range values", () => {
+    // goal-detail-panel.tsx has a local formatPercent used for trust scores, precision,
+    // negative-outcome rates, and failure-cost rates. Unlike formatConfidencePercentage (which
+    // already guarded boundaries), formatPercent used to leak "NaN%" and "Infinity%" into the
+    // panel when upstream data was corrupt. The fix clamps to [0,1] and returns "n/a" for
+    // non-finite values so operators never see math artifacts beside policy decisions.
+    const nanBundle = buildBundle({
+      actionLogs: [
+        {
+          id: "log-nan",
+          goalId: "goal-copy",
+          taskId: null,
+          workflowId: "workflow-copy",
+          actor: "policy",
+          kind: "policy.evaluated",
+          message: "Policy evaluated.",
+          details: {
+            riskClass: "R2",
+            outcome: "allowed",
+            rationale: "Test.",
+            confidence: 0.5,
+            requiresApproval: false,
+            policyTrace: {
+              decision: {
+                riskClass: "R2",
+                outcome: "allowed",
+                rationale: "Test.",
+                confidence: 0.5,
+                requiresApproval: false
+              },
+              checks: [],
+              trust: { approvedCount: 0, rejectedCount: 0, trustScore: NaN },
+              scorecardTrust: { strong: false, weak: false, rationale: null },
+              autonomyBudget: null,
+              conformance: null,
+              learningValidation: {
+                replayValidated: false,
+                safeSuggestionPrecision: Infinity,
+                negativeOutcomeRate: -Infinity,
+                failureCostRate: NaN,
+                driftStatus: "insufficient_data",
+                rationale: "Not enough data."
+              }
+            }
+          },
+          createdAt: "2024-01-01T00:01:00.000Z",
+          prevHash: null
+        }
+      ]
+    });
+
+    const markup = renderToStaticMarkup(<GoalDetailPanel bundle={nanBundle} onClose={() => {}} />);
+
+    // No math artifacts should leak into the rendered panel.
+    expect(markup).not.toContain("NaN%");
+    expect(markup).not.toContain("Infinity%");
+    expect(markup).not.toContain("-Infinity%");
+    // The guard should produce either "n/a" or a clamped percentage.
+    expect(markup).toContain("n/a");
+  });
+
   it("Regression: prototype-chain keys in artifact metadata are not read as an execution mode", () => {
     // isAgentExecutionMode used `value in executionModePresentations`, which is true for inherited
     // keys like "constructor"/"toString"/"__proto__". That let attacker-writable artifact metadata

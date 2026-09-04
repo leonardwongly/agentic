@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import {
   AGENTIC_SESSION_COOKIE,
   AGENTIC_ACCESS_KEY_HEADER,
@@ -15,6 +16,7 @@ import {
   parseAuthorizedSessionToken,
   requireApiPrincipal,
   requireApiSession,
+  resolveApiPrincipal,
   revokeSessionToken,
   verifyAccessKey
 } from "../apps/web/lib/auth";
@@ -876,6 +878,205 @@ describe("auth helpers", () => {
     await expect(primaryStore.getStatus(key, now + 10 * 60_000 + 2)).resolves.toEqual({
       throttled: false,
       retryAfterSeconds: 0
+    });
+  });
+
+  describe("adversarial auth edge cases", () => {
+    it("rejects zero-length and whitespace-only access keys without throwing", () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+
+      expect(verifyAccessKey("")).toBe(false);
+      expect(verifyAccessKey("   ")).toBe(false);
+      expect(verifyAccessKey("\t\n")).toBe(false);
+      expect(verifyAccessKey(null)).toBe(false);
+      expect(verifyAccessKey(undefined)).toBe(false);
+    });
+
+    it("rejects session tokens with unicode and control characters in the payload", async () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+
+      const validToken = buildSessionToken();
+      const [payload] = validToken.split(".");
+
+      // Inject unicode/control chars into the base64url payload
+      const unicodeTampered = `${payload}\u0000.signature`;
+      const controlCharTampered = `${payload}\r\n.signature`;
+
+      await expect(parseAuthorizedSessionToken(unicodeTampered)).resolves.toBeNull();
+      await expect(parseAuthorizedSessionToken(controlCharTampered)).resolves.toBeNull();
+    });
+
+    it("rejects session tokens with extra dots (multi-segment forgery)", async () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+
+      const validToken = buildSessionToken();
+      const [payload, signature] = validToken.split(".");
+
+      // Extra segment appended
+      await expect(parseAuthorizedSessionToken(`${payload}.${signature}.extra`)).resolves.toBeNull();
+      // Extra segment prepended
+      await expect(parseAuthorizedSessionToken(`prefix.${payload}.${signature}`)).resolves.toBeNull();
+    });
+
+    it("rejects session tokens at exact expiry boundary (off-by-one)", async () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+
+      const token = buildSessionToken();
+      const parsed = await parseAuthorizedSessionToken(token);
+      expect(parsed).not.toBeNull();
+
+      const expiresAtMs = Date.parse(parsed!.expiresAt);
+
+      // At exactly expiry time, token should be rejected (<= check in source)
+      vi.useFakeTimers({ now: expiresAtMs });
+      try {
+        await expect(parseAuthorizedSessionToken(token)).resolves.toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      // One ms before expiry, token should still be valid
+      vi.useFakeTimers({ now: expiresAtMs - 1 });
+      try {
+        await expect(parseAuthorizedSessionToken(token)).resolves.not.toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("handles concurrent session creation without collision", async () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+
+      const tokens = await Promise.all(Array.from({ length: 20 }, () => buildSessionToken()));
+      const uniqueTokens = new Set(tokens);
+
+      // All tokens must be unique (UUID-based sessionId ensures this)
+      expect(uniqueTokens.size).toBe(20);
+
+      // All tokens must be independently valid
+      const results = await Promise.all(tokens.map((token) => parseAuthorizedSessionToken(token)));
+      expect(results.every((result) => result !== null)).toBe(true);
+    });
+
+    it("rejects machine tokens with empty or whitespace-only secrets", () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+
+      expect(() => hashMachineTokenSecret("")).toThrow(/must not be empty/);
+      expect(() => hashMachineTokenSecret("   ")).toThrow(/must not be empty/);
+    });
+
+    it("rejects machine token configs with duplicate ids", async () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+      process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
+        {
+          id: "duplicate-id",
+          subject: "first",
+          userId: "owner",
+          tokenHash: hashMachineTokenSecret("secret-1"),
+          scopes: ["read"],
+          routeGroups: ["api"]
+        },
+        {
+          id: "duplicate-id",
+          subject: "second",
+          userId: "owner",
+          tokenHash: hashMachineTokenSecret("secret-2"),
+          scopes: ["write"],
+          routeGroups: ["api"]
+        }
+      ]);
+
+      const request = new Request("http://localhost/api/test", {
+        headers: { [AGENTIC_MACHINE_TOKEN_HEADER]: "secret-1" }
+      });
+
+      // Should throw due to duplicate id validation
+      await expect(requireApiPrincipal(request, { allowMachineToken: true })).rejects.toThrow(/Duplicate machine token id/);
+    });
+
+    it("rejects machine token configs with malformed tokenHash", async () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+      process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
+        {
+          id: "bad-hash",
+          subject: "test",
+          userId: "owner",
+          tokenHash: "not-a-valid-hash",
+          scopes: ["read"],
+          routeGroups: ["api"]
+        }
+      ]);
+
+      const request = new Request("http://localhost/api/test", {
+        headers: { [AGENTIC_MACHINE_TOKEN_HEADER]: "any-secret" }
+      });
+
+      await expect(requireApiPrincipal(request, { allowMachineToken: true })).rejects.toThrow(/sha256 tokenHash/);
+    });
+
+    it("handles cookie header with multiple semicolons and empty segments", async () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+
+      const token = buildSessionToken();
+
+      // Multiple semicolons, empty segments, whitespace
+      const messyCookieHeader = `;; ${AGENTIC_SESSION_COOKIE}=${token} ;; other=val ;;`;
+
+      const principal = await requireApiSession(
+        new Request("http://localhost/api/test", {
+          headers: { cookie: messyCookieHeader }
+        })
+      );
+
+      expect(principal).toMatchObject({ authMethod: "session", userId: "owner" });
+    });
+
+    it("rejects bearer authorization header with only whitespace after Bearer", async () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+
+      const principal = await resolveApiPrincipal(
+        new Request("http://localhost/api/test", {
+          headers: { authorization: "Bearer    " }
+        })
+      );
+
+      // Whitespace-only bearer should not match any machine token
+      expect(principal).toBeNull();
+    });
+
+    it("is case-insensitive for Bearer prefix in authorization header", async () => {
+      process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
+      process.env.NODE_ENV = "test";
+      process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
+        {
+          id: "bearer-test",
+          subject: "bearer test",
+          userId: "owner",
+          tokenHash: hashMachineTokenSecret("bearer-secret"),
+          scopes: ["read"],
+          routeGroups: ["api"]
+        }
+      ]);
+
+      // The regex uses /iu flag so BEARER, bearer, BeArEr all work
+      const principal = await requireApiPrincipal(
+        new Request("http://localhost/api/test", {
+          headers: { authorization: "BEARER bearer-secret" }
+        }),
+        { allowMachineToken: true, routeGroup: "api", scope: "read" }
+      );
+
+      expect(principal).toMatchObject({ kind: "machine_token", tokenId: "bearer-test" });
     });
   });
 });

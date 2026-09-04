@@ -128,7 +128,7 @@ export function DataTable<T>({ caption, columns, rows, getRowKey, emptyLabel = "
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={columns.length}>{emptyLabel}</td>
+              <td colSpan={Math.max(1, columns.length)}>{emptyLabel}</td>
             </tr>
           ) : (
             rows.map((row) => (

@@ -110,6 +110,35 @@ describe("dashboard events route", () => {
     expect(text).not.toContain(hiddenJob.id);
   });
 
+  it("rejects dashboard event stream with timeoutMs less than pollMs", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await dashboardEventsRoute(
+      buildAuthorizedGetRequest("http://localhost/api/dashboard/events?timeoutMs=500&pollMs=5000")
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/timeoutMs.*pollMs/i);
+  });
+
+  it("clamps out-of-range SSE query parameters to safe bounds", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await dashboardEventsRoute(
+      buildAuthorizedGetRequest(
+        "http://localhost/api/dashboard/events?pollMs=-100&heartbeatMs=999999&timeoutMs=2000"
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+  });
+
   it("bounds burst batches with monotonic sequence ids for client dedupe", async () => {
     const repository = createRouteTestRepository();
     await repository.seedDefaults(DEFAULT_OWNER_USER_ID);

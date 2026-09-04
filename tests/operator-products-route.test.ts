@@ -104,6 +104,72 @@ describe("operator products route", () => {
     expect(persistedSelection?.actorContext).toEqual(createSystemActorContext(DEFAULT_OWNER_USER_ID));
   });
 
+  it("rejects unauthenticated operator product access", async () => {
+    const response = await operatorProductsRouteGet(
+      new Request("http://localhost/api/operator-products", {
+        method: "GET"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toMatch(/unauthorized/i);
+  });
+
+  it("rejects operator product selection with empty operatorProductId", async () => {
+    const response = await operatorProductsRoutePost(
+      buildAuthorizedRequest("http://localhost/api/operator-products", "POST", {
+        operatorProductId: ""
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
+  it("rejects operator product selection with whitespace-only operatorProductId", async () => {
+    const response = await operatorProductsRoutePost(
+      buildAuthorizedRequest("http://localhost/api/operator-products", "POST", {
+        operatorProductId: "   "
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
+  it("rejects operator product selection with malformed JSON body", async () => {
+    const response = await operatorProductsRoutePost(
+      new Request("http://localhost/api/operator-products", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: "{broken json"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/valid JSON/i);
+  });
+
+  it("rejects operator product selection with extra unrecognized fields", async () => {
+    const response = await operatorProductsRoutePost(
+      buildAuthorizedRequest("http://localhost/api/operator-products", "POST", {
+        operatorProductId: "some-product",
+        unexpectedField: "injection"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/unrecognized key/i);
+  });
+
   it("returns 404 when selecting another user's custom operator product", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH

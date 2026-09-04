@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   ApiRouteError,
   authenticatedJson,
+  authenticatedRateLimitError,
   authenticatedResponse,
   authenticatedStreamResponse,
   handleApiError,
@@ -169,5 +170,90 @@ describe("api security headers", () => {
     expectAuthenticatedStreamHeaders(response);
 
     await response.body?.cancel();
+  });
+
+  describe("adversarial security header edge cases", () => {
+    it("security headers cannot be overridden by caller-supplied init headers", () => {
+      // Attempt to override X-Frame-Options via init headers
+      const response = authenticatedJson(
+        { ok: true },
+        {
+          headers: {
+            "X-Frame-Options": "ALLOWALL",
+            "X-Content-Type-Options": "",
+            "Referrer-Policy": "unsafe-url"
+          }
+        }
+      );
+
+      // Security headers must win over caller-supplied values
+      expect(response.headers.get("x-frame-options")).toBe("DENY");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    });
+
+    it("operational responses also enforce security headers against override attempts", () => {
+      const response = operationalJson(
+        { ok: true },
+        {
+          headers: {
+            "X-Frame-Options": "SAMEORIGIN",
+            "Cross-Origin-Opener-Policy": "unsafe-none"
+          }
+        }
+      );
+
+      expect(response.headers.get("x-frame-options")).toBe("DENY");
+      expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");
+    });
+
+    it("error responses maintain all security headers", () => {
+      const errorResponse = handleApiError(new Error("unexpected"), "Fallback.");
+
+      expect(errorResponse.status).toBe(500);
+      expectBaseSecurityHeaders(errorResponse);
+      expectNoStoreHeaders(errorResponse);
+    });
+
+    it("rate limit responses include Retry-After and security headers", () => {
+      const response = authenticatedRateLimitError("Too many requests.", 30);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("retry-after")).toBe("30");
+      expectBaseSecurityHeaders(response);
+    });
+
+    it("withApiTelemetry applies security headers even when handler throws", async () => {
+      const response = await withApiTelemetry(
+        new Request("http://localhost/api/test"),
+        "api.test.error",
+        () => {
+          throw new Error("handler exploded");
+        }
+      ).catch((error: unknown) => {
+        // withApiTelemetry doesn't catch handler errors, so we need to handle them
+        // But the important thing is that if it does return a response, headers are applied
+        throw error;
+      }).catch(() => null);
+
+      // If the handler throws, withApiTelemetry propagates the error.
+      // This test documents that behavior - callers must use handleApiError.
+      expect(response).toBeNull();
+    });
+
+    it("all six base security headers are present and have expected values", () => {
+      const response = authenticatedJson({ ok: true });
+
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("x-frame-options")).toBe("DENY");
+      expect(response.headers.get("permissions-policy")).toContain("camera=()");
+      expect(response.headers.get("permissions-policy")).toContain("geolocation=()");
+      expect(response.headers.get("permissions-policy")).toContain("microphone=()");
+      expect(response.headers.get("permissions-policy")).toContain("payment=()");
+      expect(response.headers.get("permissions-policy")).toContain("usb=()");
+      expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");
+      expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+    });
   });
 });

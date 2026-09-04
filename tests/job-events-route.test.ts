@@ -80,6 +80,63 @@ describe("job event stream route", () => {
     expect(text).toContain('"terminal":true');
   });
 
+  it("rejects cross-user job event stream access", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    await repository.seedDefaults("user-secondary");
+    const now = "2026-04-29T00:00:00.000Z";
+    const secondaryJob = createJobRecord({
+      userId: "user-secondary",
+      kind: "docs_render",
+      payload: {
+        type: "docs_render",
+        metadata: {}
+      },
+      availableAt: now
+    });
+    await repository.enqueueJob(secondaryJob);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await jobEventsRoute(
+      buildAuthorizedGetRequest(`http://localhost/api/jobs/${secondaryJob.id}/events?timeoutMs=1000`),
+      {
+        params: Promise.resolve({ id: secondaryJob.id })
+      }
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(404);
+    expect(payload.error).toContain("was not found");
+  });
+
+  it("clamps out-of-range SSE query parameters to safe bounds", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const now = "2026-04-29T00:00:00.000Z";
+    const completedJob = {
+      ...createJobRecord({
+        userId: DEFAULT_OWNER_USER_ID,
+        kind: "docs_render",
+        payload: { type: "docs_render", metadata: {} },
+        availableAt: now
+      }),
+      status: "completed" as const,
+      completedAt: now,
+      updatedAt: now
+    };
+    await repository.enqueueJob(completedJob);
+
+    const response = await jobEventsRoute(
+      buildAuthorizedGetRequest(
+        `http://localhost/api/jobs/${completedJob.id}/events?pollMs=-100&heartbeatMs=999999&timeoutMs=1000`
+      ),
+      { params: Promise.resolve({ id: completedJob.id }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+  });
+
   it("does not stream jobs that are absent or outside the authenticated scope", async () => {
     const repository = createRouteTestRepository();
     await repository.seedDefaults(DEFAULT_OWNER_USER_ID);

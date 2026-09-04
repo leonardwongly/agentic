@@ -9,6 +9,7 @@ import {
   authenticatedJson,
   authenticatedRateLimitError,
   handleApiError,
+  readBoundedRequestText,
   withApiTelemetry
 } from "../../../lib/api-response";
 import { createActorContextFromPrincipal } from "../../../lib/actor-context";
@@ -22,7 +23,7 @@ const BriefingRequestSchema = z
   .strict();
 
 async function parseBriefingRequest(request: Request): Promise<z.infer<typeof BriefingRequestSchema>> {
-  const rawBody = await request.text();
+  const rawBody = await readBoundedRequestText(request);
 
   if (!rawBody.trim()) {
     return { type: "startup" };
