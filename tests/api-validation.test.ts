@@ -264,10 +264,9 @@ describe("api request validation", () => {
   ])("rejects unknown fields for %s requests", async (_label, invokeRoute) => {
     const response = await invokeRoute();
     const payload = (await response.json()) as { error?: string };
-    const expectedMessage = _label === "nl intent" ? "Invalid input" : "Unrecognized key";
 
     expect(response.status).toBe(400);
-    expect(payload.error).toContain(expectedMessage);
+    expect(payload.error).toContain("Unrecognized key");
     expectNoStoreHeaders(response);
   });
 

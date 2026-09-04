@@ -15,59 +15,57 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "ignoreDeprecations": "6.0",
-    "baseUrl": ".",
     "paths": {
       "@agentic/contracts": [
-        "packages/contracts/src/index.ts"
+        "./packages/contracts/src/index.ts"
       ],
       "@agentic/orchestrator": [
-        "packages/orchestrator/src/index.ts"
+        "./packages/orchestrator/src/index.ts"
       ],
       "@agentic/memory": [
-        "packages/memory/src/index.ts"
+        "./packages/memory/src/index.ts"
       ],
       "@agentic/policy": [
-        "packages/policy/src/index.ts"
+        "./packages/policy/src/index.ts"
       ],
       "@agentic/execution": [
-        "packages/execution/src/index.ts"
+        "./packages/execution/src/index.ts"
       ],
       "@agentic/agents": [
-        "packages/agents/src/index.ts"
+        "./packages/agents/src/index.ts"
       ],
       "@agentic/integrations": [
-        "packages/integrations/src/index.ts"
+        "./packages/integrations/src/index.ts"
       ],
       "@agentic/observability": [
-        "packages/observability/src/index.ts"
+        "./packages/observability/src/index.ts"
       ],
       "@agentic/notifications": [
-        "packages/notifications/src/index.ts"
+        "./packages/notifications/src/index.ts"
       ],
       "@agentic/db": [
-        "packages/db/src/index.ts"
+        "./packages/db/src/index.ts"
       ],
       "@agentic/db/migration-discipline": [
-        "packages/db/src/migration-discipline.ts"
+        "./packages/db/src/migration-discipline.ts"
       ],
       "@agentic/db/migration-runtime": [
-        "packages/db/src/migration-runtime.ts"
+        "./packages/db/src/migration-runtime.ts"
       ],
       "@agentic/db/schema-status": [
-        "packages/db/src/schema-status.ts"
+        "./packages/db/src/schema-status.ts"
       ],
       "@agentic/repository": [
-        "packages/repository/src/index.ts"
+        "./packages/repository/src/index.ts"
       ],
       "@agentic/worker-runtime": [
-        "packages/worker-runtime/src/index.ts"
+        "./packages/worker-runtime/src/index.ts"
       ],
       "@agentic/docs-runtime": [
-        "packages/docs-runtime/src/index.ts"
+        "./packages/docs-runtime/src/index.ts"
       ],
       "@agentic/self-improvement-memory": [
-        "packages/self-improvement-memory/src/index.ts"
+        "./packages/self-improvement-memory/src/index.ts"
       ]
     }
   },

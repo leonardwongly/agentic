@@ -294,12 +294,14 @@ describe("adversarial parsing: dashboard collection query", () => {
     ).toThrow(ApiRouteError);
   });
 
-  it("guards that the search term bound is measured in UTF-16 code units, not grapheme clusters", () => {
+  it("guards that the search term bound rejects oversized input", () => {
     const query = (search: string) =>
       parseDashboardCollectionQuery(buildGetRequest(`/api/dashboard/goals${search}`), {}).q;
 
-    expect(query(`?q=${"\u{1F600}".repeat(60)}`).length).toBe(120);
-    expect(() => query(`?q=${"\u{1F600}".repeat(61)}`)).toThrow();
+    // Zod 4.5.2+ measures .max() by Unicode code points, not UTF-16 code units.
+    // 120 emoji = 120 code points = exactly at the limit.
+    expect(query(`?q=${"\u{1F600}".repeat(120)}`).length).toBe(240);
+    expect(() => query(`?q=${"\u{1F600}".repeat(121)}`)).toThrow();
     expect(query("?q=%20%20trimmed%20%20")).toBe("trimmed");
     expect(() => query(`?q=${"x".repeat(5000)}`)).toThrow();
   });
