@@ -653,3 +653,309 @@ Ongoing
 | 11 | GitHub App E2E | 🟠 High | Not Started | #142 | 2-3 days |
 | 12 | Roadmap | 🟠 High | In Progress | #142-145 | Ongoing |
 | 13 | Cognitive-core | 📋 Planning | Planning | Tier 1 | Ongoing |
+
+---
+
+## Risk Register & Contingency Planning
+
+Each critical and high-priority finding includes a fallback strategy if the primary remediation approach fails.
+
+| # | Finding | Primary Risk | Likelihood | Impact | Contingency / Fallback |
+|---|---------|-------------|------------|--------|----------------------|
+| 1 | node:fs isolation | R2/KV adapter introduces latency or consistency issues not present in file-backed store | Medium | High | Maintain dual-mode adapter; self-hosted continues using `node:fs`. Workers deployment proceeds with documented limitations. Add feature flag `AGENTIC_STORAGE_BACKEND` to select adapter at runtime. |
+| 2 | Watcher scheduler | Cron granularity (1-min minimum) insufficient for sub-minute watcher intervals | Low | Medium | Document minimum cadence. For sub-minute watchers, fall back to event-driven triggers only on Workers. Self-hosted retains interval-based scheduling. |
+| 3 | SDK validation | `googleapis` fundamentally incompatible with `workerd` even under `nodejs_compat` | Medium | High | Lazy-load googleapis behind a runtime check. On Workers, disable Google integrations and surface clear "not available on this platform" messaging. File upstream issue with Cloudflare. Consider REST API alternative to googleapis SDK. |
+| 4 | Config/secrets parity | Workers Secrets Store has different rotation semantics than `process.env` | Low | Medium | Implement secret versioning in the adapter layer. Support both env-var and Secrets Store backends transparently. |
+| 7 | Model planner | Model provider API costs exceed budget during evaluation | Medium | Medium | Set hard token/cost caps in eval harness. Use smaller/cheaper model for initial evaluation. Define cost-per-decision threshold before graduating to default. |
+| 8 | GitHub App config | GitHub App installation permissions insufficient for target org | Low | High | Document required permissions upfront. Provide pre-flight permission checker script. Fall back to PAT-based sync if App install blocked. |
+| 9 | Postgres bootstrap | Hyperdrive connection pooling behaves differently than direct `pg` driver | Medium | High | Test connection pooling under load before production. Maintain direct `pg` fallback for non-Workers deployments. Add connection health monitoring. |
+| 10 | Worker durability | Lease expiry timing differs between Node timers and Workers `waitUntil()` | Medium | High | Validate lease mechanics under Miniflare first. Add configurable lease grace period. Monitor dead-letter queue for unexpected failures post-deploy. |
+| 11 | GitHub App E2E | Webhook delivery delayed or dropped by GitHub | Low | Medium | Implement webhook retry with exponential backoff. Add webhook receipt logging. Provide manual sync trigger as fallback. |
+
+### Escalation Path
+
+| Severity | Response Time | Escalate To | Action |
+|----------|--------------|-------------|--------|
+| Critical blocker (deployment blocked) | Same day | Project Lead + Platform Team | Swarm resolution; consider temporary workaround |
+| High blocker (feature broken) | Within 2 business days | Tech Lead | Assign dedicated engineer; daily standup tracking |
+| Medium issue | Within 1 week | Team Lead | Schedule into sprint; weekly review |
+| Assumption invalidated | Immediate | All stakeholders | Re-evaluate affected findings; update plan |
+
+---
+
+## Resource & Capacity Planning
+
+### Effort Estimates (Person-Weeks)
+
+| # | Finding | Estimated Effort | Required Skills | Notes |
+|---|---------|-----------------|----------------|-------|
+| 1 | node:fs isolation | 2-3 person-weeks | TypeScript, Cloudflare Workers/R2/KV, storage abstraction patterns | Largest single finding; requires architectural design |
+| 2 | Watcher scheduler | 0.5 person-weeks | TypeScript, Cloudflare Cron Triggers | Straightforward wiring once #979 done |
+| 3 | SDK validation | 1 person-week | Cloudflare workerd, Node.js compatibility, bundle analysis | Investigation-heavy; may uncover additional issues |
+| 4 | Config/secrets parity | 1 person-week | Cloudflare Workers bindings, security headers, CSP | Testing-heavy across environments |
+| 5 | Deployment runbook | 0.5-1 person-week | Technical writing, Cloudflare operations | Documentation; requires completed findings for accuracy |
+| 7 | Model planner | 1-2 person-weeks | AI/ML evaluation, Anthropic/OpenAI APIs, metrics design | Requires provider credentials and staging environment |
+| 8 | GitHub App config | 0.5 person-weeks | GitHub Apps, secrets management, CI/CD | Operational configuration; low code change |
+| 9 | Postgres bootstrap | 0.5 person-weeks | Postgres, Hyperdrive, deployment ops | Validation against live infrastructure |
+| 10 | Worker durability | 0.5-1 person-weeks | Distributed systems, lease mechanics, failure injection | Requires staging environment with Postgres |
+| 11 | GitHub App E2E | 0.5 person-weeks | GitHub webhooks, integration testing | Depends on #142 being complete |
+| 12 | Roadmap | Ongoing (0.25 pw) | Project management, stakeholder alignment | Tracking/planning overhead |
+| 13 | Cognitive-core | Ongoing (0.25 pw) | Architecture, product planning | Strategic planning |
+
+**Total estimated effort:** 8-11 person-weeks of focused engineering work
+
+### Skill Requirements
+
+| Skill Area | Findings Requiring It | Availability | Gap? |
+|-----------|----------------------|-------------|------|
+| Cloudflare Workers / Wrangler | #979, #981, #982, #984, #985 | TBD | Assess team familiarity |
+| Storage Abstraction Design | #979 | TBD | May require senior engineer |
+| Postgres / Hyperdrive | #979, #143, #144 | TBD | DBA or backend engineer |
+| GitHub Apps / Webhooks | #142, #145 | TBD | DevOps or platform engineer |
+| AI/ML Evaluation | #1006 | TBD | ML engineer or experienced backend |
+| Technical Writing | #985 | TBD | Any engineer with docs experience |
+
+---
+
+## Definition of Done / Acceptance Criteria
+
+Each finding is considered complete only when **all** acceptance criteria are met.
+
+| # | Finding | Acceptance Criteria |
+|---|---------|-------------------|
+| 1 | node:fs isolation | ✅ `wrangler deploy --dry-run` succeeds with zero `node:fs` errors<br>✅ Self-hosted mode passes full test suite using file adapter<br>✅ Workers mode boots and serves requests using R2/KV adapter<br>✅ Runtime adapter selection is automatic based on environment<br>✅ Code review approved by at least 1 reviewer |
+| 2 | Watcher scheduler | ✅ `scheduled()` handler invokes watcher pass on every cron tick<br>✅ Time-based watchers fire correctly under Miniflare<br>✅ No duplicate evaluations on overlapping ticks<br>✅ Telemetry logs watcher scheduler invocations |
+| 3 | SDK validation | ✅ Bundle size report documented (< target threshold)<br>✅ Each SDK function tested under Miniflare with `nodejs_compat`<br>✅ Lazy-loading verified (SDKs not in cold path)<br>✅ Incompatible features documented with user-facing messaging |
+| 4 | Config/secrets parity | ✅ Client IP correctly resolved from CF headers<br>✅ All secrets accessible via Workers bindings<br>✅ CSP headers validated for edge-origin responses<br>✅ Readiness probe checks Hyperdrive connectivity<br>✅ Self-hosted mode unaffected (regression tests pass) |
+| 5 | Deployment runbook | ✅ Runbook covers prerequisites, deploy, verify, rollback<br>✅ Fresh operator successfully follows runbook end-to-end<br>✅ Rollback procedure tested and documented<br>✅ Cross-referenced with existing runbooks |
+| 7 | Model planner | ✅ Evaluation metrics captured against defined thresholds<br>✅ Cost-per-decision within budget<br>✅ Graduation decision documented with evidence<br>✅ Kill-switch verified functional |
+| 8 | GitHub App config | ✅ Preflight script passes all checks<br>✅ Manual sync creates/updates issues correctly<br>✅ Credentials stored securely (not in repo/env plaintext)<br>✅ Error handling produces actionable messages |
+| 9 | Postgres bootstrap | ✅ Bootstrap check passes against live deployment<br>✅ Auth state persists across worker restarts<br>✅ Readiness endpoint returns 200 with DB status<br>✅ Removing DB string produces explicit error (no silent fallback) |
+| 10 | Worker durability | ✅ Happy-path job completes end-to-end<br>✅ Crash recovery re-queues job after lease expiry<br>✅ Duplicate submissions produce single execution<br>✅ Circuit breaker opens after threshold failures<br>✅ Dead-letter queue captures permanent failures |
+| 11 | GitHub App E2E | ✅ Full flow: issue created → webhook → queue → process → updated<br>✅ Invalid webhook signature rejected with 401<br>✅ Rate-limited API retried with backoff<br>✅ Worker offline → job queued → processed on recovery |
+
+---
+
+## Known Risks & Assumptions
+
+### Assumptions (Validate Before Proceeding)
+
+| # | Assumption | Validation Task | Owner | Status |
+|---|-----------|----------------|-------|--------|
+| A1 | `workerd` `nodejs_compat` supports all Node APIs used by googleapis, @anthropic-ai/sdk, and openai | Run each SDK's core functions under Miniflare; document unsupported APIs | TBD | Not Validated |
+| A2 | Hyperdrive connection latency is acceptable for real-time API responses (< 100ms p95) | Benchmark Hyperdrive vs direct pg under load | TBD | Not Validated |
+| A3 | R2/KV provides sufficient consistency guarantees for the file-store lock replacement | Design review + prototype test with concurrent writers | TBD | Not Validated |
+| A4 | Cloudflare Workers free-tier limits (10MB bundle, 30s CPU) are sufficient for the application | `wrangler deploy --dry-run` bundle size check; CPU profiling | TBD | Not Validated |
+| A5 | Provider API keys (Anthropic/OpenAI) are obtainable within budget for evaluation | Confirm with finance/stakeholder | TBD | Not Validated |
+| A6 | GitHub App can be installed on the target organization with required permissions | Pre-flight permission check | TBD | Not Validated |
+| A7 | Existing self-hosted/Docker deployments are unaffected by storage adapter changes | Full regression test suite on self-hosted mode | TBD | Not Validated |
+
+### Risks (Monitor Throughout Execution)
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|-----------|
+| Cloudflare deprecates or changes `nodejs_compat` behaviour | Low | High | Pin Wrangler version; monitor Cloudflare changelog; maintain fallback paths |
+| googleapis SDK bundle exceeds Workers limits even with lazy-loading | Medium | High | Evaluate REST API alternative; consider tree-shaking or subset import |
+| Hyperdrive enters beta/breaking changes during migration | Low | Medium | Pin Hyperdrive version; maintain direct pg fallback |
+| Team lacks Cloudflare Workers expertise | Medium | Medium | Allocate learning time in Phase 1; pair programming; Cloudflare docs/discord |
+| Production proof reveals fundamental architecture gaps | Low | Critical | Fail fast; escalate immediately; reassess migration viability |
+| Dependency updates during migration cause regressions | Medium | Medium | Freeze dependency updates during active migration phases; use dependabot pause |
+
+---
+
+## Cross-Cutting Concerns
+
+These concerns span multiple findings and should be addressed holistically rather than per-finding.
+
+### Observability & Monitoring for Workers
+
+| Concern | Affected Findings | Action |
+|---------|------------------|--------|
+| Workers Observability setup | #979, #981, #982, #984 | Enable Workers Logs + Tail Workers in wrangler.jsonc. Define log levels and structured fields consistent with existing observability package. |
+| Error tracking integration | All Cloudflare findings | Integrate Sentry or equivalent error tracker for Workers. Ensure unhandled exceptions are captured with request context. |
+| Metrics export from Workers | #981, #982, #144 | Adapt `@agentic/observability` to support Workers Analytics Engine or external metrics endpoint. Verify counter/gauge/histogram exports work under workerd. |
+| Alerting thresholds | #143, #144 | Define alerting rules for: error rate > 1%, p95 latency > 2s, dead-letter queue depth > 10, circuit breaker open events. |
+
+### Secret Management & Rotation
+
+| Concern | Affected Findings | Action |
+|---------|------------------|--------|
+| Workers Secrets Store provisioning | #984, #142 | Document `wrangler secret put` workflow for all required secrets. Create secrets inventory checklist. |
+| Secret rotation procedure | #984 | Define rotation cadence and zero-downtime rotation steps for each secret type (API keys, OAuth tokens, DB passwords). |
+| Local dev secret parity | #979, #984 | Ensure `.dev.vars` file mirrors Workers Secrets Store structure for local development. |
+
+### CI/CD Pipeline Updates
+
+| Concern | Affected Findings | Action |
+|---------|------------------|--------|
+| Workers build step in CI | #983 ✅, #979 | Add `wrangler deploy --dry-run` to CI pipeline after #979 is complete. Gate merge on successful dry-run. |
+| Staging environment for production proof | #142, #143, #144, #145 | Provision staging Cloudflare account with R2, Hyperdrive, and Secrets Store. Document staging setup in runbook. |
+| E2E test environment for Workers | #981, #982 | Add Miniflare-based E2E tests to CI. Separate from Playwright browser tests. |
+
+### Backward Compatibility
+
+| Concern | Affected Findings | Action |
+|---------|------------------|--------|
+| Self-hosted mode preservation | #979, #984 | All adapter changes must be opt-in for Workers. Self-hosted mode uses existing code paths by default. Feature flag `AGENTIC_RUNTIME=workers\|node` controls adapter selection. |
+| API contract stability | #984 | No API response format changes. Client IP resolution change is internal only. Security headers remain superset of current. |
+| Database schema compatibility | #143 | No schema changes required for Hyperdrive. Connection string format differs but schema is identical. |
+
+---
+
+## Timeline with Milestones & Go/No-Go Gates
+
+```
+Week 1 (Sep 8-12)
+├── MILESTONE: Phase 1 Kickoff
+│   ├── Validate Assumptions A1, A3, A4 (SDK compat, R2 consistency, bundle size)
+│   ├── Begin Finding 1 (#979): Storage adapter design
+│   └── Begin Finding 3 (#982): SDK validation under Miniflare
+├── GO/NO-GO GATE 1 (Sep 12): Are Workers fundamentals viable?
+│   ├── YES → Continue to Week 2
+│   └── NO → Escalate; reassess migration target; consider Vercel/Deno alternative
+│
+Week 2 (Sep 15-19)
+├── MILESTONE: Storage Adapter Prototype
+│   ├── Finding 1 (#979): Adapter interface + R2/KV implementation
+│   ├── Finding 3 (#982): SDK validation results documented
+│   └── Begin Finding 8 (#142): GitHub App config (parallel, no CF dependency)
+├── CHECKPOINT: Weekly sync review
+│
+Week 3 (Sep 22-26)
+├── MILESTONE: Phase 1 Complete + Phase 2 Start
+│   ├── Finding 1 (#979): Complete + reviewed
+│   ├── Finding 2 (#981): Watcher scheduler wired
+│   ├── Finding 9 (#143): Postgres bootstrap proof initiated
+│   └── GO/NO-GO GATE 2 (Sep 26): Is node:fs isolation production-ready?
+│       ├── YES → Proceed to Phase 2 production proof
+│       └── NO → Extend Phase 1; defer Phase 2
+│
+Week 4 (Sep 29 - Oct 3)
+├── MILESTONE: Production Proof Evidence
+│   ├── Finding 9 (#143): Postgres bootstrap proven
+│   ├── Finding 10 (#144): Worker durability verified
+│   ├── Finding 8 (#142): GitHub App configured
+│   └── Finding 11 (#145): E2E sync validated
+├── CHECKPOINT: Stakeholder demo of production proof results
+│
+Week 5 (Oct 6-10)
+├── MILESTONE: Cloudflare Completion
+│   ├── Finding 4 (#984): Config/secrets parity verified
+│   ├── Finding 5 (#985): Runbook drafted + reviewed
+│   └── GO/NO-GO GATE 3 (Oct 10): Is Workers deployment production-ready?
+│       ├── YES → Announce Workers as supported deployment target
+│       └── NO → Document gaps; schedule remediation sprint
+│
+Week 6 (Oct 13-17)
+├── MILESTONE: Cognitive-Core Evaluation
+│   ├── Finding 7 (#1006): Model planner evaluation complete
+│   ├── Finding 12 (#152): Roadmap updated with evidence
+│   └── Finding 13 (#1011): Tier 2 scope defined
+├── FINAL REVIEW: Full plan retrospective + next quarter planning
+```
+
+### Go/No-Go Decision Criteria
+
+| Gate | Date | Decision Maker | Criteria for GO | Criteria for NO-GO |
+|------|------|---------------|-----------------|-------------------|
+| Gate 1 | Sep 12 | Tech Lead + Platform | SDKs work under workerd; bundle < 10MB; R2 prototype functional | Fundamental incompatibility; bundle > 15MB; no viable storage alternative |
+| Gate 2 | Sep 26 | Tech Lead | Storage adapter passes all tests; self-hosted regression clean; Workers boots successfully | Adapter introduces data loss risk; self-hosted regressions; > 3 unresolved bugs |
+| Gate 3 | Oct 10 | Project Lead + Stakeholders | All P0/P1 Cloudflare findings closed; runbook reviewed; staging deployment verified | > 2 P1 findings incomplete; no working rollback procedure; security review not passed |
+
+---
+
+## Communication Plan
+
+### Stakeholder Matrix
+
+| Stakeholder | Information Need | Cadence | Channel | Owner |
+|------------|-----------------|---------|---------|-------|
+| Engineering Team | Task assignments, blockers, technical decisions | Daily | Standup / Slack | Tech Lead |
+| Project Lead | Progress against milestones, risks, go/no-go readiness | Weekly | Status report / meeting | Project Lead |
+| Platform/Ops Team | Infrastructure requirements, secret provisioning, deployment access | As needed | Ticket / Slack | Platform Lead |
+| Product/Stakeholders | Capability status, timeline, go/no-go outcomes | Bi-weekly | Demo / email | Project Lead |
+| Security Team | Security review requests, CSP/header changes, secret handling | Per finding | Review request | Security Lead |
+
+### Reporting Cadence
+
+| Report | Audience | Frequency | Contents |
+|--------|---------|-----------|----------|
+| Daily standup update | Engineering team | Daily | Blockers, progress, next steps |
+| Weekly status report | Project lead + stakeholders | Friday | Milestone progress, risk register updates, upcoming gates |
+| Go/No-Go brief | Decision makers | At each gate | Evidence summary, recommendation, contingency status |
+| Phase completion report | All stakeholders | End of each phase | Completed findings, evidence links, lessons learned |
+| Final retrospective | All stakeholders | End of plan | Overall outcomes, remaining gaps, next quarter recommendations |
+
+### Escalation Triggers
+
+| Trigger | Escalate To | Within |
+|---------|-----------|--------|
+| Critical finding blocked > 2 days | Project Lead + Platform Team | Same day |
+| Assumption invalidated | All stakeholders + Tech Lead | Immediate |
+| Go/No-Go gate criteria not met | Project Lead + Stakeholders | Before gate date |
+| Security concern discovered | Security Lead + Tech Lead | Same day |
+| Budget/resource constraint | Project Lead + Finance | Within 2 days |
+
+---
+
+## Change Management
+
+### User Impact Assessment
+
+| Change | Affected Users | Impact Level | Communication Required | Migration Path |
+|--------|---------------|-------------|----------------------|---------------|
+| Storage adapter (#979) | Self-hosted operators | Low (transparent) | Release notes | Automatic; no action required |
+| Workers deployment option (#986) | New deployers | Positive (new option) | Documentation + announcement | Opt-in; existing deployments unaffected |
+| Model planner graduation (#1006) | All users | Medium (behaviour change) | Release notes + feature flag docs | Gradual rollout via feature flag; kill-switch available |
+| GitHub App sync activation (#142) | Repo admins | Low (additive) | Setup guide | Opt-in configuration |
+| Zod 4.5.4 error messages | API consumers | Low (message text only) | Changelog | No code change needed; error codes unchanged |
+
+### Rollout Strategy
+
+| Finding | Rollout Approach | Feature Flag | Rollback Method |
+|---------|-----------------|-------------|----------------|
+| #979 Storage adapter | Dual-mode from day 1 | `AGENTIC_STORAGE_BACKEND=node\|cloudflare` | Set flag to `node`; restart |
+| #981 Watcher scheduler | Enabled with cron trigger | `AGENTIC_WATCHER_SCHEDULER_DISABLED` | Set flag to `true`; redeploy |
+| #1006 Model planner | Gradual: staging → canary → production | `AGENTIC_MODEL_PLANNER` | Set flag to `false`; no restart needed |
+| #142 GitHub App sync | Opt-in per repository | Repository-level config | Remove App installation or disable workflow |
+
+### Backward Compatibility Guarantees
+
+1. **All existing deployment modes (Docker, self-hosted, free-tier serverless) continue to work unchanged.** Workers is an additional option, not a replacement.
+2. **No API contract changes.** Response formats, status codes, and error structures remain identical.
+3. **No database schema changes.** Hyperdrive uses the same Postgres schema.
+4. **Feature flags default to existing behaviour.** New capabilities are opt-in until graduated.
+5. **Rollback to any previous version remains possible** at any point during the migration.
+
+---
+
+## Appendix: Iterative Implementation Workflow
+
+Each finding follows this 10-step lifecycle:
+
+```
+1. CONFIRM    → Validate finding still applies; gather latest context
+2. ANALYSE    → Root cause investigation; impact quantification
+3. DESIGN     → Solution design; peer review of approach
+4. PRIORITISE → Confirm priority; assign owner; schedule
+5. IMPLEMENT  → Code changes; unit tests; local verification
+6. TEST       → Integration tests; edge cases; regression suite
+7. REVIEW     → Code review; security review (if applicable); docs update
+8. REFINE     → Address review feedback; re-test if needed
+9. DEPLOY     → Merge to main; CI passes; staging verification
+10. MONITOR   → Production observation; alert verification; close finding
+```
+
+### Status Tracking
+
+Each finding moves through these statuses:
+
+| Status | Meaning |
+|--------|---------|
+| Not Started | Finding confirmed but no work begun |
+| In Progress | Active implementation underway |
+| Under Review | Implementation complete; awaiting code/security review |
+| Staged | Merged to main; deployed to staging; awaiting verification |
+| Complete | All acceptance criteria met; deployed to production; monitored |
+| Deferred | Deprioritised due to changed circumstances; revisit date set |
+| Won't Fix | Finding no longer applicable; rationale documented |
