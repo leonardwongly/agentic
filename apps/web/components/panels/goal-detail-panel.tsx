@@ -189,7 +189,11 @@ function formatCapabilityLabel(value: string): string {
 }
 
 function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
+  if (!Number.isFinite(value)) {
+    return "n/a";
+  }
+  const clamped = Math.min(1, Math.max(0, value));
+  return `${Math.round(clamped * 100)}%`;
 }
 
 function formatOutcomeLabel(value: PolicyTraceSummary["decision"]["outcome"]): string {

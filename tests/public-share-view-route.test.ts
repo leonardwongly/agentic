@@ -470,4 +470,119 @@ describe("public share view route", () => {
     expect(queuedJobs).toHaveLength(0);
     expectOperationalNoStoreHeaders(response);
   });
+
+  describe("adversarial public share view input validation", () => {
+    it("accepts token at exactly 4096 chars (max boundary) without error", async () => {
+      const repository = await createRouteTestRepository();
+      await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+
+      // A 4096-char token that is syntactically valid but won't match any share
+      const maxToken = "a".repeat(4096);
+      const response = await publicShareViewRoute(
+        buildPublicShareViewRequest({ token: maxToken })
+      );
+
+      // Should be accepted (202) but not tracked since it's not a real share
+      expect(response.status).toBe(202);
+      const payload = (await response.json()) as { accepted: boolean; tracked: boolean };
+      expect(payload.accepted).toBe(true);
+      expect(payload.tracked).toBe(false);
+    });
+
+    it("rejects token exceeding 4096 chars via schema validation", async () => {
+      const oversizedToken = "a".repeat(4097);
+      const response = await publicShareViewRoute(
+        buildPublicShareViewRequest({ token: oversizedToken })
+      );
+
+      // Zod will reject this as it exceeds .max(4096)
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects empty token string via schema validation", async () => {
+      const response = await publicShareViewRoute(
+        buildPublicShareViewRequest({ token: "" })
+      );
+
+      // Zod will reject empty string due to .min(1)
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects whitespace-only token after trim", async () => {
+      const response = await publicShareViewRoute(
+        buildPublicShareViewRequest({ token: "   " })
+      );
+
+      // After trim, empty string fails .min(1)
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects non-string token values", async () => {
+      const response = await publicShareViewRoute(
+        buildPublicShareViewRequest({ token: 12345 })
+      );
+
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects requests with extra fields in the body (strict schema)", async () => {
+      const response = await publicShareViewRoute(
+        buildPublicShareViewRequest({ token: "valid-token", extraField: "injected" })
+      );
+
+      expect(response.status).toBe(400);
+    });
+
+    it("handles oversized content-length header gracefully", async () => {
+      const response = await publicShareViewRoute(
+        new Request("http://localhost/api/share/view", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": "999999"
+          },
+          body: JSON.stringify({ token: "test-token" })
+        })
+      );
+
+      // Content-length exceeds MAX_PUBLIC_SHARE_VIEW_CONTENT_LENGTH_BYTES (8192)
+      // so it returns acceptedNoOp (202, not tracked)
+      expect(response.status).toBe(202);
+      const payload = (await response.json()) as { accepted: boolean; tracked: boolean };
+      expect(payload.accepted).toBe(true);
+      expect(payload.tracked).toBe(false);
+    });
+
+    it("handles negative content-length header gracefully", async () => {
+      const response = await publicShareViewRoute(
+        new Request("http://localhost/api/share/view", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": "-1"
+          },
+          body: JSON.stringify({ token: "test-token" })
+        })
+      );
+
+      // Negative content-length is treated as null (ignored), proceeds to parse body
+      expect(response.status).toBe(202);
+    });
+
+    it("handles non-numeric content-length header gracefully", async () => {
+      const response = await publicShareViewRoute(
+        new Request("http://localhost/api/share/view", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": "not-a-number"
+          },
+          body: JSON.stringify({ token: "test-token" })
+        })
+      );
+
+      // Non-numeric content-length is treated as null (ignored)
+      expect(response.status).toBe(202);
+    });
+  });
 });

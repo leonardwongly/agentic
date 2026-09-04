@@ -1117,9 +1117,11 @@ describe("route user scoping", () => {
     );
 
     const response = await watcherUpdateRoute(
-      buildAuthorizedPatchRequest(`http://localhost/api/watchers/${watcher.id}`, {
-        action: "pause"
-      }),
+      buildAuthorizedPatchRequestWithIfMatch(
+        `http://localhost/api/watchers/${watcher.id}`,
+        watcher.updatedAt,
+        { action: "pause" }
+      ),
       {
         params: Promise.resolve({ id: watcher.id })
       }

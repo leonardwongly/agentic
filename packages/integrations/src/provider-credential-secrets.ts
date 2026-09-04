@@ -199,6 +199,7 @@ export function createProviderCredentialSecretStore(
     currentMasterKey: masterKey,
     keyring: options?.keyring
   });
+  const DERIVED_KEY_CACHE_MAX_SIZE = 1000;
   const derivedKeyCache = new Map<string, Buffer>();
 
   function resolveDerivedKey(version: string, salt: Buffer): Buffer {
@@ -213,11 +214,26 @@ export function createProviderCredentialSecretStore(
     const cacheKey = `${version}:${salt.toString("base64")}`;
     let derivedKey = derivedKeyCache.get(cacheKey);
 
-    if (!derivedKey) {
-      derivedKey = crypto.scryptSync(masterSecret, salt, PROVIDER_SECRET_DERIVED_KEY_BYTES);
+    if (derivedKey) {
+      // Move to end for LRU ordering: delete and re-insert so the most
+      // recently used entry is always the last key in insertion order.
+      derivedKeyCache.delete(cacheKey);
       derivedKeyCache.set(cacheKey, derivedKey);
+      return derivedKey;
     }
 
+    derivedKey = crypto.scryptSync(masterSecret, salt, PROVIDER_SECRET_DERIVED_KEY_BYTES);
+
+    // Evict the least-recently-used entry when the cache exceeds its bound.
+    // Map iteration yields keys in insertion order, so the first key is the LRU.
+    if (derivedKeyCache.size >= DERIVED_KEY_CACHE_MAX_SIZE) {
+      const lruKey = derivedKeyCache.keys().next().value;
+      if (lruKey !== undefined) {
+        derivedKeyCache.delete(lruKey);
+      }
+    }
+
+    derivedKeyCache.set(cacheKey, derivedKey);
     return derivedKey;
   }
 

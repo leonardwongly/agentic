@@ -117,6 +117,95 @@ describe("autopilot settings route", () => {
     });
   });
 
+  it("rejects unauthenticated autopilot settings access", async () => {
+    const response = await autopilotSettingsGetRoute(
+      new Request("http://localhost/api/autopilot/settings", {
+        method: "GET"
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toMatch(/unauthorized/i);
+  });
+
+  it("rejects malformed autopilot settings body with invalid debounceMinutes", async () => {
+    const response = await autopilotSettingsPostRoute(
+      new Request("http://localhost/api/autopilot/settings", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          debounceMinutes: -5
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
+  it("rejects autopilot settings with debounceMinutes exceeding max boundary", async () => {
+    const response = await autopilotSettingsPostRoute(
+      new Request("http://localhost/api/autopilot/settings", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          debounceMinutes: 99999
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
+  it("rejects autopilot settings with unrecognized fields via strict schema", async () => {
+    const response = await autopilotSettingsPostRoute(
+      new Request("http://localhost/api/autopilot/settings", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          mode: "notify_only",
+          unexpectedField: "injection"
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toMatch(/unrecognized key/i);
+  });
+
+  it("rejects invalid autopilot mode value", async () => {
+    const response = await autopilotSettingsPostRoute(
+      new Request("http://localhost/api/autopilot/settings", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AGENTIC_ACCESS_KEY_HEADER]: "test-access-key"
+        },
+        body: JSON.stringify({
+          mode: "delete_everything"
+        })
+      })
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBeDefined();
+  });
+
   it("rejects auto-run mode when persistence is file-backed", async () => {
     const response = await autopilotSettingsPostRoute(
       new Request("http://localhost/api/autopilot/settings", {

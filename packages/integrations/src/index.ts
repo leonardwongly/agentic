@@ -122,19 +122,19 @@ export function inferCapabilitiesFromRequest(request: string): Capability[] {
   const normalized = request.toLowerCase();
   const capabilities = new Set<Capability>(["read", "search"]);
 
-  if (/(draft|prepare|summarize|triage|plan)/.test(normalized)) {
+  if (/\b(draft|prepare|summarize|triage|plan)\b/.test(normalized)) {
     capabilities.add("draft");
   }
 
-  if (/(send|reply|email|message)/.test(normalized)) {
+  if (/\b(send|reply|email|message)\b/.test(normalized)) {
     capabilities.add("send");
   }
 
-  if (/(schedule|calendar|meeting|week)/.test(normalized)) {
+  if (/\b(schedule|calendar|meeting|week)\b/.test(normalized)) {
     capabilities.add("schedule");
   }
 
-  if (/(monitor|watch|remind|trip|travel)/.test(normalized)) {
+  if (/\b(monitor|watch|remind|trip|travel)\b/.test(normalized)) {
     capabilities.add("monitor");
   }
 

@@ -321,18 +321,25 @@ export function buildContextPacketFromMemory(
   });
   const transformations = [derivedTransformation, ...(options?.transformations ?? [])];
 
+  // MemoryRecordSchema does not cap category/sensitivity lengths, but
+  // ContextPacketSchema enforces max(120) and max(80) respectively. Truncate
+  // defensively so a long-but-legal memory record cannot crash context packet
+  // derivation (and by extension provenance graph builds or packet queries).
+  const safeCategory = record.category.slice(0, 120);
+  const safeSensitivity = record.sensitivity.slice(0, 80);
+
   return ContextPacketSchema.parse({
     id: packetId,
     userId: record.userId,
     source: {
       kind: "memory",
       id: record.id,
-      summary: `${record.memoryType} memory from ${record.source}`
+      summary: `${record.memoryType} memory from ${record.source}`.slice(0, 500)
     },
-    category: record.category,
+    category: safeCategory,
     contentSummary: summarizeContextContent(record.content),
     memoryType: record.memoryType,
-    sensitivity: record.sensitivity,
+    sensitivity: safeSensitivity,
     permissions: record.permissions,
     retention: {
       reviewAt: record.reviewAt,

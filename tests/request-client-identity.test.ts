@@ -150,4 +150,133 @@ describe("request client identity", () => {
       warnings: []
     });
   });
+
+  describe("adversarial request identity edge cases", () => {
+    it("handles IPv6 addresses in x-forwarded-for correctly", () => {
+      process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+      process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
+
+      const identity = getRequestClientIdentity(
+        buildRequest({
+          "x-forwarded-for": "2001:db8::1, 198.51.100.8"
+        })
+      );
+
+      expect(identity).toEqual({
+        key: "ip:2001:db8::1",
+        source: "trusted-ip"
+      });
+    });
+
+    it("handles bracketed IPv6 with port in proxy headers", () => {
+      process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+      process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
+
+      const identity = getRequestClientIdentity(
+        buildRequest({
+          "x-forwarded-for": "[2001:db8::1]:8080"
+        })
+      );
+
+      expect(identity).toEqual({
+        key: "ip:2001:db8::1",
+        source: "trusted-ip"
+      });
+    });
+
+    it("handles IPv4-mapped IPv6 addresses (::ffff: prefix)", () => {
+      process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+      process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
+
+      const identity = getRequestClientIdentity(
+        buildRequest({
+          "x-forwarded-for": "::ffff:192.168.1.1"
+        })
+      );
+
+      expect(identity).toEqual({
+        key: "ip:192.168.1.1",
+        source: "trusted-ip"
+      });
+    });
+
+    it("strips zone IDs from IPv6 addresses", () => {
+      process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+      process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
+
+      const identity = getRequestClientIdentity(
+        buildRequest({
+          "x-forwarded-for": "fe80::1%eth0"
+        })
+      );
+
+      expect(identity).toEqual({
+        key: "ip:fe80::1",
+        source: "trusted-ip"
+      });
+    });
+
+    it("falls back to fingerprint when all proxy IPs are invalid", () => {
+      process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+      process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
+
+      const identity = getRequestClientIdentity(
+        buildRequest({
+          "x-forwarded-for": "invalid, also-invalid, still-not-an-ip"
+        })
+      );
+
+      expect(identity.source).toBe("request-fingerprint");
+    });
+
+    it("produces stable fingerprints for identical requests", () => {
+      const request1 = buildRequest();
+      const request2 = buildRequest();
+
+      expect(getRequestClientIdentity(request1).key).toBe(getRequestClientIdentity(request2).key);
+    });
+
+    it("produces different fingerprints for different user agents", () => {
+      const request1 = buildRequest({ "user-agent": "Chrome/120" });
+      const request2 = buildRequest({ "user-agent": "Firefox/121" });
+
+      expect(getRequestClientIdentity(request1).key).not.toBe(getRequestClientIdentity(request2).key);
+    });
+
+    it("truncates extremely long user-agent strings for fingerprint stability", () => {
+      const longUA = "A".repeat(10_000);
+      const request = buildRequest({ "user-agent": longUA });
+
+      // Should not throw and should produce a bounded fingerprint
+      const identity = getRequestClientIdentity(request);
+      expect(identity.key.length).toBeLessThan(200);
+    });
+
+    it("handles empty x-forwarded-for header gracefully", () => {
+      process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
+      process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
+
+      const identity = getRequestClientIdentity(
+        buildRequest({
+          "x-forwarded-for": ""
+        })
+      );
+
+      expect(identity.source).toBe("request-fingerprint");
+    });
+
+    it("ignores AGENTIC_TRUST_PROXY_HEADERS when set to non-true values", () => {
+      process.env.AGENTIC_TRUST_PROXY_HEADERS = "yes";
+      process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = "x-forwarded-for";
+
+      const identity = getRequestClientIdentity(
+        buildRequest({
+          "x-forwarded-for": "203.0.113.10"
+        })
+      );
+
+      // "yes" is not "true", so proxy headers should not be trusted
+      expect(identity.source).toBe("request-fingerprint");
+    });
+  });
 });

@@ -119,8 +119,7 @@ export function describeIntegrationReadiness(
         "draft-grade",
         `${account.name} can still support draft and planning flows, but execution depends on manual or local fallback steps.`
       );
-    case "ready":
-    default: {
+    case "ready": {
       const googleAssessment = assessManagedGoogleCredential({
         account,
         credential: options?.providerCredential?.credential ?? null,
@@ -185,6 +184,11 @@ export function describeIntegrationReadiness(
           );
       }
     }
+    default:
+      return buildReadinessProfile(
+        "experimental",
+        `${account.name} has an unrecognized status (${String(account.status)}) and must not be treated as ready until explicitly reviewed.`
+      );
   }
 }
 

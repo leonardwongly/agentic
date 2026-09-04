@@ -123,6 +123,72 @@ describe("agent metrics route", () => {
     expect(payload.error).toBe("Agent not found");
   });
 
+  it("rejects unauthenticated agent metrics access", async () => {
+    const response = await agentMetricsRoute(
+      new Request("http://localhost/api/agents/communications/metrics"),
+      { params: Promise.resolve({ id: "communications" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(401);
+    expect(payload.error).toMatch(/unauthorized/i);
+  });
+
+  it("returns 404 when accessing another user's custom agent metrics", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+    const secondaryUserId = "user-secondary";
+
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    await repository.seedDefaults(secondaryUserId);
+
+    const { AgentDefinitionSchema, nowIso } = await import("@agentic/contracts");
+    await repository.saveAgent(
+      AgentDefinitionSchema.parse({
+        id: "agent-secondary-private",
+        userId: secondaryUserId,
+        name: "secondary-private",
+        displayName: "Secondary Private Agent",
+        description: "Private agent for secondary user.",
+        systemPrompt: "Handle private operations for the secondary user only.",
+        artifactType: "summary",
+        allowedCapabilities: ["read", "search"],
+        status: "active",
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      })
+    );
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await agentMetricsRoute(
+      buildAuthorizedGetRequest("http://localhost/api/agents/agent-secondary-private/metrics"),
+      { params: Promise.resolve({ id: "agent-secondary-private" }) }
+    );
+    const payload = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(404);
+    expect(payload.error).toBe("Agent not found");
+  });
+
+  it("defaults to all period when period query param is missing", async () => {
+    const repository = createRepository({
+      storePath: process.env.AGENTIC_RUNTIME_STORE_PATH
+    });
+
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await agentMetricsRoute(
+      buildAuthorizedGetRequest("http://localhost/api/agents/communications/metrics"),
+      { params: Promise.resolve({ id: "communications" }) }
+    );
+    const payload = (await response.json()) as { period: string };
+
+    expect(response.status).toBe(200);
+    expect(payload.period).toBe("all");
+  });
+
   it("returns 400 for unsupported metric periods", async () => {
     const repository = createRepository({
       storePath: process.env.AGENTIC_RUNTIME_STORE_PATH

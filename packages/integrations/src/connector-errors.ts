@@ -180,7 +180,12 @@ export function normalizeConnectorThrownError(params: {
     });
   }
 
-  return new ConnectorFailureError(params.provider, params.operation, "remote_error", true, {
+  const programmingError =
+    params.error instanceof TypeError ||
+    params.error instanceof ReferenceError ||
+    params.error instanceof SyntaxError;
+
+  return new ConnectorFailureError(params.provider, params.operation, "remote_error", !programmingError, {
     cause: params.error,
     message:
       params.error instanceof Error && params.error.message
