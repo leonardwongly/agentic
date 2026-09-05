@@ -68,14 +68,14 @@ export function getRuntimeContext(cloudflareBindings?: CloudflareBindings): Runt
 
   // Auto-detect based on environment
   if (isCloudflareWorkersEnvironment()) {
-    if (!cloudflareBindings) {
-      throw new Error(
-        "Running in Cloudflare Workers environment but no bindings provided. " +
-        "Pass Cloudflare bindings to getRuntimeContext()."
-      );
+    if (cloudflareBindings) {
+      cachedContext = createCloudflareRuntimeContext(cloudflareBindings);
+      return cachedContext;
     }
-    cachedContext = createCloudflareRuntimeContext(cloudflareBindings);
-    return cachedContext;
+    // On Workers without explicit bindings, fall back to Node.js adapter.
+    // Workers with nodejs_compat can use node:fs APIs for compatible operations.
+    // This allows the app to boot even when R2/KV bindings aren't configured.
+    console.warn("[runtime-adapters] Running on Workers without Cloudflare bindings; using Node.js adapter fallback.");
   }
 
   // Default to Node.js
