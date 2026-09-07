@@ -89,7 +89,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Validate issue-theme gate taxonomy
-        run: pnpm run ci:issue-theme-gates -- --assert-workflow
+        run: pnpm run ci:issue-theme-gates --assert-workflow
 
   validate:
     needs:
@@ -168,13 +168,13 @@ jobs:
         run: pnpm run compliance:validate-registry
 
       - name: Audit production dependencies
-        run: pnpm run security:audit-runtime -- --minimum-severity moderate --report artifacts/security/runtime-audit-report.json
+        run: pnpm run security:audit-runtime --minimum-severity moderate --report artifacts/security/runtime-audit-report.json
 
       - name: Validate migrations
         run: |
           pnpm run db:check-migrations
           pnpm run db:migrate
-          pnpm run db:status -- --require-ready
+          pnpm run db:status --require-ready
 
       - name: Run governance simulation suite
         run: pnpm run governance:simulate
@@ -205,7 +205,7 @@ jobs:
         run: pnpm run build
 
       - name: Generate runtime SBOM
-        run: pnpm run security:sbom -- --output artifacts/security/agentic-sbom.spdx.json
+        run: pnpm run security:sbom --output artifacts/security/agentic-sbom.spdx.json
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
@@ -240,7 +240,7 @@ jobs:
           docker save agentic-ci:${{ github.sha }} -o artifacts/build/agentic-image.tar
 
       - name: Collect compliance evidence bundle
-        run: pnpm run security:collect-evidence -- --require-artifacts --output-dir artifacts/compliance
+        run: pnpm run security:collect-evidence --require-artifacts --output-dir artifacts/compliance
 
       - name: Upload supply-chain evidence
         if: github.event_name != 'pull_request' && vars.ENABLE_SUPPLY_CHAIN_ARTIFACT_UPLOAD == 'true'
