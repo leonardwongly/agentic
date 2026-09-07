@@ -5,7 +5,7 @@ RUN npm install -g pnpm@11.5.2
 FROM base AS deps
 COPY package*.json ./
 COPY pnpm-lock.yaml ./
-ENV PNPM_ONLY_BUILT_DEPENDENCIES='["esbuild", "workerd"]'
+RUN pnpm config set onlyBuiltDependencies '["esbuild", "workerd"]' --location project
 COPY apps/web/package.json apps/web/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/agents/package.json packages/agents/package.json
