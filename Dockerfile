@@ -22,7 +22,7 @@ COPY packages/repository/package.json packages/repository/package.json
 COPY packages/runtime-adapters/package.json packages/runtime-adapters/package.json
 COPY packages/self-improvement-memory/package.json packages/self-improvement-memory/package.json
 COPY packages/worker-runtime/package.json packages/worker-runtime/package.json
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --config.onlyBuiltDependencies=[]
 
 FROM deps AS build
 ARG NODE_OPTIONS=--max-old-space-size=4096
