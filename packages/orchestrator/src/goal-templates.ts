@@ -110,23 +110,86 @@ export function computeNextRun(cron: string, timezone: string): string | null {
   return null;
 }
 
-function nextDailyRun(now: Date, hour: number, minute: number, _timezone: string): string {
-  const candidate = new Date(now);
-  candidate.setHours(hour, minute, 0, 0);
+/**
+ * Get the current date/time parts in a specific timezone.
+ * Returns year, month (1-12), day, hour, minute, and weekday (0=Sun).
+ */
+function getDatePartsInTimezone(date: Date, timezone: string): {
+  year: number; month: number; day: number;
+  hour: number; minute: number; weekday: number;
+} {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric", month: "numeric", day: "numeric",
+      hour: "numeric", minute: "numeric", hour12: false,
+      weekday: "short"
+    });
+    const parts = formatter.formatToParts(date);
+    const get = (type: string) => parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+    const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const weekdayStr = parts.find((p) => p.type === "weekday")?.value ?? "Sun";
+    return {
+      year: get("year"), month: get("month"), day: get("day"),
+      hour: get("hour") % 24, minute: get("minute"),
+      weekday: weekdayMap[weekdayStr] ?? 0
+    };
+  } catch {
+    // Fallback to UTC if timezone is invalid
+    return {
+      year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate(),
+      hour: date.getUTCHours(), minute: date.getUTCMinutes(),
+      weekday: date.getUTCDay()
+    };
+  }
+}
+
+/**
+ * Create a Date from wall-clock time in a specific timezone.
+ */
+function fromDateInTimezone(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
+  // Binary search approach: create a UTC date and adjust for timezone offset
+  // Start with an approximate UTC time
+  let candidate = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+
+  // Iteratively adjust: check what wall-clock time this UTC instant maps to in the target tz
+  for (let i = 0; i < 3; i++) {
+    const parts = getDatePartsInTimezone(candidate, timezone);
+    const diffMinutes = ((hour - parts.hour) * 60) + (minute - parts.minute);
+    const diffDays = day - parts.day;
+    // Handle day wraparound
+    let totalDiffMs = (diffDays * 24 * 60 + diffMinutes) * 60 * 1000;
+    if (Math.abs(totalDiffMs) > 12 * 60 * 60 * 1000) {
+      // Likely a day boundary issue, adjust sign
+      totalDiffMs = totalDiffMs > 0 ? totalDiffMs - 24 * 60 * 60 * 1000 : totalDiffMs + 24 * 60 * 60 * 1000;
+    }
+    candidate = new Date(candidate.getTime() + totalDiffMs);
+  }
+
+  return candidate;
+}
+
+function nextDailyRun(now: Date, hour: number, minute: number, timezone: string): string {
+  const parts = getDatePartsInTimezone(now, timezone);
+
+  // Build candidate for today at the target time in the specified timezone
+  let candidate = fromDateInTimezone(parts.year, parts.month, parts.day, hour, minute, timezone);
 
   // If today's target time has already passed, move to tomorrow
   if (candidate.getTime() <= now.getTime()) {
-    candidate.setDate(candidate.getDate() + 1);
+    const tomorrow = new Date(candidate.getTime() + 24 * 60 * 60 * 1000);
+    candidate = tomorrow;
   }
 
   return candidate.toISOString();
 }
 
-function nextWeeklyRun(now: Date, targetDay: number, hour: number, minute: number, _timezone: string): string {
-  const candidate = new Date(now);
-  candidate.setHours(hour, minute, 0, 0);
+function nextWeeklyRun(now: Date, targetDay: number, hour: number, minute: number, timezone: string): string {
+  const parts = getDatePartsInTimezone(now, timezone);
 
-  const currentDay = candidate.getDay();
+  let candidate = fromDateInTimezone(parts.year, parts.month, parts.day, hour, minute, timezone);
+
+  const currentDay = parts.weekday;
   let daysUntilTarget = targetDay - currentDay;
 
   if (daysUntilTarget < 0) {
@@ -138,7 +201,7 @@ function nextWeeklyRun(now: Date, targetDay: number, hour: number, minute: numbe
     daysUntilTarget = 7;
   }
 
-  candidate.setDate(candidate.getDate() + daysUntilTarget);
+  candidate = new Date(candidate.getTime() + daysUntilTarget * 24 * 60 * 60 * 1000);
   return candidate.toISOString();
 }
 

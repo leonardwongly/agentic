@@ -102,7 +102,8 @@ function parseCreatedCalendarEvent(
 }
 
 export function isCalendarReady(): boolean {
-  return getOAuth2Client() !== null;
+  // Check env directly since getOAuth2Client is now async
+  return Boolean(process.env.GOOGLE_REFRESH_TOKEN?.trim());
 }
 
 export type GoogleCalendarAdapter = {

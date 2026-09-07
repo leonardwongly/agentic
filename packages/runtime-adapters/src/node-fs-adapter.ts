@@ -5,7 +5,7 @@
  * and self-hosted deployments.
  */
 
-import { mkdir, rmdir, stat, readFile as fsReadFile, writeFile as fsWriteFile, readdir as fsReaddir, rename, unlink } from "node:fs/promises";
+import { mkdir, rm, rmdir, stat, readFile as fsReadFile, writeFile as fsWriteFile, readdir as fsReaddir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { StorageAdapter, LockAdapter, RuntimeContext, FileStat, DirectoryEntry, ReadDirOptions } from "./storage-adapter";
@@ -55,10 +55,13 @@ export class NodeFsStorageAdapter implements StorageAdapter {
     await mkdir(dirPath, { recursive: options?.recursive ?? false });
   }
 
-  async rmdir(dirPath: string, _options?: { recursive?: boolean }): Promise<void> {
-    // Note: recursive rmdir is deprecated in favor of rm in newer Node versions
-    // For now, we just remove empty directories
-    await rmdir(dirPath);
+  async rmdir(dirPath: string, options?: { recursive?: boolean }): Promise<void> {
+    if (options?.recursive) {
+      // Use rm with recursive for non-empty directories (rmdir only handles empty dirs)
+      await rm(dirPath, { recursive: true, force: true });
+    } else {
+      await rmdir(dirPath);
+    }
   }
 
   async stat(filePath: string): Promise<FileStat> {
@@ -85,6 +88,8 @@ export class NodeFsStorageAdapter implements StorageAdapter {
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
+    // Ensure parent directory of destination exists
+    await mkdir(path.dirname(newPath), { recursive: true });
     await rename(oldPath, newPath);
   }
 
