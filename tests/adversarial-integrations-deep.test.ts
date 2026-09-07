@@ -40,23 +40,25 @@ describe("Dynamic import failures", () => {
       throw new Error("Cannot find module 'googleapis'");
     });
 
-    const { createGoogleOAuthClient } = await import(
-      "../packages/integrations/src/google-oauth"
-    );
+    const { createGoogleOAuthClient } =
+      await import("../packages/integrations/src/google-oauth");
 
-    await expect(createGoogleOAuthClient({ refreshToken: "rt" })).rejects.toThrow();
+    await expect(
+      createGoogleOAuthClient({ refreshToken: "rt" }),
+    ).rejects.toThrow();
   });
 
   it("should handle import that returns undefined default export", async () => {
     // Simulate a broken module that exports nothing useful
     vi.doMock("googleapis", () => ({}));
 
-    const { createGoogleOAuthClient } = await import(
-      "../packages/integrations/src/google-oauth"
-    );
+    const { createGoogleOAuthClient } =
+      await import("../packages/integrations/src/google-oauth");
 
     // google is undefined → accessing google.auth should throw
-    await expect(createGoogleOAuthClient({ refreshToken: "rt" })).rejects.toThrow();
+    await expect(
+      createGoogleOAuthClient({ refreshToken: "rt" }),
+    ).rejects.toThrow();
   });
 
   it("should cache the googleapis module after first successful load", async () => {
@@ -65,9 +67,11 @@ describe("Dynamic import failures", () => {
       auth: {
         OAuth2: class {
           setCredentials() {}
-          generateAuthUrl() { return "https://example.com/auth"; }
-        }
-      }
+          generateAuthUrl() {
+            return "https://example.com/auth";
+          }
+        },
+      },
     };
 
     vi.doMock("googleapis", () => {
@@ -90,17 +94,18 @@ describe("Dynamic import failures", () => {
       });
     });
 
-    const { createGoogleOAuthClient } = await import(
-      "../packages/integrations/src/google-oauth"
-    );
+    const { createGoogleOAuthClient } =
+      await import("../packages/integrations/src/google-oauth");
 
     const result = createGoogleOAuthClient({ refreshToken: "rt" });
     // Race against a short timeout
     const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Import timed out")), 50)
+      setTimeout(() => reject(new Error("Import timed out")), 50),
     );
 
-    await expect(Promise.race([result, timeout])).rejects.toThrow("Import timed out");
+    await expect(Promise.race([result, timeout])).rejects.toThrow(
+      "Import timed out",
+    );
   });
 });
 
@@ -124,18 +129,16 @@ describe("OAuth edge cases", () => {
 
   it("should throw when GOOGLE_CLIENT_ID is missing", async () => {
     delete process.env.GOOGLE_CLIENT_ID;
-    const { createGoogleOAuthClient } = await import(
-      "../packages/integrations/src/google-oauth"
-    );
+    const { createGoogleOAuthClient } =
+      await import("../packages/integrations/src/google-oauth");
 
     await expect(createGoogleOAuthClient()).rejects.toThrow(/not configured/i);
   });
 
   it("should throw when GOOGLE_CLIENT_SECRET is empty string", async () => {
     process.env.GOOGLE_CLIENT_SECRET = "   ";
-    const { createGoogleOAuthClient } = await import(
-      "../packages/integrations/src/google-oauth"
-    );
+    const { createGoogleOAuthClient } =
+      await import("../packages/integrations/src/google-oauth");
 
     await expect(createGoogleOAuthClient()).rejects.toThrow(/not configured/i);
   });
@@ -151,23 +154,28 @@ describe("OAuth edge cases", () => {
         auth: {
           OAuth2: class MockOAuth2 {
             _creds: any = null;
-            constructor() { instances.push(this); }
-            setCredentials(creds: any) { this._creds = creds; }
-            generateAuthUrl() { return "https://example.com"; }
-          }
-        }
-      }
+            constructor() {
+              instances.push(this);
+            }
+            setCredentials(creds: any) {
+              this._creds = creds;
+            }
+            generateAuthUrl() {
+              return "https://example.com";
+            }
+          },
+        },
+      },
     }));
 
-    const { createGoogleOAuthClient } = await import(
-      "../packages/integrations/src/google-oauth"
-    );
+    const { createGoogleOAuthClient } =
+      await import("../packages/integrations/src/google-oauth");
 
     // Fire 5 concurrent client creations
     const clients = await Promise.all(
       Array.from({ length: 5 }, (_, i) =>
-        createGoogleOAuthClient({ refreshToken: `rt-${i}` })
-      )
+        createGoogleOAuthClient({ refreshToken: `rt-${i}` }),
+      ),
     );
 
     // All should return distinct OAuth2 instances
@@ -196,25 +204,26 @@ describe("OAuth edge cases", () => {
           OAuth2: class {
             setCredentials() {}
             getToken() {
-              const err: any = new Error("invalid_grant: Token has been expired or revoked.");
+              const err: any = new Error(
+                "invalid_grant: Token has been expired or revoked.",
+              );
               err.code = 400;
               err.response = { status: 400, data: { error: "invalid_grant" } };
               throw err;
             }
-          }
-        }
-      }
+          },
+        },
+      },
     }));
 
-    const { exchangeGoogleAuthorizationCode } = await import(
-      "../packages/integrations/src/google-oauth"
-    );
+    const { exchangeGoogleAuthorizationCode } =
+      await import("../packages/integrations/src/google-oauth");
 
     await expect(
       exchangeGoogleAuthorizationCode({
         code: "expired-code",
-        redirectUri: "http://localhost/callback"
-      })
+        redirectUri: "http://localhost/callback",
+      }),
     ).rejects.toThrow(/invalid_grant|expired|revoked/i);
   });
 
@@ -224,29 +233,29 @@ describe("OAuth edge cases", () => {
         auth: {
           OAuth2: class {
             setCredentials() {}
-          }
+          },
         },
         oauth2: () => ({
           userinfo: {
-            get: () => Promise.resolve({
-              data: {
-                // Missing required 'id' field
-                email: "user@example.com",
-                name: "Test User"
-              }
-            })
-          }
-        })
-      }
+            get: () =>
+              Promise.resolve({
+                data: {
+                  // Missing required 'id' field
+                  email: "user@example.com",
+                  name: "Test User",
+                },
+              }),
+          },
+        }),
+      },
     }));
 
-    const { fetchGoogleAccountProfile } = await import(
-      "../packages/integrations/src/google-oauth"
-    );
+    const { fetchGoogleAccountProfile } =
+      await import("../packages/integrations/src/google-oauth");
 
     // Zod validation should fail because 'sub' (mapped from id) is missing
     await expect(
-      fetchGoogleAccountProfile({ accessToken: "at" })
+      fetchGoogleAccountProfile({ accessToken: "at" }),
     ).rejects.toThrow();
   });
 });
@@ -269,43 +278,38 @@ describe("Local notes path traversal attacks", () => {
   });
 
   it("should reject slug with directory traversal (../)", async () => {
-    const { readLocalNote } = await import(
-      "../packages/integrations/src/local-notes"
-    );
+    const { readLocalNote } =
+      await import("../packages/integrations/src/local-notes");
 
     // The slug regex /^[a-z0-9-]+$/ rejects dots and slashes
     await expect(readLocalNote("../../etc/passwd")).rejects.toThrow();
   });
 
   it("should reject slug with null byte injection", async () => {
-    const { readLocalNote } = await import(
-      "../packages/integrations/src/local-notes"
-    );
+    const { readLocalNote } =
+      await import("../packages/integrations/src/local-notes");
 
     await expect(readLocalNote("valid-slug\x00.md")).rejects.toThrow();
   });
 
   it("should reject slug containing absolute path characters", async () => {
-    const { readLocalNote } = await import(
-      "../packages/integrations/src/local-notes"
-    );
+    const { readLocalNote } =
+      await import("../packages/integrations/src/local-notes");
 
     await expect(readLocalNote("/etc/passwd")).rejects.toThrow();
   });
 
   it("should reject slug with encoded traversal (%2e%2e%2f)", async () => {
-    const { readLocalNote } = await import(
-      "../packages/integrations/src/local-notes"
-    );
+    const { readLocalNote } =
+      await import("../packages/integrations/src/local-notes");
 
     // URL-encoded ../ — the regex only allows [a-z0-9-]
     await expect(readLocalNote("%2e%2e%2fetc%2fpasswd")).rejects.toThrow();
   });
 
   it("should reject extremely long slugs (>120 chars)", async () => {
-    const { readLocalNote } = await import(
-      "../packages/integrations/src/local-notes"
-    );
+    const { readLocalNote } =
+      await import("../packages/integrations/src/local-notes");
 
     const longSlug = "a".repeat(121);
     await expect(readLocalNote(longSlug)).rejects.toThrow();
@@ -313,12 +317,12 @@ describe("Local notes path traversal attacks", () => {
 
   it("should strip BOM from note content during parsing", async () => {
     const bomContent = "\uFEFF# Test Title\n\nSome content here\n";
-    
+
     // Create a mock runtime context
     const mockContext = {
-      env: { 
+      env: {
         AGENTIC_LOCAL_NOTES_ENABLED: "true",
-        NODE_ENV: "development"
+        NODE_ENV: "development",
       },
       storage: {
         resolve: (...parts: string[]) => parts.join("/"),
@@ -338,17 +342,16 @@ describe("Local notes path traversal attacks", () => {
         writeFile: vi.fn().mockResolvedValue(undefined),
         stat: vi.fn().mockResolvedValue({
           birthtimeMs: Date.now(),
-          mtimeMs: Date.now()
+          mtimeMs: Date.now(),
         }),
-        readdir: vi.fn().mockResolvedValue([])
+        readdir: vi.fn().mockResolvedValue([]),
       },
       cwd: () => "/tmp/test",
-      randomUUID: () => crypto.randomUUID()
+      randomUUID: () => crypto.randomUUID(),
     } as any;
 
-    const { readLocalNote } = await import(
-      "../packages/integrations/src/local-notes"
-    );
+    const { readLocalNote } =
+      await import("../packages/integrations/src/local-notes");
 
     const note = await readLocalNote("test-note", "/notes", mockContext);
     // BOM should be stripped; title should not start with \uFEFF
@@ -364,13 +367,12 @@ describe("Local notes path traversal attacks", () => {
 
 describe("LRU cache eviction in provider credential secrets", () => {
   it("should evict least-recently-used entries when cache exceeds capacity", async () => {
-    const { createProviderCredentialSecretStore } = await import(
-      "../packages/integrations/src/provider-credential-secrets"
-    );
+    const { createProviderCredentialSecretStore } =
+      await import("../packages/integrations/src/provider-credential-secrets");
 
     const store = createProviderCredentialSecretStore({
       masterKey: "test-master-key-that-is-long-enough",
-      keyVersion: "v1"
+      keyVersion: "v1",
     });
 
     // Encrypt distinct secrets; each uses a random salt → unique cache entry.
@@ -395,13 +397,12 @@ describe("LRU cache eviction in provider credential secrets", () => {
   }, 30000);
 
   it("should promote accessed entries in LRU order", async () => {
-    const { createProviderCredentialSecretStore } = await import(
-      "../packages/integrations/src/provider-credential-secrets"
-    );
+    const { createProviderCredentialSecretStore } =
+      await import("../packages/integrations/src/provider-credential-secrets");
 
     const store = createProviderCredentialSecretStore({
       masterKey: "test-master-key-for-lru-test",
-      keyVersion: "v1"
+      keyVersion: "v1",
     });
 
     // Encrypt two secrets
@@ -417,26 +418,24 @@ describe("LRU cache eviction in provider credential secrets", () => {
   });
 
   it("should reject empty secrets before caching", async () => {
-    const { createProviderCredentialSecretStore } = await import(
-      "../packages/integrations/src/provider-credential-secrets"
-    );
+    const { createProviderCredentialSecretStore } =
+      await import("../packages/integrations/src/provider-credential-secrets");
 
     const store = createProviderCredentialSecretStore({
       masterKey: "test-key",
-      keyVersion: "v1"
+      keyVersion: "v1",
     });
 
     expect(() => store.encrypt("")).toThrow(/empty/i);
   });
 
   it("should reject secrets exceeding size limit", async () => {
-    const { createProviderCredentialSecretStore } = await import(
-      "../packages/integrations/src/provider-credential-secrets"
-    );
+    const { createProviderCredentialSecretStore } =
+      await import("../packages/integrations/src/provider-credential-secrets");
 
     const store = createProviderCredentialSecretStore({
       masterKey: "test-key",
-      keyVersion: "v1"
+      keyVersion: "v1",
     });
 
     const oversized = "x".repeat(8_193);
@@ -450,15 +449,17 @@ describe("LRU cache eviction in provider credential secrets", () => {
 
 describe("Connector error normalization", () => {
   it("should normalize AbortError to timeout failure", async () => {
-    const { normalizeConnectorThrownError, ConnectorFailureError } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { normalizeConnectorThrownError, ConnectorFailureError } =
+      await import("../packages/integrations/src/connector-errors");
 
-    const abortError = new DOMException("The operation was aborted.", "AbortError");
+    const abortError = new DOMException(
+      "The operation was aborted.",
+      "AbortError",
+    );
     const result = normalizeConnectorThrownError({
       provider: "gmail",
       operation: "drafts.create",
-      error: abortError
+      error: abortError,
     });
 
     expect(result).toBeInstanceOf(ConnectorFailureError);
@@ -467,24 +468,23 @@ describe("Connector error normalization", () => {
   });
 
   it("should normalize HTTP 429 to rate_limited with retry-after", async () => {
-    const { normalizeConnectorThrownError, ConnectorFailureError } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { normalizeConnectorThrownError, ConnectorFailureError } =
+      await import("../packages/integrations/src/connector-errors");
 
     const rateLimitError = {
       response: {
         status: 429,
         headers: {
-          get: (name: string) => (name === "retry-after" ? "30" : null)
-        }
+          get: (name: string) => (name === "retry-after" ? "30" : null),
+        },
       },
-      message: "Rate limit exceeded"
+      message: "Rate limit exceeded",
     };
 
     const result = normalizeConnectorThrownError({
       provider: "gmail",
       operation: "messages.list",
-      error: rateLimitError
+      error: rateLimitError,
     });
 
     expect(result).toBeInstanceOf(ConnectorFailureError);
@@ -494,15 +494,14 @@ describe("Connector error normalization", () => {
   });
 
   it("should normalize HTTP 500+ to retryable remote_error", async () => {
-    const { normalizeConnectorThrownError } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { normalizeConnectorThrownError } =
+      await import("../packages/integrations/src/connector-errors");
 
     const serverError = { response: { status: 503 } };
     const result = normalizeConnectorThrownError({
       provider: "google_calendar",
       operation: "events.insert",
-      error: serverError
+      error: serverError,
     });
 
     expect(result.code).toBe("remote_error");
@@ -510,15 +509,14 @@ describe("Connector error normalization", () => {
   });
 
   it("should mark TypeError as non-retryable programming error", async () => {
-    const { normalizeConnectorThrownError } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { normalizeConnectorThrownError } =
+      await import("../packages/integrations/src/connector-errors");
 
     const typeError = new TypeError("Cannot read properties of undefined");
     const result = normalizeConnectorThrownError({
       provider: "gmail",
       operation: "drafts.create",
-      error: typeError
+      error: typeError,
     });
 
     expect(result.code).toBe("remote_error");
@@ -526,24 +524,27 @@ describe("Connector error normalization", () => {
   });
 
   it("should pass through ConnectorFailureError unchanged", async () => {
-    const { normalizeConnectorThrownError, ConnectorFailureError } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { normalizeConnectorThrownError, ConnectorFailureError } =
+      await import("../packages/integrations/src/connector-errors");
 
-    const original = new ConnectorFailureError("gmail", "test", "unauthorized", false);
+    const original = new ConnectorFailureError(
+      "gmail",
+      "test",
+      "unauthorized",
+      false,
+    );
     const result = normalizeConnectorThrownError({
       provider: "gmail",
       operation: "test",
-      error: original
+      error: original,
     });
 
     expect(result).toBe(original);
   });
 
   it("should handle malformed response objects without crashing", async () => {
-    const { normalizeConnectorThrownError } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { normalizeConnectorThrownError } =
+      await import("../packages/integrations/src/connector-errors");
 
     // Various malformed error shapes
     const malformedErrors = [
@@ -554,14 +555,14 @@ describe("Connector error normalization", () => {
       { response: null },
       { response: { status: "not-a-number" } },
       { response: { headers: { get: "not-a-function" } } },
-      {}
+      {},
     ];
 
     for (const error of malformedErrors) {
       const result = normalizeConnectorThrownError({
         provider: "test",
         operation: "op",
-        error
+        error,
       });
       expect(result.code).toBe("remote_error");
     }
@@ -574,9 +575,8 @@ describe("Connector error normalization", () => {
 
 describe("Capability inference from request text", () => {
   it("should always include read and search as baseline capabilities", async () => {
-    const { inferCapabilitiesFromRequest } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { inferCapabilitiesFromRequest } =
+      await import("../packages/integrations/src/index");
 
     const caps = inferCapabilitiesFromRequest("just some random text");
     expect(caps).toContain("read");
@@ -584,46 +584,49 @@ describe("Capability inference from request text", () => {
   });
 
   it("should detect draft capability from relevant keywords", async () => {
-    const { inferCapabilitiesFromRequest } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { inferCapabilitiesFromRequest } =
+      await import("../packages/integrations/src/index");
 
-    expect(inferCapabilitiesFromRequest("please draft an email")).toContain("draft");
-    expect(inferCapabilitiesFromRequest("prepare a summary")).toContain("draft");
+    expect(inferCapabilitiesFromRequest("please draft an email")).toContain(
+      "draft",
+    );
+    expect(inferCapabilitiesFromRequest("prepare a summary")).toContain(
+      "draft",
+    );
     expect(inferCapabilitiesFromRequest("triage my inbox")).toContain("draft");
   });
 
   it("should detect send capability from relevant keywords", async () => {
-    const { inferCapabilitiesFromRequest } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { inferCapabilitiesFromRequest } =
+      await import("../packages/integrations/src/index");
 
     expect(inferCapabilitiesFromRequest("send this reply")).toContain("send");
     expect(inferCapabilitiesFromRequest("email the team")).toContain("send");
   });
 
   it("should detect schedule capability from calendar keywords", async () => {
-    const { inferCapabilitiesFromRequest } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { inferCapabilitiesFromRequest } =
+      await import("../packages/integrations/src/index");
 
-    expect(inferCapabilitiesFromRequest("schedule a meeting")).toContain("schedule");
-    expect(inferCapabilitiesFromRequest("check my calendar")).toContain("schedule");
+    expect(inferCapabilitiesFromRequest("schedule a meeting")).toContain(
+      "schedule",
+    );
+    expect(inferCapabilitiesFromRequest("check my calendar")).toContain(
+      "schedule",
+    );
   });
 
   it("should handle empty input gracefully", async () => {
-    const { inferCapabilitiesFromRequest } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { inferCapabilitiesFromRequest } =
+      await import("../packages/integrations/src/index");
 
     const caps = inferCapabilitiesFromRequest("");
     expect(caps).toEqual(["read", "search"]);
   });
 
   it("should handle injection attempts in capability inference", async () => {
-    const { inferCapabilitiesFromRequest } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { inferCapabilitiesFromRequest } =
+      await import("../packages/integrations/src/index");
 
     // Attempt to inject extra capabilities via crafted text
     const maliciousInputs = [
@@ -631,13 +634,24 @@ describe("Capability inference from request text", () => {
       "<script>alert('xss')</script> draft email",
       "'; DROP TABLE capabilities; -- send email",
       "\n\r\tdraft\tsend\r\nschedule",
-      "dRaFt eMaIl" // mixed case
+      "dRaFt eMaIl", // mixed case
     ];
 
     for (const input of maliciousInputs) {
       const caps = inferCapabilitiesFromRequest(input);
       // Should only contain valid Capability values
-      const validCaps = ["read", "search", "draft", "send", "schedule", "monitor", "create", "update", "delete", "approve"];
+      const validCaps = [
+        "read",
+        "search",
+        "draft",
+        "send",
+        "schedule",
+        "monitor",
+        "create",
+        "update",
+        "delete",
+        "approve",
+      ];
       for (const cap of caps) {
         expect(validCaps).toContain(cap);
       }
@@ -645,12 +659,11 @@ describe("Capability inference from request text", () => {
   });
 
   it("should match multiple capabilities from compound requests", async () => {
-    const { inferCapabilitiesFromRequest } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { inferCapabilitiesFromRequest } =
+      await import("../packages/integrations/src/index");
 
     const caps = inferCapabilitiesFromRequest(
-      "draft and send an email about the meeting I need to schedule"
+      "draft and send an email about the meeting I need to schedule",
     );
     expect(caps).toContain("draft");
     expect(caps).toContain("send");
@@ -664,9 +677,8 @@ describe("Capability inference from request text", () => {
 
 describe("Idempotency enforcement", () => {
   it("should require idempotency key for Gmail draft creation", async () => {
-    const { createGmailAdapter } = await import(
-      "../packages/integrations/src/gmail"
-    );
+    const { createGmailAdapter } =
+      await import("../packages/integrations/src/gmail");
 
     // We can't easily test the full flow without mocking googleapis deeply,
     // but we can verify the adapter exists and the function signature enforces keys
@@ -677,9 +689,21 @@ describe("Idempotency enforcement", () => {
 
   it("should build deterministic idempotency message IDs from keys", async () => {
     // Test the internal buildIdempotencyMessageId logic indirectly
-    const hash1 = crypto.createHash("sha256").update("key-abc").digest("hex").slice(0, 32);
-    const hash2 = crypto.createHash("sha256").update("key-abc").digest("hex").slice(0, 32);
-    const hash3 = crypto.createHash("sha256").update("key-xyz").digest("hex").slice(0, 32);
+    const hash1 = crypto
+      .createHash("sha256")
+      .update("key-abc")
+      .digest("hex")
+      .slice(0, 32);
+    const hash2 = crypto
+      .createHash("sha256")
+      .update("key-abc")
+      .digest("hex")
+      .slice(0, 32);
+    const hash3 = crypto
+      .createHash("sha256")
+      .update("key-xyz")
+      .digest("hex")
+      .slice(0, 32);
 
     expect(hash1).toBe(hash2);
     expect(hash1).not.toBe(hash3);
@@ -687,9 +711,8 @@ describe("Idempotency enforcement", () => {
   });
 
   it("should reject whitespace-only idempotency keys", async () => {
-    const { createInvalidConnectorRequestError } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { createInvalidConnectorRequestError } =
+      await import("../packages/integrations/src/connector-errors");
 
     // Simulate what requireGmailIdempotencyKey does
     const key = "   ".trim();
@@ -698,7 +721,8 @@ describe("Idempotency enforcement", () => {
     const error = createInvalidConnectorRequestError({
       provider: "gmail",
       operation: "drafts.create",
-      message: "Gmail drafts.create requires an idempotency key before provider mutation."
+      message:
+        "Gmail drafts.create requires an idempotency key before provider mutation.",
     });
 
     expect(error.code).toBe("invalid_request");
@@ -731,7 +755,8 @@ describe("Encoding edge cases", () => {
   });
 
   it("should handle special characters in calendar event descriptions", () => {
-    const description = 'Meeting with "quotes" & <angles> and \'apostrophes\' and \\backslashes\\';
+    const description =
+      "Meeting with \"quotes\" & <angles> and 'apostrophes' and \\backslashes\\";
     // Calendar events pass through JSON serialization
     const serialized = JSON.stringify({ description });
     const deserialized = JSON.parse(serialized);
@@ -744,13 +769,13 @@ describe("Encoding edge cases", () => {
     const testCases = [
       { input: "SGVsbG8gV29ybGQ", expected: "Hello World" },
       { input: "SGVsbG8tV29ybGRfMTIz", expected: "Hello-World_123" },
-      { input: "", expected: "" }
+      { input: "", expected: "" },
     ];
 
     for (const { input, expected } of testCases) {
       const decoded = Buffer.from(
         input.replace(/-/g, "+").replace(/_/g, "/"),
-        "base64"
+        "base64",
       ).toString("utf8");
       expect(decoded).toBe(expected);
     }
@@ -759,12 +784,13 @@ describe("Encoding edge cases", () => {
   it("should handle emoji and multi-byte characters in note slugs", () => {
     // The toSlug function strips non-alphanumeric chars
     const title = "🚀 Meeting Notes — Café ☕";
-    const slug = title
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "note";
+    const slug =
+      title
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "note";
 
     expect(slug).toMatch(/^[a-z0-9-]+$/);
     expect(slug).not.toContain("🚀");
@@ -780,47 +806,60 @@ describe("Encoding edge cases", () => {
 
 describe("Provider credential secret context binding", () => {
   it("should fail decryption when context mismatches", async () => {
-    const { createProviderCredentialSecretStore } = await import(
-      "../packages/integrations/src/provider-credential-secrets"
-    );
+    const { createProviderCredentialSecretStore } =
+      await import("../packages/integrations/src/provider-credential-secrets");
 
     const store = createProviderCredentialSecretStore({
       masterKey: "context-binding-test-key",
-      keyVersion: "v1"
+      keyVersion: "v1",
     });
 
-    const contextA = { credentialId: "cred-1", userId: "user-1", kind: "oauth" };
-    const contextB = { credentialId: "cred-2", userId: "user-2", kind: "api-key" };
+    const contextA = {
+      credentialId: "cred-1",
+      userId: "user-1",
+      kind: "oauth",
+    };
+    const contextB = {
+      credentialId: "cred-2",
+      userId: "user-2",
+      kind: "api-key",
+    };
 
     const envelope = store.encrypt("my-secret", contextA);
 
     // Decrypting with wrong context should fail (AAD mismatch)
-    expect(() => store.decrypt(envelope, contextB)).toThrow(/decryption failed/i);
+    expect(() => store.decrypt(envelope, contextB)).toThrow(
+      /decryption failed/i,
+    );
   });
 
   it("should reject incomplete context for encryption", async () => {
-    const { createProviderCredentialSecretStore } = await import(
-      "../packages/integrations/src/provider-credential-secrets"
-    );
+    const { createProviderCredentialSecretStore } =
+      await import("../packages/integrations/src/provider-credential-secrets");
 
     const store = createProviderCredentialSecretStore({
       masterKey: "incomplete-context-key",
-      keyVersion: "v1"
+      keyVersion: "v1",
     });
 
-    const incompleteContext = { credentialId: "", userId: "user-1", kind: "oauth" };
+    const incompleteContext = {
+      credentialId: "",
+      userId: "user-1",
+      kind: "oauth",
+    };
 
-    expect(() => store.encrypt("secret", incompleteContext)).toThrow(/incomplete/i);
+    expect(() => store.encrypt("secret", incompleteContext)).toThrow(
+      /incomplete/i,
+    );
   });
 
   it("should fail when key version is not in keyring", async () => {
-    const { createProviderCredentialSecretStore } = await import(
-      "../packages/integrations/src/provider-credential-secrets"
-    );
+    const { createProviderCredentialSecretStore } =
+      await import("../packages/integrations/src/provider-credential-secrets");
 
     const store = createProviderCredentialSecretStore({
       masterKey: "current-key",
-      keyVersion: "v2"
+      keyVersion: "v2",
     });
 
     // Encrypt with v2
@@ -829,7 +868,7 @@ describe("Provider credential secret context binding", () => {
     // Create a new store that doesn't know about v2
     const store2 = createProviderCredentialSecretStore({
       masterKey: "other-key",
-      keyVersion: "v3"
+      keyVersion: "v3",
     });
 
     expect(() => store2.decrypt(envelope)).toThrow(/not configured/i);
@@ -842,14 +881,13 @@ describe("Provider credential secret context binding", () => {
 
 describe("Connector timeout signal composition", () => {
   it("should combine external signal with timeout signal", async () => {
-    const { createConnectorTimeoutSignal } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { createConnectorTimeoutSignal } =
+      await import("../packages/integrations/src/connector-errors");
 
     const controller = new AbortController();
     const combined = createConnectorTimeoutSignal({
       timeoutMs: 5000,
-      signal: controller.signal
+      signal: controller.signal,
     });
 
     expect(combined.aborted).toBe(false);
@@ -859,16 +897,15 @@ describe("Connector timeout signal composition", () => {
   });
 
   it("should return external signal directly if already aborted", async () => {
-    const { createConnectorTimeoutSignal } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { createConnectorTimeoutSignal } =
+      await import("../packages/integrations/src/connector-errors");
 
     const controller = new AbortController();
     controller.abort();
 
     const combined = createConnectorTimeoutSignal({
       timeoutMs: 5000,
-      signal: controller.signal
+      signal: controller.signal,
     });
 
     expect(combined).toBe(controller.signal);
@@ -876,9 +913,8 @@ describe("Connector timeout signal composition", () => {
   });
 
   it("should return timeout-only signal when no external signal provided", async () => {
-    const { createConnectorTimeoutSignal } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { createConnectorTimeoutSignal } =
+      await import("../packages/integrations/src/connector-errors");
 
     const signal = createConnectorTimeoutSignal({ timeoutMs: 100 });
     expect(signal.aborted).toBe(false);
@@ -895,9 +931,8 @@ describe("Connector timeout signal composition", () => {
 
 describe("Retry-After header parsing", () => {
   it("should parse valid numeric retry-after values", async () => {
-    const { parseRetryAfterSeconds } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { parseRetryAfterSeconds } =
+      await import("../packages/integrations/src/connector-errors");
 
     expect(parseRetryAfterSeconds("30")).toBe(30);
     expect(parseRetryAfterSeconds("0")).toBe(0);
@@ -905,9 +940,8 @@ describe("Retry-After header parsing", () => {
   });
 
   it("should return undefined for invalid retry-after values", async () => {
-    const { parseRetryAfterSeconds } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { parseRetryAfterSeconds } =
+      await import("../packages/integrations/src/connector-errors");
 
     expect(parseRetryAfterSeconds(null)).toBeUndefined();
     expect(parseRetryAfterSeconds(undefined)).toBeUndefined();
@@ -918,9 +952,8 @@ describe("Retry-After header parsing", () => {
   });
 
   it("should floor fractional retry-after values", async () => {
-    const { parseRetryAfterSeconds } = await import(
-      "../packages/integrations/src/connector-errors"
-    );
+    const { parseRetryAfterSeconds } =
+      await import("../packages/integrations/src/connector-errors");
 
     expect(parseRetryAfterSeconds("30.7")).toBe(30);
     expect(parseRetryAfterSeconds("0.9")).toBe(0);
@@ -933,44 +966,49 @@ describe("Retry-After header parsing", () => {
 
 describe("Capability enforcement at integration call sites", () => {
   it("should throw CapabilityViolationError when agent lacks required capability", async () => {
-    const { assertAgentCapability, CapabilityViolationError } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { assertAgentCapability, CapabilityViolationError } =
+      await import("../packages/integrations/src/index");
 
     expect(() =>
-      assertAgentCapability("research", "send", ["read", "search", "draft"])
+      assertAgentCapability("research", "send", ["read", "search", "draft"]),
     ).toThrow(CapabilityViolationError);
   });
 
   it("should pass when agent has the required capability", async () => {
-    const { assertAgentCapability } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { assertAgentCapability } =
+      await import("../packages/integrations/src/index");
 
     expect(() =>
-      assertAgentCapability("communications", "send", ["read", "search", "draft", "send"])
+      assertAgentCapability("communications", "send", [
+        "read",
+        "search",
+        "draft",
+        "send",
+      ]),
     ).not.toThrow();
   });
 
   it("should detect allowlist violations for agent types", async () => {
-    const { assertCapabilitiesWithinAllowlist, CapabilityAllowlistViolationError } = await import(
-      "../packages/integrations/src/index"
-    );
+    const {
+      assertCapabilitiesWithinAllowlist,
+      CapabilityAllowlistViolationError,
+    } = await import("../packages/integrations/src/index");
 
     // research agent shouldn't have 'send' capability
     expect(() =>
-      assertCapabilitiesWithinAllowlist("research", ["read", "search", "send"])
+      assertCapabilitiesWithinAllowlist("research", ["read", "search", "send"]),
     ).toThrow(CapabilityAllowlistViolationError);
   });
 
   it("should reject unknown agent types with empty allowlist", async () => {
-    const { assertCapabilitiesWithinAllowlist, CapabilityAllowlistViolationError } = await import(
-      "../packages/integrations/src/index"
-    );
+    const {
+      assertCapabilitiesWithinAllowlist,
+      CapabilityAllowlistViolationError,
+    } = await import("../packages/integrations/src/index");
 
     // Unknown agent type gets empty allowlist → any capability is a violation
     expect(() =>
-      assertCapabilitiesWithinAllowlist("unknown-agent", ["read"])
+      assertCapabilitiesWithinAllowlist("unknown-agent", ["read"]),
     ).toThrow(CapabilityAllowlistViolationError);
   });
 });
@@ -1009,7 +1047,7 @@ describe("Gmail readiness checks", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 14. Calendar readiness check  
+// 14. Calendar readiness check
 // ---------------------------------------------------------------------------
 
 describe("Calendar readiness checks", () => {
@@ -1024,7 +1062,8 @@ describe("Calendar readiness checks", () => {
     vi.resetModules();
     delete process.env.GOOGLE_REFRESH_TOKEN;
 
-    const calendar = await import("../packages/integrations/src/google-calendar");
+    const calendar =
+      await import("../packages/integrations/src/google-calendar");
 
     // Same pattern as Gmail - isCalendarReady may have the same async/sync mismatch
     const result = calendar.isCalendarReady();
@@ -1038,9 +1077,8 @@ describe("Calendar readiness checks", () => {
 
 describe("Integration template integrity", () => {
   it("should produce valid integration accounts for a given user", async () => {
-    const { buildDefaultIntegrationAccounts } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { buildDefaultIntegrationAccounts } =
+      await import("../packages/integrations/src/index");
 
     const accounts = buildDefaultIntegrationAccounts("user-123");
     expect(accounts.length).toBeGreaterThan(0);
@@ -1054,9 +1092,8 @@ describe("Integration template integrity", () => {
   });
 
   it("should include local-notes template with metadata", async () => {
-    const { getIntegrationTemplates } = await import(
-      "../packages/integrations/src/index"
-    );
+    const { getIntegrationTemplates } =
+      await import("../packages/integrations/src/index");
 
     const templates = getIntegrationTemplates();
     const notesTemplate = templates.find((t) => t.key === "local-notes");
