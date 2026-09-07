@@ -5,7 +5,7 @@ RUN npm install -g pnpm@11.5.2
 FROM base AS deps
 COPY package*.json ./
 COPY pnpm-lock.yaml ./
-RUN pnpm config set onlyBuiltDependencies '["esbuild", "workerd"]' --location project
+RUN printf 'esbuild@0.25.4:\n  allowed: true\nesbuild@0.28.1:\n  allowed: true\nesbuild@0.28.2:\n  allowed: true\nworkerd@1.20260828.1:\n  allowed: true\n' > .pnpm-builds.yaml
 COPY apps/web/package.json apps/web/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/agents/package.json packages/agents/package.json
