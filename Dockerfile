@@ -5,6 +5,7 @@ RUN npm install -g pnpm@11.5.2
 FROM base AS deps
 COPY package*.json ./
 COPY pnpm-lock.yaml ./
+RUN echo 'onlyBuiltDependencies=[]' > .npmrc
 COPY apps/web/package.json apps/web/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/agents/package.json packages/agents/package.json
@@ -22,7 +23,7 @@ COPY packages/repository/package.json packages/repository/package.json
 COPY packages/runtime-adapters/package.json packages/runtime-adapters/package.json
 COPY packages/self-improvement-memory/package.json packages/self-improvement-memory/package.json
 COPY packages/worker-runtime/package.json packages/worker-runtime/package.json
-RUN pnpm install --frozen-lockfile --config.onlyBuiltDependencies=[]
+RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 ARG NODE_OPTIONS=--max-old-space-size=4096
