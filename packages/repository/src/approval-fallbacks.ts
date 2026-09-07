@@ -40,16 +40,18 @@ export function buildFallbackApprovalPreview(approval: {
   riskClass: ApprovalRequest["riskClass"];
 }): ApprovalRequest["preview"] {
   const actionType = inferApprovalActionTypeFromRequestedAction(approval.requestedAction);
+  const safeSummary = approval.requestedAction || "No action specified";
+  const safeAfter = approval.requestedAction || "No action specified";
 
   return ApprovalPreviewSchema.parse({
     actionType,
-    summary: approval.requestedAction,
+    summary: safeSummary,
     target: approval.title.replace(/\s+requires approval$/u, "") || "Pending action",
     changes: [
       {
         label: "Requested action",
         before: "Pending user review",
-        after: approval.requestedAction
+        after: safeAfter
       }
     ],
     impact: {
