@@ -1,11 +1,10 @@
 FROM node:22-bookworm-slim AS base
 WORKDIR /app
-RUN npm install -g pnpm@11.5.2
+RUN npm install -g pnpm@10
 
 FROM base AS deps
 COPY package*.json ./
 COPY pnpm-lock.yaml ./
-RUN printf '{"onlyBuiltDependencies":["esbuild","workerd"]}' > pnpm-allowed-builds.json
 COPY apps/web/package.json apps/web/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/agents/package.json packages/agents/package.json
@@ -23,7 +22,7 @@ COPY packages/repository/package.json packages/repository/package.json
 COPY packages/runtime-adapters/package.json packages/runtime-adapters/package.json
 COPY packages/self-improvement-memory/package.json packages/self-improvement-memory/package.json
 COPY packages/worker-runtime/package.json packages/worker-runtime/package.json
-RUN pnpm install --frozen-lockfile --config.onlyBuiltDependenciesFile=./pnpm-allowed-builds.json
+RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 ARG NODE_OPTIONS=--max-old-space-size=4096
@@ -40,7 +39,7 @@ RUN pnpm run build
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
-RUN npm install -g pnpm@11.5.2
+RUN npm install -g pnpm@10
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
