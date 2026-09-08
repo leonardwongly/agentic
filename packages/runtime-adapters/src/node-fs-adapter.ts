@@ -1,20 +1,41 @@
 /**
  * Node.js File System Adapter
- * 
+ *
  * Implements StorageAdapter using node:fs for local development
  * and self-hosted deployments.
  */
 
-import { mkdir, rmdir, stat, readFile as fsReadFile, writeFile as fsWriteFile, readdir as fsReaddir, rename, unlink } from "node:fs/promises";
+import {
+  mkdir,
+  rm,
+  rmdir,
+  stat,
+  readFile as fsReadFile,
+  writeFile as fsWriteFile,
+  readdir as fsReaddir,
+  rename,
+  unlink,
+} from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { StorageAdapter, LockAdapter, RuntimeContext, FileStat, DirectoryEntry, ReadDirOptions } from "./storage-adapter";
+import type {
+  StorageAdapter,
+  LockAdapter,
+  RuntimeContext,
+  FileStat,
+  DirectoryEntry,
+  ReadDirOptions,
+} from "./storage-adapter";
 
 const FILE_STORE_LOCK_STALE_MS = 60_000;
 const FILE_STORE_LOCK_RETRY_MS = 25;
 
 function isErrnoException(error: unknown, code: string): boolean {
-  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === code;
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === code
+  );
 }
 
 export class NodeFsStorageAdapter implements StorageAdapter {
@@ -33,7 +54,10 @@ export class NodeFsStorageAdapter implements StorageAdapter {
     }
   }
 
-  async readFile(filePath: string, encoding?: "utf8"): Promise<string | Uint8Array> {
+  async readFile(
+    filePath: string,
+    encoding?: "utf8",
+  ): Promise<string | Uint8Array> {
     if (encoding === "utf8") {
       return fsReadFile(filePath, "utf8");
     }
@@ -41,24 +65,37 @@ export class NodeFsStorageAdapter implements StorageAdapter {
     return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   }
 
-  async writeFile(filePath: string, data: string | Uint8Array, options?: { mode?: number }): Promise<void> {
+  async writeFile(
+    filePath: string,
+    data: string | Uint8Array,
+    options?: { mode?: number },
+  ): Promise<void> {
     const dirPath = path.dirname(filePath);
     await mkdir(dirPath, { recursive: true });
-    
+
     // Atomic write: write to temp file then rename
     const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
     await fsWriteFile(tempPath, data, { mode: options?.mode ?? 0o644 });
     await rename(tempPath, filePath);
   }
 
-  async mkdir(dirPath: string, options?: { recursive?: boolean }): Promise<void> {
+  async mkdir(
+    dirPath: string,
+    options?: { recursive?: boolean },
+  ): Promise<void> {
     await mkdir(dirPath, { recursive: options?.recursive ?? false });
   }
 
-  async rmdir(dirPath: string, _options?: { recursive?: boolean }): Promise<void> {
-    // Note: recursive rmdir is deprecated in favor of rm in newer Node versions
-    // For now, we just remove empty directories
-    await rmdir(dirPath);
+  async rmdir(
+    dirPath: string,
+    options?: { recursive?: boolean },
+  ): Promise<void> {
+    if (options?.recursive) {
+      // Use rm with recursive for non-empty directories (rmdir only handles empty dirs)
+      await rm(dirPath, { recursive: true, force: true });
+    } else {
+      await rmdir(dirPath);
+    }
   }
 
   async stat(filePath: string): Promise<FileStat> {
@@ -68,23 +105,28 @@ export class NodeFsStorageAdapter implements StorageAdapter {
       mtimeMs: stats.mtimeMs,
       birthtimeMs: stats.birthtimeMs,
       isFile: stats.isFile(),
-      isDirectory: stats.isDirectory()
+      isDirectory: stats.isDirectory(),
     };
   }
 
-  async readdir(dirPath: string, options?: ReadDirOptions): Promise<string[] | DirectoryEntry[]> {
+  async readdir(
+    dirPath: string,
+    options?: ReadDirOptions,
+  ): Promise<string[] | DirectoryEntry[]> {
     if (options?.withFileTypes) {
       const entries = await fsReaddir(dirPath, { withFileTypes: true });
       return entries.map((entry) => ({
         name: entry.name,
         isFile: entry.isFile(),
-        isDirectory: entry.isDirectory()
+        isDirectory: entry.isDirectory(),
       }));
     }
     return fsReaddir(dirPath);
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
+    // Ensure parent directory of destination exists
+    await mkdir(path.dirname(newPath), { recursive: true });
     await rename(oldPath, newPath);
   }
 
@@ -124,12 +166,17 @@ export class NodeFsLockAdapter implements LockAdapter {
     this.storage = storage;
   }
 
-  async acquire(lockId: string, options?: { staleMs?: number }): Promise<() => Promise<void>> {
+  async acquire(
+    lockId: string,
+    options?: { staleMs?: number },
+  ): Promise<() => Promise<void>> {
     const lockPath = `${lockId}.lock`;
     const staleMs = options?.staleMs ?? FILE_STORE_LOCK_STALE_MS;
 
     // Ensure parent directory exists
-    await this.storage.mkdir(this.storage.dirname(lockPath), { recursive: true });
+    await this.storage.mkdir(this.storage.dirname(lockPath), {
+      recursive: true,
+    });
 
     for (;;) {
       try {
@@ -148,12 +195,17 @@ export class NodeFsLockAdapter implements LockAdapter {
         }
 
         // Wait before retrying
-        await new Promise((resolve) => setTimeout(resolve, FILE_STORE_LOCK_RETRY_MS));
+        await new Promise((resolve) =>
+          setTimeout(resolve, FILE_STORE_LOCK_RETRY_MS),
+        );
       }
     }
   }
 
-  private async tryRemoveStaleLock(lockPath: string, staleMs: number): Promise<boolean> {
+  private async tryRemoveStaleLock(
+    lockPath: string,
+    staleMs: number,
+  ): Promise<boolean> {
     try {
       const lockStat = await this.storage.stat(lockPath);
       const now = Date.now();
@@ -188,6 +240,6 @@ export function createNodeRuntimeContext(): RuntimeContext {
     cwd: () => process.cwd(),
     pid: process.pid,
     randomUUID: () => crypto.randomUUID(),
-    now: () => Date.now()
+    now: () => Date.now(),
   };
 }

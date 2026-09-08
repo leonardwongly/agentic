@@ -34,6 +34,9 @@
       "@agentic/agents": [
         "./packages/agents/src/index.ts"
       ],
+      "@agentic/integrations/client": [
+        "./packages/integrations/src/client.ts"
+      ],
       "@agentic/integrations": [
         "./packages/integrations/src/index.ts"
       ],
@@ -45,6 +48,9 @@
       ],
       "@agentic/db": [
         "./packages/db/src/index.ts"
+      ],
+      "@agentic/db/auth-runtime-schema": [
+        "./packages/db/src/auth-runtime-schema.ts"
       ],
       "@agentic/db/migration-discipline": [
         "./packages/db/src/migration-discipline.ts"

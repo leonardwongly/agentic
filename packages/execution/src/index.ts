@@ -749,7 +749,8 @@ export function computeJobRetryDelayMs(
   const attemptIndex = Math.max(0, attemptCount - 1);
   const multiplier = normalized.factor ** attemptIndex;
   const baseDelay = Math.min(normalized.maxDelayMs, Math.round(normalized.baseDelayMs * multiplier));
-  const jitterRatio = Math.max(0, Math.min(1, options?.jitterRatio ?? 0));
+  const rawJitter = options?.jitterRatio;
+  const jitterRatio = rawJitter !== undefined && Number.isFinite(rawJitter) ? Math.max(0, Math.min(1, rawJitter)) : 0;
 
   if (jitterRatio === 0) {
     return baseDelay;

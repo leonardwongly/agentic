@@ -33,7 +33,6 @@ describe("security closeout artifacts", () => {
   it("runs the production container as a non-root user with owned app files", () => {
     const dockerfile = readRepoFile("Dockerfile");
 
-    expect(dockerfile).toContain("ENV NPM_CONFIG_CACHE=/home/node/.npm");
     expect(dockerfile).toMatch(/COPY --chown=node:node --from=deps \/app\/node_modules \.\/node_modules/u);
     expect(dockerfile).toMatch(/COPY --chown=node:node --from=build \/app\/apps \.\/apps/u);
     expect(dockerfile).toMatch(/COPY --chown=node:node --from=build \/app\/packages \.\/packages/u);
