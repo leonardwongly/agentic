@@ -362,7 +362,6 @@ describe("contract: discriminated union type narrowing for ActionIntentSchema", 
     if (intent.type === "send_message") {
       expect(intent.to).toBe("test@example.com");
       expect(intent.subject).toBe("Subject");
-      // @ts-expect-error - body should not exist on non-send_message types after narrowing
       expect(intent.body).toBeDefined();
     }
   });
@@ -526,7 +525,7 @@ describe("contract: createJobRecord defaults and validation", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} }
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload
     });
 
     expect(job.priority).toBe("normal");
@@ -537,7 +536,7 @@ describe("contract: createJobRecord defaults and validation", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} }
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload
     });
 
     expect(job.maxAttempts).toBe(3);
@@ -548,7 +547,7 @@ describe("contract: createJobRecord defaults and validation", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} },
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload,
       queue: ""
     });
 
@@ -559,7 +558,7 @@ describe("contract: createJobRecord defaults and validation", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} },
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload,
       queue: "   "
     });
 
@@ -570,7 +569,7 @@ describe("contract: createJobRecord defaults and validation", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} }
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload
     });
 
     expect(job.attemptCount).toBe(0);
@@ -581,7 +580,7 @@ describe("contract: createJobRecord defaults and validation", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} }
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload
     });
 
     expect(job.journal.entries).toHaveLength(1);
@@ -593,7 +592,7 @@ describe("contract: createJobRecord defaults and validation", () => {
       createJobRecord({
         userId: "",
         kind: "goal_create",
-        payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} }
+        payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload
       })
     ).toThrow();
   });
@@ -602,7 +601,7 @@ describe("contract: createJobRecord defaults and validation", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} }
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload
     });
 
     expect(job.claimedBy).toBeNull();
@@ -750,13 +749,18 @@ describe("contract: recomputeWorkflowStatuses does not assume all-completed mean
     const activeWatcher = {
       id: "watcher-1",
       goalId: bundle.goal.id,
-      name: "Test watcher",
       targetEntity: "email",
       condition: "new email received",
       triggerAction: "notify",
       frequency: "realtime" as const,
+      sourceSystems: [] as string[],
       status: "active" as const,
-      dryRun: false,
+      expiryAt: null,
+      schedule: { enabled: true, dryRun: true, cursor: null, lastRunAt: null, nextRunAt: null, lease: null },
+      lastEvaluation: null,
+      escalationPolicy: { notify: true, minSuppressionMs: 15 * 60_000, maxTriggersPerHour: 4 },
+      actorContext: null,
+      responsibility: { owner: { kind: "user" as const, userId: "user-1", displayName: "User", workspaceRole: null, systemActor: null, label: "User" }, delegate: null, reviewer: null, escalationOwner: { kind: "user" as const, userId: "user-1", displayName: "User", workspaceRole: null, systemActor: null, label: "User" }, handoffStatus: "owner_control" as const, handoffSummary: "The owner directly manages the watcher.", delegationReason: null, escalationReason: null, audit: { at: nowIso(), by: { kind: "user" as const, userId: "user-1", displayName: "User", workspaceRole: null, systemActor: null, label: "User" }, reason: "Initial assignment", requiredEvents: [], requireActorContext: false, requireReasonForDelegation: false, requireReasonForEscalation: false, requireReviewerIdentity: false }, lastChangedAt: null, lastChangedBy: { kind: "user" as const, userId: "user-1", displayName: "User", workspaceRole: null, systemActor: null, label: "User" } },
       createdAt: nowIso(),
       updatedAt: nowIso()
     };
@@ -1242,7 +1246,7 @@ describe("contract: isJobClaimable respects time bounds", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} },
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload,
       availableAt: futureDate
     });
 
@@ -1254,7 +1258,7 @@ describe("contract: isJobClaimable respects time bounds", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} },
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload,
       availableAt: pastDate
     });
 
@@ -1266,7 +1270,7 @@ describe("contract: isJobClaimable respects time bounds", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} }
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload
     });
     const claimedJob = { ...job, claimedBy: "worker-1", status: "running" as JobStatus };
 
@@ -1278,7 +1282,7 @@ describe("contract: isJobClaimable respects time bounds", () => {
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} }
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload
     });
     const runningJob = { ...job, status: "running" as JobStatus };
 
@@ -1426,17 +1430,21 @@ describe("contract: WorkflowDag validation enforces invariants", () => {
     return {
       id: "dag-1",
       workflowId: "wf-1",
+      schemaVersion: "v1" as const,
       nodes: [
         {
           id: "node-1",
           label: "Node 1",
           dependsOn: [],
           actionIntent: {
+            schemaVersion: "v1",
             type: "manual_review",
             riskClass: "R1",
             actionType: "artifact-only",
             summary: "Review",
-            reason: "Because"
+            reason: "Because",
+            artifactIds: [],
+            metadata: {}
           },
           permissionGrant: {
             capabilities: [],
@@ -1447,7 +1455,9 @@ describe("contract: WorkflowDag validation enforces invariants", () => {
             backoffMs: 1000
           },
           compensation: {
-            required: false
+            actionIntent: null,
+            required: false,
+            note: null
           }
         }
       ],
@@ -1513,7 +1523,8 @@ describe("contract: WorkflowDag validation enforces invariants", () => {
           ...minimalDag().nodes[0],
           compensation: {
             required: true,
-            actionIntent: null
+            actionIntent: null,
+            note: null
           }
         }
       ]
@@ -1534,17 +1545,21 @@ describe("contract: WorkflowDagInstance transitions", () => {
     const dag = {
       id: "dag-1",
       workflowId: "wf-1",
+      schemaVersion: "v1" as const,
       nodes: [
         {
           id: "node-1",
           label: "Node 1",
           dependsOn: [],
           actionIntent: {
+            schemaVersion: "v1" as const,
             type: "manual_review" as const,
             riskClass: "R1" as RiskClass,
             actionType: "artifact-only" as const,
             summary: "Review",
-            reason: "Because"
+            reason: "Because",
+            artifactIds: [],
+            metadata: {}
           },
           permissionGrant: {
             capabilities: [],
@@ -1555,7 +1570,9 @@ describe("contract: WorkflowDagInstance transitions", () => {
             backoffMs: 1000
           },
           compensation: {
-            required: false
+            actionIntent: null,
+            required: false,
+            note: null
           }
         }
       ],
@@ -1688,42 +1705,49 @@ describe("contract: WorkflowDagNode execution transitions", () => {
 
 describe("contract: inspectWorkflowDagInstance derivation invariants", () => {
   it("reports zero progress for a fresh instance", () => {
-    const dag = {
+    const dag: WorkflowDag = {
       id: "dag-1",
       workflowId: "wf-1",
+      schemaVersion: "v1" as const,
       nodes: [
         {
           id: "node-1",
           label: "Node 1",
           dependsOn: [],
           actionIntent: {
+            schemaVersion: "v1" as const,
             type: "manual_review" as const,
             riskClass: "R1" as RiskClass,
             actionType: "artifact-only" as const,
             summary: "Review",
-            reason: "Because"
+            reason: "Because",
+            artifactIds: [] as string[],
+            metadata: {} as Record<string, string | number | boolean | null>
           },
           permissionGrant: { capabilities: [], maxRiskClass: "R1" as RiskClass },
           retryPolicy: { maxAttempts: 3, backoffMs: 1000 },
-          compensation: { required: false }
+          compensation: { actionIntent: null, required: false, note: null }
         },
         {
           id: "node-2",
           label: "Node 2",
           dependsOn: ["node-1"],
           actionIntent: {
+            schemaVersion: "v1" as const,
             type: "manual_review" as const,
             riskClass: "R1" as RiskClass,
             actionType: "artifact-only" as const,
             summary: "Review 2",
-            reason: "Because 2"
+            reason: "Because 2",
+            artifactIds: [] as string[],
+            metadata: {} as Record<string, string | number | boolean | null>
           },
           permissionGrant: { capabilities: [], maxRiskClass: "R1" as RiskClass },
           retryPolicy: { maxAttempts: 3, backoffMs: 1000 },
-          compensation: { required: false }
+          compensation: { actionIntent: null, required: false, note: null }
         }
       ],
-      edges: [{ from: "node-1", to: "node-2" }],
+      edges: [{ from: "node-1", to: "node-2", condition: "always" as const }],
       createdAt: nowIso(),
       updatedAt: nowIso()
     };
@@ -1858,7 +1882,8 @@ describe("contract: buildApprovalNotificationDeliveryTarget injectivity", () => 
       goalId: "goal-1",
       taskId: "task-1",
       decision: "approved",
-      metadata: {}
+      workspaceId: null,
+      metadata: { replayedFromJobId: null }
     });
 
     const target2 = buildApprovalNotificationDeliveryTarget({
@@ -1870,7 +1895,8 @@ describe("contract: buildApprovalNotificationDeliveryTarget injectivity", () => 
       goalId: "goal-1",
       taskId: "task-1",
       decision: "approved",
-      metadata: {}
+      workspaceId: null,
+      metadata: { replayedFromJobId: null }
     });
 
     expect(target1).not.toBe(target2);
@@ -1886,20 +1912,24 @@ describe("contract: buildApprovalNotificationDeliveryTarget injectivity", () => 
       goalId: "goal-1",
       taskId: "task-1",
       decision: "approved",
-      metadata: {}
+      workspaceId: null,
+      metadata: { replayedFromJobId: null }
     });
 
-    const email = buildApprovalNotificationDeliveryTarget({
+    const telegram = buildApprovalNotificationDeliveryTarget({
       type: "approval_notification",
-      channel: "email",
+      channel: "telegram_receipt",
       approvalId: "approval-1",
+      telegramChatId: "chat-1",
+      telegramMessageId: 12345,
       goalId: "goal-1",
       taskId: "task-1",
       decision: "approved",
-      metadata: {}
+      workspaceId: null,
+      metadata: { replayedFromJobId: null }
     });
 
-    expect(slack).not.toBe(email);
+    expect(slack).not.toBe(telegram);
   });
 });
 
@@ -2043,7 +2073,7 @@ describe("contract: durable job queue handles concurrent access correctly", () =
     const job = createJobRecord({
       userId: "user-1",
       kind: "goal_create",
-      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} }
+      payload: { type: "goal_create", goalId: "goal-1", workflowId: "wf-1", request: "Test request", metadata: {} } as JobPayload
     });
 
     await queue.enqueue(job);
@@ -2217,24 +2247,28 @@ describe("contract: MonitorSignalActionIntentSchema invariants", () => {
 
 describe("contract: retryWorkflowDagNode precondition enforcement", () => {
   function createDagWithOneFailedNode(): WorkflowDagInstance {
-    const dag = {
+    const dag: WorkflowDag = {
       id: "dag-1",
       workflowId: "wf-1",
+      schemaVersion: "v1" as const,
       nodes: [
         {
           id: "node-1",
           label: "Node 1",
           dependsOn: [],
           actionIntent: {
+            schemaVersion: "v1" as const,
             type: "manual_review" as const,
             riskClass: "R1" as RiskClass,
             actionType: "artifact-only" as const,
             summary: "Review",
-            reason: "Because"
+            reason: "Because",
+            artifactIds: [] as string[],
+            metadata: {} as Record<string, string | number | boolean | null>
           },
           permissionGrant: { capabilities: [], maxRiskClass: "R1" as RiskClass },
           retryPolicy: { maxAttempts: 3, backoffMs: 1000 },
-          compensation: { required: false }
+          compensation: { actionIntent: null, required: false, note: null }
         }
       ],
       edges: [],
@@ -2277,24 +2311,28 @@ describe("contract: retryWorkflowDagNode precondition enforcement", () => {
   });
 
   it("throws when node is not in failed state", () => {
-    const dag = {
+    const dag: WorkflowDag = {
       id: "dag-1",
       workflowId: "wf-1",
+      schemaVersion: "v1" as const,
       nodes: [
         {
           id: "node-1",
           label: "Node 1",
           dependsOn: [],
           actionIntent: {
+            schemaVersion: "v1" as const,
             type: "manual_review" as const,
             riskClass: "R1" as RiskClass,
             actionType: "artifact-only" as const,
             summary: "Review",
-            reason: "Because"
+            reason: "Because",
+            artifactIds: [] as string[],
+            metadata: {} as Record<string, string | number | boolean | null>
           },
           permissionGrant: { capabilities: [], maxRiskClass: "R1" as RiskClass },
           retryPolicy: { maxAttempts: 3, backoffMs: 1000 },
-          compensation: { required: false }
+          compensation: { actionIntent: null, required: false, note: null }
         }
       ],
       edges: [],

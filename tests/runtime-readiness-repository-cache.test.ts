@@ -168,12 +168,12 @@ describe("getWebReadinessReport repository lifecycle", () => {
     poolMocks.constructor.mockClear();
     poolMocks.query.mockClear();
     poolMocks.end.mockClear();
-    delete process.env.DATABASE_URL;
-    delete process.env.NODE_ENV;
+    Reflect.deleteProperty(process.env, "DATABASE_URL");
+    Reflect.deleteProperty(process.env, "NODE_ENV");
   });
 
   it("reuses a single repository instance across repeated readiness checks", { timeout: 15_000 }, async () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
 
     const { getWebReadinessReport } = await import("../apps/web/lib/runtime-readiness");
 
@@ -184,7 +184,7 @@ describe("getWebReadinessReport repository lifecycle", () => {
   });
 
   it("caches public readiness summaries within the TTL", async () => {
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
 
     const { getPublicWebReadinessSummary, resetPublicWebReadinessCacheForTests } = await import(
       "../apps/web/lib/runtime-readiness"
@@ -208,7 +208,7 @@ describe("getWebReadinessReport repository lifecycle", () => {
   });
 
   it("keeps authenticated detailed readiness fresh while public readiness is cached", async () => {
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
 
     const { getPublicWebReadinessSummary, getWebReadinessReport, resetPublicWebReadinessCacheForTests } = await import(
       "../apps/web/lib/runtime-readiness"
@@ -230,7 +230,7 @@ describe("getWebReadinessReport repository lifecycle", () => {
   });
 
   it("uses a lightweight database ping for public readiness and keeps schema drift on details", async () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.DATABASE_URL = "postgres://agentic.example/agentic";
 
     const { getPublicWebReadinessSummary, getWebReadinessReport, resetPublicWebReadinessCacheForTests } = await import(
@@ -256,7 +256,7 @@ describe("getWebReadinessReport repository lifecycle", () => {
   });
 
   it("falls back to a stale not-ready public snapshot when refresh fails", async () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     repositoryMocks.getJobReadinessSummary.mockResolvedValueOnce({
       queuedJobs: 0,
       retryingJobs: 0,

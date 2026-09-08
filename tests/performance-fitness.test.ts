@@ -47,9 +47,8 @@ function buildAuthorizedRequest(url: string, init?: RequestInit) {
 
 async function writeLargeReadinessStore(storePath: string) {
   const now = "2026-04-16T04:00:00.000Z";
-  const jobs = Array.from({ length: 10_000 }, (_, index) =>
-    createJobRecord({
-      id: `ready-large-job-${index}`,
+  const jobs = Array.from({ length: 10_000 }, (_, index) => {
+    const record = createJobRecord({
       userId: DEFAULT_OWNER_USER_ID,
       kind: index % 2 === 0 ? "goal_create" : "docs_render",
       availableAt: "2026-04-16T03:59:00.000Z",
@@ -68,8 +67,10 @@ async function writeLargeReadinessStore(storePath: string) {
               type: "docs_render",
               metadata: {}
             }
-    })
-  );
+    });
+    record.id = `ready-large-job-${index}`;
+    return record;
+  });
   const providerCredentials = Array.from({ length: 2_000 }, (_, index) =>
     ProviderCredentialSchema.parse({
       id: `google:global:ready-large-${index}`,

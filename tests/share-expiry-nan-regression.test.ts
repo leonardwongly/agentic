@@ -69,7 +69,7 @@ describe("share expiry NaN regression", () => {
       getGoalBundle: async () => bundle,
       saveGoalShare: async () => corruptedShare,
       saveGoalBundle: async () => bundle
-    } as Parameters<typeof executePublicShareViewJob>[0]["repository"];
+    } as unknown as Parameters<typeof executePublicShareViewJob>[0]["repository"];
 
     const job = createJobRecord({
       userId: DEFAULT_OWNER_USER_ID,
@@ -137,7 +137,7 @@ describe("share expiry NaN regression", () => {
         return corruptedShare;
       },
       saveGoalBundle: async () => bundle
-    } as Parameters<typeof executePublicShareViewJob>[0]["repository"];
+    } as unknown as Parameters<typeof executePublicShareViewJob>[0]["repository"];
 
     const job = createJobRecord({
       userId: DEFAULT_OWNER_USER_ID,
@@ -197,7 +197,7 @@ describe("share expiry NaN regression", () => {
         return updated;
       },
       saveGoalBundle: async (updated: typeof bundle) => updated
-    } as Parameters<typeof executePublicShareViewJob>[0]["repository"];
+    } as unknown as Parameters<typeof executePublicShareViewJob>[0]["repository"];
 
     const job = createJobRecord({
       userId: DEFAULT_OWNER_USER_ID,

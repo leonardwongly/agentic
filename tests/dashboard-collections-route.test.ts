@@ -115,6 +115,7 @@ describe("dashboard collection routes", () => {
           artifactType: "summary",
           title: "Dashboard collection artifact",
           content: "Bounded artifact content for dashboard collection route tests.",
+          metadata: {},
           createdAt
         }
       ],
@@ -149,6 +150,8 @@ describe("dashboard collection routes", () => {
       riskClass: "R3",
       confidence: 0.42,
       provenanceSummary: "Manual test commitment for bounded dashboard route coverage.",
+      actorContext: null,
+      suggestedNextAction: null,
       evidence: [
         {
           section: "approvals",
@@ -280,6 +283,7 @@ describe("dashboard collection routes", () => {
           artifactType: "summary",
           title: "PRIVATE_SECONDARY_WORKSPACE_TOKEN artifact",
           content: "This artifact belongs to a different workspace owner.",
+          metadata: {},
           createdAt: nowIso()
         }
       ]
@@ -337,6 +341,7 @@ describe("dashboard collection routes", () => {
           artifactType: "summary",
           title: `${token} retained artifact`,
           content: "This old artifact must remain discoverable by the bounded collection route.",
+          metadata: {},
           createdAt
         }
       ]
@@ -455,6 +460,7 @@ describe("dashboard collection routes", () => {
           artifactType: "summary",
           title: "Bounded contract artifact",
           content: "Bounded collection contract evidence.",
+          metadata: {},
           createdAt
         }
       ],

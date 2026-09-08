@@ -10,7 +10,7 @@ describe("request client identity", () => {
   const originalTrustedClientIpHeader = process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER;
 
   afterEach(() => {
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = originalTrustedClientIpHeader;
   });
@@ -127,7 +127,7 @@ describe("request client identity", () => {
   });
 
   it("reports the production readiness contract for trusted client IP headers", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.AGENTIC_TRUST_PROXY_HEADERS = "true";
 
     expect(getRequestIdentityRuntimeStatus()).toEqual({

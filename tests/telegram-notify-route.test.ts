@@ -147,7 +147,8 @@ describe("telegram notify route", () => {
       messageId: 42
     });
     expect(sendTelegramApprovalMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendTelegramApprovalMessageMock.mock.calls[0]?.[0]).toMatchObject({
+    const firstCallArgs = sendTelegramApprovalMessageMock.mock.calls[0] as unknown as [{ chatId: string; approval: { title: string; rationale: string; riskClass: string; requestedAction: string; approveActionId: string; rejectActionId: string } }];
+    expect(firstCallArgs[0]).toMatchObject({
       chatId: "-100123456",
       approval: {
         title: "Draft reply",
@@ -156,8 +157,8 @@ describe("telegram notify route", () => {
         requestedAction: "Draft reply"
       }
     });
-    expect(sendTelegramApprovalMessageMock.mock.calls[0]?.[0].approval.approveActionId.length).toBeLessThanOrEqual(64);
-    expect(sendTelegramApprovalMessageMock.mock.calls[0]?.[0].approval.rejectActionId.length).toBeLessThanOrEqual(64);
+    expect(firstCallArgs[0].approval.approveActionId.length).toBeLessThanOrEqual(64);
+    expect(firstCallArgs[0].approval.rejectActionId.length).toBeLessThanOrEqual(64);
   });
 
   it("returns 400 when no chat target is available", async () => {

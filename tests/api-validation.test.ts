@@ -82,7 +82,7 @@ describe("api request validation", () => {
 
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
     delete process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
     process.env.AGENTIC_RUNTIME_STORE_PATH = path.join(
       await mkdtemp(path.join(os.tmpdir(), "agentic-api-validation-")),
@@ -93,7 +93,7 @@ describe("api request validation", () => {
 
   afterEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
     process.env.AGENTIC_TRUST_PROXY_HEADERS = originalTrustProxyHeaders;
     process.env.AGENTIC_TRUSTED_CLIENT_IP_HEADER = originalTrustedClientIpHeader;
@@ -594,7 +594,7 @@ describe("api request validation", () => {
   });
 
   it("rejects session creation in production when only process-local auth stores are configured", async () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     delete process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
     const response = await sessionRoute(

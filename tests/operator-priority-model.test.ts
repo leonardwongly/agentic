@@ -67,7 +67,7 @@ function dashboardFixture(overrides: Partial<DashboardData> = {}): DashboardData
         highlights: []
       }
     }
-  } as DashboardData;
+  } as unknown as DashboardData;
 
   return {
     ...base,

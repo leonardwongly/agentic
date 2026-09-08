@@ -5,6 +5,7 @@ import { resolveStagingExecutionPlan } from "../scripts/lib/staging-execution-pl
 describe("staging execution plan", () => {
   it("keeps the external deployment flow when all required configuration is present", () => {
     const plan = resolveStagingExecutionPlan({
+      NODE_ENV: "test",
       DATABASE_URL: "postgres://staging",
       AGENTIC_ACCESS_KEY: "staging-key",
       AGENTIC_INGRESS_PROVIDER: "render",
@@ -28,6 +29,7 @@ describe("staging execution plan", () => {
 
   it("falls back to runner-local self-test mode when external staging config is incomplete", () => {
     const plan = resolveStagingExecutionPlan({
+      NODE_ENV: "test",
       AGENTIC_STAGING_DEPLOY_TIMEOUT_MS: "45000"
     });
 
@@ -72,9 +74,9 @@ describe("staging execution plan", () => {
     const runbook = readFileSync("docs/runbooks/deployment.md", "utf8");
 
     expect(packageJson.scripts?.["deploy:staging:plan"]).toBe("tsx scripts/staging-execution-plan.ts");
-    expect(workflow).toContain("run: npm run deploy:staging:plan");
+    expect(workflow).toContain("run: pnpm run deploy:staging:plan");
     expect(workflow).not.toContain("run: npx tsx scripts/staging-execution-plan.ts");
-    expect(runbook).toContain("npm run deploy:staging:plan");
+    expect(runbook).toContain("pnpm run deploy:staging:plan");
     expect(runbook).toContain("Do not treat `self-test` mode as external deployment evidence.");
   });
 });

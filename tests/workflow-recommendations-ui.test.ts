@@ -23,6 +23,21 @@ function buildBundle(overrides?: Partial<GoalBundle>): GoalBundle {
       status: "running",
       confidence: 0.81,
       explanation: "A governed specialist prepared the reply.",
+      wedge: { key: "general_coordination", label: "Coordination", selection: "selected_production", rationale: "Test wedge" },
+      completionContract: { id: "cc-1", summary: "Test contract", successCriteria: ["reply sent"], evidenceSignals: ["artifact created"], approvalExpectations: [], doneWhen: "Reply is sent." },
+      responsibility: {
+        owner: { kind: "user", userId: "user-1", workspaceRole: null, systemActor: null, label: "Goal owner" },
+        delegate: null,
+        reviewer: null,
+        escalationOwner: null,
+        handoffStatus: "owner_control",
+        handoffSummary: null,
+        delegationReason: null,
+        escalationReason: null,
+        audit: { requiredEvents: ["delegation_change"] as const, requireActorContext: true, requireReasonForDelegation: true, requireReasonForEscalation: true, requireReviewerIdentity: true },
+        lastChangedAt: null,
+        lastChangedBy: null
+      },
       createdAt: "2026-04-20T00:00:00.000Z",
       updatedAt: "2026-04-20T00:00:00.000Z"
     },
@@ -50,6 +65,19 @@ function buildBundle(overrides?: Partial<GoalBundle>): GoalBundle {
         dependsOn: [],
         toolCapabilities: ["read"],
         artifactIds: [],
+        responsibility: {
+          owner: { kind: "user", userId: "user-1", workspaceRole: null, systemActor: null, label: "Goal owner" },
+          delegate: null,
+          reviewer: null,
+          escalationOwner: null,
+          handoffStatus: "owner_control",
+          handoffSummary: null,
+          delegationReason: null,
+          escalationReason: null,
+          audit: { requiredEvents: ["delegation_change"] as const, requireActorContext: true, requireReasonForDelegation: true, requireReasonForEscalation: true, requireReviewerIdentity: true },
+          lastChangedAt: null,
+          lastChangedBy: null
+        },
         createdAt: "2026-04-20T00:00:00.000Z",
         updatedAt: "2026-04-20T00:00:00.000Z"
       },
@@ -66,6 +94,19 @@ function buildBundle(overrides?: Partial<GoalBundle>): GoalBundle {
         dependsOn: [],
         toolCapabilities: ["draft", "send", "send"],
         artifactIds: [],
+        responsibility: {
+          owner: { kind: "user", userId: "user-1", workspaceRole: null, systemActor: null, label: "Goal owner" },
+          delegate: null,
+          reviewer: null,
+          escalationOwner: null,
+          handoffStatus: "owner_control",
+          handoffSummary: null,
+          delegationReason: null,
+          escalationReason: null,
+          audit: { requiredEvents: ["delegation_change"] as const, requireActorContext: true, requireReasonForDelegation: true, requireReasonForEscalation: true, requireReviewerIdentity: true },
+          lastChangedAt: null,
+          lastChangedBy: null
+        },
         createdAt: "2026-04-20T00:00:00.000Z",
         updatedAt: "2026-04-20T00:00:00.000Z"
       }
@@ -108,6 +149,15 @@ function buildRecommendation(): WorkflowRecommendation {
       negativeRate: 0.14,
       score: 0.81,
       lastSeenAt: "2026-04-20T00:00:00.000Z"
+    },
+    provenance: {
+      episodeIds: [],
+      goalIds: ["goal-1"],
+      taskIds: ["task-2"],
+      memoryIds: [],
+      actionLogIds: [],
+      evidenceRecordIds: [],
+      graphRootIds: []
     }
   };
 }

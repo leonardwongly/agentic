@@ -368,7 +368,7 @@ describe("execution", () => {
             lastError: params.error,
             journal: appendJobExecutionJournalEntry({
               journal: baseJob.journal,
-              at: params.deadLetteredAt,
+              at: params.deadLetteredAt ?? nowIso(),
               status: "dead_letter",
               attemptCount: 2,
               summary: "Job dead-lettered after 2/2 attempts.",
@@ -576,7 +576,7 @@ describe("execution", () => {
       handlers: {
         goal_create: async (_claimedJob, context) =>
           new Promise<void>((resolve) => {
-            context.signal.addEventListener(
+            context!.signal.addEventListener(
               "abort",
               () => {
                 abortObserved.push("aborted");

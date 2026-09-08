@@ -75,7 +75,7 @@ export interface ComplianceControlEvidence {
   codePaths: ComplianceReferenceStatus[];
   runbooks: ComplianceReferenceStatus[];
   automatedChecks: Array<
-    ComplianceAutomatedCheck & {
+    Omit<ComplianceAutomatedCheck, "sourcePaths"> & {
       sourcePaths: ComplianceReferenceStatus[];
     }
   >;
@@ -418,7 +418,7 @@ export function buildComplianceEvidenceBundle(
   let readyControls = 0;
   let failingControls = 0;
 
-  const controls = registry.controls.map<ComplianceControlEvidence>((control) => {
+  const controls = registry.controls.map((control) => {
     const codePaths = control.codePaths.map((entry) => inspectReference(cwd, entry));
     const runbooks = control.runbooks.map((entry) => inspectReference(cwd, entry));
     const traceabilityRoutePaths = control.traceability.routePaths.map((entry) => inspectReference(cwd, entry));
@@ -513,7 +513,7 @@ export function buildComplianceEvidenceBundle(
       missingReferences,
       missingRequiredArtifacts
     },
-    controls
+    controls: controls as ComplianceControlEvidence[]
   };
 }
 

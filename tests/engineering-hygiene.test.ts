@@ -22,7 +22,7 @@ function createEvidenceRoot() {
   const root = mkdtempSync(path.join(os.tmpdir(), "agentic-hygiene-"));
   for (const relativePath of [
     ".github/workflows/ci.yml",
-    "package-lock.json",
+    "pnpm-lock.yaml",
     "package.json",
     "README.md",
     "config/engineering-hygiene/w10-evidence-map.json",
@@ -225,7 +225,7 @@ describe("engineering hygiene gates", () => {
     const report = evaluateFirstRunReadiness({
       cwd: root,
       nodeVersion: "v18.19.0",
-      env: {}
+      env: { NODE_ENV: "test" }
     });
 
     expect(report.ok).toBe(false);
@@ -246,6 +246,7 @@ describe("engineering hygiene gates", () => {
       cwd: root,
       nodeVersion: "v20.19.0",
       env: {
+        NODE_ENV: "test",
         AGENTIC_ACCESS_KEY: "local-test-key",
         DATABASE_URL: "postgres://localhost/agentic"
       }
@@ -270,6 +271,7 @@ describe("engineering hygiene gates", () => {
       cwd: root,
       nodeVersion: "v22.11.0",
       env: {
+        NODE_ENV: "test",
         AGENTIC_ACCESS_KEY: "local-test-key",
         DATABASE_URL: "postgres://localhost/agentic"
       }

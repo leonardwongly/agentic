@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_OWNER_USER_ID, type ApprovalRequest, type AgentDefinition, type Task } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, type ApprovalRequest, type AgentDefinition, type Task, type EvidenceRecord } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { deriveCalibrationInsights } from "../packages/repository/src/calibration-insights";
@@ -62,7 +62,7 @@ describe("deriveCalibrationInsights", () => {
     expect(templateApproval).toBeDefined();
 
     const failedTask = buildTask(templateTask!, {
-      assignedAgent: agent.name,
+      assignedAgent: agent.name as Task["assignedAgent"],
       state: "failed",
       createdAt,
       updatedAt
@@ -107,6 +107,7 @@ describe("deriveCalibrationInsights", () => {
           actionLogIds: [],
           artifactIds: [],
           memoryIds: [],
+          actorContext: null,
           createdAt,
           updatedAt
         },
@@ -132,6 +133,7 @@ describe("deriveCalibrationInsights", () => {
           actionLogIds: [],
           artifactIds: [],
           memoryIds: [],
+          actorContext: null,
           createdAt,
           updatedAt
         }
@@ -181,7 +183,7 @@ describe("deriveCalibrationInsights", () => {
     expect(templateApproval).toBeDefined();
 
     const completedTask = buildTask(templateTask!, {
-      assignedAgent: agent.name,
+      assignedAgent: agent.name as Task["assignedAgent"],
       state: "completed",
       createdAt: currentAt,
       updatedAt: currentAt
@@ -208,7 +210,8 @@ describe("deriveCalibrationInsights", () => {
       resultingGoalStatus: bundle.goal.status,
       actionLogIds: [],
       artifactIds: [],
-      memoryIds: []
+      memoryIds: [],
+      actorContext: null
     };
 
     const calibration = deriveCalibrationInsights({
@@ -232,7 +235,7 @@ describe("deriveCalibrationInsights", () => {
           respondedAt: staleAt,
           createdAt: staleAt,
           updatedAt: staleAt
-        },
+        } as EvidenceRecord,
         {
           ...baseEvidence,
           id: "current-approval",
@@ -242,7 +245,7 @@ describe("deriveCalibrationInsights", () => {
           respondedAt: currentAt,
           createdAt: currentAt,
           updatedAt: currentAt
-        }
+        } as EvidenceRecord
       ],
       options: {
         period: "day",
@@ -267,7 +270,7 @@ describe("deriveCalibrationInsights", () => {
     expect(templateTask).toBeDefined();
 
     const recentlyFailedTask = buildTask(templateTask!, {
-      assignedAgent: agent.name,
+      assignedAgent: agent.name as Task["assignedAgent"],
       state: "failed",
       createdAt: staleAt,
       updatedAt: currentAt
@@ -336,7 +339,7 @@ describe("deriveCalibrationInsights", () => {
     expect(templateTask).toBeDefined();
 
     const completedTask = buildTask(templateTask!, {
-      assignedAgent: agent.name,
+      assignedAgent: agent.name as Task["assignedAgent"],
       state: "completed",
       createdAt,
       updatedAt: createdAt
@@ -379,7 +382,7 @@ describe("deriveCalibrationInsights", () => {
     expect(templateTask).toBeDefined();
 
     const completedTask = buildTask(templateTask!, {
-      assignedAgent: agent.name,
+      assignedAgent: agent.name as Task["assignedAgent"],
       state: "completed",
       createdAt,
       updatedAt: createdAt
@@ -420,7 +423,7 @@ describe("deriveCalibrationInsights", () => {
     expect(templateApproval).toBeDefined();
 
     const runningTask = buildTask(templateTask!, {
-      assignedAgent: agent.name,
+      assignedAgent: agent.name as Task["assignedAgent"],
       state: "running",
       createdAt,
       updatedAt: createdAt
@@ -460,7 +463,7 @@ describe("deriveCalibrationInsights", () => {
     expect(templateTask).toBeDefined();
 
     const completedTask = buildTask(templateTask!, {
-      assignedAgent: agent.name,
+      assignedAgent: agent.name as Task["assignedAgent"],
       state: "completed",
       requiresApproval: false,
       createdAt,

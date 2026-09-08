@@ -79,11 +79,12 @@ describe("DashboardFirstRunChecklist", () => {
               id: "goal-1",
               userId: "user-1",
               workspaceId: "workspace-1",
+              workflowId: "workflow-1",
               title: "Prepare daily operating plan",
+              request: "Prepare daily operating plan.",
+              intent: "briefing:daily_plan",
               status: "completed",
-              successCriteria: "Plan is ready.",
-              summary: "Daily plan.",
-              sourceRequest: "Prepare daily operating plan.",
+              confidence: 0.95,
               explanation: "Completed by test fixture.",
               createdAt: "2026-05-15T00:00:00.000Z",
               updatedAt: "2026-05-15T00:00:00.000Z"
@@ -101,7 +102,7 @@ describe("DashboardFirstRunChecklist", () => {
             watchers: [],
             actionLogs: []
           }
-        ] as DashboardData["goals"]
+        ] as unknown as DashboardData["goals"]
       }),
       notes: [],
       templates: [],

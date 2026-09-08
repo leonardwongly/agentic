@@ -42,11 +42,11 @@ const GOLDEN = [
 let savedNodeEnv: string | undefined;
 beforeEach(() => {
   savedNodeEnv = process.env.NODE_ENV;
-  process.env.NODE_ENV = "production";
+  (process.env as any).NODE_ENV = "production";
 });
 afterEach(() => {
-  if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
-  else process.env.NODE_ENV = savedNodeEnv;
+  if (savedNodeEnv === undefined) Reflect.deleteProperty(process.env, "NODE_ENV");
+  else (process.env as any).NODE_ENV = savedNodeEnv;
 });
 
 describe("runAgentWithModel eval gate", () => {

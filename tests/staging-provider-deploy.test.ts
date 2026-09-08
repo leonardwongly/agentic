@@ -4,6 +4,7 @@ import { parseDeployTimeoutMs, parseProviderDeployConfig } from "../scripts/lib/
 describe("staging provider deploy config", () => {
   it("parses a provider command with structured arguments", () => {
     const config = parseProviderDeployConfig({
+      NODE_ENV: "test",
       AGENTIC_STAGING_DEPLOY_BIN: "node",
       AGENTIC_STAGING_DEPLOY_ARGS_JSON: JSON.stringify(["scripts/deploy.mjs", "--env", "staging"])
     }, { requireConfig: true });
@@ -15,11 +16,11 @@ describe("staging provider deploy config", () => {
   });
 
   it("returns null when provider deploy configuration is omitted and not required", () => {
-    expect(parseProviderDeployConfig({}, { requireConfig: false })).toBeNull();
+    expect(parseProviderDeployConfig({ NODE_ENV: "test" }, { requireConfig: false })).toBeNull();
   });
 
   it("rejects a missing provider command when configuration is required", () => {
-    expect(() => parseProviderDeployConfig({}, { requireConfig: true })).toThrow(
+    expect(() => parseProviderDeployConfig({ NODE_ENV: "test" }, { requireConfig: true })).toThrow(
       "AGENTIC_STAGING_DEPLOY_BIN must be configured."
     );
   });
@@ -27,6 +28,7 @@ describe("staging provider deploy config", () => {
   it("rejects malformed JSON for provider arguments", () => {
     expect(() =>
       parseProviderDeployConfig({
+        NODE_ENV: "test",
         AGENTIC_STAGING_DEPLOY_BIN: "node",
         AGENTIC_STAGING_DEPLOY_ARGS_JSON: "[not-json"
       }, { requireConfig: true })
@@ -36,6 +38,7 @@ describe("staging provider deploy config", () => {
   it("rejects non-string provider arguments", () => {
     expect(() =>
       parseProviderDeployConfig({
+        NODE_ENV: "test",
         AGENTIC_STAGING_DEPLOY_BIN: "node",
         AGENTIC_STAGING_DEPLOY_ARGS_JSON: JSON.stringify(["deploy.mjs", 42])
       }, { requireConfig: true })
@@ -44,12 +47,14 @@ describe("staging provider deploy config", () => {
 
   it("parses an explicit deploy timeout", () => {
     expect(parseDeployTimeoutMs({
+      NODE_ENV: "test",
       AGENTIC_STAGING_DEPLOY_TIMEOUT_MS: "45000"
     })).toBe(45000);
   });
 
   it("rejects an invalid deploy timeout", () => {
     expect(() => parseDeployTimeoutMs({
+      NODE_ENV: "test",
       AGENTIC_STAGING_DEPLOY_TIMEOUT_MS: "0"
     })).toThrow("AGENTIC_STAGING_DEPLOY_TIMEOUT_MS must be a positive integer when configured.");
   });

@@ -129,7 +129,7 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         taskId: "task-1",
         decision: "approved",
         workspaceId: null,
-        metadata: {}
+        metadata: { replayedFromJobId: null, actionId: null }
       }
     });
     const replayedJob = buildJob({
@@ -147,7 +147,8 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         decision: "approved",
         workspaceId: null,
         metadata: {
-          replayedFromJobId: "job-dead-letter"
+          replayedFromJobId: "job-dead-letter",
+          actionId: null
         }
       }
     });
@@ -159,6 +160,8 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         userId: "system",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: { budgetWindowMinutes: 60, maxEventsPerWindow: 12, maxPendingEvents: 3, maxConsecutiveFailures: 2 },
+        actorContext: null,
         createdAt: "2026-04-01T00:00:00.000Z",
         updatedAt: "2026-04-01T00:00:00.000Z"
       },
@@ -227,7 +230,7 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         taskId: "task-1",
         decision: "approved",
         workspaceId: null,
-        metadata: {}
+        metadata: { replayedFromJobId: null, actionId: null }
       }
     });
     const unresolvedReplay = buildJob({
@@ -243,7 +246,8 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         decision: "approved",
         workspaceId: null,
         metadata: {
-          replayedFromJobId: "job-dead-letter"
+          replayedFromJobId: "job-dead-letter",
+          actionId: null
         }
       }
     });
@@ -255,6 +259,8 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         userId: "system",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: { budgetWindowMinutes: 60, maxEventsPerWindow: 12, maxPendingEvents: 3, maxConsecutiveFailures: 2 },
+        actorContext: null,
         createdAt: "2026-04-01T00:00:00.000Z",
         updatedAt: "2026-04-01T00:00:00.000Z"
       },
@@ -325,6 +331,8 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         userId: "system",
         mode: "auto_run",
         debounceMinutes: 15,
+        reliabilityControls: { budgetWindowMinutes: 60, maxEventsPerWindow: 12, maxPendingEvents: 3, maxConsecutiveFailures: 2 },
+        actorContext: null,
         createdAt: "2026-04-01T00:00:00.000Z",
         updatedAt: "2026-04-01T00:00:00.000Z"
       },
@@ -363,6 +371,8 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         userId: "system",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: { budgetWindowMinutes: 60, maxEventsPerWindow: 12, maxPendingEvents: 3, maxConsecutiveFailures: 2 },
+        actorContext: null,
         createdAt: "2026-04-01T00:00:00.000Z",
         updatedAt: "2026-04-01T00:00:00.000Z"
       },
@@ -411,6 +421,8 @@ describe("buildDashboardOperationsTower shell effectiveness", () => {
         userId: "system",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: { budgetWindowMinutes: 60, maxEventsPerWindow: 12, maxPendingEvents: 3, maxConsecutiveFailures: 2 },
+        actorContext: null,
         createdAt: "2026-04-01T00:00:00.000Z",
         updatedAt: "2026-04-01T00:00:00.000Z"
       },

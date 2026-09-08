@@ -7,12 +7,12 @@ describe("logout route", () => {
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
   });
 
   it("revokes the active session, clears the cookie, and redirects home", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const token = buildSessionToken();
     await expect(parseAuthorizedSessionToken(token)).resolves.not.toBeNull();
@@ -35,7 +35,7 @@ describe("logout route", () => {
 
   it("redirects home even when no session cookie is present", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const response = await logoutRoute(new Request("http://localhost/logout"));
 
@@ -47,7 +47,7 @@ describe("logout route", () => {
 
   it("handles double-logout gracefully (revoking an already-revoked token)", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const token = buildSessionToken();
     await expect(parseAuthorizedSessionToken(token)).resolves.not.toBeNull();
@@ -74,7 +74,7 @@ describe("logout route", () => {
 
   it("handles logout with a tampered/invalid session token without error", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const response = await logoutRoute(
       new Request("http://localhost/logout", {
@@ -90,7 +90,7 @@ describe("logout route", () => {
 
   it("handles logout with empty cookie value gracefully", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const response = await logoutRoute(
       new Request("http://localhost/logout", {
@@ -104,7 +104,7 @@ describe("logout route", () => {
 
   it("applies security headers to the logout redirect response", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const response = await logoutRoute(new Request("http://localhost/logout"));
 

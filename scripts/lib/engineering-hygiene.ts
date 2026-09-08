@@ -489,7 +489,7 @@ export function evaluateFirstRunReadiness(options: {
     });
   }
 
-  for (const requiredPath of ["package-lock.json", "package.json", "docs/specs/api-route-inventory.md"]) {
+  for (const requiredPath of ["pnpm-lock.yaml", "package.json", "docs/specs/api-route-inventory.md"]) {
     checks.push(
       existsSync(path.join(options.cwd, requiredPath))
         ? {

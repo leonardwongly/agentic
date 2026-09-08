@@ -74,6 +74,9 @@ describe("policy", () => {
       approvalMode: "risk_based",
       requireAuditExports: false,
       maxAutoRunRiskClass: "R3",
+      publicSharingEnabled: false,
+      providerAccessRequiresApproval: false,
+      escalationRequiresApproval: false,
       externalSendRequiresApproval: false,
       calendarWriteRequiresApproval: false,
       shadowReplayPolicy: {
@@ -654,6 +657,8 @@ describe("policy", () => {
         requireAuditExports: true,
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
+        providerAccessRequiresApproval: true,
+        escalationRequiresApproval: true,
         maxAutoRunRiskClass: "R2"
       })
     );
@@ -662,6 +667,7 @@ describe("policy", () => {
         requireAuditExports: true,
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: false,
+        providerAccessRequiresApproval: true,
         maxAutoRunRiskClass: "R3"
       })
     );
@@ -853,6 +859,8 @@ describe("policy", () => {
         requireAuditExports: true,
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
+        providerAccessRequiresApproval: true,
+        escalationRequiresApproval: true,
         maxAutoRunRiskClass: "R2"
       })
     });
@@ -890,6 +898,7 @@ describe("policy", () => {
         requireAuditExports: true,
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
+        providerAccessRequiresApproval: true,
         maxAutoRunRiskClass: "R2"
       })
     });
@@ -968,9 +977,9 @@ describe("policy", () => {
         id: `expected-block-${index}`,
         title: `Blocked write ${index}`,
         description: "A high-risk path should remain blocked.",
-        capabilities: ["delete"],
+        capabilities: ["delete"] as string[],
         confidence: 0.95,
-        expectedDecision: "block",
+        expectedDecision: "block" as const,
         result: {
           decision: {
             outcome: "blocked",
@@ -986,7 +995,7 @@ describe("policy", () => {
           conformance: null,
           learningValidation: null
         }
-      }))
+      } as GovernanceSimulationScenarioResult))
     ];
     const report = evaluateGovernanceSimulationCalibration({
       simulations,
@@ -1056,6 +1065,8 @@ describe("policy", () => {
         requireAuditExports: true,
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
+        providerAccessRequiresApproval: true,
+        escalationRequiresApproval: true,
         maxAutoRunRiskClass: "R2"
       })
     });

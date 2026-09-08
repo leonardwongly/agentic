@@ -8,6 +8,8 @@ import {
   readJson
 } from "../apps/web/components/dashboard-async";
 
+type JobEventSource = Pick<EventSource, "addEventListener" | "close">;
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -187,7 +189,7 @@ describe("dashboard async helpers", () => {
       error: string | null;
     }>("/api/goals/jobs/job-cancelled-stream", {
       fetchImpl,
-      eventSourceFactory: (url) => new FakeEventSource(url),
+      eventSourceFactory: (url) => new FakeEventSource(url) as unknown as JobEventSource,
       timeoutMs: 1_000
     });
 
@@ -226,7 +228,7 @@ describe("dashboard async helpers", () => {
       error: null;
     }>("/api/templates/jobs/job-123", {
       fetchImpl,
-      eventSourceFactory: (url) => new FakeEventSource(url),
+      eventSourceFactory: (url) => new FakeEventSource(url) as unknown as JobEventSource,
       timeoutMs: 1_000
     });
 
@@ -267,7 +269,7 @@ describe("dashboard async helpers", () => {
       error: null;
     }>("/api/docs/jobs/job-456", {
       fetchImpl,
-      eventSourceFactory: (url) => new FakeEventSource(url),
+      eventSourceFactory: (url) => new FakeEventSource(url) as unknown as JobEventSource,
       pollIntervalMs: 0,
       timeoutMs: 1_000
     });
@@ -285,7 +287,7 @@ describe("dashboard async helpers", () => {
     const states: string[] = [];
     const batches: unknown[] = [];
     const close = connectDashboardEventStream({
-      eventSourceFactory: (url) => new FakeEventSource(url),
+      eventSourceFactory: (url) => new FakeEventSource(url) as unknown as JobEventSource,
       now: () => 1_000,
       onBatch: (batch) => batches.push(batch),
       onFreshnessChange: (state) => states.push(state.freshness)

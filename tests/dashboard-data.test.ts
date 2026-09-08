@@ -36,6 +36,7 @@ describe("assembleDashboardData instrumentation", () => {
         timezone: "UTC",
         focus: "balanced",
         schedules: [],
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -44,6 +45,7 @@ describe("assembleDashboardData instrumentation", () => {
         mode: "notify_only",
         debounceMinutes: 15,
         reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -163,6 +165,7 @@ describe("assembleDashboardData instrumentation", () => {
         timezone: "UTC",
         focus: "balanced",
         schedules: [],
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -171,6 +174,7 @@ describe("assembleDashboardData instrumentation", () => {
         mode: "notify_only",
         debounceMinutes: 15,
         reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -292,6 +296,7 @@ describe("assembleDashboardData instrumentation", () => {
         timezone: "UTC",
         focus: "balanced",
         schedules: [],
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -300,6 +305,7 @@ describe("assembleDashboardData instrumentation", () => {
         mode: "notify_only",
         debounceMinutes: 15,
         reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -515,26 +521,34 @@ describe("assembleDashboardData instrumentation", () => {
             id: "goal-1",
             userId: "user-1",
             workspaceId: null,
+            workflowId: "workflow-1",
             title: "Review outbound reply",
+            request: "Review my inbox",
+            intent: "Resolve one approval",
             status: "completed",
-            successCriteria: "Decision recorded",
-            summary: "Resolve one approval",
-            sourceRequest: "Review my inbox",
+            confidence: 1,
             explanation: "Approval workflow for an outbound reply.",
+            wedge: { key: "general_coordination", label: "Review", selection: "selected_production", rationale: "Approval workflow for an outbound reply." },
+            completionContract: { id: "contract-1", summary: "Resolve one approval", successCriteria: ["Decision recorded"], evidenceSignals: ["Approval decision logged"], approvalExpectations: [], doneWhen: "Decision is recorded" },
+            responsibility: { owner: { kind: "user", userId: "user-1", workspaceRole: "owner", systemActor: null, label: "User" }, delegate: null, reviewer: null, escalationOwner: null, handoffStatus: "owner_control", audit: { requiredEvents: [], requireActorContext: false, requireReasonForDelegation: false, requireReasonForEscalation: false, requireReviewerIdentity: false }, lastChangedAt: null, handoffSummary: null, delegationReason: null, escalationReason: null, lastChangedBy: null },
             createdAt: "2024-01-01T00:00:00.000Z",
             updatedAt: "2024-01-01T00:00:00.000Z"
           },
           workflow: {
             id: "workflow-1",
             goalId: "goal-1",
+            workspaceId: null,
             status: "completed",
+            currentStep: "done",
             checkpoint: "done",
+            createdAt: "2024-01-01T00:00:00.000Z",
             updatedAt: "2024-01-01T00:00:00.000Z"
           },
           tasks: [
             {
               id: "task-1",
               goalId: "goal-1",
+              workflowId: "workflow-1",
               title: "Send a reply",
               summary: "Send the approved response.",
               assignedAgent: "communications",
@@ -544,6 +558,7 @@ describe("assembleDashboardData instrumentation", () => {
               dependsOn: [],
               toolCapabilities: ["draft", "send"],
               artifactIds: [],
+              responsibility: { owner: { kind: "user", userId: "user-1", workspaceRole: "owner", systemActor: null, label: "User" }, delegate: null, reviewer: null, escalationOwner: null, handoffStatus: "owner_control", audit: { requiredEvents: [], requireActorContext: false, requireReasonForDelegation: false, requireReasonForEscalation: false, requireReviewerIdentity: false }, lastChangedAt: null, handoffSummary: null, delegationReason: null, escalationReason: null, lastChangedBy: null },
               createdAt: "2024-01-01T00:00:00.000Z",
               updatedAt: "2024-01-01T00:00:00.000Z"
             }
@@ -567,12 +582,16 @@ describe("assembleDashboardData instrumentation", () => {
           decision: "approved",
           requestedAction: "Send the draft to the customer.",
           actionIntent: {
+            schemaVersion: "v1",
             type: "send_message",
             adapter: "gmail",
+            riskClass: "R2",
             mode: "send",
             to: "customer@example.com",
             subject: "Follow-up",
-            body: "Thanks for the update."
+            body: "Thanks for the update.",
+            threadId: null,
+            metadata: {}
           },
           preview: {
             actionType: "send",
@@ -592,7 +611,8 @@ describe("assembleDashboardData instrumentation", () => {
           explanation: null,
           createdAt: "2024-01-01T00:00:00.000Z",
           expiryAt: "2024-01-02T00:00:00.000Z",
-          respondedAt: "2024-01-01T00:05:00.000Z"
+          respondedAt: "2024-01-01T00:05:00.000Z",
+          responsibility: { owner: { kind: "user", userId: "user-1", workspaceRole: "owner", systemActor: null, label: "User" }, delegate: null, reviewer: null, escalationOwner: null, handoffStatus: "owner_control", audit: { requiredEvents: [], requireActorContext: false, requireReasonForDelegation: false, requireReasonForEscalation: false, requireReviewerIdentity: false }, lastChangedAt: null, handoffSummary: null, delegationReason: null, escalationReason: null, lastChangedBy: null }
         }
       ],
       evidenceRecords: [
@@ -618,6 +638,7 @@ describe("assembleDashboardData instrumentation", () => {
           actionLogIds: ["log-1", "log-2"],
           artifactIds: ["artifact-1"],
           memoryIds: ["memory-1"],
+          actorContext: null,
           createdAt: "2024-01-01T00:05:00.000Z",
           updatedAt: "2024-01-01T00:06:00.000Z"
         }
@@ -628,6 +649,7 @@ describe("assembleDashboardData instrumentation", () => {
         timezone: "UTC",
         focus: "balanced",
         schedules: [],
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -636,6 +658,7 @@ describe("assembleDashboardData instrumentation", () => {
         mode: "notify_only",
         debounceMinutes: 15,
         reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -672,6 +695,9 @@ describe("assembleDashboardData instrumentation", () => {
       }),
       buildOperatingSections: ({ approvals, evidenceRecords }) => ({
         generatedAt: "2024-01-01T00:00:00.000Z",
+        roleView: { role: null, label: "Default", summary: "Default view", focusAreas: [], prioritizedSectionKeys: [] },
+        teamWorkflow: { mode: "setup", label: "Default", summary: "Default workflow", visibilityLabel: "Internal", queueMetrics: [], ownershipAssignments: [], queues: [], controls: [], auditCoverage: { required: false, status: "healthy", summary: "No audit required", latestStatus: null, latestCompletedAt: null }, actionBoundaries: [], handoffGuidance: [], permissions: { manageMembers: { level: "full", reason: null }, editGovernance: { level: "full", reason: null } } },
+        nextBestAction: { kind: "configure_workspace", label: "No action", summary: "No pending actions", status: "healthy", targetSection: "trust", role: "editor" },
         sections: [
           {
             key: "trust",
@@ -683,7 +709,7 @@ describe("assembleDashboardData instrumentation", () => {
             highlights: []
           }
         ]
-      }),
+      }) as any,
       buildBriefingHistory: () => [],
       sortArtifacts: (artifacts) => artifacts,
       sortActionLogs: (logs) => logs
@@ -715,8 +741,12 @@ describe("assembleDashboardData instrumentation", () => {
         approvalMode: "risk_based",
         requireAuditExports: false,
         maxAutoRunRiskClass: "R1",
+        publicSharingEnabled: false,
+        providerAccessRequiresApproval: false,
         externalSendRequiresApproval: true,
         calendarWriteRequiresApproval: true,
+        escalationRequiresApproval: false,
+        shadowReplayPolicy: { enabled: false, promotionMode: "disabled", rollbackOutcome: "downgrade_to_draft", minimumMatchedEpisodes: 1, minimumPrecision: 0.8, maximumNegativeOutcomeRate: 0.1, maximumFailureCostRate: 0.05 },
         retentionDays: 365,
         updatedBy: "user-1",
         createdAt: "2024-01-01T00:00:00.000Z",
@@ -733,6 +763,7 @@ describe("assembleDashboardData instrumentation", () => {
         timezone: "UTC",
         focus: "balanced",
         schedules: [],
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -740,6 +771,8 @@ describe("assembleDashboardData instrumentation", () => {
         userId: "user-1",
         mode: "notify_only",
         debounceMinutes: 15,
+        reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+        actorContext: null,
         createdAt: "2024-01-01T00:00:00.000Z",
         updatedAt: "2024-01-01T00:00:00.000Z"
       },
@@ -766,8 +799,11 @@ describe("assembleDashboardData instrumentation", () => {
       }),
       buildOperatingSections: () => ({
         generatedAt: "2024-01-01T00:00:00.000Z",
+        roleView: { role: null, label: "Default", summary: "Default view", focusAreas: [], prioritizedSectionKeys: [] },
+        teamWorkflow: { mode: "setup", label: "Default", summary: "Default workflow", visibilityLabel: "Internal", queueMetrics: [], ownershipAssignments: [], queues: [], controls: [], auditCoverage: { required: false, status: "healthy", summary: "No audit required", latestStatus: null, latestCompletedAt: null }, actionBoundaries: [], handoffGuidance: [], permissions: { manageMembers: { level: "full", reason: null }, editGovernance: { level: "full", reason: null } } },
+        nextBestAction: { kind: "configure_workspace", label: "No action", summary: "No pending actions", status: "healthy", targetSection: "trust", role: "editor" },
         sections: []
-      }),
+      }) as any,
       buildBriefingHistory: () => [],
       sortArtifacts: (artifacts) => artifacts,
       sortActionLogs: (logs) => logs

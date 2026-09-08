@@ -214,7 +214,7 @@ async function runBuiltin(step: LocalCiBuiltinStep) {
         "apps/web/package.json",
         "apps/worker/package.json",
         "package.json",
-        "package-lock.json",
+        "pnpm-lock.yaml",
         "packages",
         "scripts"
       ]

@@ -42,7 +42,7 @@ describe("describeIntegrationReadiness", () => {
     process.env.AGENTIC_LOCAL_NOTES_ENABLED = originalLocalNotesEnabled;
     process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = originalLocalNotesAllowedRoot;
     process.env.AGENTIC_NOTES_PATH = originalNotesPath;
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
   });
 
   it("compares readiness tiers monotonically for execution gates", () => {
@@ -54,7 +54,7 @@ describe("describeIntegrationReadiness", () => {
   });
 
   it("marks live notes as autonomous-grade", () => {
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
 
     const notes = buildDefaultIntegrationAccounts("user-1").find((integration) => integration.system === "notes");
 
@@ -77,7 +77,7 @@ describe("describeIntegrationReadiness", () => {
   });
 
   it("disables local notes in production until explicitly enabled and scoped", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     delete process.env.AGENTIC_LOCAL_NOTES_ENABLED;
     process.env.AGENTIC_NOTES_PATH = "/tmp/agentic-notes";
     process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = "/tmp";

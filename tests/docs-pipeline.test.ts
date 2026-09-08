@@ -8,6 +8,7 @@ import {
   renderDocx,
   validateDocx,
   validatePortableDocReferences
+  // @ts-expect-error -- untyped local ESM module
 } from "../scripts/lib/docx-pipeline.mjs";
 
 const pandocCheck = spawnSync("pandoc", ["--version"], { stdio: "ignore" });
@@ -21,7 +22,7 @@ describe("docx pipeline", () => {
       `See ${localHome}/${worktreeSegment}/24f9/Agentic/packages/contracts/src/index.ts`
     );
 
-    expect(violations.map(violation => violation.id)).toEqual(
+    expect(violations.map((violation: { id: string }) => violation.id)).toEqual(
       expect.arrayContaining(["local-home-path", "codex-worktree-path"])
     );
   });

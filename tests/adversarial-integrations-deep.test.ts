@@ -269,7 +269,7 @@ describe("Local notes path traversal attacks", () => {
 
   beforeEach(() => {
     process.env.AGENTIC_LOCAL_NOTES_ENABLED = "true";
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
   });
 
   afterEach(() => {

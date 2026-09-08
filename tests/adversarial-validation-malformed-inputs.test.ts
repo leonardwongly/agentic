@@ -1638,18 +1638,23 @@ describe("adversarial malformed input: GoalSchema derivation boundary attacks", 
   it("rejects GoalSchema with empty tasks array (min 1 after transform)", () => {
     const result = GoalSchema.safeParse({
       id: "goal-1",
+      userId: "user-1",
+      workspaceId: null,
+      workflowId: "workflow-1",
       title: "Test goal",
-      owner: "owner",
+      request: "Test request.",
+      intent: "email_follow_up",
       status: "planned",
-      tasks: [],
+      confidence: 0.5,
+      explanation: "Test explanation.",
       createdAt: "2026-06-09T12:00:00.000Z",
       updatedAt: "2026-06-09T12:00:00.000Z",
     });
 
-    // GoalSchema transforms the input and adds a default task if empty.
-    // This test pins whether empty tasks array is accepted or rejected.
+    // GoalSchema transforms the input and adds defaults for wedge/completionContract/responsibility.
+    // The output shape no longer includes a tasks array.
     if (result.success) {
-      expect(result.data.tasks.length).toBeGreaterThan(0);
+      expect((result.data as Record<string, unknown>).tasks).toBeUndefined();
     }
   });
 });

@@ -46,8 +46,6 @@ function buildDashboardData(): DashboardData {
         },
         actionBoundaries: [],
         handoffGuidance: [],
-        queues: [],
-        controls: [],
         permissions: {
           manageMembers: {
             allowed: false,
@@ -255,7 +253,7 @@ function buildDashboardData(): DashboardData {
       totalCount: 0,
       items: []
     }
-  } as DashboardData;
+  } as unknown as DashboardData;
 }
 
 describe("Dashboard execution mode filter", () => {

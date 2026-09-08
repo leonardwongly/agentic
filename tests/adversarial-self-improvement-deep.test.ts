@@ -695,12 +695,16 @@ describe("Adversarial self-improvement-memory deep tests", () => {
         capturedAt: "2025-06-15T10:00:00.000Z",
         skill: "test",
         tool: "bash",
-        message: "oops"
+        message: "oops",
+        exitCode: null,
+        inputSummary: null,
+        outputSummary: null
       });
       await repo.writeSessionEnd({
         sessionId: "s1",
         endedAt: "2025-06-15T11:00:00.000Z",
-        status: "completed"
+        status: "completed",
+        summary: null
       });
 
       await repo.clearWorkingMemory();

@@ -41,7 +41,7 @@ describe("operator products route", () => {
     const response = await operatorProductsRouteGet(buildAuthorizedRequest("http://localhost/api/operator-products", "GET"));
     const payload = (await response.json()) as {
       products: Array<{ id: string; slug: string }>;
-      selection: { operatorProductId: string } | null;
+      selection: { operatorProductId: string; actorContext: unknown } | null;
       agents: Array<{ id: string; name: string; allowedCapabilities: string[]; maxRiskClass: string }>;
       templates: Array<{ id: string }>;
     };

@@ -513,7 +513,7 @@ describe("compliance evidence collector", () => {
                   exists: true,
                   kind: "file",
                   sha256: "123"
-                } satisfies ComplianceReferenceStatus
+                }
               ]
             }
           ],

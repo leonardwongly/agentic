@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { DEFAULT_OWNER_USER_ID, createSystemActorContext, type JobRecord } from "@agentic/contracts";
-import { createRepository, type AgenticRepository } from "@agentic/repository";
+import { createRepository, type AgenticRepository, type QueueRepositoryPort } from "@agentic/repository";
 import { enqueueDeploymentCanaryJob } from "@agentic/worker-runtime";
 import { AGENTIC_ACCESS_KEY_HEADER } from "../../apps/web/lib/auth";
 
@@ -48,7 +48,7 @@ export type DeploymentAsyncCanaryOptions = {
   requestId?: string;
   traceId?: string;
   fetchImpl?: typeof fetch;
-  repository?: Pick<AgenticRepository, "enqueueJob" | "getJob">;
+  repository?: QueueRepositoryPort;
   wait?: (ms: number) => Promise<void>;
 };
 
@@ -101,7 +101,7 @@ async function readJson<T>(response: Response): Promise<T> {
 async function runDatabaseBackedCanary(params: {
   baseUrl: string;
   databaseUrl: string | null;
-  repository?: Pick<AgenticRepository, "enqueueJob" | "getJob">;
+  repository?: QueueRepositoryPort;
   userId: string;
   requestId: string;
   traceId: string;

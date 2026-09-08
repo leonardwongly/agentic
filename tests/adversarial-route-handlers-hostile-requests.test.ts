@@ -100,7 +100,7 @@ describe("adversarial route handlers: hostile requests", () => {
 
   beforeEach(async () => {
     process.env.AGENTIC_ACCESS_KEY = TEST_ACCESS_KEY;
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const dir = await mkdtemp(path.join(process.cwd(), "build", "adversarial-routes-"));
     tempDirs.push(dir);
@@ -114,7 +114,7 @@ describe("adversarial route handlers: hostile requests", () => {
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
     Reflect.set(globalThis, "__agenticRepository", undefined);
     Reflect.set(globalThis, "__agenticSelfImprovementRepository", undefined);
     resetAuthSessionStateStoreForTesting();

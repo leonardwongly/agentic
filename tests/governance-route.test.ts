@@ -371,6 +371,7 @@ describe("governance route", () => {
       await repository.saveWorkspaceSelection({
         userId: collaboratorUserId,
         workspaceId: "workspace-governance-shared",
+        actorContext: null,
         selectedAt: "2026-04-18T00:00:00.000Z",
         updatedAt: "2026-04-18T00:00:00.000Z"
       });

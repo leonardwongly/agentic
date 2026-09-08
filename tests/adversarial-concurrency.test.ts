@@ -36,20 +36,20 @@ import {
   claimNextJobFromStore,
   claimNextJobFromStoreWithOutcome,
   type ClaimNextJobParams
-} from "@agentic/repository/job-claim";
+} from "../packages/repository/src/repository-job-claim";
 import {
   isJobBlockedByConcurrency,
   isJobClaimableAt
-} from "@agentic/repository/runtime-helpers";
+} from "../packages/repository/src/repository-runtime-helpers";
 import {
   claimWatcherLeaseInRuntimeStore,
   type WatcherLeaseClaimParams
-} from "@agentic/repository/watcher-lease";
+} from "../packages/repository/src/watcher-lease-helpers";
 import {
   countsTowardAutopilotBudget,
   evaluateAutopilotClaimControls,
   buildPendingAutopilotEvent
-} from "@agentic/repository/autopilot-event-claim";
+} from "../packages/repository/src/autopilot-event-claim-helpers";
 import {
   reconcileExecutionResults,
   type ExecutionResult
@@ -912,6 +912,25 @@ describe("watcher lease claim concurrency", () => {
         maxTriggersPerHour: 4
       },
       actorContext: null,
+      responsibility: {
+        owner: { kind: "user", userId: DEFAULT_OWNER_USER_ID, workspaceRole: null, systemActor: null, label: "owner" },
+        delegate: null,
+        reviewer: null,
+        escalationOwner: null,
+        handoffStatus: "owner_control",
+        handoffSummary: null,
+        delegationReason: null,
+        escalationReason: null,
+        audit: {
+          requiredEvents: ["delegation_change", "handoff_acceptance", "review_assignment", "escalation_trigger"],
+          requireActorContext: true,
+          requireReasonForDelegation: true,
+          requireReasonForEscalation: true,
+          requireReviewerIdentity: true
+        },
+        lastChangedAt: null,
+        lastChangedBy: null
+      },
       createdAt: T0,
       updatedAt: T0
     };
@@ -1002,6 +1021,7 @@ describe("watcher lease claim concurrency", () => {
 
 describe("autopilot claim controls under concurrent pressure", () => {
   const reliabilityControls = {
+    budgetWindowMinutes: 60,
     maxConsecutiveFailures: 3,
     maxPendingEvents: 5,
     maxEventsPerWindow: 10
@@ -1360,7 +1380,7 @@ describe("autopilot event ordering assumptions", () => {
       { ...buildPendingAutopilotEvent({ userId: "u", kind: "watcher_triggered", sourceId: "s", mode: "auto_run", summary: "c" }), status: "executed" as const }
     ];
 
-    const controls = { maxConsecutiveFailures: 3, maxPendingEvents: 10, maxEventsPerWindow: 20 };
+    const controls = { budgetWindowMinutes: 60, maxConsecutiveFailures: 3, maxPendingEvents: 10, maxEventsPerWindow: 20 };
 
     const result1 = evaluateAutopilotClaimControls({ recentEvents: events, reliabilityControls: controls });
     const result2 = evaluateAutopilotClaimControls({ recentEvents: [...events].reverse(), reliabilityControls: controls });

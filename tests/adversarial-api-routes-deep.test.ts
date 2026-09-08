@@ -96,7 +96,7 @@ describe("Adversarial API Route Security Tests", () => {
       clearRateLimit: async () => {},
       revokeSession: async () => {},
       isSessionRevoked: async () => false,
-    } as AuthSessionStateStore);
+    } as unknown as AuthSessionStateStore);
   });
 
   afterEach(() => {
@@ -392,7 +392,7 @@ describe("Adversarial API Route Security Tests", () => {
         clearRateLimit: async () => {},
         revokeSession: async () => {},
         isSessionRevoked: async () => false,
-      } as AuthSessionStateStore);
+      } as unknown as AuthSessionStateStore);
 
       const makeRequest = () =>
         new Request("http://localhost/api/session", {
@@ -415,7 +415,7 @@ describe("Adversarial API Route Security Tests", () => {
         clearRateLimit: async () => {},
         revokeSession: async () => {},
         isSessionRevoked: async () => false,
-      } as AuthSessionStateStore);
+      } as unknown as AuthSessionStateStore);
 
       const request = new Request("http://localhost/api/session", {
         method: "POST",

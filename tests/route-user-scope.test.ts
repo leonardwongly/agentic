@@ -117,6 +117,7 @@ function buildDashboardData(): DashboardData {
     workspaceSelection: {
       userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.id,
+      actorContext: null,
       selectedAt: timestamp,
       updatedAt: timestamp
     },
@@ -135,6 +136,9 @@ function buildDashboardData(): DashboardData {
       approvalMode: "risk_based",
       requireAuditExports: false,
       maxAutoRunRiskClass: "R1",
+      publicSharingEnabled: false,
+      providerAccessRequiresApproval: false,
+      escalationRequiresApproval: false,
       externalSendRequiresApproval: true,
       calendarWriteRequiresApproval: true,
       shadowReplayPolicy: {
@@ -253,6 +257,7 @@ function buildDashboardData(): DashboardData {
         enabled: index === 0,
         time: `${String(8 + index).padStart(2, "0")}:00`
       })),
+      actorContext: null,
       createdAt: "2024-01-01T00:00:00.000Z",
       updatedAt: "2024-01-01T00:00:00.000Z"
     },
@@ -269,6 +274,41 @@ function buildDashboardData(): DashboardData {
       totalCount: 0,
       generatedAt: "2024-01-01T00:00:00.000Z",
       items: []
+    },
+    traceability: {
+      generatedAt: timestamp,
+      workspaceId: workspace.id,
+      workflowTraces: [],
+      taskTraces: [],
+      approvalTraces: [],
+      memoryProvenance: [],
+      eventCount: 0,
+      artifactCount: 0,
+      jobCount: 0,
+      trustLane: {
+        scopedMemoryCount: 0,
+        autonomyEligibleMemoryCount: 0,
+        advisoryInferredMemoryCount: 0,
+        staleOrReviewRequiredMemoryCount: 0,
+        blockedUnscopedMemoryCount: 0,
+        policy: "scoped"
+      }
+    },
+    cockpitRollout: {
+      enabled: false,
+      variant: "legacy" as const,
+      flagName: "AGENTIC_DASHBOARD_COCKPIT" as const,
+      source: "default" as const,
+      rawValue: null,
+      runbookPath: "docs/runbooks/dashboard-cockpit-rollout.md",
+      thresholds: {
+        firstMeaningfulRenderMs: 2500,
+        summaryLatencyMs: 1000,
+        tableEndpointLatencyMs: 750,
+        eventReconnects: 2,
+        approvalLatencyMs: 600000,
+        deadLetterRecoveryMs: 900000
+      }
     }
   };
 }
@@ -313,7 +353,7 @@ function buildAgentDefinition() {
 }
 
 function createFakeJobStore() {
-  const jobs = new Map<string, JobRecord>();
+  const jobs = new Map<string, JobRecord & { runnerId: string | null; startedAt: string | null; leasedUntil: string | null; attemptCount: number; lastError: string | null }>();
 
   const filterJobs = (params?: {
     userId?: string;
@@ -372,7 +412,7 @@ function createFakeJobStore() {
         }
       }
 
-      jobs.set(job.id, job);
+      jobs.set(job.id, { ...job, runnerId: null, startedAt: null, leasedUntil: null, attemptCount: 0, lastError: null });
       return job;
     },
     async claimNextJob(params: {
@@ -499,13 +539,13 @@ function createFakeJobStore() {
   };
 }
 
-function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRepository {
+function createFakeRepository(overrides: any): any {
   const jobStore = createFakeJobStore();
 
   return {
-    backend: "file",
+    backend: "file" as const,
     seedDefaults: async () => {},
-    saveGoalBundle: async (bundle) => bundle,
+    saveGoalBundle: async (bundle: any) => bundle,
     respondToApproval: async () => {
       throw new Error("respondToApproval was not stubbed.");
     },
@@ -533,26 +573,26 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       generatedAt: "2024-01-01T00:00:00.000Z"
     }),
     getCommitment: async () => null,
-    saveCommitment: async (commitment) => commitment,
+    saveCommitment: async (commitment: any) => commitment,
     deleteCommitment: async () => {},
     listWorkspaces: async () => buildDashboardData().workspaces,
-    saveWorkspace: async (workspace) => workspace,
+    saveWorkspace: async (workspace: any) => workspace,
     listWorkspaceMembers: async () => buildDashboardData().workspaceMembers,
-    saveWorkspaceMember: async (member) => member,
+    saveWorkspaceMember: async (member: any) => member,
     getWorkspaceSelection: async () => buildDashboardData().workspaceSelection,
-    saveWorkspaceSelection: async (selection) => selection,
+    saveWorkspaceSelection: async (selection: any) => selection,
     getWorkspaceGovernance: async () => buildDashboardData().workspaceGovernance,
-    saveWorkspaceGovernance: async (governance) => governance,
+    saveWorkspaceGovernance: async (governance: any) => governance,
     listGoalShares: async () => [],
     getGoalShare: async () => null,
     getGoalShareByTokenFingerprint: async () => null,
-    saveGoalShare: async (share) => share,
+    saveGoalShare: async (share: any) => share,
     listPrivacyOperations: async () => [],
     getPrivacyOperation: async () => null,
-    savePrivacyOperation: async (operation) => operation,
+    savePrivacyOperation: async (operation: any) => operation,
     enforceWorkspaceRetention: async () => ({}),
     deleteWorkspaceData: async () => ({}),
-    exportWorkspaceAudit: async (workspaceId) => ({
+    exportWorkspaceAudit: async (workspaceId: any) => ({
       workspaceId,
       fileName: `${workspaceId}-audit.json`,
       contentType: "application/json",
@@ -560,14 +600,14 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
       generatedAt: "2024-01-01T00:00:00.000Z"
     }),
     getBriefingPreferences: async () => buildDashboardData().briefingPreferences,
-    saveBriefingPreferences: async (preferences) => preferences,
+    saveBriefingPreferences: async (preferences: any) => preferences,
     getAutopilotSettings: async () => buildAutopilotSettings(),
-    saveAutopilotSettings: async (settings) => settings,
+    saveAutopilotSettings: async (settings: any) => settings,
     listAutopilotEvents: async () => [],
     claimAutopilotEvent: async () => {
       throw new Error("claimAutopilotEvent was not stubbed.");
     },
-    saveAutopilotEvent: async (event) => event,
+    saveAutopilotEvent: async (event: any) => event,
     listJobs: jobStore.listJobs,
     getJob: jobStore.getJob,
     enqueueJob: jobStore.enqueueJob,
@@ -576,39 +616,39 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     retryJob: jobStore.retryJob,
     deadLetterJob: jobStore.deadLetterJob,
     listMemory: async () => [],
-    saveMemory: async (record) => record,
-    saveEvidenceRecord: async (record) => record,
+    saveMemory: async (record: any) => record,
+    saveEvidenceRecord: async (record: any) => record,
     listWatchers: async () => [],
-    saveWatcher: async (watcher) => watcher,
+    saveWatcher: async (watcher: any) => watcher,
     listIntegrations: async () => [],
-    upsertIntegration: async (account) => account,
+    upsertIntegration: async (account: any) => account,
     listProviderCredentials: async () => [],
     getProviderCredential: async () => null,
-    saveProviderCredential: async (credential) => credential,
+    saveProviderCredential: async (credential: any) => credential,
     getProviderCredentialSecret: async () => null,
-    saveProviderCredentialSecret: async (record) => record,
+    saveProviderCredentialSecret: async (record: any) => record,
     reserveProviderSideEffect: async () => { throw new Error("reserveProviderSideEffect was not stubbed."); },
     updateProviderSideEffect: async () => { throw new Error("updateProviderSideEffect was not stubbed."); },
     listTemplates: async () => [],
-    saveTemplate: async (template) => template,
+    saveTemplate: async (template: any) => template,
     deleteTemplate: async () => {},
     listWorkflowTemplates: async () => [],
     getWorkflowTemplate: async () => null,
-    saveWorkflowTemplate: async (template) => template,
+    saveWorkflowTemplate: async (template: any) => template,
     deleteWorkflowTemplate: async () => {},
     getDashboardData: async () => buildDashboardData(),
     listOperatorProducts: async () => [],
     getOperatorProductSelection: async () => null,
-    saveOperatorProduct: async (product) => product,
-    saveOperatorProductSelection: async (selection) => selection,
+    saveOperatorProduct: async (product: any) => product,
+    saveOperatorProductSelection: async (selection: any) => selection,
     listAgents: async () => [],
     getAgent: async () => null,
-    saveAgent: async (agent) => agent,
+    saveAgent: async (agent: any) => agent,
     deleteAgent: async () => {},
     getAgentMetrics: async () => null,
-    saveAgentMetrics: async (metrics) => metrics,
+    saveAgentMetrics: async (metrics: any) => metrics,
     ...overrides
-  };
+  } as any;
 }
 
 describe("route user scoping", () => {
@@ -664,11 +704,11 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        listIntegrations: async (userId) => {
+        listIntegrations: async (userId: any) => {
           listIntegrationsCalls.push(userId);
           return [integration];
         },
-        upsertIntegration: async (account) => {
+        upsertIntegration: async (account: any) => {
           updatedStatuses.push(account.status);
           savedAccounts.push({
             actorContext: account.actorContext ?? null,
@@ -677,7 +717,7 @@ describe("route user scoping", () => {
           });
           return account;
         },
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         }
@@ -764,7 +804,7 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        respondToApproval: async ({ actor, decision, scope, rationale }) => {
+        respondToApproval: async ({ actor, decision, scope, rationale }: any) => {
           approvalCalls.push(actor);
           resolvedDecisions.push(decision);
           resolvedScopes.push(scope);
@@ -823,16 +863,16 @@ describe("route user scoping", () => {
             updatedAt: "2024-01-01T00:00:00.000Z"
           }
         ],
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         },
-        saveMemory: async (record) => {
+        saveMemory: async (record: any) => {
           savedMemories.push(record.content);
           savedMemoryIds.push(record.id);
           return record;
         },
-        saveEvidenceRecord: async (record) => {
+        saveEvidenceRecord: async (record: any) => {
           savedEvidence.push(record);
           return record;
         }
@@ -1028,11 +1068,11 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        listMemory: async (userId) => {
+        listMemory: async (userId: any) => {
           listMemoryCalls.push(userId);
           return [memory];
         },
-        saveMemory: async (record) => {
+        saveMemory: async (record: any) => {
           savedMemories.push({
             id: record.id,
             memoryType: record.memoryType,
@@ -1041,7 +1081,7 @@ describe("route user scoping", () => {
           });
           return record;
         },
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         }
@@ -1093,11 +1133,11 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        listWatchers: async (filters) => {
+        listWatchers: async (filters: any) => {
           listWatcherCalls.push(filters?.userId);
           return [watcher];
         },
-        saveWatcher: async (candidate) => {
+        saveWatcher: async (candidate: any) => {
           savedStatuses.push(candidate.status);
           savedActors.push(candidate.actorContext);
           return candidate;
@@ -1109,7 +1149,7 @@ describe("route user scoping", () => {
               workspaceId: null
             }
           }) as Awaited<ReturnType<AgenticRepository["getGoalBundleForUser"]>>,
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         }
@@ -1147,7 +1187,7 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        listOperatorProducts: async (userId) => [
+        listOperatorProducts: async (userId = DEFAULT_OWNER_USER_ID) => [
           {
             id: "operator-product-custom",
             userId,
@@ -1168,7 +1208,7 @@ describe("route user scoping", () => {
           }
         ],
         getOperatorProductSelection: async () => null,
-        saveOperatorProductSelection: async (selection) => {
+        saveOperatorProductSelection: async (selection: any) => {
           selectionCalls.push({
             userId: selection.userId,
             operatorProductId: selection.operatorProductId,
@@ -1177,7 +1217,7 @@ describe("route user scoping", () => {
           });
           return selection;
         },
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         }
@@ -1213,7 +1253,12 @@ describe("route user scoping", () => {
       goalId: "goal-1",
       approvalId: null,
       dueAt: null,
+      actorContext: null,
+      urgency: "later" as const,
+      riskClass: null,
       confidence: 0.91,
+      provenanceSummary: "Captured commitment.",
+      suggestedNextAction: null,
       evidence: [
         {
           section: "goals" as const,
@@ -1233,21 +1278,21 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        getCommitment: async (id, userId) => {
-          commitmentCalls.push({ id, userId });
+        getCommitment: async (commitmentId: any, userId: any) => {
+          commitmentCalls.push({ id: commitmentId, userId });
           return commitment;
         },
-        saveCommitment: async (candidate) => {
+        saveCommitment: async (candidate: any) => {
           savedCommitments.push({
             status: candidate.status,
             actorContext: candidate.actorContext
           });
           return candidate;
         },
-        deleteCommitment: async (id, userId) => {
+        deleteCommitment: async (id: any, userId: any) => {
           deletedCalls.push({ id, userId });
         },
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         }
@@ -1298,7 +1343,7 @@ describe("route user scoping", () => {
   it("passes the system user explicitly when reading, updating, deleting, and measuring agents", async () => {
     const agent = buildAgentDefinition();
     const getAgentCalls: Array<{ id: string; userId: string | undefined }> = [];
-    const metricsCalls: Array<{ id: string; period: string; userId: string | undefined }> = [];
+    const metricsCalls: Array<{ id: string; period: string | undefined; userId: string | undefined }> = [];
     const savedAgents: Array<{ version: number; actorContext: ActorContext | null; displayName: string }> = [];
     const deletedCalls: Array<{ id: string; userId: string | undefined }> = [];
     const dashboardCalls: Array<string | undefined> = [];
@@ -1307,11 +1352,11 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        getAgent: async (id, userId) => {
+        getAgent: async (id: any, userId: any) => {
           getAgentCalls.push({ id, userId });
           return agent;
         },
-        saveAgent: async (candidate) => {
+        saveAgent: async (candidate: any) => {
           savedAgents.push({
             version: candidate.version,
             actorContext: candidate.actorContext,
@@ -1319,10 +1364,10 @@ describe("route user scoping", () => {
           });
           return candidate;
         },
-        deleteAgent: async (id, userId) => {
+        deleteAgent: async (id: any, userId: any) => {
           deletedCalls.push({ id, userId });
         },
-        getAgentMetrics: async (id, period, userId) => {
+        getAgentMetrics: async (id: any, period: any, userId: any) => {
           metricsCalls.push({ id, period, userId });
           return AgentMetricsSchema.parse({
             agentId: id,
@@ -1354,7 +1399,7 @@ describe("route user scoping", () => {
             updatedAt: "2024-01-08T00:00:00.000Z"
           });
         },
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         }
@@ -1434,15 +1479,15 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        getBriefingPreferences: async (userId) => {
+        getBriefingPreferences: async (userId: any) => {
           preferencesCalls.push(userId);
           return buildDashboardData().briefingPreferences;
         },
-        saveBriefingPreferences: async (preferences) => {
+        saveBriefingPreferences: async (preferences: any) => {
           savedActors.push(preferences.actorContext);
           return preferences;
         },
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         }
@@ -1480,31 +1525,31 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        listWorkspaces: async (userId) => {
+        listWorkspaces: async (userId: any) => {
           workspaceCalls.push(userId);
           return buildDashboardData().workspaces;
         },
-        getWorkspaceSelection: async (userId) => {
+        getWorkspaceSelection: async (userId: any) => {
           selectionCalls.push(userId);
           return buildDashboardData().workspaceSelection;
         },
-        listWorkspaceMembers: async (_workspaceId, userId) => {
+        listWorkspaceMembers: async (_workspaceId: any, userId: any) => {
           memberCalls.push(userId);
           return buildDashboardData().workspaceMembers;
         },
-        getWorkspaceGovernance: async (_workspaceId, userId) => {
+        getWorkspaceGovernance: async (_workspaceId: any, userId: any) => {
           governanceCalls.push(userId);
           return buildDashboardData().workspaceGovernance;
         },
-        saveWorkspace: async (workspace, actor) => {
+        saveWorkspace: async (workspace: any, actor: any) => {
           savedWorkspaceActors.push(actor);
           return workspace;
         },
-        saveWorkspaceMember: async (member, actor) => {
+        saveWorkspaceMember: async (member: any, actor: any) => {
           savedMemberActors.push(actor);
           return member;
         },
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         }
@@ -1541,7 +1586,7 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        saveWorkspaceSelection: async (selection) => {
+        saveWorkspaceSelection: async (selection: any) => {
           selectionCalls.push({
             userId: selection.userId,
             workspaceId: selection.workspaceId,
@@ -1579,15 +1624,15 @@ describe("route user scoping", () => {
       globalThis,
       "__agenticRepository",
       createFakeRepository({
-        getWorkspaceGovernance: async (_workspaceId, userId) => {
+        getWorkspaceGovernance: async (_workspaceId: any, userId: any) => {
           governanceCalls.push(userId);
           return buildDashboardData().workspaceGovernance;
         },
-        saveWorkspaceGovernance: async (governance, actor) => {
+        saveWorkspaceGovernance: async (governance: any, actor: any) => {
           savedGovernanceActors.push(actor);
           return governance;
         },
-        exportWorkspaceAudit: async (workspaceId, userId) => {
+        exportWorkspaceAudit: async (workspaceId: any, userId: any) => {
           auditCalls.push({ workspaceId, userId });
           return {
             workspaceId,
@@ -1597,7 +1642,7 @@ describe("route user scoping", () => {
             generatedAt: "2024-01-01T00:00:00.000Z"
           };
         },
-        getDashboardData: async (userId) => {
+        getDashboardData: async (userId: any) => {
           dashboardCalls.push(userId);
           return buildDashboardData();
         }

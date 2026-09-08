@@ -189,6 +189,22 @@ export function getRequestClientIdentity(request: Request): RequestClientIdentit
     };
   }
 
+  if (shouldTrustProxyHeaders()) {
+    const header = getTrustedClientIpHeader();
+    const rawProxyValue = header ? (request.headers.get(header) ?? "").trim().slice(0, 80) : "";
+    if (rawProxyValue) {
+      const proxyHash = crypto
+        .createHash("sha256")
+        .update(`proxy-fallback:${rawProxyValue}`)
+        .digest("hex")
+        .slice(0, 24);
+      return {
+        key: `${REQUEST_FINGERPRINT_PREFIX}proxy-fallback:${proxyHash}`,
+        source: "request-fingerprint"
+      };
+    }
+  }
+
   return {
     key: getRequestFingerprintKey(request),
     source: "request-fingerprint"

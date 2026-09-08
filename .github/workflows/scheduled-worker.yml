@@ -74,12 +74,16 @@ jobs:
         if: steps.guard.outputs.configured == 'true'
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
+
+      - name: Install pnpm
+        if: steps.guard.outputs.configured == 'true'
+        run: npm install -g pnpm@11.5.2
 
       - name: Install dependencies
         if: steps.guard.outputs.configured == 'true'
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Drain durable jobs (bounded run-once worker)
         if: steps.guard.outputs.configured == 'true'
-        run: npm run worker:once
+        run: pnpm run worker:once

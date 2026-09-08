@@ -14,7 +14,7 @@ describe("adversarial task state machine boundaries", () => {
   it("completed is a terminal state with no legal outgoing transitions", () => {
     const targets = ["queued", "running", "waiting", "blocked", "retrying", "failed", "completed"];
     for (const target of targets) {
-      expect(canTransitionTaskState("completed", target)).toBe(false);
+      expect(canTransitionTaskState("completed", target as any)).toBe(false);
     }
   });
 
@@ -22,7 +22,7 @@ describe("adversarial task state machine boundaries", () => {
     const states = ["queued", "running", "waiting", "blocked", "retrying", "failed"];
     const targets = ["queued", "running", "waiting", "blocked", "retrying", "failed", "completed"];
     for (const state of states) {
-      const hasLegalTransition = targets.some((target) => canTransitionTaskState(state, target));
+      const hasLegalTransition = targets.some((target) => canTransitionTaskState(state as any, target as any));
       expect(hasLegalTransition, `${state} should have at least one legal transition`).toBe(true);
     }
   });
@@ -30,7 +30,7 @@ describe("adversarial task state machine boundaries", () => {
   it("self-transitions are always illegal", () => {
     const states = ["queued", "running", "waiting", "blocked", "retrying", "failed", "completed"];
     for (const state of states) {
-      expect(canTransitionTaskState(state, state)).toBe(false);
+      expect(canTransitionTaskState(state as any, state as any)).toBe(false);
     }
   });
 });
@@ -39,16 +39,16 @@ describe("adversarial job state machine boundaries", () => {
   it("terminal job states have no legal outgoing transitions", () => {
     const targets = ["queued", "running", "retrying", "paused", "cancelled", "completed", "dead_letter"];
     for (const target of targets) {
-      expect(canTransitionJobState("completed", target)).toBe(false);
-      expect(canTransitionJobState("cancelled", target)).toBe(false);
-      expect(canTransitionJobState("dead_letter", target)).toBe(false);
+      expect(canTransitionJobState("completed", target as any)).toBe(false);
+      expect(canTransitionJobState("cancelled", target as any)).toBe(false);
+      expect(canTransitionJobState("dead_letter", target as any)).toBe(false);
     }
   });
 
   it("self-transitions are always illegal for jobs", () => {
     const states = ["queued", "running", "retrying", "paused", "cancelled", "completed", "dead_letter"];
     for (const state of states) {
-      expect(canTransitionJobState(state, state)).toBe(false);
+      expect(canTransitionJobState(state as any, state as any)).toBe(false);
     }
   });
 });

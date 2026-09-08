@@ -829,11 +829,11 @@ describe("adversarial worker runtime deep", () => {
         status: "running",
         processedCount: 42,
         // These should be ignored:
-        runnerId: "hijacked" as any,
-        version: 999 as any,
-        pid: 99999 as any,
-        startedAt: "1970-01-01T00:00:00.000Z" as any
-      });
+        runnerId: "hijacked",
+        version: 999,
+        pid: 99999,
+        startedAt: "1970-01-01T00:00:00.000Z"
+      } as any);
 
       expect(tampered.runnerId).toBe("immutable-runner");
       expect(tampered.version).toBe(1);

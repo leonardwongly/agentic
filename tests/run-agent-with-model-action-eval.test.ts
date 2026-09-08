@@ -52,13 +52,13 @@ function actionIntentOf(result: { artifacts: Array<{ metadata: Record<string, un
 let savedNodeEnv: string | undefined;
 beforeEach(() => {
   savedNodeEnv = process.env.NODE_ENV;
-  process.env.NODE_ENV = "production";
+  (process.env as any).NODE_ENV = "production";
   modelMockState.extractionThrows = false;
   modelMockState.prompts = [];
 });
 afterEach(() => {
-  if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
-  else process.env.NODE_ENV = savedNodeEnv;
+  if (savedNodeEnv === undefined) Reflect.deleteProperty(process.env, "NODE_ENV");
+  else (process.env as any).NODE_ENV = savedNodeEnv;
 });
 
 describe("model-proposed action gating", () => {

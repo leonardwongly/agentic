@@ -149,7 +149,7 @@ describe("repository", () => {
       resultingTaskState: resultingTask!.state,
       resultingGoalStatus: updatedBundle.goal.status,
       actionLogIds: appendedLogIds,
-      artifactIds: approval!.actionIntent?.artifactIds ?? [],
+      artifactIds: (approval!.actionIntent as any)?.artifactIds ?? [],
       memoryIds: [],
       actorContext: systemActor
     });
@@ -644,7 +644,8 @@ describe("repository", () => {
         tokenFingerprint: "abc123def456",
         reason: "expired"
       },
-      createdAt: "2026-04-30T00:00:00.000Z"
+      createdAt: "2026-04-30T00:00:00.000Z",
+      prevHash: null
     };
     const secondLog = {
       ...firstLog,
@@ -1177,7 +1178,7 @@ describe("repository", () => {
           metadata: {
             replayedFromJobId: null
           }
-        }
+        } as any
       })
     );
     const claimedJob = await repository.claimNextJob({
@@ -1968,11 +1969,12 @@ describe("repository", () => {
   ): Promise<{ result: T; queryCount: number }> {
     let queryCount = 0;
     const originalClientQuery = Client.prototype.query;
-    const instrumentedQuery: typeof Client.prototype.query = function (...args) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const instrumentedQuery = function (this: Client, ...args: unknown[]) {
       queryCount += 1;
-      return originalClientQuery.apply(this, args);
+      return (originalClientQuery as (...a: unknown[]) => unknown).apply(this, args);
     };
-    Client.prototype.query = instrumentedQuery;
+    Client.prototype.query = instrumentedQuery as typeof Client.prototype.query;
 
     try {
       const result = await run();
@@ -2566,6 +2568,7 @@ describe("repository", () => {
       actionLogIds: [],
       artifactIds: [],
       memoryIds: [],
+      actorContext: null,
       createdAt: rejectedAt,
       updatedAt: rejectedAt
     });
@@ -2619,6 +2622,7 @@ describe("repository", () => {
       actionLogIds: [],
       artifactIds: [],
       memoryIds: [],
+      actorContext: null,
       createdAt: failedAt,
       updatedAt: failedAt
     });
@@ -3356,6 +3360,11 @@ describe("repository", () => {
           label: "Follow up on a fuzzy obligation"
         }
       ],
+      actorContext: null,
+      urgency: "today",
+      riskClass: "R1",
+      provenanceSummary: "Test fixture",
+      suggestedNextAction: null,
       createdAt: nowIso(),
       updatedAt: nowIso()
     });
@@ -3378,6 +3387,11 @@ describe("repository", () => {
           label: "Waiting on a vendor response"
         }
       ],
+      actorContext: null,
+      urgency: "today",
+      riskClass: "R1",
+      provenanceSummary: "Test fixture",
+      suggestedNextAction: null,
       createdAt: nowIso(),
       updatedAt: nowIso()
     });
@@ -3400,6 +3414,11 @@ describe("repository", () => {
           label: "Already done"
         }
       ],
+      actorContext: null,
+      urgency: "today",
+      riskClass: "R1",
+      provenanceSummary: "Test fixture",
+      suggestedNextAction: null,
       createdAt: nowIso(),
       updatedAt: nowIso()
     });
@@ -3978,7 +3997,10 @@ describe("repository", () => {
           history: [],
           createdAt: oneHourAgo,
           expiryAt: oneHourAgo,
-          respondedAt: null
+          respondedAt: null,
+          actionIntent: null,
+          explanation: null,
+          responsibility: { owner: { kind: "user" as const, userId: DEFAULT_OWNER_USER_ID, workspaceRole: null, systemActor: null, label: "User" }, delegate: null, reviewer: null, escalationOwner: { kind: "user" as const, userId: DEFAULT_OWNER_USER_ID, workspaceRole: null, systemActor: null, label: "User" }, handoffStatus: "owner_control" as const, handoffSummary: "The owner directly manages this approval.", delegationReason: null, escalationReason: null, audit: { requiredEvents: ["delegation_change" as const], requireActorContext: true, requireReasonForDelegation: true, requireReasonForEscalation: true, requireReviewerIdentity: true }, lastChangedAt: null, lastChangedBy: { kind: "user" as const, userId: DEFAULT_OWNER_USER_ID, workspaceRole: null, systemActor: null, label: "User" } }
         }
       ]
     });
@@ -5105,6 +5127,10 @@ describe("repository", () => {
         }
       ],
       actorContext: systemActor,
+      urgency: "today",
+      riskClass: "R1",
+      provenanceSummary: "Test fixture",
+      suggestedNextAction: null,
       createdAt: nowIso(),
       updatedAt: nowIso()
     });

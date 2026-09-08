@@ -294,6 +294,13 @@ describe("runAgent", () => {
             executionMode: "deterministic_scaffold",
             implementationTier: "experimental",
             artifacts: [],
+            structuredResult: null,
+            evidenceRefs: [],
+            assumptions: [],
+            riskFlags: [],
+            proposedActions: [],
+            memoryUpdates: [],
+            watcherRecommendations: [],
             proposedToolCalls: [],
             nextSteps: [],
             explanation: "This output is deliberately outside the runner contract."

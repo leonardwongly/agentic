@@ -19,6 +19,7 @@ function buildAutopilotSettings() {
     mode: "notify_only" as const,
     debounceMinutes: 15,
     reliabilityControls: DEFAULT_AUTOPILOT_RELIABILITY_CONTROLS,
+    actorContext: null,
     createdAt: "2024-01-01T00:00:00.000Z",
     updatedAt: "2024-01-01T00:00:00.000Z"
   };
@@ -145,10 +146,10 @@ function createFakeJobStore() {
       const claimed = {
         ...candidate,
         status: "running" as const,
-        runnerId: params.runnerId,
+        claimedBy: params.runnerId,
         attemptCount: candidate.attemptCount + 1,
-        startedAt: candidate.startedAt ?? now,
-        leasedUntil,
+        lastAttemptAt: candidate.lastAttemptAt ?? now,
+        leaseExpiresAt: leasedUntil,
         updatedAt: now
       };
 
@@ -322,7 +323,7 @@ function buildMalformedTelegramRequest(body: string): Request {
   });
 }
 
-function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRepository {
+function createFakeRepository(overrides: any): any {
   const jobStore = createFakeJobStore();
   const timestamp = "2024-01-01T00:00:00.000Z";
   const workspace = {
@@ -339,7 +340,7 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
   return {
     backend: "file",
     seedDefaults: async () => {},
-    saveGoalBundle: async (bundle) => bundle,
+    saveGoalBundle: async (bundle: any) => bundle,
     respondToApproval: async () => {
       throw new Error("respondToApproval was not stubbed.");
     },
@@ -349,10 +350,10 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     listApprovals: async () => [],
     listCommitments: async () => [],
     getCommitment: async () => null,
-    saveCommitment: async (commitment) => commitment,
+    saveCommitment: async (commitment: any) => commitment,
     deleteCommitment: async () => {},
     listWorkspaces: async () => [workspace],
-    saveWorkspace: async (candidate) => candidate,
+    saveWorkspace: async (candidate: any) => candidate,
     listWorkspaceMembers: async () => [
       {
         id: `workspace-member-${workspace.id}-${DEFAULT_OWNER_USER_ID}`,
@@ -363,37 +364,42 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
         updatedAt: timestamp
       }
     ],
-    saveWorkspaceMember: async (member) => member,
+    saveWorkspaceMember: async (member: any) => member,
     getWorkspaceSelection: async () => ({
       userId: DEFAULT_OWNER_USER_ID,
       workspaceId: workspace.id,
+      actorContext: null,
       selectedAt: timestamp,
       updatedAt: timestamp
     }),
-    saveWorkspaceSelection: async (selection) => selection,
+    saveWorkspaceSelection: async (selection: any) => selection,
     getWorkspaceGovernance: async () => ({
       workspaceId: workspace.id,
-      approvalMode: "risk_based",
+      approvalMode: "risk_based" as const,
       requireAuditExports: false,
-      maxAutoRunRiskClass: "R1",
+      maxAutoRunRiskClass: "R1" as const,
+      publicSharingEnabled: false,
+      providerAccessRequiresApproval: false,
+      escalationRequiresApproval: false,
       externalSendRequiresApproval: true,
       calendarWriteRequiresApproval: true,
+      shadowReplayPolicy: { enabled: false, promotionMode: "manual" as const, rollbackOutcome: "none" as const, minimumMatchedEpisodes: 3, minConfidenceDelta: 0.1 },
       retentionDays: 365,
       updatedBy: DEFAULT_OWNER_USER_ID,
       createdAt: timestamp,
       updatedAt: timestamp
     }),
-    saveWorkspaceGovernance: async (governance) => governance,
+    saveWorkspaceGovernance: async (governance: any) => governance,
     listGoalShares: async () => [],
     getGoalShare: async () => null,
     getGoalShareByTokenFingerprint: async () => null,
-    saveGoalShare: async (share) => share,
+    saveGoalShare: async (share: any) => share,
     listPrivacyOperations: async () => [],
     getPrivacyOperation: async () => null,
-    savePrivacyOperation: async (operation) => operation,
+    savePrivacyOperation: async (operation: any) => operation,
     enforceWorkspaceRetention: async () => ({}),
     deleteWorkspaceData: async () => ({}),
-    exportWorkspaceAudit: async (workspaceId) => ({
+    exportWorkspaceAudit: async (workspaceId: any) => ({
       workspaceId,
       fileName: `${workspaceId}-audit.json`,
       contentType: "application/json",
@@ -403,42 +409,43 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
     getBriefingPreferences: async () => ({
       userId: DEFAULT_OWNER_USER_ID,
       timezone: "UTC",
-      focus: "balanced",
+      focus: "balanced" as const,
       schedules: briefingTypeValues.map((type, index) => ({
         type,
         enabled: index === 0,
         time: `${String(8 + index).padStart(2, "0")}:00`
       })),
+      actorContext: null,
       createdAt: timestamp,
       updatedAt: timestamp
     }),
-    saveBriefingPreferences: async (preferences) => preferences,
+    saveBriefingPreferences: async (preferences: any) => preferences,
     getAutopilotSettings: async () => buildAutopilotSettings(),
-    saveAutopilotSettings: async (settings) => settings,
+    saveAutopilotSettings: async (settings: any) => settings,
     listAutopilotEvents: async () => [],
     claimAutopilotEvent: async () => {
       throw new Error("claimAutopilotEvent was not stubbed.");
     },
-    saveAutopilotEvent: async (event) => event,
+    saveAutopilotEvent: async (event: any) => event,
     listMemory: async () => [],
-    saveMemory: async (record) => record,
+    saveMemory: async (record: any) => record,
     listWatchers: async () => [],
-    saveWatcher: async (watcher) => watcher,
+    saveWatcher: async (watcher: any) => watcher,
     listIntegrations: async () => [],
-    upsertIntegration: async (account) => account,
+    upsertIntegration: async (account: any) => account,
     listProviderCredentials: async () => [],
     getProviderCredential: async () => null,
-    saveProviderCredential: async (credential) => credential,
+    saveProviderCredential: async (credential: any) => credential,
     getProviderCredentialSecret: async () => null,
-    saveProviderCredentialSecret: async (record) => record,
+    saveProviderCredentialSecret: async (record: any) => record,
     reserveProviderSideEffect: async () => { throw new Error("reserveProviderSideEffect was not stubbed."); },
     updateProviderSideEffect: async () => { throw new Error("updateProviderSideEffect was not stubbed."); },
     listTemplates: async () => [],
-    saveTemplate: async (template) => template,
+    saveTemplate: async (template: any) => template,
     deleteTemplate: async () => {},
     listWorkflowTemplates: async () => [],
     getWorkflowTemplate: async () => null,
-    saveWorkflowTemplate: async (template) => template,
+    saveWorkflowTemplate: async (template: any) => template,
     deleteWorkflowTemplate: async () => {},
     listJobs: jobStore.listJobs,
     getJob: jobStore.getJob,
@@ -596,18 +603,20 @@ function createFakeRepository(overrides: Partial<AgenticRepository>): AgenticRep
         totalCount: 0,
         generatedAt: timestamp,
         items: []
-      }
-    }),
+      },
+      traceability: { generatedAt: timestamp, lineage: [], coverage: { totalGoals: 0, coveredGoals: 0, uncoveredGoals: [] } } as any,
+      cockpitRollout: { generatedAt: timestamp, enabledFeatures: [], rolloutPercentage: 0 } as any
+    }) as any,
     listOperatorProducts: async () => [],
     getOperatorProductSelection: async () => null,
-    saveOperatorProduct: async (product) => product,
-    saveOperatorProductSelection: async (selection) => selection,
+    saveOperatorProduct: async (product: any) => product,
+    saveOperatorProductSelection: async (selection: any) => selection,
     listAgents: async () => [],
     getAgent: async () => null,
-    saveAgent: async (agent) => agent,
+    saveAgent: async (agent: any) => agent,
     deleteAgent: async () => {},
     getAgentMetrics: async () => null,
-    saveAgentMetrics: async (metrics) => metrics,
+    saveAgentMetrics: async (metrics: any) => metrics,
     ...overrides
   };
 }
@@ -705,7 +714,7 @@ describe("telegram webhook route", () => {
       rationale?: string | null;
     }> = [];
     const repository = createFakeRepository({
-      getGoalBundleForUser: async (goalId, userId) =>
+      getGoalBundleForUser: async (goalId: any, userId: any) =>
         goalId === "goal-1" && userId === "user-telegram"
           ? {
               goal: {
@@ -788,7 +797,7 @@ describe("telegram webhook route", () => {
               actionLogs: []
             }
           : null,
-      respondToApproval: async (input) => {
+      respondToApproval: async (input: any) => {
         approvalCalls.push({
           approvalId: input.approvalId,
           decision: input.decision,
@@ -864,7 +873,7 @@ describe("telegram webhook route", () => {
           actionLogs: []
         };
       },
-      saveGoalBundle: async (bundle) => bundle
+      saveGoalBundle: async (bundle: any) => bundle
     });
 
     Reflect.set(globalThis, "__agenticRepository", repository);
@@ -930,9 +939,9 @@ describe("telegram webhook route", () => {
       workspaceId: "workspace-personal-system-user",
       expiresAt: "2099-01-01T00:00:00.000Z"
     });
-    const saveMemory = vi.fn(async (record) => record);
+    const saveMemory = vi.fn(async (record: any) => record);
     const repository = createFakeRepository({
-      getGoalBundleForUser: async (goalId, userId) =>
+      getGoalBundleForUser: async (goalId: any, userId: any) =>
         goalId === "goal-1" && userId === "user-telegram"
           ? {
               goal: {
@@ -1015,7 +1024,7 @@ describe("telegram webhook route", () => {
               actionLogs: []
             }
           : null,
-      respondToApproval: async (input) => ({
+      respondToApproval: async (input: any) => ({
         goal: {
           id: "goal-1",
           userId: input.actor.subjectUserId,
@@ -1093,7 +1102,7 @@ describe("telegram webhook route", () => {
         watchers: [],
         actionLogs: []
       }),
-      saveGoalBundle: async (bundle) => bundle,
+      saveGoalBundle: async (bundle: any) => bundle,
       saveMemory
     });
 

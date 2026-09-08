@@ -404,6 +404,7 @@ describe("templates routes", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: secondaryUserId,
       sessionId: "session-secondary",

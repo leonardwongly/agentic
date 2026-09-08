@@ -8,6 +8,7 @@ import {
 const PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nredacted\\n-----END RSA PRIVATE KEY-----";
 
 const BASE_ENV = {
+  NODE_ENV: "test" as const,
   AGENTIC_GITHUB_APP_ISSUE_SYNC_URL: "https://agentic.example.com/api/github/issues/app/sync",
   AGENTIC_SMOKE_BASE_URL: "https://agentic.example.com",
   AGENTIC_SMOKE_ACCESS_KEY: "runtime-access-key",

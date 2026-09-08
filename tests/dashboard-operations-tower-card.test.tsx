@@ -134,7 +134,8 @@ describe("DashboardOperationsTowerCard", () => {
               "Run connector revalidation from the recovery lane.",
               "Confirm encrypted credential storage remains present and secret material is not exposed.",
               "If revalidation fails again, reconnect the provider account before widening automation."
-            ]
+            ],
+            remediation: null
           }
         ]
       }
@@ -176,7 +177,7 @@ describe("DashboardOperationsTowerCard", () => {
       generatedAt: "2026-04-21T00:00:00.000Z",
       autonomyPosture: {
         status: "attention",
-        level: "operator_review",
+        level: "bounded_autonomy",
         label: "Operator review",
         summary: "A shared dead-letter queue item remains visible, but replay is restricted.",
         reasons: [],
@@ -226,7 +227,7 @@ describe("DashboardOperationsTowerCard", () => {
             remediation: {
               kind: "replay_job",
               label: "Replay job",
-              permission: "editor",
+              permission: "owner",
               note: "Replay remains restricted to recovery-capable workspace roles."
             }
           }
@@ -273,7 +274,7 @@ describe("DashboardOperationsTowerCard", () => {
       generatedAt: "2026-04-21T00:00:00.000Z",
       autonomyPosture: {
         status: "attention",
-        level: "operator_review",
+        level: "bounded_autonomy",
         label: "Operator review",
         summary: "A stale lease is visible, but recovery is restricted.",
         reasons: [],
@@ -323,7 +324,7 @@ describe("DashboardOperationsTowerCard", () => {
             remediation: {
               kind: "release_expired_lease",
               label: "Release expired lease",
-              permission: "editor",
+              permission: "owner",
               note: "Release remains restricted to recovery-capable workspace roles."
             }
           }

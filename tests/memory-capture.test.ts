@@ -306,8 +306,8 @@ describe("captureExecutionOutcomeSignals", () => {
 
     expect(captured.memories).toHaveLength(2);
     expect(captured.memories[1].content.length).toBeLessThan(500);
-    expect(String(captured.episodes[0].metadata?.detail).length).toBeLessThanOrEqual(220);
-    expect(String(captured.episodes[0].metadata?.detail)).toContain("...");
+    expect(String((captured.episodes[0].metadata as Record<string, unknown> | null | undefined)?.detail).length).toBeLessThanOrEqual(220);
+    expect(String((captured.episodes[0].metadata as Record<string, unknown> | null | undefined)?.detail)).toContain("...");
   });
 
   it("redacts sensitive execution details before learning capture", () => {
@@ -410,8 +410,8 @@ describe("captureMemoriesFromBundle", () => {
     expect(captured.memories.every((memory) => memory.sensitivity === "learning-redacted")).toBe(true);
     expect(captured.memories.every((memory) => memory.reviewAt === "2024-01-16T00:00:00.000Z")).toBe(true);
     expect(captured.memories.every((memory) => memory.expiryAt === "2024-01-31T00:00:00.000Z")).toBe(true);
-    expect(captured.episodes.every((episode) => episode.metadata?.learningPrivacy)).toBe(true);
-    expect(captured.episodes[0].metadata?.learningPrivacy).toMatchObject({
+    expect(captured.episodes.every((episode) => (episode.metadata as Record<string, unknown> | null | undefined)?.learningPrivacy)).toBe(true);
+    expect((captured.episodes[0].metadata as Record<string, unknown> | null | undefined)?.learningPrivacy).toMatchObject({
       datasetId: "learning-capture-records",
       userId: "user-1",
       workspaceId: "workspace-1",
@@ -479,7 +479,7 @@ describe("captureApprovalOutcomeSignals", () => {
         userCorrection: true
       }
     });
-    expect(captured.episodes[0].metadata?.learningPrivacy).toMatchObject({
+    expect((captured.episodes[0].metadata as Record<string, unknown> | null | undefined)?.learningPrivacy).toMatchObject({
       captureSource: "approval_outcome",
       captureAllowed: true,
       userId: "user-1",

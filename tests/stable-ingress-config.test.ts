@@ -14,7 +14,7 @@ const BASE_ENV = {
   AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for",
   AGENTIC_STAGING_DEPLOY_BIN: "node",
   AGENTIC_STAGING_DEPLOY_ARGS_JSON: JSON.stringify(["scripts/provider-deploy.mjs"])
-};
+} as NodeJS.ProcessEnv;
 
 describe("stable ingress config", () => {
   it("accepts a stable HTTPS origin with production proxy trust and provider deploy wiring", () => {
@@ -157,7 +157,7 @@ describe("stable ingress config", () => {
       AGENTIC_TRUST_PROXY_HEADERS: "true",
       AGENTIC_PROXY_HEADER_OVERWRITE_CONFIRMED: "true",
       AGENTIC_TRUSTED_CLIENT_IP_HEADER: "x-forwarded-for"
-    });
+    } as NodeJS.ProcessEnv);
 
     expect(report.ok).toBe(false);
     expect(report.providerDeployConfigured).toBe(false);

@@ -81,6 +81,7 @@ describe("Cloudflare provider evidence", () => {
       repoRoot: process.cwd()
     });
     const report = validateGitHubAppSyncLivePreflight({
+      NODE_ENV: "test",
       AGENTIC_GITHUB_APP_ISSUE_SYNC_URL: "https://agentic.leonardwong.workers.dev/api/github/issues/app/sync",
       AGENTIC_SMOKE_BASE_URL: "https://agentic.leonardwong.workers.dev",
       AGENTIC_SMOKE_ACCESS_KEY: "runtime-access-key",

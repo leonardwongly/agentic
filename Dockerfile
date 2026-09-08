@@ -1,6 +1,6 @@
 FROM node:22-bookworm-slim AS base
 WORKDIR /app
-RUN npm install -g pnpm@10
+RUN npm install -g pnpm@11.5.2
 
 FROM base AS deps
 COPY package*.json ./
@@ -39,7 +39,7 @@ RUN pnpm run build
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
-RUN npm install -g pnpm@10
+RUN npm install -g pnpm@11.5.2
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000

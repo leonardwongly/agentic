@@ -120,7 +120,7 @@ describe("google provider routes", () => {
 
   beforeEach(() => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
     process.env.AGENTIC_PROVIDER_SECRET_KEY = "test-provider-secret-key";
     process.env.AGENTIC_PROVIDER_SECRET_KEY_VERSION = "test-v1";
     delete process.env.AGENTIC_PUBLIC_BASE_URL;
@@ -134,7 +134,7 @@ describe("google provider routes", () => {
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalAccessKey;
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_PROVIDER_SECRET_KEY = originalProviderSecretKey;
     process.env.AGENTIC_PROVIDER_SECRET_KEY_VERSION = originalProviderSecretKeyVersion;
     if (originalPublicBaseUrl === undefined) {
@@ -183,7 +183,7 @@ describe("google provider routes", () => {
     const repository = await buildRepository();
     await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
     Reflect.set(globalThis, "__agenticRepository", repository);
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
 
     const response = await googleConnectRoute(
       buildAuthorizedGetRequest("http://internal-service.local/api/integrations/google/connect?format=json")

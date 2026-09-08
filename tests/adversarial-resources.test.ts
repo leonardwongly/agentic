@@ -867,8 +867,8 @@ describe("adversarial: graceful degradation under resource pressure", () => {
 
     // Try to claim the same job twice concurrently
     const [claim1, claim2] = await Promise.all([
-      queue.claimNext({ runnerId: "runner-a" }),
-      queue.claimNext({ runnerId: "runner-b" })
+      queue.claimNext(),
+      queue.claimNext()
     ]);
 
     // At most one should succeed (or both could return the same job

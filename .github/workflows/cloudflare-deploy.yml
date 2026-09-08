@@ -69,27 +69,31 @@ jobs:
         if: steps.guard.outputs.configured == 'true'
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
+
+      - name: Install pnpm
+        if: steps.guard.outputs.configured == 'true'
+        run: npm install -g pnpm@11.5.2
 
       - name: Install dependencies
         if: steps.guard.outputs.configured == 'true'
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Apply database migrations
         if: steps.guard.outputs.configured == 'true' && env.AGENTIC_DATABASE_URL != ''
         env:
           DATABASE_URL: ${{ secrets.AGENTIC_DATABASE_URL }}
         run: |
-          npm run db:migrate
-          npm run db:status -- --require-ready
+          pnpm run db:migrate
+          pnpm run db:status -- --require-ready
 
       - name: Build the Cloudflare worker
         if: steps.guard.outputs.configured == 'true'
-        run: npm run cf:build -w @agentic/web
+        run: pnpm run cf:build -w @agentic/web
 
       - name: Check worker bundle size
         if: steps.guard.outputs.configured == 'true'
-        run: npm run cf:check-size
+        run: pnpm run cf:check-size
 
       - name: Deploy to Cloudflare Workers
         if: steps.guard.outputs.configured == 'true'

@@ -14,7 +14,7 @@ import type { ActionExecutionConnectorReadiness } from "@agentic/integrations";
 import { vi } from "vitest";
 
 function buildBundle(params: {
-  taskCapabilities: Array<"send" | "schedule" | "create" | "draft" | "read">;
+  taskCapabilities: Array<"send" | "schedule" | "create" | "draft" | "read" | "update">;
   actionIntent: ReturnType<typeof ActionIntentSchema.parse>;
   assignedAgent?: "workflow" | "communications" | "calendar";
 }) {
@@ -100,8 +100,20 @@ function buildGovernance(overrides: Partial<WorkspaceGovernance> = {}): Workspac
     approvalMode: "risk_based",
     requireAuditExports: false,
     maxAutoRunRiskClass: "R1",
+    publicSharingEnabled: false,
+    providerAccessRequiresApproval: true,
+    escalationRequiresApproval: true,
     externalSendRequiresApproval: true,
     calendarWriteRequiresApproval: true,
+    shadowReplayPolicy: {
+      enabled: true,
+      promotionMode: "validated_autonomy",
+      rollbackOutcome: "allowed_with_confirmation",
+      minimumMatchedEpisodes: 5,
+      minimumPrecision: 0.8,
+      maximumNegativeOutcomeRate: 0.15,
+      maximumFailureCostRate: 0.2
+    },
     retentionDays: 365,
     updatedBy: "user-1",
     createdAt: nowIso(),

@@ -32,6 +32,7 @@ describe("deployment async canary", () => {
     let savedJob: JobRecord | null = null;
     let getAttempt = 0;
     const repository = {
+      listJobs: vi.fn(async () => []),
       enqueueJob: vi.fn(async (job: JobRecord) => {
         savedJob = job;
         return job;
@@ -51,7 +52,18 @@ describe("deployment async canary", () => {
           completedAt,
           updatedAt: completedAt
         } satisfies JobRecord;
-      })
+      }),
+      claimNextJob: vi.fn(async () => null),
+      completeJob: vi.fn(async () => {
+        throw new Error("completeJob should not be called");
+      }),
+      retryJob: vi.fn(async () => {
+        throw new Error("retryJob should not be called");
+      }),
+      deadLetterJob: vi.fn(async () => {
+        throw new Error("deadLetterJob should not be called");
+      }),
+      cancelJobsForGoal: vi.fn(async () => [])
     };
     const fetchImpl = vi.fn<typeof fetch>();
     const wait = vi.fn(async () => undefined);

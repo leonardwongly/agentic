@@ -16,12 +16,16 @@ describe("buildNlCapabilitySummary", () => {
           decision: "pending",
           requestedAction: "Send the reply.",
           actionIntent: {
+            schemaVersion: "v1",
             type: "send_message",
             adapter: "gmail",
+            riskClass: "R2",
             mode: "send",
             to: "customer@example.com",
             subject: "Follow-up",
-            body: "Thanks."
+            body: "Thanks.",
+            threadId: null,
+            metadata: {}
           },
           preview: {
             actionType: "send",
@@ -41,7 +45,20 @@ describe("buildNlCapabilitySummary", () => {
           history: [],
           createdAt: "2024-01-01T00:00:00.000Z",
           expiryAt: "2024-01-02T00:00:00.000Z",
-          respondedAt: null
+          respondedAt: null,
+          responsibility: {
+            owner: { kind: "user", userId: "user-1", workspaceRole: null, systemActor: null, label: "user-1" },
+            delegate: null,
+            reviewer: null,
+            escalationOwner: null,
+            handoffStatus: "owner_control",
+            handoffSummary: null,
+            delegationReason: null,
+            escalationReason: null,
+            audit: { requiredEvents: ["delegation_change", "handoff_acceptance", "review_assignment", "escalation_trigger"], requireActorContext: true, requireReasonForDelegation: true, requireReasonForEscalation: true, requireReviewerIdentity: true },
+            lastChangedAt: null,
+            lastChangedBy: null
+          }
         }
       ],
       integrations: buildDefaultIntegrationAccounts("user-1"),

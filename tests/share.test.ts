@@ -1,4 +1,4 @@
-import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, type ApprovalRequest } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { buildDefaultIntegrationAccounts } from "@agentic/integrations";
 import { createMemoryRecord } from "@agentic/memory";
@@ -43,7 +43,7 @@ describe("goal share helpers", () => {
   beforeEach(() => {
     process.env.AGENTIC_ACCESS_KEY = "test-access-key";
     delete process.env.AGENTIC_PUBLIC_BASE_URL;
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
   });
 
   afterEach(() => {
@@ -53,7 +53,7 @@ describe("goal share helpers", () => {
     } else {
       process.env.AGENTIC_PUBLIC_BASE_URL = originalPublicBaseUrl;
     }
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
   });
 
   it("creates and verifies signed goal share tokens", () => {
@@ -97,7 +97,7 @@ describe("goal share helpers", () => {
   });
 
   it("builds share links from the configured public base URL in production", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.AGENTIC_PUBLIC_BASE_URL = "https://agentic.example.com";
 
     expect(buildGoalShareUrl("http://internal-service.local/api/goals/goal-1/share", "token/with spaces")).toBe(
@@ -107,8 +107,8 @@ describe("goal share helpers", () => {
 
   it("builds a public goal projection without leaking internal-only bundle data", async () => {
     const bundle = await buildBundle();
-    const privateApprovals =
-      bundle.approvals.length > 0
+    const privateApprovals: ApprovalRequest[] =
+      (bundle.approvals.length > 0
         ? bundle.approvals.map((approval) => ({
             ...approval,
             title: "PRIVATE-APPROVAL"
@@ -123,6 +123,7 @@ describe("goal share helpers", () => {
               riskClass: "R2" as const,
               decision: "pending" as const,
               requestedAction: "Do not expose this approval",
+              actionIntent: null,
               preview: {
                 actionType: "artifact-only" as const,
                 target: "Internal review artifact",
@@ -138,18 +139,32 @@ describe("goal share helpers", () => {
               decisionScope: null,
               decisionRationale: null,
               history: [],
+              explanation: null,
+              responsibility: {
+                owner: { kind: "user", userId: null, workspaceRole: null, systemActor: null, label: "owner" },
+                delegate: null,
+                reviewer: null,
+                escalationOwner: null,
+                handoffStatus: "owner_control",
+                handoffSummary: null,
+                delegationReason: null,
+                escalationReason: null,
+                audit: { requiredEvents: ["delegation_change"] as const, requireActorContext: true, requireReasonForDelegation: true, requireReasonForEscalation: true, requireReviewerIdentity: true },
+                lastChangedAt: null,
+                lastChangedBy: null
+              },
               createdAt: "2026-04-02T00:00:00.000Z",
               expiryAt: null,
               respondedAt: null
             }
-          ];
+          ] as unknown as ApprovalRequest[]);
     const sharedView = buildSharedGoalView({
       ...bundle,
       goal: {
         ...bundle.goal,
         request: "PRIVATE-REQUEST"
       },
-      approvals: privateApprovals,
+      approvals: privateApprovals as typeof bundle.approvals,
       actionLogs: [
         ...bundle.actionLogs,
         {
@@ -163,7 +178,8 @@ describe("goal share helpers", () => {
           details: {
             secret: "PRIVATE-DETAIL"
           },
-          createdAt: "2026-04-02T00:00:00.000Z"
+          createdAt: "2026-04-02T00:00:00.000Z",
+          prevHash: null
         }
       ]
     });

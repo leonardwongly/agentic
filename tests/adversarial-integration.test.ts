@@ -88,6 +88,7 @@ function makeJobPayload(): JobPayload {
     requestId: "req-1",
     traceId: "trace-1",
     enqueuedAt: T0,
+    metadata: {},
   };
 }
 
@@ -1100,7 +1101,7 @@ describe("adversarial integration: memory context pack at boundary", () => {
         updatedAt: nowIso(),
         expiresAt: null,
         evidence: [],
-      } as MemoryRecord,
+      } as unknown as MemoryRecord,
     ];
 
     const pack = buildWorkflowContextPack({
@@ -1133,7 +1134,7 @@ describe("adversarial integration: memory context pack at boundary", () => {
         updatedAt: nowIso(),
         expiresAt: null,
         evidence: [],
-      } as MemoryRecord,
+      } as unknown as MemoryRecord,
       {
         id: "mem-2",
         userId: "user-1",
@@ -1149,7 +1150,7 @@ describe("adversarial integration: memory context pack at boundary", () => {
         updatedAt: nowIso(),
         expiresAt: null,
         evidence: [],
-      } as MemoryRecord,
+      } as unknown as MemoryRecord,
     ];
 
     const pack = buildWorkflowContextPack({
@@ -1179,7 +1180,7 @@ describe("adversarial integration: state transition validation", () => {
     expect(canTransitionJobState("completed", "running")).toBe(false);
     expect(canTransitionJobState("dead_letter", "queued")).toBe(false);
     expect(canTransitionJobState("cancelled", "running")).toBe(false);
-    expect(canTransitionJobState("completed", "failed")).toBe(false);
+    expect(canTransitionJobState("completed", "dead_letter")).toBe(false);
   });
 
   it("canTransitionTaskState rejects illegal transitions", () => {

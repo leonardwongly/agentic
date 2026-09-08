@@ -125,14 +125,18 @@ describe("approval job route", () => {
       details: {
         failureStage: "execution",
         requiresReview: true,
-        recoveryAction: "review_event_error"
+        recoveryAction: "review_event_error",
+        eventEnvelope: null,
+        budget: null,
+        suppression: null,
+        fabric: null
       },
       actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       createdAt: nowIso(),
       processedAt: nowIso(),
       resultGoalId: null,
       error: "Autopilot execution failed."
-    });
+    } as any);
 
     const job = await enqueueAutopilotProcessJob({
       repository,
@@ -506,14 +510,15 @@ describe("approval job route", () => {
         maxAttempts: 1,
         idempotencyKey: `legacy-approval-follow-up:${approval.id}:rejected`,
         payload: {
-          type: "approval_follow_up",
+          type: "approval_follow_up" as const,
           approvalId: approval.id,
           goalId: bundle.goal.id,
           taskId: approval.taskId,
-          decision: "rejected",
+          decision: "rejected" as const,
           workspaceId: bundle.goal.workspaceId,
           metadata: {
-            replayedFromJobId: null
+            replayedFromJobId: null,
+            actionId: null
           }
         }
       })
@@ -617,7 +622,7 @@ describe("approval job route", () => {
 
     const secondaryPrincipal = {
       kind: "session" as const,
-      authMethod: "session",
+      authMethod: "session" as const,
       userId: "user-secondary",
       sessionId: "session-secondary",
       expiresAt: "2099-04-19T04:00:00.000Z"
@@ -704,7 +709,7 @@ describe("approval job route", () => {
 
     const viewerPrincipal = {
       kind: "session" as const,
-      authMethod: "session",
+      authMethod: "session" as const,
       userId: viewerUserId,
       sessionId: "session-viewer",
       expiresAt: "2099-04-22T07:00:00.000Z"
@@ -804,7 +809,7 @@ describe("approval job route", () => {
 
     const editorPrincipal = {
       kind: "session" as const,
-      authMethod: "session",
+      authMethod: "session" as const,
       userId: editorUserId,
       sessionId: "session-editor",
       expiresAt: "2099-04-22T07:00:00.000Z"

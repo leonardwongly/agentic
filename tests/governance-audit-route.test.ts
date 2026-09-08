@@ -165,10 +165,11 @@ describe("governance audit route", () => {
     const collaboratorUserId = "workspace-collaborator";
     const ownerActor = createSystemActorContext(ownerUserId);
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: collaboratorUserId,
       sessionId: "session-collaborator",
-      expiresAt: null
+      expiresAt: "2099-12-31T23:59:59.000Z"
     });
 
     try {
@@ -215,6 +216,7 @@ describe("governance audit route", () => {
       await repository.saveWorkspaceSelection({
         userId: collaboratorUserId,
         workspaceId: "workspace-shared-audit",
+        actorContext: null,
         selectedAt: "2026-04-18T00:00:00.000Z",
         updatedAt: "2026-04-18T00:00:00.000Z"
       });

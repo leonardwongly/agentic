@@ -216,6 +216,7 @@ function buildEvidenceRecord(params: {
     actionLogIds: [],
     artifactIds: [],
     memoryIds: [],
+    actorContext: null,
     createdAt,
     updatedAt
   };

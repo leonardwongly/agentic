@@ -161,7 +161,7 @@ describe("recommendation feedback route", () => {
         userCorrection: false
       }
     });
-    expect(episodes[0].metadata?.learningPrivacy).toMatchObject({
+    expect((episodes[0].metadata as any)?.learningPrivacy).toMatchObject({
       datasetId: "learning-capture-records",
       userId: DEFAULT_OWNER_USER_ID,
       workspaceId: bundle.goal.workspaceId ?? null,
@@ -174,7 +174,7 @@ describe("recommendation feedback route", () => {
     });
     expect(episodes[0].privacy.retention).toMatchObject({
       policy: "learning-feedback-90d",
-      expiresAt: episodes[0].metadata?.learningPrivacy?.expiresAt
+      expiresAt: (episodes[0].metadata as any)?.learningPrivacy?.expiresAt
     });
     await expect(
       selfImprovementRepository.exportLearningEpisodes!({
@@ -432,8 +432,8 @@ describe("recommendation feedback route", () => {
     }
 
     const episodes = await selfImprovementRepository.listEpisodes({ ownerUserId: DEFAULT_OWNER_USER_ID });
-    const suppressedEpisode = episodes.find((episode) => episode.metadata?.decision === "suppressed");
-    const expiredEpisode = episodes.find((episode) => episode.metadata?.decision === "expired");
+    const suppressedEpisode = episodes.find((episode) => (episode.metadata as any)?.decision === "suppressed");
+    const expiredEpisode = episodes.find((episode) => (episode.metadata as any)?.decision === "expired");
     const snapshot = getTelemetrySnapshot();
     const suppressedMetric = snapshot.metrics.find(
       (entry) =>
@@ -452,7 +452,7 @@ describe("recommendation feedback route", () => {
       userCorrection: true,
       outcomeScore: -1
     });
-    expect(suppressedEpisode?.metadata?.recommendationControl).toMatchObject({
+    expect((suppressedEpisode?.metadata as any)?.recommendationControl).toMatchObject({
       action: "suppress",
       recommendationKey: buildRecommendation().key,
       reasonProvided: true
@@ -462,7 +462,7 @@ describe("recommendation feedback route", () => {
       userCorrection: true,
       outcomeScore: -1
     });
-    expect(expiredEpisode?.metadata?.recommendationControl).toMatchObject({
+    expect((expiredEpisode?.metadata as any)?.recommendationControl).toMatchObject({
       action: "expire",
       recommendationKey: buildRecommendation().key,
       reasonProvided: true

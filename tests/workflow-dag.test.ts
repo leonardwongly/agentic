@@ -200,11 +200,15 @@ describe("workflow DAG process model", () => {
           id: "monitor-support",
           label: "Monitor support inbox",
           actionIntent: {
+            schemaVersion: "v1",
             type: "monitor_signal",
+            adapter: "watcher",
+            riskClass: "R1",
             targetEntity: "Support inbox",
             condition: "Escalation arrives.",
             triggerAction: "Create an operator review.",
-            sourceSystems: ["gmail"]
+            sourceSystems: ["gmail"],
+            metadata: {}
           }
         }
       ],

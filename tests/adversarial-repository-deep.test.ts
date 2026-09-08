@@ -22,8 +22,7 @@ import { acquireFileStoreLock } from "../packages/repository/src/file-store-lock
 import {
   validateGoalActionLogs,
   cloneActionLogs,
-  appendGoalActionLogsToStore,
-  appendMissingActionLogs as _appendMissingActionLogs
+  appendGoalActionLogsToStore
 } from "../packages/repository/src/action-log-append";
 import {
   normalizeCollectionPageLimit,
@@ -89,7 +88,10 @@ function makeMockRuntime(lockImpl?: LockAdapter): RuntimeContext {
     locks: lockImpl ?? defaultLock,
     isEdgeRuntime: false,
     env: {},
-    cwd: () => "/tmp"
+    cwd: () => "/tmp",
+    pid: process.pid,
+    randomUUID: () => "test-uuid",
+    now: () => Date.now()
   };
 }
 
@@ -158,7 +160,8 @@ function makeCommitment(id: string, opts: Record<string, any> = {}) {
     suggestedNextAction: opts.suggestedNextAction ?? null,
     evidence: opts.evidence ?? [{ section: "goals", itemId: "goal-1", label: "Goal" }],
     createdAt: opts.createdAt ?? nowIso(),
-    updatedAt: opts.updatedAt ?? nowIso()
+    updatedAt: opts.updatedAt ?? nowIso(),
+    actorContext: null
   };
 }
 

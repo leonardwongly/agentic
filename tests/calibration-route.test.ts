@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_OWNER_USER_ID } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, type AgentName } from "@agentic/contracts";
 import { createRepository } from "@agentic/repository";
 import { processUserRequest } from "@agentic/orchestrator";
 import { GET as calibrationRoute } from "../apps/web/app/api/calibration/route";
@@ -74,7 +74,7 @@ describe("calibration route", () => {
       tasks: [
         {
           ...task!,
-          assignedAgent: agent!.name,
+          assignedAgent: agent!.name as AgentName,
           state: "failed",
           createdAt,
           updatedAt

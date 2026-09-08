@@ -85,6 +85,8 @@ function buildReplayValidation(
   return {
     replayValidated: true,
     matchedEpisodes: 8,
+    matchedPatterns: 5,
+    suggestedPatterns: 3,
     safeSuggestionPrecision: 0.95,
     negativeOutcomeRate: 0.01,
     failureCostRate: 0.02,

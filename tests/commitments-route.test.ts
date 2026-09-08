@@ -83,7 +83,12 @@ describe("commitments route", () => {
       goalId: null,
       approvalId: null,
       dueAt: null,
+      actorContext: null,
+      urgency: "later",
+      riskClass: null,
       confidence: 0.33,
+      provenanceSummary: "Captured commitment.",
+      suggestedNextAction: null,
       evidence: [
         {
           section: "goals",
@@ -256,7 +261,12 @@ describe("commitments route", () => {
       goalId: "goal-secondary",
       approvalId: null,
       dueAt: null,
+      actorContext: null,
+      urgency: "later",
+      riskClass: null,
       confidence: 0.7,
+      provenanceSummary: "Captured commitment.",
+      suggestedNextAction: null,
       evidence: [
         {
           section: "goals",

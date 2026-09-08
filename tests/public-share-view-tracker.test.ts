@@ -17,7 +17,7 @@ describe("public share view tracker", () => {
     });
 
     expect(sendBeacon).toHaveBeenCalledTimes(1);
-    expect(sendBeacon.mock.calls[0]?.[0]).toBe("/api/share/view");
+    expect((sendBeacon.mock.calls[0] as unknown[] | undefined)?.[0]).toBe("/api/share/view");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

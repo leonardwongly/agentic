@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { AutopilotEventSchema } from "@agentic/contracts";
+import { AutopilotEventSchema, GoalSchema } from "@agentic/contracts";
 import type { DashboardData } from "@agentic/repository";
 import { DashboardOperationsSections } from "../apps/web/components/dashboard-operations-sections";
 
@@ -30,6 +30,7 @@ function buildDashboardData(): DashboardData {
     workspaceSelection: {
       userId: "workspace-editor",
       workspaceId: "workspace-operations",
+      actorContext: null,
       selectedAt: "2026-04-22T00:00:00.000Z",
       updatedAt: "2026-04-22T00:00:00.000Z"
     },
@@ -48,6 +49,9 @@ function buildDashboardData(): DashboardData {
       approvalMode: "risk_based",
       requireAuditExports: true,
       maxAutoRunRiskClass: "R2",
+      publicSharingEnabled: false,
+      providerAccessRequiresApproval: true,
+      escalationRequiresApproval: true,
       externalSendRequiresApproval: true,
       calendarWriteRequiresApproval: true,
       shadowReplayPolicy: {
@@ -67,31 +71,8 @@ function buildDashboardData(): DashboardData {
     goalShares: [],
     privacyOperations: [],
     controlPlane: {
-      workspace: {
-        status: "healthy",
-        summary: "Workspace is active.",
-        updatedAt: "2026-04-22T00:00:00.000Z"
-      },
-      commitments: {
-        status: "idle",
-        summary: "No commitment pressure.",
-        updatedAt: "2026-04-22T00:00:00.000Z"
-      },
-      automation: {
-        status: "idle",
-        summary: "Automation is bounded.",
-        updatedAt: "2026-04-22T00:00:00.000Z"
-      },
-      execution: {
-        status: "healthy",
-        summary: "Execution is stable.",
-        updatedAt: "2026-04-22T00:00:00.000Z"
-      },
-      trust: {
-        status: "healthy",
-        summary: "Trust signals are healthy.",
-        updatedAt: "2026-04-22T00:00:00.000Z"
-      }
+      generatedAt: "2026-04-22T00:00:00.000Z",
+      sections: []
     },
     operatingSections: {
       generatedAt: "2026-04-22T00:00:00.000Z",
@@ -167,6 +148,7 @@ function buildDashboardData(): DashboardData {
       timezone: "UTC",
       focus: "balanced",
       schedules: [],
+      actorContext: null,
       createdAt: "2026-04-22T00:00:00.000Z",
       updatedAt: "2026-04-22T00:00:00.000Z"
     },
@@ -175,6 +157,13 @@ function buildDashboardData(): DashboardData {
       userId: "workspace-editor",
       mode: "notify_only",
       debounceMinutes: 15,
+      reliabilityControls: {
+        budgetWindowMinutes: 60,
+        maxEventsPerWindow: 10,
+        maxPendingEvents: 5,
+        maxConsecutiveFailures: 3
+      },
+      actorContext: null,
       createdAt: "2026-04-22T00:00:00.000Z",
       updatedAt: "2026-04-22T00:00:00.000Z"
     },
@@ -186,7 +175,44 @@ function buildDashboardData(): DashboardData {
     actionLogs: [],
     diagnostics: {
       generatedAt: "2026-04-22T00:00:00.000Z",
+      status: "healthy",
+      totalCount: 0,
       items: []
+    },
+    traceability: {
+      generatedAt: "2026-04-22T00:00:00.000Z",
+      workspaceId: "workspace-operations",
+      workflowTraces: [],
+      taskTraces: [],
+      approvalTraces: [],
+      memoryProvenance: [],
+      eventCount: 0,
+      artifactCount: 0,
+      jobCount: 0,
+      trustLane: {
+        scopedMemoryCount: 0,
+        autonomyEligibleMemoryCount: 0,
+        advisoryInferredMemoryCount: 0,
+        staleOrReviewRequiredMemoryCount: 0,
+        blockedUnscopedMemoryCount: 0,
+        policy: "default"
+      }
+    },
+    cockpitRollout: {
+      enabled: false,
+      variant: "legacy" as const,
+      flagName: "AGENTIC_DASHBOARD_COCKPIT" as const,
+      source: "default" as const,
+      rawValue: null,
+      runbookPath: "/docs/runbook.md",
+      thresholds: {
+        firstMeaningfulRenderMs: 1000,
+        summaryLatencyMs: 500,
+        tableEndpointLatencyMs: 300,
+        eventReconnects: 3,
+        approvalLatencyMs: 200,
+        deadLetterRecoveryMs: 60000
+      }
     }
   };
 }
@@ -227,6 +253,9 @@ describe("DashboardOperationsSections", () => {
           approvalMode: "risk_based",
           requireAuditExports: true,
           maxAutoRunRiskClass: "R2",
+          publicSharingEnabled: false,
+          providerAccessRequiresApproval: true,
+          escalationRequiresApproval: true,
           externalSendRequiresApproval: true,
           calendarWriteRequiresApproval: true,
           shadowReplayPolicy: {
@@ -245,6 +274,13 @@ describe("DashboardOperationsSections", () => {
           userId: "workspace-editor",
           mode: "notify_only",
           debounceMinutes: 15,
+          reliabilityControls: {
+            budgetWindowMinutes: 60,
+            maxEventsPerWindow: 10,
+            maxPendingEvents: 5,
+            maxConsecutiveFailures: 3
+          },
+          actorContext: null,
           createdAt: "2026-04-22T00:00:00.000Z",
           updatedAt: "2026-04-22T00:00:00.000Z"
         }}
@@ -276,6 +312,7 @@ describe("DashboardOperationsSections", () => {
     data.workspaceSelection = {
       userId: "workspace-viewer",
       workspaceId: "workspace-operations",
+      actorContext: null,
       selectedAt: "2026-04-22T00:00:00.000Z",
       updatedAt: "2026-04-22T00:00:00.000Z"
     };
@@ -307,7 +344,7 @@ describe("DashboardOperationsSections", () => {
     ];
     data.goals = [
       {
-        goal: {
+        goal: GoalSchema.parse({
           id: "goal-1",
           userId: "workspace-owner",
           workspaceId: "workspace-operations",
@@ -320,7 +357,7 @@ describe("DashboardOperationsSections", () => {
           explanation: "Viewer should inspect but not mutate share links.",
           createdAt: "2026-04-22T00:00:00.000Z",
           updatedAt: "2026-04-22T00:00:00.000Z"
-        },
+        }),
         workflow: {
           id: "workflow-1",
           goalId: "goal-1",
@@ -365,6 +402,9 @@ describe("DashboardOperationsSections", () => {
           approvalMode: "risk_based",
           requireAuditExports: true,
           maxAutoRunRiskClass: "R2",
+          publicSharingEnabled: false,
+          providerAccessRequiresApproval: true,
+          escalationRequiresApproval: true,
           externalSendRequiresApproval: true,
           calendarWriteRequiresApproval: true,
           shadowReplayPolicy: {
@@ -383,6 +423,13 @@ describe("DashboardOperationsSections", () => {
           userId: "workspace-viewer",
           mode: "notify_only",
           debounceMinutes: 15,
+          reliabilityControls: {
+            budgetWindowMinutes: 60,
+            maxEventsPerWindow: 10,
+            maxPendingEvents: 5,
+            maxConsecutiveFailures: 3
+          },
+          actorContext: null,
           createdAt: "2026-04-22T00:00:00.000Z",
           updatedAt: "2026-04-22T00:00:00.000Z"
         }}
@@ -408,7 +455,7 @@ describe("DashboardOperationsSections", () => {
     const data = buildDashboardData();
     data.goals = [
       {
-        goal: {
+        goal: GoalSchema.parse({
           id: "goal-approval-recovery",
           userId: "workspace-owner",
           workspaceId: "workspace-operations",
@@ -421,7 +468,7 @@ describe("DashboardOperationsSections", () => {
           explanation: "Operator needs a fast path into the failing approval context.",
           createdAt: "2026-04-22T00:00:00.000Z",
           updatedAt: "2026-04-22T00:00:00.000Z"
-        },
+        }),
         workflow: {
           id: "workflow-approval-recovery",
           goalId: "goal-approval-recovery",
@@ -508,6 +555,9 @@ describe("DashboardOperationsSections", () => {
           approvalMode: "risk_based",
           requireAuditExports: true,
           maxAutoRunRiskClass: "R2",
+          publicSharingEnabled: false,
+          providerAccessRequiresApproval: true,
+          escalationRequiresApproval: true,
           externalSendRequiresApproval: true,
           calendarWriteRequiresApproval: true,
           shadowReplayPolicy: {
@@ -526,6 +576,13 @@ describe("DashboardOperationsSections", () => {
           userId: "workspace-editor",
           mode: "notify_only",
           debounceMinutes: 15,
+          reliabilityControls: {
+            budgetWindowMinutes: 60,
+            maxEventsPerWindow: 10,
+            maxPendingEvents: 5,
+            maxConsecutiveFailures: 3
+          },
+          actorContext: null,
           createdAt: "2026-04-22T00:00:00.000Z",
           updatedAt: "2026-04-22T00:00:00.000Z"
         }}

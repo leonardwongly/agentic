@@ -164,7 +164,6 @@ parityDescribe("repository Postgres parity", () => {
 
   it("persists durable jobs consistently", async () => {
     const job = createJobRecord({
-      id: `job-parity-${unique}`,
       userId: DEFAULT_OWNER_USER_ID,
       kind: "goal_create",
       payload: {
@@ -200,7 +199,6 @@ parityDescribe("repository Postgres parity", () => {
 
   it("summarizes durable job readiness consistently", async () => {
     const staleQueued = createJobRecord({
-      id: `job-readiness-queued-${unique}`,
       userId: DEFAULT_OWNER_USER_ID,
       kind: "goal_create",
       availableAt: "2026-04-16T03:40:00.000Z",
@@ -215,7 +213,6 @@ parityDescribe("repository Postgres parity", () => {
       }
     });
     const expiredRunning = createJobRecord({
-      id: `job-readiness-running-${unique}`,
       userId: DEFAULT_OWNER_USER_ID,
       kind: "docs_render",
       payload: {
@@ -224,7 +221,6 @@ parityDescribe("repository Postgres parity", () => {
       }
     });
     const deadLetter = createJobRecord({
-      id: `job-readiness-dead-${unique}`,
       userId: DEFAULT_OWNER_USER_ID,
       kind: "docs_render",
       payload: {

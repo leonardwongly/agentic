@@ -254,6 +254,7 @@ describe("workflow templates routes", () => {
   it("stamps the human actor when a session principal creates a workflow template", async () => {
     const secondaryUserId = "user-secondary";
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: secondaryUserId,
       sessionId: "session-secondary",

@@ -60,8 +60,7 @@ describe("DashboardGoalsCard", () => {
         pendingShareReview={{
           goalId: "goal-1",
           goalTitle: "Reviewed customer follow-up",
-          review: buildReview(),
-          reviewFingerprint: "a".repeat(64)
+          review: buildReview()
         }}
         shareGoal={() => {}}
         confirmGoalShare={async () => {}}

@@ -64,7 +64,7 @@ describe("auth helpers", () => {
 
   afterEach(() => {
     process.env.AGENTIC_ACCESS_KEY = originalKey;
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
     process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE = originalRequireSharedAuthState;
     process.env.DATABASE_URL = originalDatabaseUrl;
     process.env.AGENTIC_SHARED_AUTH_STATE = originalSharedAuthState;
@@ -89,7 +89,7 @@ describe("auth helpers", () => {
 
   it("verifies a configured access key and derived session token", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     expect(verifyAccessKey("super-secret-key")).toBe(true);
     expect(verifyAccessKey("wrong-key")).toBe(false);
@@ -104,7 +104,7 @@ describe("auth helpers", () => {
 
   it("issues distinct signed session tokens and honors revocation", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const firstToken = buildSessionToken();
     const secondToken = buildSessionToken();
@@ -120,7 +120,7 @@ describe("auth helpers", () => {
 
   it("issues signed OAuth state tokens scoped to the expected user and workspace", () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const token = buildOAuthStateToken({
       userId: "test-owner",
@@ -137,7 +137,7 @@ describe("auth helpers", () => {
 
   it("rejects tampered OAuth state signatures", () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const token = buildOAuthStateToken({
       userId: "test-owner",
@@ -151,7 +151,7 @@ describe("auth helpers", () => {
 
   it("rejects OAuth state tokens presented for the wrong user", () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const token = buildOAuthStateToken({
       userId: "test-owner",
@@ -163,7 +163,7 @@ describe("auth helpers", () => {
 
   it("supports swapping in a shared auth session state store boundary", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const rateLimitAttempts = new Map<string, number>();
     const revokedSessionIds = new Map<string, number>();
@@ -223,7 +223,7 @@ describe("auth helpers", () => {
 
   it("reports missing configuration in production without the development fallback", () => {
     delete process.env.AGENTIC_ACCESS_KEY;
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
 
     const authMode = getAuthMode();
 
@@ -234,7 +234,7 @@ describe("auth helpers", () => {
   it("requires explicit opt-in before using the local development fallback key", () => {
     delete process.env.AGENTIC_ACCESS_KEY;
     delete process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY;
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
 
     expect(getAuthMode({ emitDevelopmentWarning: false })).toMatchObject({
       configured: false,
@@ -248,7 +248,7 @@ describe("auth helpers", () => {
     const warningSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     delete process.env.AGENTIC_ACCESS_KEY;
     process.env.AGENTIC_ENABLE_LOCAL_DEV_KEY = "true";
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
 
     const authMode = getAuthMode({ emitDevelopmentWarning: false });
 
@@ -263,7 +263,7 @@ describe("auth helpers", () => {
 
   it("accepts the access-key header without touching the cookie store", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     await expect(
       requireApiSession(
@@ -281,7 +281,7 @@ describe("auth helpers", () => {
 
   it("accepts scoped machine tokens only through explicit principal requirements", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
     process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
       {
         id: "ci-goals",
@@ -336,7 +336,7 @@ describe("auth helpers", () => {
 
   it("rejects revoked, expired, or underscoped machine tokens deterministically", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     const request = new Request("http://localhost/api/goals", {
       method: "POST",
@@ -401,7 +401,7 @@ describe("auth helpers", () => {
 
   it("rejects an explicit invalid machine token even when an access key is present", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
     process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
       {
         id: "ci-goals",
@@ -436,7 +436,7 @@ describe("auth helpers", () => {
 
   it("accepts a valid session cookie from the request headers", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     await expect(
       requireApiSession(
@@ -454,7 +454,7 @@ describe("auth helpers", () => {
 
   it("rejects unauthorized requests with an auth error", async () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
 
     await expect(requireApiSession(new Request("http://localhost/api/memory"))).rejects.toMatchObject({
       name: "AuthError",
@@ -465,7 +465,7 @@ describe("auth helpers", () => {
   it("marks session cookies as secure-only in production", () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
     process.env.AGENTIC_BOOTSTRAP_USER_ID = "owner";
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
 
     const cookie = createSessionCookie();
 
@@ -479,7 +479,7 @@ describe("auth helpers", () => {
   it("clears session cookies immediately in production", () => {
     process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
     process.env.AGENTIC_BOOTSTRAP_USER_ID = "owner";
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
 
     const cookie = clearSessionCookie();
 
@@ -553,7 +553,7 @@ describe("auth helpers", () => {
   });
 
   it("reports request identity runtime warnings until trusted proxy headers are enabled", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
 
     expect(getRequestIdentityRuntimeStatus()).toEqual({
       production: true,
@@ -596,7 +596,7 @@ describe("auth helpers", () => {
     expect(identity).toMatchObject({
       source: "request-fingerprint"
     });
-    expect(identity.key).toMatch(/^fp:\/api\/session:[0-9a-f]{24}$/);
+    expect(identity.key).toMatch(/^fp:proxy-fallback:[0-9a-f]{24}$/);
   });
 
   it("supports swapping in a shared session unlock state store boundary", async () => {
@@ -701,7 +701,7 @@ describe("auth helpers", () => {
   });
 
   it("reports process-local auth runtime state by default", () => {
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
     delete process.env.AGENTIC_REQUIRE_SHARED_AUTH_STATE;
     delete process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
@@ -715,14 +715,14 @@ describe("auth helpers", () => {
   });
 
   it("rejects production mode by default when auth runtime state is still process-local", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     delete process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
     expect(() => validateAuthRuntimeState()).toThrow(/Shared auth state is not configured for production/);
   });
 
   it("accepts strict production mode when shared auth runtime state is configured", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     delete process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE;
 
     const authStore: AuthSessionStateStore = {
@@ -763,7 +763,7 @@ describe("auth helpers", () => {
   });
 
   it("allows an explicit single-instance production exception when process-local auth state is intentional", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.AGENTIC_ALLOW_PROCESS_LOCAL_AUTH_STATE = "true";
 
     expect(() => validateAuthRuntimeState()).not.toThrow();
@@ -774,7 +774,7 @@ describe("auth helpers", () => {
   });
 
   it("defaults to shared auth runtime state when DATABASE_URL is configured", () => {
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
     process.env.DATABASE_URL = "postgres://agentic:agentic@localhost:5432/agentic";
     process.env.AGENTIC_SHARED_AUTH_STATE = "true";
 
@@ -884,7 +884,7 @@ describe("auth helpers", () => {
   describe("adversarial auth edge cases", () => {
     it("rejects zero-length and whitespace-only access keys without throwing", () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
 
       expect(verifyAccessKey("")).toBe(false);
       expect(verifyAccessKey("   ")).toBe(false);
@@ -895,7 +895,7 @@ describe("auth helpers", () => {
 
     it("rejects session tokens with unicode and control characters in the payload", async () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
 
       const validToken = buildSessionToken();
       const [payload] = validToken.split(".");
@@ -910,7 +910,7 @@ describe("auth helpers", () => {
 
     it("rejects session tokens with extra dots (multi-segment forgery)", async () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
 
       const validToken = buildSessionToken();
       const [payload, signature] = validToken.split(".");
@@ -923,7 +923,7 @@ describe("auth helpers", () => {
 
     it("rejects session tokens at exact expiry boundary (off-by-one)", async () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
 
       const token = buildSessionToken();
       const parsed = await parseAuthorizedSessionToken(token);
@@ -950,7 +950,7 @@ describe("auth helpers", () => {
 
     it("handles concurrent session creation without collision", async () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
 
       const tokens = await Promise.all(Array.from({ length: 20 }, () => buildSessionToken()));
       const uniqueTokens = new Set(tokens);
@@ -965,7 +965,7 @@ describe("auth helpers", () => {
 
     it("rejects machine tokens with empty or whitespace-only secrets", () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
 
       expect(() => hashMachineTokenSecret("")).toThrow(/must not be empty/);
       expect(() => hashMachineTokenSecret("   ")).toThrow(/must not be empty/);
@@ -973,7 +973,7 @@ describe("auth helpers", () => {
 
     it("rejects machine token configs with duplicate ids", async () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
       process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
         {
           id: "duplicate-id",
@@ -1003,7 +1003,7 @@ describe("auth helpers", () => {
 
     it("rejects machine token configs with malformed tokenHash", async () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
       process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
         {
           id: "bad-hash",
@@ -1024,7 +1024,7 @@ describe("auth helpers", () => {
 
     it("handles cookie header with multiple semicolons and empty segments", async () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
 
       const token = buildSessionToken();
 
@@ -1042,7 +1042,7 @@ describe("auth helpers", () => {
 
     it("rejects bearer authorization header with only whitespace after Bearer", async () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
 
       const principal = await resolveApiPrincipal(
         new Request("http://localhost/api/test", {
@@ -1056,7 +1056,7 @@ describe("auth helpers", () => {
 
     it("is case-insensitive for Bearer prefix in authorization header", async () => {
       process.env.AGENTIC_ACCESS_KEY = "super-secret-key";
-      process.env.NODE_ENV = "test";
+      (process.env as any).NODE_ENV = "test";
       process.env[AGENTIC_MACHINE_TOKENS_ENV] = JSON.stringify([
         {
           id: "bearer-test",

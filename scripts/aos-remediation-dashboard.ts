@@ -490,7 +490,7 @@ export function formatAosTrackerOutput(tracker: unknown, errors: string[], optio
     return `${JSON.stringify(
       {
         tracker,
-        summary: isRecord(tracker) ? summarizeAosTracker(tracker as AosTracker) : null,
+        summary: isRecord(tracker) ? summarizeAosTracker(tracker as unknown as AosTracker) : null,
         errors
       },
       null,
@@ -504,7 +504,7 @@ export function formatAosTrackerOutput(tracker: unknown, errors: string[], optio
     );
   }
 
-  const rendered = renderAosDashboard(tracker as AosTracker, {
+  const rendered = renderAosDashboard(tracker as unknown as AosTracker, {
     includeGitSnapshot: options.includeGitSnapshot,
     cwd: options.cwd
   });

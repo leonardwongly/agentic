@@ -320,7 +320,7 @@ describe("orchestrator", () => {
     const originalNodeEnv = process.env.NODE_ENV;
     const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
 
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
     process.env.OPENAI_API_KEY = "test-key";
 
     try {
@@ -332,7 +332,7 @@ describe("orchestrator", () => {
       expect(bundle.goal.intent).toBe("weekly-planning");
       expect(bundle.goal.title).toBe("Weekly planning and calendar shaping");
     } finally {
-      process.env.NODE_ENV = originalNodeEnv;
+      (process.env as any).NODE_ENV = originalNodeEnv;
       process.env.OPENAI_API_KEY = originalOpenAiApiKey;
     }
   });
@@ -407,7 +407,7 @@ describe("orchestrator", () => {
           log.kind === "task.state_changed" &&
           log.details?.scope === "similar_24h" &&
           log.details?.decision === "approved" &&
-          log.details?.actorContext?.subjectUserId === DEFAULT_OWNER_USER_ID
+          (log.details as any)?.actorContext?.subjectUserId === DEFAULT_OWNER_USER_ID
       )
     ).toBe(true);
     expect(updated.actionLogs.at(-1)).toMatchObject({
@@ -631,7 +631,7 @@ describe("orchestrator", () => {
     expect(bundle.tasks).toHaveLength(3);
     expect(bundle.workflow.checkpoint).toBe("done");
     expect(bundle.actionLogs.filter((log) => log.kind === "agent.completed")).toSatisfy((logs) =>
-      logs.every((log) => typeof log.details?.executionMode === "string")
+      logs.every((log: any) => typeof log.details?.executionMode === "string")
     );
     expect(resolutionLog?.details).toMatchObject({
       briefingType: "midday",

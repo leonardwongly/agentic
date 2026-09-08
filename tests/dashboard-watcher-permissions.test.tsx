@@ -309,7 +309,7 @@ function buildDashboardData(role: "editor" | "viewer"): DashboardData {
         items: []
       }
     }
-  } as DashboardData;
+  } as unknown as DashboardData;
 }
 
 function buildCommitmentInbox() {

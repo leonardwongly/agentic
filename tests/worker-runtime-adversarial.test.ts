@@ -197,9 +197,9 @@ describe("worker runtime adversarial", () => {
       const updated = updateWorkerRuntimeHealthSnapshot(snapshot, {
         status: "running",
         processedCount: 10,
-        runnerId: "hijacked-runner" as any,
-        version: 99 as any
-      });
+        runnerId: "hijacked-runner",
+        version: 99
+      } as any);
 
       // Immutable fields must not change
       expect(updated.runnerId).toBe("runner-1");

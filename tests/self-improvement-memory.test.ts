@@ -925,8 +925,7 @@ describe("recommendation replay analytics", () => {
       kind: "execution_path",
       agent: "communications",
       riskClass: "R3",
-      capabilities: ["send"],
-      minimumEvidence: 3
+      capabilities: ["send"]
     });
 
     expect(validation).toMatchObject({
@@ -1044,8 +1043,7 @@ describe("recommendation replay analytics", () => {
       kind: "execution_path",
       agent: "communications",
       riskClass: "R3",
-      capabilities: ["send"],
-      minimumEvidence: 3
+      capabilities: ["send"]
     });
 
     expect(validation.replayValidated).toBe(false);

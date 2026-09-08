@@ -20,7 +20,7 @@ describe("local notes adapter", () => {
     process.env.AGENTIC_LOCAL_NOTES_ENABLED = originalLocalNotesEnabled;
     process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = originalLocalNotesAllowedRoot;
     process.env.AGENTIC_NOTES_PATH = originalNotesPath;
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
   });
 
   it("creates, reads, searches, and updates notes in a safe base directory", async () => {
@@ -113,7 +113,7 @@ describe("local notes adapter", () => {
     const allowedRoot = await mkdtemp(path.join(os.tmpdir(), "agentic-notes-root-"));
     const basePath = path.join(allowedRoot, "notes");
 
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.AGENTIC_NOTES_PATH = basePath;
     process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = allowedRoot;
     delete process.env.AGENTIC_LOCAL_NOTES_ENABLED;
@@ -132,7 +132,7 @@ describe("local notes adapter", () => {
     const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "agentic-notes-outside-"));
     const basePath = path.join(outsideRoot, "notes");
 
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.AGENTIC_LOCAL_NOTES_ENABLED = "true";
     process.env.AGENTIC_NOTES_PATH = basePath;
     process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = allowedRoot;

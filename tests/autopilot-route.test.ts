@@ -823,6 +823,7 @@ describe("autopilot events route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: secondaryUserId,
       sessionId: "session-secondary",
@@ -887,6 +888,7 @@ describe("autopilot events route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: viewerUserId,
       sessionId: "session-viewer",
@@ -957,6 +959,7 @@ describe("autopilot events route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: editorUserId,
       sessionId: "session-editor",
@@ -1294,6 +1297,7 @@ describe("autopilot events route", () => {
     Reflect.set(globalThis, "__agenticRepository", undefined);
 
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: secondaryUserId,
       sessionId: "session-secondary",

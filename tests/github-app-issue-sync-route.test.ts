@@ -319,8 +319,8 @@ describe("GitHub App issue sync route", () => {
 
     expect(response.status).toBe(202);
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.payload.issue.body).toHaveLength(10_000);
-    expect(jobs[0]?.payload.issue.body).toBe("a".repeat(10_000));
+    expect((jobs[0]?.payload as Record<string, any>).issue.body).toHaveLength(10_000);
+    expect((jobs[0]?.payload as Record<string, any>).issue.body).toBe("a".repeat(10_000));
   });
 
   it("deduplicates repeat syncs by repository, issue, mode, and sync trigger", async () => {

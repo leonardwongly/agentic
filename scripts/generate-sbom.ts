@@ -260,10 +260,65 @@ export function buildSpdxDocument(lockFile: PackageLockFile, packageJson: Packag
   };
 }
 
+interface PnpmLsEntry {
+  name: string;
+  version: string;
+  resolved?: string;
+  integrity?: string;
+  dependencies?: Record<string, string>;
+  dev?: boolean;
+  path?: string;
+}
+
+function collectPnpmPackages(entries: PnpmLsEntry[]): Map<string, PackageLockDependency> {
+  const packages = new Map<string, PackageLockDependency>();
+
+  function walk(items: PnpmLsEntry[]) {
+    for (const item of items) {
+      if (item.dev) {
+        continue;
+      }
+      const key = `node_modules/${item.name}`;
+      if (!packages.has(key)) {
+        packages.set(key, {
+          name: item.name,
+          version: item.version,
+          resolved: item.resolved,
+          integrity: item.integrity
+        });
+      }
+    }
+  }
+
+  walk(entries);
+  return packages;
+}
+
 function main() {
   const { outputPath } = parseArgs(process.argv.slice(2));
   const packageJson = JSON.parse(readFileSync(path.resolve(process.cwd(), "package.json"), "utf8")) as PackageJson;
-  const lockFile = JSON.parse(readFileSync(path.resolve(process.cwd(), "package-lock.json"), "utf8")) as PackageLockFile;
+  const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+  const pnpmOutput = execFileSync("pnpm", ["ls", "--prod", "--json", "--depth=Infinity"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024
+  });
+  const pnpmTree = JSON.parse(pnpmOutput) as Array<{ name: string; version: string; dependencies?: Record<string, PnpmLsEntry> }>;
+
+  const flatEntries: PnpmLsEntry[] = [];
+  function flattenDeps(deps: Record<string, PnpmLsEntry> | undefined) {
+    if (!deps) return;
+    for (const [name, entry] of Object.entries(deps)) {
+      flatEntries.push({ name, version: entry.version, resolved: entry.resolved, integrity: entry.integrity, dev: entry.dev });
+      flattenDeps(entry.dependencies as Record<string, PnpmLsEntry> | undefined);
+    }
+  }
+  for (const workspace of pnpmTree) {
+    flattenDeps(workspace.dependencies as Record<string, PnpmLsEntry> | undefined);
+  }
+
+  const packagesMap = collectPnpmPackages(flatEntries);
+  const lockFile: PackageLockFile = { lockfileVersion: 3, packages: Object.fromEntries(packagesMap) };
   const document = buildSpdxDocument(lockFile, packageJson);
   const resolvedOutputPath = path.resolve(process.cwd(), outputPath);
 

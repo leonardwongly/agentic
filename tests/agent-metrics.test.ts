@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_OWNER_USER_ID, type ApprovalRequest, type AgentDefinition, type Task } from "@agentic/contracts";
+import { DEFAULT_OWNER_USER_ID, type ApprovalRequest, type AgentDefinition, type AgentName, type Task } from "@agentic/contracts";
 import { processUserRequest } from "@agentic/orchestrator";
 import { createRepository } from "@agentic/repository";
 import { deriveAgentMetricsFromGoals } from "../packages/repository/src/agent-metrics";
@@ -74,14 +74,14 @@ describe("deriveAgentMetricsFromGoals", () => {
           tasks: [
             buildTask(templateTask!, {
               id: `${templateTask!.id}-before-day-boundary`,
-              assignedAgent: agent.id,
+              assignedAgent: agent.id as AgentName,
               state: "completed",
               createdAt: new Date(startOfToday.getTime() - 60_000).toISOString(),
               updatedAt: new Date(startOfToday.getTime() - 30_000).toISOString()
             }),
             buildTask(templateTask!, {
               id: `${templateTask!.id}-within-day-boundary`,
-              assignedAgent: agent.id,
+              assignedAgent: agent.id as AgentName,
               state: "completed",
               createdAt: new Date(withinDayCreatedAtMs).toISOString(),
               updatedAt: new Date(withinDayUpdatedAtMs).toISOString()
@@ -113,7 +113,7 @@ describe("deriveAgentMetricsFromGoals", () => {
     expect(templateApproval).toBeDefined();
 
     const failedTask = buildTask(templateTask!, {
-      assignedAgent: agent.id,
+      assignedAgent: agent.id as AgentName,
       state: "failed",
       createdAt,
       updatedAt
@@ -160,6 +160,7 @@ describe("deriveAgentMetricsFromGoals", () => {
           actionLogIds: [],
           artifactIds: [],
           memoryIds: [],
+          actorContext: null,
           createdAt,
           updatedAt
         },
@@ -185,6 +186,7 @@ describe("deriveAgentMetricsFromGoals", () => {
           actionLogIds: [],
           artifactIds: [],
           memoryIds: [],
+          actorContext: null,
           createdAt,
           updatedAt
         }

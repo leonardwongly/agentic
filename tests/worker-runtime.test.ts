@@ -1015,7 +1015,7 @@ describe("worker runtime", () => {
 
     expect(goalsAfterFirstAttempt).toHaveLength(1);
     expect(goalsAfterSecondAttempt).toHaveLength(1);
-    expect(goalsAfterSecondAttempt[0]?.goal.id).toBe(job.payload.goalId);
+    expect(goalsAfterSecondAttempt[0]?.goal.id).toBe((job.payload as { goalId: string }).goalId);
     expect(memoriesAfterSecondAttempt.map((memory) => memory.id)).toEqual(
       memoriesAfterFirstAttempt.map((memory) => memory.id)
     );
@@ -1208,7 +1208,7 @@ describe("worker runtime", () => {
     const memoriesAfterFirstAttempt = await repository.listMemory(DEFAULT_OWNER_USER_ID);
     const episodesAfterFirstAttempt = await selfImprovementRepository.listEpisodes();
     const approvalEpisodesAfterFirstAttempt = episodesAfterFirstAttempt.filter(
-      (episode) => episode.metadata?.goalId === bundle.goal.id && episode.metadata?.taskId === "task-approval-follow-up"
+      (episode) => (episode.metadata as Record<string, unknown> | null)?.goalId === bundle.goal.id && (episode.metadata as Record<string, unknown> | null)?.taskId === "task-approval-follow-up"
     );
 
     await executeApprovalFollowUpJob({
@@ -1396,11 +1396,14 @@ describe("worker runtime", () => {
       workspaceId: null,
       actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       actionIntent: {
+        schemaVersion: "v1" as const,
         type: "manual_review",
+        riskClass: "R2" as const,
         actionType: "send",
         summary: "Review unsupported action intent values.",
         reason: "Regression coverage for stable action identity.",
-        artifactIds: []
+        artifactIds: [],
+        metadata: {}
       }
     });
 
@@ -1501,7 +1504,7 @@ describe("worker runtime", () => {
         slackChannelId: "C123",
         slackMessageTs: "1710000000.000100",
         workspaceId: null,
-        metadata: {}
+        metadata: { replayedFromJobId: null }
       },
       actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       idempotencyKey: "worker-runtime-slack-receipt"
@@ -1547,7 +1550,7 @@ describe("worker runtime", () => {
         telegramChatId: "-100123456",
         telegramMessageId: 77,
         workspaceId: null,
-        metadata: {}
+        metadata: { replayedFromJobId: null }
       },
       actorContext: createSystemActorContext(DEFAULT_OWNER_USER_ID),
       idempotencyKey: "worker-runtime-telegram-receipt"
@@ -1622,7 +1625,7 @@ describe("worker runtime", () => {
       name: "Idempotency Workspace",
       slug: "idempotency-workspace",
       description: "Workspace used to validate derived durable job keys.",
-      retentionDays: 365,
+      isPersonal: false,
       createdAt: "2026-04-16T00:00:00.000Z",
       updatedAt: "2026-04-16T00:00:00.000Z"
     }, createSystemActorContext(DEFAULT_OWNER_USER_ID));
@@ -1870,7 +1873,7 @@ describe("worker runtime", () => {
 
     expect(goalsAfterFirstAttempt).toHaveLength(1);
     expect(goalsAfterSecondAttempt).toHaveLength(1);
-    expect(goalsAfterSecondAttempt[0]?.goal.id).toBe(job.payload.goalId);
+    expect(goalsAfterSecondAttempt[0]?.goal.id).toBe((job.payload as { goalId: string }).goalId);
     expect(memoriesAfterSecondAttempt.map((memory) => memory.id)).toEqual(
       memoriesAfterFirstAttempt.map((memory) => memory.id)
     );
@@ -2328,7 +2331,7 @@ describe("worker runtime", () => {
 
     expect(goalsAfterFirstAttempt).toHaveLength(1);
     expect(goalsAfterSecondAttempt).toHaveLength(1);
-    expect(goalsAfterSecondAttempt[0]?.goal.id).toBe(job.payload.goalId);
+    expect(goalsAfterSecondAttempt[0]?.goal.id).toBe((job.payload as { goalId: string }).goalId);
     expect(firstTemplate?.schedule.lastRunAt).toBeTruthy();
     expect(secondTemplate?.schedule.lastRunAt).toBeTruthy();
     expect(secondTemplate?.schedule.nextRunAt).toBe(firstTemplate?.schedule.nextRunAt);
@@ -2364,7 +2367,7 @@ describe("worker runtime", () => {
     });
 
     vi.spyOn(orchestrator, "processUserRequest").mockResolvedValue(
-      buildCompletedBundle(job.payload.goalId, job.payload.workflowId)
+      buildCompletedBundle((job.payload as { goalId: string; workflowId: string }).goalId, (job.payload as { goalId: string; workflowId: string }).workflowId)
     );
     vi.spyOn(orchestrator, "captureMemoriesFromBundle").mockReturnValue({
       memories: [],
@@ -2382,7 +2385,7 @@ describe("worker runtime", () => {
           relatedPatternId: null,
           userFeedback: null,
           metadata: {
-            goalId: job.payload.goalId,
+            goalId: (job.payload as { goalId: string }).goalId,
             taskId: "task-worker-runtime-completed",
             learningPrivacy: {
               datasetId: "learning-capture-records",
@@ -2415,14 +2418,14 @@ describe("worker runtime", () => {
     });
 
     const persistedJob = await repository.getJob(job.id, DEFAULT_OWNER_USER_ID);
-    const persistedBundle = await repository.getGoalBundleForUser(job.payload.goalId, DEFAULT_OWNER_USER_ID);
+    const persistedBundle = await repository.getGoalBundleForUser((job.payload as { goalId: string }).goalId, DEFAULT_OWNER_USER_ID);
     const episodes = await selfImprovementRepository.listEpisodes();
 
     expect(result).toEqual({
       processedCount: 1,
       stopReason: "max_jobs"
     });
-    expect(persistedBundle?.goal.id).toBe(job.payload.goalId);
+    expect(persistedBundle?.goal.id).toBe((job.payload as { goalId: string }).goalId);
     expect(persistedJob).toMatchObject({
       id: job.id,
       status: "dead_letter",

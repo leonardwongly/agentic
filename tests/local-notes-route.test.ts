@@ -29,7 +29,7 @@ describe("local notes routes", () => {
     process.env.AGENTIC_NOTES_PATH = path.join(sandboxRoot, "notes");
     process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = sandboxRoot;
     process.env.AGENTIC_LOCAL_NOTES_ENABLED = "true";
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
@@ -39,7 +39,7 @@ describe("local notes routes", () => {
     process.env.AGENTIC_LOCAL_NOTES_ALLOWED_ROOT = originalLocalNotesAllowedRoot;
     process.env.AGENTIC_RUNTIME_STORE_PATH = originalRuntimeStorePath;
     process.env.AGENTIC_NOTES_PATH = originalNotesPath;
-    process.env.NODE_ENV = originalNodeEnv;
+    (process.env as any).NODE_ENV = originalNodeEnv;
     Reflect.set(globalThis, "__agenticRepository", undefined);
   });
 
@@ -156,7 +156,7 @@ describe("local notes routes", () => {
   });
 
   it("fails closed without leaking local paths when production local notes are not explicitly enabled", async () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     delete process.env.AGENTIC_LOCAL_NOTES_ENABLED;
 
     const response = await localNotesRouteGet(
@@ -176,7 +176,7 @@ describe("local notes routes", () => {
   it("fails closed when production local notes are outside the allowed root", async () => {
     const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "agentic-local-notes-outside-"));
 
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.AGENTIC_LOCAL_NOTES_ENABLED = "true";
     process.env.AGENTIC_NOTES_PATH = path.join(outsideRoot, "notes");
 

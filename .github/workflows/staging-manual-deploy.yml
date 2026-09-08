@@ -69,26 +69,29 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci --include=dev
+      - name: Install pnpm
+        run: npm install -g pnpm@11.5.2
+
+      - run: pnpm install --frozen-lockfile --include=dev
 
       - name: Validate GitHub Actions provenance pins
-        run: npm run ci:validate-provenance
+        run: pnpm run ci:validate-provenance
 
       - name: Validate issue-theme gate taxonomy
-        run: npm run ci:issue-theme-gates -- --assert-workflow
+        run: pnpm run ci:issue-theme-gates -- --assert-workflow
 
       - name: Resolve staging execution mode
         id: inspect
-        run: npm run deploy:staging:plan
+        run: pnpm run deploy:staging:plan
 
       - name: Validate stable ingress readiness
         if: steps.inspect.outputs.mode == 'external'
-        run: npm run deploy:ingress:check
+        run: pnpm run deploy:ingress:check
 
       - name: Validate compliance registry references
-        run: npm run compliance:validate-registry
+        run: pnpm run compliance:validate-registry
 
       - name: Initialize staging runtime environment
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
@@ -100,41 +103,41 @@ jobs:
 
       - name: Audit production dependencies
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
-        run: npm run security:audit-runtime -- --minimum-severity moderate --report artifacts/security/runtime-audit-report.json
+        run: pnpm run security:audit-runtime -- --minimum-severity moderate --report artifacts/security/runtime-audit-report.json
 
       - name: Build deployable artifacts
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
-        run: npm run build
+        run: pnpm run build
 
       - name: Generate runtime SBOM
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
-        run: npm run security:sbom -- --output artifacts/security/agentic-sbom.spdx.json
+        run: pnpm run security:sbom -- --output artifacts/security/agentic-sbom.spdx.json
 
       - name: Prepare runner-local staging database
         if: steps.inspect.outputs.mode == 'self-test'
         run: |
-          npm run db:migrate
-          npm run db:status -- --require-ready
+          pnpm run db:migrate
+          pnpm run db:status -- --require-ready
 
       - name: Validate staging database readiness
         if: steps.inspect.outputs.mode == 'external'
-        run: npm run db:status -- --require-ready
+        run: pnpm run db:status -- --require-ready
 
       - name: Validate feature capability contracts
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
-        run: npm run test:smoke:capabilities
+        run: pnpm run test:smoke:capabilities
 
       - name: Validate async execution smoke path
         if: steps.inspect.outputs.mode == 'external'
-        run: npm run test:smoke:observability
+        run: pnpm run test:smoke:observability
 
       - name: Validate telemetry exporter, retention, and cockpit samples
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
-        run: npm run test:smoke:observability-export
+        run: pnpm run test:smoke:observability-export
 
       - name: Validate rollout gate manifests against retained cockpit telemetry
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
-        run: npm run telemetry:rollout-gate -- --dir "$AGENTIC_TELEMETRY_RETENTION_DIR"
+        run: pnpm run telemetry:rollout-gate -- --dir "$AGENTIC_TELEMETRY_RETENTION_DIR"
 
       - name: Build staging image
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
@@ -148,22 +151,22 @@ jobs:
             apps/web/package.json \
             apps/worker/package.json \
             package.json \
-            package-lock.json \
+            pnpm-lock.yaml \
             packages \
             scripts
           docker save "$AGENTIC_STAGING_IMAGE_TAG" -o artifacts/build/agentic-image.tar
 
       - name: Run provider staging deploy
         if: steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test'
-        run: npm run deploy:staging:provider
+        run: pnpm run deploy:staging:provider
 
       - name: Smoke-check deployed staging environment
         if: steps.inspect.outputs.mode == 'external'
-        run: npm run test:smoke:deployment
+        run: pnpm run test:smoke:deployment
 
       - name: Validate deployed async execution canary
         if: steps.inspect.outputs.mode == 'external'
-        run: npm run test:smoke:deployment-async
+        run: pnpm run test:smoke:deployment-async
 
       - name: Upload telemetry rollout evidence
         if: always() && (steps.inspect.outputs.mode == 'external' || steps.inspect.outputs.mode == 'self-test')

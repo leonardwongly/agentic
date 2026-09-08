@@ -14,6 +14,7 @@ import { createActorContextFromPrincipal } from "../../../lib/actor-context";
 import { ApiRouteError, authenticatedJson, handleApiError, parseJsonBody } from "../../../lib/api-response";
 import { requireJsonContentType } from "../../../lib/api-errors";
 import { getSeededWorkspaceRouteRepository } from "../../../lib/server";
+import { checkAbuseRateLimit } from "../../../lib/abuse-rate-limit";
 
 const WorkspaceNameSchema = z.string().trim().min(1).max(120);
 const WorkspaceDescriptionSchema = z.string().trim().max(500).default("");
@@ -105,6 +106,13 @@ export async function POST(request: Request) {
     const body = await parseJsonBody(request, WorkspaceActionSchema);
 
     if (body.action === "create") {
+      const rateLimit = await checkAbuseRateLimit({ namespace: "workspace-create", request, principal });
+      if (!rateLimit.allowed) {
+        return authenticatedJson(
+          { error: "Too many workspace creation requests. Try again later." },
+          { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } }
+        );
+      }
       const timestamp = nowIso();
       const workspace = WorkspaceSchema.parse({
         id: randomUUID(),

@@ -20,7 +20,8 @@ import {
   runDatabaseMigrations,
   DatabaseSchemaNotReadyError,
   DatabaseConfigurationError,
-  type DatabaseMigrationFile
+  type DatabaseMigrationFile,
+  type DatabaseSchemaStatus
 } from "@agentic/db/migration-runtime";
 import type { RuntimeContext, StorageAdapter } from "@agentic/runtime-adapters";
 
@@ -142,8 +143,11 @@ function makeRuntimeContext(
         return false;
       }
     },
-    async readFile(p: string, encoding?: "utf8") {
-      return fs.readFile(p, encoding ?? undefined);
+    async readFile(p: string, encoding?: "utf8"): Promise<string | Uint8Array> {
+      if (encoding === "utf8") {
+        return fs.readFile(p, "utf8");
+      }
+      return fs.readFile(p);
     },
     async writeFile(p: string, data: string | Uint8Array) {
       await fs.writeFile(p, data);
@@ -364,7 +368,7 @@ describe("adversarial: race conditions", () => {
     ]);
 
     // At least one should succeed (the first to complete)
-    const fulfilled = results.filter((r): r is PromiseFulfilledResult<unknown> => r.status === "fulfilled");
+    const fulfilled = results.filter((r): r is PromiseFulfilledResult<DatabaseSchemaStatus> => r.status === "fulfilled");
     expect(fulfilled.length).toBeGreaterThanOrEqual(1);
 
     // With our serialized fake, only one insert occurs. In production with

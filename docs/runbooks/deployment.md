@@ -280,7 +280,7 @@ risk is recorded in the release notes together with an owner and follow-up date.
 1. Confirm whether the configured staging path is provider-backed or runner-local.
 
 ```bash
-npm run deploy:staging:plan
+pnpm run deploy:staging:plan
 ```
 
 Do not treat `self-test` mode as external deployment evidence. It only verifies

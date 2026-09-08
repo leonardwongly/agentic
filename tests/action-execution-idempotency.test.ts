@@ -50,11 +50,16 @@ describe("action execution idempotency propagation", () => {
     const result = await executeTypedAction({
       task,
       actionIntent: {
+        schemaVersion: "v1",
         type: "send_message",
+        adapter: "gmail",
+        riskClass: "R3",
         mode: "send",
         to: "person@example.com",
         subject: "Hello",
-        body: "Body"
+        body: "Body",
+        threadId: null,
+        metadata: {}
       },
       adapters: {
         gmail: {
@@ -92,11 +97,16 @@ describe("action execution idempotency propagation", () => {
     const result = await executeTypedAction({
       task,
       actionIntent: {
+        schemaVersion: "v1",
         type: "schedule_event",
+        adapter: "calendar",
+        riskClass: "R3",
         summary: "Standup",
         start: "2026-05-16T09:00:00Z",
         end: "2026-05-16T09:30:00Z",
-        attendees: ["person@example.com"]
+        description: null,
+        attendees: ["person@example.com"],
+        metadata: {}
       },
       adapters: {
         calendar: {

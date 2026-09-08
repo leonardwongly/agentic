@@ -104,7 +104,7 @@ function buildLedger() {
 }
 
 function buildReadiness(tier: IntegrationReadinessTier, reason = `${tier} test readiness`): IntegrationReadinessProfile {
-  const supportedModes =
+  const supportedModes: Array<"draft" | "approval" | "autonomous"> =
     tier === "autonomous-grade"
       ? ["draft", "approval", "autonomous"]
       : tier === "approval-grade"

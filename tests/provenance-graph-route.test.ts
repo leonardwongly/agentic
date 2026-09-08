@@ -112,7 +112,6 @@ describe("provenance graph route", () => {
     }
     const rootJob = await repository.enqueueJob(
       createJobRecord({
-        id: "older-root-job",
         userId: DEFAULT_OWNER_USER_ID,
         kind: "goal_create",
         payload: {
@@ -130,7 +129,6 @@ describe("provenance graph route", () => {
     for (let index = 0; index < 5; index += 1) {
       await repository.enqueueJob(
         createJobRecord({
-          id: `newer-job-${index}`,
           userId: DEFAULT_OWNER_USER_ID,
           kind: "goal_create",
           payload: {

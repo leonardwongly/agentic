@@ -12,11 +12,8 @@ function buildDashboardData(overrides: Partial<DashboardData> = {}): DashboardDa
     goalShares: [],
     privacyOperations: [],
     controlPlane: {
-      workspace: { status: "attention", summary: "Missing workspace.", updatedAt: "2026-04-18T00:00:00.000Z" },
-      commitments: { status: "idle", summary: "No commitments.", updatedAt: "2026-04-18T00:00:00.000Z" },
-      automation: { status: "idle", summary: "No automation.", updatedAt: "2026-04-18T00:00:00.000Z" },
-      execution: { status: "idle", summary: "No execution.", updatedAt: "2026-04-18T00:00:00.000Z" },
-      trust: { status: "idle", summary: "No trust signals.", updatedAt: "2026-04-18T00:00:00.000Z" }
+      generatedAt: "2026-04-18T00:00:00.000Z",
+      sections: []
     },
     operatingSections: {
       generatedAt: "2026-04-18T00:00:00.000Z",
@@ -87,10 +84,10 @@ function buildDashboardData(overrides: Partial<DashboardData> = {}): DashboardDa
     commitments: [],
     briefingPreferences: {
       userId: "system",
-      type: "startup",
+      timezone: "UTC",
       focus: "balanced",
-      includeApprovals: true,
-      includeMetrics: true,
+      schedules: [],
+      actorContext: null,
       createdAt: "2026-04-18T00:00:00.000Z",
       updatedAt: "2026-04-18T00:00:00.000Z"
     },
@@ -98,9 +95,14 @@ function buildDashboardData(overrides: Partial<DashboardData> = {}): DashboardDa
     autopilotSettings: {
       userId: "system",
       mode: "notify_only",
-      dailyDigest: true,
-      quietHoursStart: null,
-      quietHoursEnd: null,
+      debounceMinutes: 30,
+      reliabilityControls: {
+        budgetWindowMinutes: 60,
+        maxEventsPerWindow: 10,
+        maxPendingEvents: 5,
+        maxConsecutiveFailures: 3
+      },
+      actorContext: null,
       createdAt: "2026-04-18T00:00:00.000Z",
       updatedAt: "2026-04-18T00:00:00.000Z"
     },
@@ -112,10 +114,47 @@ function buildDashboardData(overrides: Partial<DashboardData> = {}): DashboardDa
     actionLogs: [],
     diagnostics: {
       generatedAt: "2026-04-18T00:00:00.000Z",
+      status: "healthy",
+      totalCount: 0,
       items: []
     },
+    traceability: {
+      generatedAt: "2026-04-18T00:00:00.000Z",
+      workspaceId: null,
+      workflowTraces: [],
+      taskTraces: [],
+      approvalTraces: [],
+      memoryProvenance: [],
+      eventCount: 0,
+      artifactCount: 0,
+      jobCount: 0,
+      trustLane: {
+        scopedMemoryCount: 0,
+        autonomyEligibleMemoryCount: 0,
+        advisoryInferredMemoryCount: 0,
+        staleOrReviewRequiredMemoryCount: 0,
+        blockedUnscopedMemoryCount: 0,
+        policy: "default"
+      }
+    },
+    cockpitRollout: {
+      enabled: false,
+      variant: "legacy",
+      flagName: "AGENTIC_DASHBOARD_COCKPIT" as const,
+      source: "default" as const,
+      rawValue: null,
+      runbookPath: "docs/runbooks/dashboard-cockpit-rollout.md",
+      thresholds: {
+        firstMeaningfulRenderMs: 2500,
+        summaryLatencyMs: 1000,
+        tableEndpointLatencyMs: 750,
+        eventReconnects: 2,
+        approvalLatencyMs: 600000,
+        deadLetterRecoveryMs: 900000
+      }
+    },
     ...overrides
-  };
+  } as DashboardData;
 }
 
 describe("core loop telemetry summary", () => {
@@ -133,10 +172,10 @@ describe("core loop telemetry summary", () => {
       buildDashboardData({
         activeWorkspace: {
           id: "workspace-1",
-          userId: "system",
+          ownerUserId: "system",
           name: "Operations",
           slug: "operations",
-          description: null,
+          description: "",
           isPersonal: true,
           createdAt: "2026-04-18T00:00:00.000Z",
           updatedAt: "2026-04-18T00:00:00.000Z"
@@ -147,13 +186,14 @@ describe("core loop telemetry summary", () => {
             userId: "system",
             goalId: null,
             title: "Confirm staffing plan",
-            status: "planned",
-            summary: null,
-            source: "test",
+            status: "pending",
+            summary: "Confirm staffing plan.",
+            sourceKind: "goal",
+            sourceId: "commitment-source",
             dueAt: null,
             createdAt: "2026-04-18T00:00:00.000Z",
             updatedAt: "2026-04-18T00:00:00.000Z"
-          }
+          } as unknown as DashboardData["commitments"][number]
         ]
       })
     );
@@ -170,10 +210,10 @@ describe("core loop telemetry summary", () => {
       buildDashboardData({
         activeWorkspace: {
           id: "workspace-1",
-          userId: "system",
+          ownerUserId: "system",
           name: "Operations",
           slug: "operations",
-          description: null,
+          description: "",
           isPersonal: true,
           createdAt: "2026-04-18T00:00:00.000Z",
           updatedAt: "2026-04-18T00:00:00.000Z"
@@ -182,7 +222,7 @@ describe("core loop telemetry summary", () => {
           {
             goal: {
               id: "goal-1",
-              userId: "system",
+              ownerUserId: "system",
               title: "Close approval queue",
               prompt: "Close the approval queue.",
               status: "completed",
@@ -193,12 +233,12 @@ describe("core loop telemetry summary", () => {
             artifacts: [],
             approvals: [],
             actionLogs: []
-          } as DashboardData["goals"][number]
+          } as unknown as DashboardData["goals"][number]
         ],
         approvals: [
           {
             id: "approval-1",
-            userId: "system",
+            ownerUserId: "system",
             goalId: "goal-1",
             type: "task_execution",
             decision: "pending",
@@ -208,12 +248,12 @@ describe("core loop telemetry summary", () => {
             artifactType: "summary",
             taskTitle: "Review next step",
             payload: {}
-          } as DashboardData["approvals"][number]
+          } as unknown as DashboardData["approvals"][number]
         ],
         latestArtifacts: [
           {
             id: "artifact-1",
-            userId: "system",
+            ownerUserId: "system",
             goalId: "goal-1",
             title: "Closure summary",
             artifactType: "summary",
@@ -221,13 +261,13 @@ describe("core loop telemetry summary", () => {
             storagePath: "/tmp/closure.md",
             createdAt: "2026-04-18T00:00:00.000Z",
             updatedAt: "2026-04-18T00:00:00.000Z"
-          } as DashboardData["latestArtifacts"][number]
+          } as unknown as DashboardData["latestArtifacts"][number]
         ],
         actionLogs: [{ id: "log-1" }, { id: "log-2" }, { id: "log-3" }] as DashboardData["actionLogs"],
         memories: [
           {
             id: "memory-1",
-            userId: "system",
+            ownerUserId: "system",
             category: "workflow",
             memoryType: "confirmed",
             content: "Previous closure pattern.",
@@ -238,7 +278,7 @@ describe("core loop telemetry summary", () => {
             actorContext: null,
             agentId: null,
             agentScope: "global"
-          }
+          } as unknown as DashboardData["memories"][number]
         ]
       })
     );

@@ -12,7 +12,8 @@ import {
   type ConnectorEnablementContext,
   type ConnectorEnablementEnv
 } from "@agentic/integrations";
-import type { LocalNotesRuntimeConfig, ProviderCredential } from "@agentic/integrations";
+import type { LocalNotesRuntimeConfig } from "@agentic/integrations";
+import type { ProviderCredential } from "@agentic/contracts";
 
 function buildGoogleCredential(overrides?: Partial<ProviderCredential>): ProviderCredential {
   return {

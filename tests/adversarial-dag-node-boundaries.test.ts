@@ -29,17 +29,24 @@ function buildMinimalDag(dagId = "dag-test") {
   return validateWorkflowDag({
     id: dagId,
     workflowId: "wf-test",
+    schemaVersion: "v1" as const,
     nodes: [
       {
         id: "node-1",
         label: "Test node",
         actionIntent: {
-          type: "manual_review",
-          riskClass: "R2",
-          actionType: "artifact-only",
+          schemaVersion: "v1" as const,
+          type: "manual_review" as const,
+          riskClass: "R2" as const,
+          actionType: "artifact-only" as const,
           summary: "Test",
-          reason: "Test"
+          reason: "Test",
+          artifactIds: [],
+          metadata: {}
         },
+        dependsOn: [],
+        retryPolicy: { maxAttempts: 3, backoffMs: 1000 },
+        compensation: { required: false, actionIntent: null, note: null },
         permissionGrant: { capabilities: ["read"], maxRiskClass: "R2" }
       }
     ],
@@ -171,17 +178,24 @@ describe("adversarial validateWorkflowDag edge cases", () => {
       validateWorkflowDag({
         id: "dag-risk-exceed",
         workflowId: "wf-risk",
+        schemaVersion: "v1" as const,
         nodes: [
           {
             id: "node-1",
             label: "Over-risked node",
             actionIntent: {
-              type: "manual_review",
-              riskClass: "R4",
-              actionType: "artifact-only",
+              schemaVersion: "v1" as const,
+              type: "manual_review" as const,
+              riskClass: "R4" as const,
+              actionType: "artifact-only" as const,
               summary: "Test",
-              reason: "Test"
+              reason: "Test",
+              artifactIds: [],
+              metadata: {}
             },
+            dependsOn: [],
+            retryPolicy: { maxAttempts: 3, backoffMs: 1000 },
+            compensation: { required: false, actionIntent: null, note: null },
             permissionGrant: { capabilities: ["read"], maxRiskClass: "R2" }
           }
         ],
@@ -197,17 +211,24 @@ describe("adversarial validateWorkflowDag edge cases", () => {
       validateWorkflowDag({
         id: "dag-comp-missing",
         workflowId: "wf-comp",
+        schemaVersion: "v1" as const,
         nodes: [
           {
             id: "node-1",
             label: "Compensation node",
             actionIntent: {
-              type: "create_note",
+              schemaVersion: "v1" as const,
+              type: "create_note" as const,
+              adapter: "notes" as const,
+              riskClass: "R1" as const,
               title: "Create",
-              content: "Content"
+              content: "Content",
+              metadata: {}
             },
+            dependsOn: [],
+            retryPolicy: { maxAttempts: 3, backoffMs: 1000 },
             permissionGrant: { capabilities: ["create"], maxRiskClass: "R2" },
-            compensation: { required: true, actionIntent: null }
+            compensation: { required: true, actionIntent: null, note: null }
           }
         ],
         edges: [],
@@ -222,29 +243,46 @@ describe("adversarial validateWorkflowDag edge cases", () => {
       validateWorkflowDag({
         id: "dag-multi-issue",
         workflowId: "wf-multi",
+        schemaVersion: "v1" as const,
         nodes: [
           {
             id: "node-a",
             label: "Node A",
             actionIntent: {
-              type: "send_message",
-              mode: "send",
+              schemaVersion: "v1" as const,
+              type: "send_message" as const,
+              adapter: "gmail" as const,
+              riskClass: "R1" as const,
+              mode: "send" as const,
               to: "test@example.com",
               subject: "Test",
-              body: "Body"
+              body: "Body",
+              threadId: null,
+              metadata: {}
             },
+            dependsOn: [],
+            retryPolicy: { maxAttempts: 3, backoffMs: 1000 },
+            compensation: { required: false, actionIntent: null, note: null },
             permissionGrant: { capabilities: ["read"], maxRiskClass: "R1" }
           },
           {
             id: "node-b",
             label: "Node B",
             actionIntent: {
-              type: "schedule_event",
+              schemaVersion: "v1" as const,
+              type: "schedule_event" as const,
+              adapter: "calendar" as const,
+              riskClass: "R1" as const,
               summary: "Meeting",
               start: "2026-05-01T09:00:00Z",
               end: "2026-05-01T10:00:00Z",
-              attendees: []
+              description: null,
+              attendees: [],
+              metadata: {}
             },
+            dependsOn: [],
+            retryPolicy: { maxAttempts: 3, backoffMs: 1000 },
+            compensation: { required: false, actionIntent: null, note: null },
             permissionGrant: { capabilities: ["read"], maxRiskClass: "R1" }
           }
         ],

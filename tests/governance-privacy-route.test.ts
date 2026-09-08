@@ -294,17 +294,18 @@ describe("governance privacy route", () => {
     const repository = createRouteTestRepository();
     const ownerActor = createSystemActorContext("workspace-owner");
     const requireApiSessionSpy = vi.spyOn(authModule, "requireApiSession").mockResolvedValue({
+      kind: "session",
       authMethod: "session",
       userId: "workspace-collaborator",
       sessionId: "session-collaborator",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
     const requireApiPrincipalSpy = vi.spyOn(authModule, "requireApiPrincipal").mockResolvedValue({
       kind: "session",
       authMethod: "session",
       userId: "workspace-collaborator",
       sessionId: "session-collaborator",
-      expiresAt: null
+      expiresAt: "2026-12-31T00:00:00.000Z"
     });
 
     await repository.seedDefaults("workspace-owner");
@@ -347,6 +348,7 @@ describe("governance privacy route", () => {
     await repository.saveWorkspaceSelection({
       userId: "workspace-collaborator",
       workspaceId: "workspace-shared-collab",
+      actorContext: null,
       selectedAt: "2026-04-17T00:00:00.000Z",
       updatedAt: "2026-04-17T00:00:00.000Z"
     });

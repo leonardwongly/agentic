@@ -11,6 +11,7 @@ function FeedHarness({ actionLogs }: FeedHarnessProps) {
     approvals: [],
     artifacts: [],
     actionLogs,
+    referenceTime: actionLogs[0]?.createdAt ?? "2026-04-23T04:00:00.000Z",
     onApprove: () => undefined,
     onReject: () => undefined,
     onViewGoal: () => undefined,
@@ -54,11 +55,15 @@ describe("UnifiedFeed", () => {
       latestApprovalAt
     ].map((createdAt, index) => ({
       id: `log-${index}`,
-      workspaceId: null,
       goalId: `goal-${index}`,
+      taskId: null,
+      workflowId: null,
+      actor: "system",
       kind: "approval.responded",
       message: "Approval processed.",
-      createdAt
+      details: {},
+      createdAt,
+      prevHash: null
     }));
 
     const firstMarkup = renderToStaticMarkup(<FeedHarness actionLogs={actionLogs} />);

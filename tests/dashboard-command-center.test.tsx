@@ -277,10 +277,9 @@ function createDashboardFixture(): DashboardData {
         taskId: "task-1",
         title: "Escalation draft",
         artifactType: "draft",
-        uri: "file:///tmp/escalation.txt",
-        summary: "Prepared draft reply.",
-        createdAt: "2024-01-01T00:00:00.000Z",
-        updatedAt: "2024-01-01T00:00:00.000Z"
+        content: "Prepared draft reply.",
+        metadata: { uri: "file:///tmp/escalation.txt" },
+        createdAt: "2024-01-01T00:00:00.000Z"
       }
     ] as DashboardData["latestArtifacts"],
     actionLogs: [],
@@ -382,7 +381,7 @@ function createDashboardFixture(): DashboardData {
         ]
       }
     }
-  } as DashboardData;
+  } as unknown as DashboardData;
 }
 
 const communicationsProduct = {

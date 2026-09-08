@@ -21,6 +21,39 @@ function buildEligibleBundle(): GoalBundle {
       status: "running",
       confidence: 0.81,
       explanation: "A governed specialist prepared the reply.",
+      wedge: {
+        key: "general_coordination",
+        label: "General coordination",
+        selection: "selected_production",
+        rationale: "Default coordination wedge."
+      },
+      completionContract: {
+        id: "general-coordination-v1",
+        summary: "Coordinate the request end-to-end.",
+        successCriteria: ["Request is fulfilled."],
+        evidenceSignals: ["Artifact exists."],
+        approvalExpectations: [],
+        doneWhen: "The request is completed."
+      },
+      responsibility: {
+        owner: { kind: "user", userId: "user-1", workspaceRole: null, systemActor: null, label: "User" },
+        delegate: { kind: "system_actor", userId: null, workspaceRole: null, systemActor: "autopilot", label: "Autopilot processor" },
+        reviewer: null,
+        escalationOwner: { kind: "user", userId: "user-1", workspaceRole: null, systemActor: null, label: "User" },
+        handoffStatus: "delegated",
+        handoffSummary: "Autopilot is the active delegate.",
+        delegationReason: "Queued for autopilot processing.",
+        escalationReason: null,
+        audit: {
+          requiredEvents: ["delegation_change", "handoff_acceptance", "review_assignment", "escalation_trigger"],
+          requireActorContext: true,
+          requireReasonForDelegation: true,
+          requireReasonForEscalation: true,
+          requireReviewerIdentity: true
+        },
+        lastChangedAt: null,
+        lastChangedBy: null
+      },
       createdAt: "2026-04-20T00:00:00.000Z",
       updatedAt: "2026-04-20T00:00:00.000Z"
     },
@@ -48,6 +81,25 @@ function buildEligibleBundle(): GoalBundle {
         dependsOn: [],
         toolCapabilities: ["draft", "send"],
         artifactIds: [],
+        responsibility: {
+          owner: { kind: "user", userId: "user-1", workspaceRole: null, systemActor: null, label: "User" },
+          delegate: { kind: "system_actor", userId: null, workspaceRole: null, systemActor: "autopilot", label: "Autopilot processor" },
+          reviewer: null,
+          escalationOwner: { kind: "user", userId: "user-1", workspaceRole: null, systemActor: null, label: "User" },
+          handoffStatus: "delegated",
+          handoffSummary: "Autopilot is the active delegate.",
+          delegationReason: "Queued for autopilot processing.",
+          escalationReason: null,
+          audit: {
+            requiredEvents: ["delegation_change", "handoff_acceptance", "review_assignment", "escalation_trigger"],
+            requireActorContext: true,
+            requireReasonForDelegation: true,
+            requireReasonForEscalation: true,
+            requireReviewerIdentity: true
+          },
+          lastChangedAt: null,
+          lastChangedBy: null
+        },
         createdAt: "2026-04-20T00:00:00.000Z",
         updatedAt: "2026-04-20T00:00:00.000Z"
       }

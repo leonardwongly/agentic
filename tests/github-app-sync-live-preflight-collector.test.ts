@@ -25,6 +25,7 @@ const CLOUDFLARE_PROVIDER_EVIDENCE = JSON.stringify({
 });
 
 const RUNTIME_ENV = {
+  NODE_ENV: "test",
   AGENTIC_REPOSITORY: "octo-org/demo-agentic",
   AGENTIC_SMOKE_BASE_URL: "https://agentic.example.com",
   AGENTIC_SMOKE_ACCESS_KEY: "runtime-access-key",
@@ -58,7 +59,7 @@ const RUNTIME_ENV = {
     repositories: [{ fullName: "octo-org/demo-agentic", openIssuesSeen: 1, skippedPullRequests: 1 }],
     jobs: [{ id: "job-sync-1", repository: "octo-org/demo-agentic", issueNumber: 145, attempts: 2 }]
   })
-};
+} as NodeJS.ProcessEnv;
 
 function commandKey(command: string, args: string[]) {
   return `${command} ${args.join(" ")}`;

@@ -48,7 +48,7 @@ import {
 } from "../packages/repository/src/repository-readiness-summary";
 import { calculateNormalizedEditDistance } from "../packages/observability/src/edit-distance";
 import type { DashboardData } from "../packages/repository/src/repository-types";
-import type { AgentDefinition, Commitment, GoalBundle, JobRecord, MemoryRecord, ProviderCredential } from "@agentic/contracts";
+import type { AgentDefinition, Commitment, Goal, GoalBundle, JobRecord, MemoryRecord, ProviderCredential, Task } from "@agentic/contracts";
 
 // ---------------------------------------------------------------------------
 // 1. Collection pagination: normalizeCollectionPageLimit boundary values
@@ -502,7 +502,7 @@ describe("edge cases: buildFallbackApprovalActionIntent", () => {
       requestedAction: "delete everything",
       preview: { actionType: "send", summary: "x", target: "y", changes: [], impact: { affectedPeople: [], affectedSystems: [], permissions: [], rollback: "manual" } }
     });
-    expect(intent.actionType).toBe("send");
+    expect((intent as { actionType: string }).actionType).toBe("send");
   });
 
   it("falls back to inference when preview is null", () => {
@@ -511,7 +511,7 @@ describe("edge cases: buildFallbackApprovalActionIntent", () => {
       requestedAction: "schedule meeting",
       preview: null
     });
-    expect(intent.actionType).toBe("schedule");
+    expect((intent as { actionType: string }).actionType).toBe("schedule");
   });
 
   it("falls back to inference when preview is undefined", () => {
@@ -519,7 +519,7 @@ describe("edge cases: buildFallbackApprovalActionIntent", () => {
       title: "Test",
       requestedAction: "create document"
     });
-    expect(intent.actionType).toBe("create");
+    expect((intent as { actionType: string }).actionType).toBe("create");
   });
 });
 
@@ -683,14 +683,17 @@ describe("edge cases: mapMemoryRow", () => {
 // 10. deriveAgentMetricsFromGoals: empty and boundary inputs
 // ---------------------------------------------------------------------------
 describe("edge cases: deriveAgentMetricsFromGoals", () => {
-  const agent: AgentDefinition = {
+  const agent = {
     id: "agent-1",
+    userId: "u-1",
     name: "workflow",
+    displayName: "Workflow Agent",
     description: "test",
-    capabilities: ["read"],
-    executionMode: "governed_specialist",
-    implementationTier: "experimental"
-  };
+    systemPrompt: "You are a test workflow agent for unit tests.",
+    allowedCapabilities: ["read"],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z"
+  } as AgentDefinition;
 
   it("returns zero metrics for empty goals and empty evidence", () => {
     const metrics = deriveAgentMetricsFromGoals({
@@ -712,13 +715,14 @@ describe("edge cases: deriveAgentMetricsFromGoals", () => {
       agent,
       period: "all",
       goals: [{
-        goal: { id: "g-1", userId: "u-1", title: "t", request: "r", intent: "i", status: "running", confidence: 0.5, explanation: "e", createdAt: nowIso(), updatedAt: nowIso() },
+        goal: { id: "g-1", userId: "u-1", workspaceId: null, workflowId: "wf-1", title: "t", request: "r", intent: "i", status: "running" as const, confidence: 0.5, explanation: "e", createdAt: nowIso(), updatedAt: nowIso() } as Goal,
+        workflow: null,
         tasks: [],
         approvals: [],
         artifacts: [],
         actionLogs: [],
         watchers: []
-      }],
+      } as unknown as GoalBundle],
       evidenceRecords: []
     });
     expect(metrics.tasksTotal).toBe(0);
@@ -729,18 +733,19 @@ describe("edge cases: deriveAgentMetricsFromGoals", () => {
       agent,
       period: "all",
       goals: [{
-        goal: { id: "g-1", userId: "u-1", title: "t", request: "r", intent: "i", status: "running", confidence: 0.5, explanation: "e", createdAt: nowIso(), updatedAt: nowIso() },
+        goal: { id: "g-1", userId: "u-1", workspaceId: null, workflowId: "wf-1", title: "t", request: "r", intent: "i", status: "running" as const, confidence: 0.5, explanation: "e", createdAt: nowIso(), updatedAt: nowIso() } as Goal,
+        workflow: null,
         tasks: [{
           id: "task-1", goalId: "g-1", workflowId: "wf-1", title: "task", summary: "s",
           assignedAgent: "communications" as const, state: "completed" as const, riskClass: "R1" as const,
           requiresApproval: false, dependsOn: [], toolCapabilities: ["read" as const], artifactIds: [],
           createdAt: nowIso(), updatedAt: nowIso()
-        }],
+        } as unknown as Task],
         approvals: [],
         artifacts: [],
         actionLogs: [],
         watchers: []
-      }],
+      } as unknown as GoalBundle],
       evidenceRecords: []
     });
     // agent is "workflow" but task is assigned to "communications"
@@ -1113,10 +1118,11 @@ describe("edge cases: job state machine terminal transitions", () => {
 // ---------------------------------------------------------------------------
 describe("edge cases: floating-point precision", () => {
   it("successRate is 0 when no tasks exist (0/0 guard)", () => {
-    const agent: AgentDefinition = {
-      id: "a-1", name: "workflow", description: "test",
-      capabilities: ["read"], executionMode: "governed_specialist", implementationTier: "experimental"
-    };
+    const agent = {
+      id: "a-1", userId: "u-1", name: "workflow", displayName: "Workflow Agent", description: "test",
+      systemPrompt: "You are a test workflow agent for unit tests.",
+      allowedCapabilities: ["read"], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z"
+    } as AgentDefinition;
     const metrics = deriveAgentMetricsFromGoals({
       agent, period: "all", goals: [], evidenceRecords: []
     });
@@ -1125,10 +1131,11 @@ describe("edge cases: floating-point precision", () => {
   });
 
   it("approvalRate is 0 when no approvals exist", () => {
-    const agent: AgentDefinition = {
-      id: "a-1", name: "workflow", description: "test",
-      capabilities: ["read"], executionMode: "governed_specialist", implementationTier: "experimental"
-    };
+    const agent = {
+      id: "a-1", userId: "u-1", name: "workflow", displayName: "Workflow Agent", description: "test",
+      systemPrompt: "You are a test workflow agent for unit tests.",
+      allowedCapabilities: ["read"], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z"
+    } as AgentDefinition;
     const metrics = deriveAgentMetricsFromGoals({
       agent, period: "all", goals: [], evidenceRecords: []
     });
@@ -1137,10 +1144,11 @@ describe("edge cases: floating-point precision", () => {
   });
 
   it("correctionRate is 0 when no feedback exists", () => {
-    const agent: AgentDefinition = {
-      id: "a-1", name: "workflow", description: "test",
-      capabilities: ["read"], executionMode: "governed_specialist", implementationTier: "experimental"
-    };
+    const agent = {
+      id: "a-1", userId: "u-1", name: "workflow", displayName: "Workflow Agent", description: "test",
+      systemPrompt: "You are a test workflow agent for unit tests.",
+      allowedCapabilities: ["read"], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z"
+    } as AgentDefinition;
     const metrics = deriveAgentMetricsFromGoals({
       agent, period: "all", goals: [], evidenceRecords: []
     });

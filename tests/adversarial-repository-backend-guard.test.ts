@@ -32,7 +32,7 @@ function expectNoGuardRefusal(create: () => unknown) {
 
 describe("adversarial repository backend guard", () => {
   it("refuses an ambient remote DATABASE_URL outside production", () => {
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
     process.env.DATABASE_URL = "postgres://user:pass@db.example.com:5432/app";
     delete process.env.AGENTIC_ALLOW_REMOTE_DEV_DATABASE_URL;
 
@@ -40,7 +40,7 @@ describe("adversarial repository backend guard", () => {
   });
 
   it("allows the same remote URL when the operator explicitly opts in", () => {
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
     process.env.DATABASE_URL = "postgres://user:pass@db.example.com:5432/app";
     process.env.AGENTIC_ALLOW_REMOTE_DEV_DATABASE_URL = "true";
 
@@ -48,7 +48,7 @@ describe("adversarial repository backend guard", () => {
   });
 
   it("allows localhost ambient URLs in development", () => {
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
     process.env.DATABASE_URL = "postgres://user:pass@localhost:5432/app";
     delete process.env.AGENTIC_ALLOW_REMOTE_DEV_DATABASE_URL;
 
@@ -56,14 +56,14 @@ describe("adversarial repository backend guard", () => {
   });
 
   it("never guards an explicitly-passed databaseUrl (tests, parity suite)", () => {
-    process.env.NODE_ENV = "development";
+    (process.env as any).NODE_ENV = "development";
     process.env.DATABASE_URL = "postgres://user:pass@db.example.com:5432/app";
 
     expectNoGuardRefusal(() => createRepository({ databaseUrl: "postgres://user:pass@localhost:5432/test" }));
   });
 
   it("never guards production", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.DATABASE_URL = "postgres://user:pass@db.example.com:5432/app";
     delete process.env.AGENTIC_ALLOW_REMOTE_DEV_DATABASE_URL;
 

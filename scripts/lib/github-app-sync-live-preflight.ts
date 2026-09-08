@@ -536,7 +536,7 @@ function buildAlternateProviderEvidence(raw: string): AlternateProviderEvidence 
     : null;
   const postgres =
     record.postgres === true ||
-    (typeof databaseEngine === "string" && databaseEngine.toLowerCase().includes("postgres") && database.configured === true);
+    (typeof databaseEngine === "string" && databaseEngine.toLowerCase().includes("postgres") && database?.configured === true);
   const errors = [
     provider ? null : "provider must be set.",
     environment ? null : "environment must be set.",

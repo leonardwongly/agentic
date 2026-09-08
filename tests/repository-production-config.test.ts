@@ -27,7 +27,7 @@ describe("repository production configuration", () => {
   });
 
   it("rejects the file-backed repository in production without DATABASE_URL", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     delete process.env.DATABASE_URL;
     delete process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
 
@@ -35,7 +35,7 @@ describe("repository production configuration", () => {
   });
 
   it("rejects demo governance defaults at production startup unless explicitly allowed", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.DATABASE_URL = "postgres:///agentic-production";
     process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE = "demo";
     delete process.env.AGENTIC_ALLOW_DEMO_GOVERNANCE_DEFAULTS;
@@ -44,7 +44,7 @@ describe("repository production configuration", () => {
   });
 
   it("allows demo governance defaults only when production startup opts in explicitly", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as any).NODE_ENV = "production";
     process.env.DATABASE_URL = "postgres:///agentic-production";
     process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE = "demo";
     process.env.AGENTIC_ALLOW_DEMO_GOVERNANCE_DEFAULTS = "true";
@@ -53,7 +53,7 @@ describe("repository production configuration", () => {
   });
 
   it("still allows the file-backed repository outside production", () => {
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
     delete process.env.DATABASE_URL;
     delete process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
 
@@ -61,7 +61,7 @@ describe("repository production configuration", () => {
   });
 
   it("prefers an explicit storePath over an ambient DATABASE_URL outside production", async () => {
-    process.env.NODE_ENV = "test";
+    (process.env as any).NODE_ENV = "test";
     process.env.DATABASE_URL = "postgres:///agentic-should-not-be-used";
     delete process.env.AGENTIC_GOVERNANCE_DEFAULT_PROFILE;
     const storePath = path.join(await mkdtemp(path.join(os.tmpdir(), "agentic-repo-config-")), "runtime-store.json");

@@ -365,8 +365,15 @@ function hasBlockingUsesContext(context: YamlContext[], startIndex: number): boo
   return context.slice(startIndex + 1).some((entry) => NON_ACTION_USES_CONTEXT_KEYS.has(entry.key));
 }
 
+function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (predicate(arr[i])) return i;
+  }
+  return -1;
+}
+
 function isStepUsesContext(context: YamlContext[], indent: number): boolean {
-  const stepsIndex = context.findLastIndex((entry) => entry.key === "steps");
+  const stepsIndex = findLastIndex(context, (entry: YamlContext) => entry.key === "steps");
   if (stepsIndex < 0) {
     return false;
   }
@@ -375,7 +382,7 @@ function isStepUsesContext(context: YamlContext[], indent: number): boolean {
 }
 
 function isReusableJobUsesContext(context: YamlContext[], indent: number): boolean {
-  const jobsIndex = context.findLastIndex((entry) => entry.key === "jobs");
+  const jobsIndex = findLastIndex(context, (entry: YamlContext) => entry.key === "jobs");
   if (jobsIndex < 0 || jobsIndex + 1 >= context.length) {
     return false;
   }
