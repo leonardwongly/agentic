@@ -481,15 +481,15 @@ describe("adversarial worker runtime deep", () => {
       expect(delay).toBeLessThanOrEqual(5000);
     });
 
-    it("BUG: NaN jitter ratio propagates NaN delay instead of falling back to base delay", () => {
+    it("REGRESSION: NaN jitter ratio falls back to base delay instead of propagating NaN", () => {
       const delay = computeJobRetryDelayMs(
         1,
         { baseDelayMs: 1000, factor: 2, maxDelayMs: 60000 },
         { jitterRatio: NaN }
       );
-      // Fixed: NaN jitterRatio is now treated as 0 (no jitter).
-      // The implementation checks Number.isFinite() before clamping.
-      // Expected behavior: delay should be 1000 (baseDelayMs * factor^0 with no jitter).
+      // Regression for adversarial-sweep bug: Math.max(0, Math.min(1, NaN)) returns
+      // NaN, which used to propagate through the whole delay computation.
+      // The implementation now checks Number.isFinite() before clamping.
       expect(delay).toBe(1000);
       expect(Number.isFinite(delay)).toBe(true);
     });

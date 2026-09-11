@@ -177,9 +177,8 @@ describe("Adversarial: NodeFsStorageAdapter", () => {
       await adapter.mkdir(dirPath);
       await adapter.writeFile(path.join(dirPath, "file.txt"), "data");
 
-      // BUG DOCUMENTED: rmdir ignores the recursive option entirely.
-      // Even passing { recursive: true } still calls non-recursive rmdir.
-      // This means removing non-empty dirs always fails.
+      // REGRESSION: non-recursive rmdir must still refuse to remove a
+      // non-empty directory (safety contract — explicit recursive opt-in).
       await expect(adapter.rmdir(dirPath)).rejects.toThrow();
     });
 
