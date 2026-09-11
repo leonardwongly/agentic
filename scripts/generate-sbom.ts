@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -297,7 +298,6 @@ function collectPnpmPackages(entries: PnpmLsEntry[]): Map<string, PackageLockDep
 function main() {
   const { outputPath } = parseArgs(process.argv.slice(2));
   const packageJson = JSON.parse(readFileSync(path.resolve(process.cwd(), "package.json"), "utf8")) as PackageJson;
-  const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
   const pnpmOutput = execFileSync("pnpm", ["ls", "--prod", "--json", "--depth=Infinity"], {
     cwd: process.cwd(),
     encoding: "utf8",
