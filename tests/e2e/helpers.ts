@@ -115,12 +115,33 @@ export async function createPublicShareBrowserContext(browser: Browser): Promise
 
 export async function showAdvancedOperations(page: Page) {
   const showButton = page.getByRole("button", { name: "Show advanced operations" });
+  const heading = page.getByRole("heading", { name: "Local notes" });
 
-  if (await showButton.isVisible()) {
-    await showButton.click();
+  // The dashboard's periodic refresh can re-render the section and swallow the
+  // first click (the same flake class submitRequest guards against), and the
+  // toggle may not exist yet while the page hydrates. Retry the expansion until
+  // the section heading confirms the expanded state instead of trusting a
+  // single isVisible/click pair.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await heading.isVisible()) {
+      return;
+    }
+
+    try {
+      await expect(showButton).toBeVisible({ timeout: attempt === 0 ? E2E_UI_TIMEOUT_MS : 2_500 });
+      await showButton.click({ timeout: 5_000 });
+    } catch {
+      // Swallowed click or a transient re-render that replaced the toggle;
+      // fall through to the heading check and retry.
+    }
+
+    const expanded = await heading
+      .waitFor({ state: "visible", timeout: 10_000 })
+      .then(() => true, () => false);
+    if (expanded) {
+      return;
+    }
   }
 
-  await expect(page.getByRole("heading", { name: "Local notes" })).toBeVisible({
-    timeout: E2E_UI_TIMEOUT_MS
-  });
+  await expect(heading).toBeVisible({ timeout: E2E_UI_TIMEOUT_MS });
 }
