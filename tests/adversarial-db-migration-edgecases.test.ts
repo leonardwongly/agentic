@@ -258,20 +258,27 @@ describe("adversarial: migration file edge cases", () => {
     expect(files[0].name).toBe("0001_valid.sql");
   });
 
-  it("handles SQL files with UTF-8 BOM", async () => {
-    // UTF-8 BOM is EF BB BF
+  it("REGRESSION: strips the UTF-8 BOM so checksums are platform-independent", async () => {
+    // Regression for adversarial-sweep bug: the BOM (EF BB BF) used to be kept
+    // in the SQL content and checksum, so the same migration saved by a
+    // BOM-writing editor produced a different checksum than the committed file
+    // and showed up as false drift.
     const bom = Buffer.from([0xef, 0xbb, 0xbf]);
     const sqlContent = Buffer.concat([bom, Buffer.from("select 1;")]);
-    const dir = await writeFixtures({ "0001_bom.sql": sqlContent });
-    const ctx = makeRuntimeContext(dir);
-    const files = await listMigrationFiles({ migrationsDir: dir, context: ctx });
+    const dirBom = await writeFixtures({ "0001_bom.sql": sqlContent });
+    const dirPlain = await writeFixtures({ "0001_plain.sql": "select 1;" });
+    const ctxBom = makeRuntimeContext(dirBom);
+    const ctxPlain = makeRuntimeContext(dirPlain);
 
-    expect(files).toHaveLength(1);
-    // The BOM becomes part of the string — checksum includes it
-    expect(files[0].checksum).toMatch(/^[a-f0-9]{64}$/);
-    // BUG DOCUMENTED: BOM is included in SQL content and checksum.
-    // If the same file is read on a system that strips BOM, checksums will differ,
-    // causing false drift detection.
+    const withBom = await listMigrationFiles({ migrationsDir: dirBom, context: ctxBom });
+    const withoutBom = await listMigrationFiles({ migrationsDir: dirPlain, context: ctxPlain });
+
+    expect(withBom).toHaveLength(1);
+    // The BOM is stripped from the SQL text and therefore from the checksum:
+    // identical SQL with and without a BOM hashes identically.
+    expect(withBom[0].sql).toBe("select 1;");
+    expect(withBom[0].sql.charCodeAt(0)).not.toBe(0xfeff);
+    expect(withBom[0].checksum).toBe(withoutBom[0].checksum);
   });
 
   it("returns empty array for nonexistent migrations directory", async () => {
@@ -348,31 +355,67 @@ describe("adversarial: checksum integrity", () => {
 // ---------------------------------------------------------------------------
 
 describe("adversarial: race conditions", () => {
-  it("concurrent runDatabaseMigrations calls share state without advisory locking", async () => {
+  it("REGRESSION: runDatabaseMigrations brackets metadata work with a pg advisory lock", async () => {
     const dir = await writeFixtures({ "0001_init.sql": "select 1;" });
     const pool = new FakePool();
     const ctx = makeRuntimeContext(dir);
 
-    // Run two migrations concurrently against the same pool.
-    // Because our FakePool serializes queries synchronously and shares state,
-    // the second call sees the first call's insert and skips the migration.
-    // BUG DOCUMENTED: In a real Postgres deployment with separate connections,
-    // there is no advisory lock (pg_advisory_lock) or INSERT ... ON CONFLICT
-    // guard on the migration metadata table. Two concurrent callers could both
-    // pass the "is applied?" check before either commits, leading to a PK
-    // violation error on the second insert. The runtime relies on external
-    // serialization (single-instance deployment or operator discipline).
+    // Regression for adversarial-sweep bug: migrations ran with no cross-
+    // connection serialization, so two concurrent runners could both pass the
+    // "is applied?" check before either committed and the second insert would
+    // violate the metadata primary key. runDatabaseMigrations now takes a
+    // session-scoped pg_advisory_lock keyed on the metadata table name before
+    // reading/writing migration metadata and releases it afterwards.
+    await runDatabaseMigrations({ pool: pool as never, migrationsDir: dir, context: ctx });
+
+    const queries = pool.state.executedQueries;
+    const lockIndex = queries.findIndex((q) => q.includes("pg_advisory_lock(hashtext($1))"));
+    const unlockIndex = queries.findIndex((q) => q.includes("pg_advisory_unlock(hashtext($1))"));
+    const insertIndex = queries.findIndex((q) => q.includes("insert into agentic_schema_migrations"));
+    const appliedReadIndex = queries.findIndex((q) => q.includes("select name, checksum, applied_at"));
+
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(unlockIndex).toBeGreaterThanOrEqual(0);
+    // Lock is held BEFORE the applied-rows read that decides what to apply,
+    // and released only after the inserts complete.
+    expect(lockIndex).toBeLessThan(appliedReadIndex);
+    expect(insertIndex).toBeGreaterThan(lockIndex);
+    expect(unlockIndex).toBeGreaterThan(insertIndex);
+  });
+
+  it("REGRESSION: the advisory lock is released even when a migration fails mid-run", async () => {
+    const dir = await writeFixtures({ "0001_init.sql": "select 1;" });
+    const pool = new FakePool();
+    pool.state.failOnQuery = "select 1;"; // the migration body itself fails
+    const ctx = makeRuntimeContext(dir);
+
+    await expect(
+      runDatabaseMigrations({ pool: pool as never, migrationsDir: dir, context: ctx })
+    ).rejects.toThrow();
+
+    const queries = pool.state.executedQueries;
+    expect(queries.some((q) => q.includes("pg_advisory_lock(hashtext($1))"))).toBe(true);
+    // A crashed runner must not strand the lock for the next deploy.
+    expect(queries.some((q) => q.includes("pg_advisory_unlock(hashtext($1))"))).toBe(true);
+  });
+
+  it("concurrent runDatabaseMigrations calls share serialized state", async () => {
+    const dir = await writeFixtures({ "0001_init.sql": "select 1;" });
+    const pool = new FakePool();
+    const ctx = makeRuntimeContext(dir);
+
+    // Run two migrations concurrently against the same pool. With the advisory
+    // lock in place, real Postgres connections serialize here; the FakePool
+    // additionally shares applied-state, so the second call sees the first
+    // call's insert and skips the migration — exactly one insert either way.
     const results = await Promise.allSettled([
       runDatabaseMigrations({ pool: pool as never, migrationsDir: dir, context: ctx }),
       runDatabaseMigrations({ pool: pool as never, migrationsDir: dir, context: ctx })
     ]);
 
-    // At least one should succeed (the first to complete)
     const fulfilled = results.filter((r): r is PromiseFulfilledResult<DatabaseSchemaStatus> => r.status === "fulfilled");
     expect(fulfilled.length).toBeGreaterThanOrEqual(1);
 
-    // With our serialized fake, only one insert occurs. In production with
-    // real concurrent connections, this would be a race condition.
     const insertCount = pool.state.executedQueries.filter((q) =>
       q.includes("insert into agentic_schema_migrations")
     ).length;
@@ -401,7 +444,7 @@ describe("adversarial: race conditions", () => {
 // ---------------------------------------------------------------------------
 
 describe("adversarial: boundary values", () => {
-  it("reports ready when zero migrations exist even without metadata table", async () => {
+  it("REGRESSION: reports NOT ready when zero migrations exist without metadata table", async () => {
     const dir = await writeFixtures({});
     const pool = new FakePool();
     const ctx = makeRuntimeContext(dir);
@@ -412,18 +455,15 @@ describe("adversarial: boundary values", () => {
       context: ctx
     });
 
-    // BUG DOCUMENTED: When there are zero migration files on disk and the
-    // metadata table does not exist, summarizeDatabaseSchemaStatus returns
-    // ready=true because pendingMigrations is empty. The missingMetadataTable
-    // flag is set but does NOT cause failureReason="metadata_missing" when
-    // there are no pending migrations. This means a completely uninitialized
-    // database with an empty migrations directory appears "ready", which could
-    // mask deployment misconfigurations where the migrations directory is
-    // accidentally empty or misconfigured.
+    // Regression for adversarial-sweep bug: zero migration files on disk AND no
+    // metadata table used to report ready=true (the empty pending list
+    // short-circuited the missingMetadataTable check), masking deployments where
+    // the migrations directory was accidentally empty or misresolved. A healthy
+    // migrated database always carries the metadata table.
     expect(status.pendingMigrations).toEqual([]);
     expect(status.missingMetadataTable).toBe(true);
-    expect(status.ready).toBe(true); // BUG: should arguably be false
-    expect(status.failureReason).toBe(null); // BUG: should be "metadata_missing"
+    expect(status.ready).toBe(false);
+    expect(status.failureReason).toBe("metadata_missing");
   });
 
   it("handles a large number of migration files", async () => {

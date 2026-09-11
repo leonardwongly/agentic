@@ -164,6 +164,24 @@ async function detectRefinementLlm(bundle: GoalBundle, refinement: string, memor
   return detectRefinementHeuristic(bundle, refinement);
 }
 
+// Negation guard for the refinement keyword heuristic: a keyword only counts
+// when it is NOT preceded by a negation within the same clause. Without this,
+// "don't remove anything" used to trigger the removal branch and
+// "don't add new tasks" the addition branch (adversarial sweep BUG-005).
+const REFINEMENT_NEGATION_PATTERN =
+  /\b(?:don'?t|doesn'?t|didn'?t|won'?t|can'?t|cannot|do not|does not|did not|will not|should ?n'?t|should not|must not|never|no need to|avoid|refrain from|without|keep|stop)\b[^.;!?\n]*$/u;
+
+function hasNonNegatedKeyword(text: string, keywords: RegExp): boolean {
+  for (const match of text.matchAll(keywords)) {
+    const preceding = text.slice(0, match.index);
+    if (!REFINEMENT_NEGATION_PATTERN.test(preceding)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function detectRefinementHeuristic(bundle: GoalBundle, refinement: string): RefinementChange {
   const lower = refinement.toLowerCase();
   const changes: RefinementChange = {
@@ -173,7 +191,7 @@ function detectRefinementHeuristic(bundle: GoalBundle, refinement: string): Refi
   };
 
   // Simple heuristic: if the refinement mentions adding something, create a new task
-  if (/(add|include|also|plus)\b/u.test(lower)) {
+  if (hasNonNegatedKeyword(lower, /\b(add|include|also|plus)\b/gu)) {
     changes.newTasks.push({
       title: `Address refinement: ${refinement.slice(0, 60)}`,
       summary: refinement,
@@ -184,7 +202,7 @@ function detectRefinementHeuristic(bundle: GoalBundle, refinement: string): Refi
   }
 
   // If the refinement mentions removing or canceling, try to match a task
-  if (/(remove|cancel|drop|skip|delete)\b/u.test(lower)) {
+  if (hasNonNegatedKeyword(lower, /\b(remove|cancel|drop|skip|delete)\b/gu)) {
     const matchedTask = bundle.tasks.find((t) =>
       lower.includes(t.title.toLowerCase().split(" ").slice(0, 3).join(" "))
     );
@@ -194,7 +212,7 @@ function detectRefinementHeuristic(bundle: GoalBundle, refinement: string): Refi
   }
 
   // If the refinement mentions changing or updating, modify the first non-completed task
-  if (/(change|move|update|modify|adjust|reschedule)\b/u.test(lower)) {
+  if (hasNonNegatedKeyword(lower, /\b(change|move|update|modify|adjust|reschedule)\b/gu)) {
     const target = bundle.tasks.find((t) => t.state !== "completed");
     if (target) {
       changes.updatedTasks.push({

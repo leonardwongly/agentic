@@ -227,6 +227,67 @@ describe("OAuth edge cases", () => {
     ).rejects.toThrow(/invalid_grant|expired|revoked/i);
   });
 
+  it("REGRESSION: dedupes concurrent exchanges of the same authorization code", async () => {
+    // Regression for adversarial-sweep observation: no concurrency guard on the
+    // token exchange. Google auth codes are single-use — a concurrent second
+    // exchange always fails and can revoke the token issued by the first.
+    // Callers racing the same callback now share one token-endpoint call.
+    vi.resetModules();
+    process.env.GOOGLE_CLIENT_ID = "test-client-id";
+    process.env.GOOGLE_CLIENT_SECRET = "test-client-secret";
+
+    let getTokenCalls = 0;
+    vi.doMock("googleapis", () => ({
+      google: {
+        auth: {
+          OAuth2: class {
+            setCredentials() {}
+            async getToken(code: string) {
+              getTokenCalls += 1;
+              await new Promise((resolve) => setTimeout(resolve, 20));
+              return {
+                tokens: {
+                  access_token: `at-${code}`,
+                  refresh_token: `rt-${code}`,
+                  expiry_date: Date.now() + 3_600_000,
+                  scope: "openid https://www.googleapis.com/auth/gmail.modify",
+                },
+              };
+            }
+          },
+        },
+      },
+    }));
+
+    const { exchangeGoogleAuthorizationCode } =
+      await import("../packages/integrations/src/google-oauth");
+
+    // Same code raced by two callers (double callback delivery / double click):
+    // exactly one token-endpoint call; both callers receive the identical result.
+    const [first, second] = await Promise.all([
+      exchangeGoogleAuthorizationCode({
+        code: "shared-code",
+        redirectUri: "http://localhost/callback",
+      }),
+      exchangeGoogleAuthorizationCode({
+        code: "shared-code",
+        redirectUri: "http://localhost/callback",
+      }),
+    ]);
+
+    expect(getTokenCalls).toBe(1);
+    expect(first).toEqual(second);
+    expect(first.accessToken).toBe("at-shared-code");
+
+    // Dedup covers only the in-flight window: a later exchange of a DIFFERENT
+    // code proceeds independently.
+    await exchangeGoogleAuthorizationCode({
+      code: "other-code",
+      redirectUri: "http://localhost/callback",
+    });
+    expect(getTokenCalls).toBe(2);
+  });
+
   it("should handle profile fetch returning malformed data", async () => {
     vi.doMock("googleapis", () => ({
       google: {
