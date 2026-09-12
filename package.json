@@ -103,7 +103,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "zod": "^4.5.4",
-    "google-auth-library": "10.5.0"
+    "google-auth-library": "11.0.2"
   },
   "overrides": {
     "postcss": "8.5.23",
