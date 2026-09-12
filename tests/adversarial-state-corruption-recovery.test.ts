@@ -787,7 +787,7 @@ describe("State corruption: idempotency of recovery", () => {
     ).toThrow(/must be failed/);
   });
 
-  it("action log deduplication prevents duplicate entries on re-append", () => {
+  it("action log deduplication prevents duplicate entries on re-append", async () => {
     const goalId = "goal-1";
     const log1 = ActionLogSchema.parse({
       id: "log-1",
@@ -811,13 +811,15 @@ describe("State corruption: idempotency of recovery", () => {
     let writeCount = 0;
     const writeStore = async () => { writeCount++; };
 
-    // First append
-    appendGoalActionLogsToStore(store, goalId, [log1], writeStore);
+    // First append. Appends are serialized per store and commit asynchronously,
+    // so callers must await the returned promise before inspecting the store.
+    await appendGoalActionLogsToStore(store, goalId, [log1], writeStore);
     expect(store.actionLogs).toHaveLength(1);
 
     // Second append of the same log (idempotency)
-    appendGoalActionLogsToStore(store, goalId, [log1], writeStore);
+    await appendGoalActionLogsToStore(store, goalId, [log1], writeStore);
     expect(store.actionLogs).toHaveLength(1); // Still 1, dedup worked
+    expect(writeCount).toBe(2);
   });
 });
 
@@ -933,10 +935,12 @@ describe("State corruption: cross-entity state consistency", () => {
 // ---------------------------------------------------------------------------
 
 describe("State corruption: interrupted operation recovery", () => {
-  it("recovers action log store when write fails mid-append", async () => {
-    // BUG DOCUMENTED: action-log-append.ts mutates store.actionLogs BEFORE
-    // calling writeStore. If writeStore fails, in-memory state is dirty.
-    // This test documents the bug and verifies detection.
+  it("REGRESSION: rolls back action log store when write fails mid-append", async () => {
+    // Regression for adversarial-sweep bug: action-log-append.ts used to mutate
+    // store.actionLogs BEFORE calling writeStore, so a failed write left the
+    // in-memory state dirty — the unpersisted entry stayed visible and dedup
+    // silently skipped it on every retry. The mutation is now rolled back when
+    // the write rejects, keeping memory consistent with durable state.
     const goalId = "goal-1";
     const log1 = ActionLogSchema.parse({
       id: "log-1", goalId, taskId: null, workflowId: "wf-1",
@@ -951,17 +955,18 @@ describe("State corruption: interrupted operation recovery", () => {
 
     const failingWrite = async () => { throw new Error("disk full"); };
 
-    // The write fails but store.actionLogs may already be mutated
     const promise = appendGoalActionLogsToStore(store, goalId, [log1], failingWrite);
 
     await expect(promise).rejects.toThrow("disk full");
 
-    // BUG: After failure, store.actionLogs contains the entry even though
-    // the write never succeeded. This is the dirty-state-on-write-failure bug.
-    // A correct implementation would rollback the in-memory mutation.
-    const isDirty = store.actionLogs.length > 0;
-    // This documents the bug exists:
-    expect(isDirty).toBe(true);
+    // After the failed write the store is clean: memory matches durable state.
+    expect(store.actionLogs).toHaveLength(0);
+
+    // And a retry with a healthy writer persists the entry (dedup no longer
+    // swallows it).
+    const okWrite = async () => {};
+    await appendGoalActionLogsToStore(store, goalId, [log1], okWrite);
+    expect(store.actionLogs).toHaveLength(1);
   });
 
   it("recovers workflow state after partial node execution crash", () => {

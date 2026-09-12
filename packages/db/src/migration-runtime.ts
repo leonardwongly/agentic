@@ -9,8 +9,8 @@ import {
 } from "./auth-runtime-schema";
 
 // Use import.meta.url for ESM compatibility
-const __filename = typeof import.meta !== "undefined" && import.meta.url 
-  ? fileURLToPath(import.meta.url) 
+const __filename = typeof import.meta !== "undefined" && import.meta.url
+  ? fileURLToPath(import.meta.url)
   : __dirname + "/migration-runtime.js";
 const __dirname_fallback = typeof import.meta !== "undefined" && import.meta.url
   ? fileURLToPath(new URL(".", import.meta.url))
@@ -199,6 +199,47 @@ async function loadAppliedMigrationRows(
   }));
 }
 
+/**
+ * Acquire a session-scoped Postgres advisory lock that serializes concurrent
+ * migration runners. Advisory locks are per-session, so when handed a Pool a
+ * dedicated client is held for the lock's lifetime to guarantee lock and
+ * unlock run on the same connection. If a runner crashes, Postgres releases
+ * the lock automatically when its connection drops.
+ */
+async function acquireMigrationAdvisoryLock(queryable: MigrationQueryable): Promise<{ release: () => Promise<void> }> {
+  const lockHolder = "connect" in queryable ? await queryable.connect() : queryable;
+  const ownsHolder = lockHolder !== queryable && isPoolClient(lockHolder);
+
+  try {
+    await lockHolder.query("select pg_advisory_lock(hashtext($1))", [SCHEMA_MIGRATIONS_TABLE]);
+  } catch (error) {
+    if (ownsHolder) {
+      lockHolder.release();
+    }
+    throw error;
+  }
+
+  let released = false;
+  return {
+    async release() {
+      if (released) {
+        return;
+      }
+      released = true;
+
+      try {
+        await lockHolder.query("select pg_advisory_unlock(hashtext($1))", [SCHEMA_MIGRATIONS_TABLE]);
+      } catch {
+        // A dead session already dropped the lock; never mask the migration error.
+      } finally {
+        if (ownsHolder) {
+          (lockHolder as PoolClient).release();
+        }
+      }
+    }
+  };
+}
+
 function summarizeDatabaseSchemaStatus(params: {
   missingMetadataTable: boolean;
   pendingMigrations: string[];
@@ -216,6 +257,17 @@ function summarizeDatabaseSchemaStatus(params: {
     return {
       ready: false,
       failureReason: params.missingMetadataTable ? "metadata_missing" : "pending_migrations"
+    };
+  }
+
+  if (params.missingMetadataTable) {
+    // Zero checked-in migrations AND no metadata table: pending is empty, but a
+    // healthy database always carries the metadata table once migrations have run.
+    // This combination means the migrations directory was empty or misresolved —
+    // report not-ready instead of masking the deployment misconfiguration.
+    return {
+      ready: false,
+      failureReason: "metadata_missing"
     };
   }
 
@@ -255,7 +307,7 @@ let cachedDefaultMigrationFiles: DatabaseMigrationFile[] | null = null;
 
 export async function listMigrationFiles(options?: { migrationsDir?: string; context?: RuntimeContext }): Promise<DatabaseMigrationFile[]> {
   const runtime = options?.context ?? getRuntimeContext();
-  
+
   // The checked-in migration files are immutable at runtime, so reading and
   // SHA-256 hashing all of them on every call is wasteful — the readiness probe
   // recomputes schema status frequently. Cache the default-directory result for
@@ -268,7 +320,7 @@ export async function listMigrationFiles(options?: { migrationsDir?: string; con
   }
 
   const migrationsDir = resolveMigrationsDir(options?.migrationsDir, runtime);
-  
+
   let entries: Array<{ name: string; isFile: boolean }>;
   try {
     const rawEntries = await runtime.storage.readdir(migrationsDir, { withFileTypes: true });
@@ -287,7 +339,10 @@ export async function listMigrationFiles(options?: { migrationsDir?: string; con
     entries.map(async (entry) => {
       const absolutePath = runtime.storage.join(migrationsDir, entry.name);
       const sqlRaw = await runtime.storage.readFile(absolutePath, "utf8");
-      const sql = sqlRaw as string;
+      // Strip a leading UTF-8 BOM so the checksum covers only the SQL text.
+      // Editors on some platforms save migrations with a BOM; leaving it in
+      // makes checksums platform-dependent and produces false drift reports.
+      const sql = (sqlRaw as string).replace(/^\uFEFF/, "");
 
       return {
         name: entry.name,
@@ -434,61 +489,70 @@ export async function runDatabaseMigrations(options?: {
         );
       }
 
-      await ensureMigrationMetadataTable(queryable);
-      await ensureLegacyMigrationBootstrapTables(queryable);
-      const appliedRows = await loadAppliedMigrationRows(queryable);
-      const appliedByName = new Map(appliedRows.map((row) => [row.name, row]));
+      // Serialize concurrent runners BEFORE reading migration metadata: without
+      // this, two callers could both pass the "is applied?" check and the second
+      // insert would violate the metadata primary key.
+      const advisoryLock = await acquireMigrationAdvisoryLock(queryable);
 
-      for (const applied of appliedRows) {
-        if (!migrationFiles.some((migration) => migration.name === applied.name)) {
-          throw new DatabaseSchemaNotReadyError(
-            "Database migration metadata does not match the checked-in migration files.",
-            createEmptySchemaStatus({
-              driftedMigrations: [applied.name],
-              failureReason: "migration_drift"
-            })
-          );
-        }
-      }
+      try {
+        await ensureMigrationMetadataTable(queryable);
+        await ensureLegacyMigrationBootstrapTables(queryable);
+        const appliedRows = await loadAppliedMigrationRows(queryable);
+        const appliedByName = new Map(appliedRows.map((row) => [row.name, row]));
 
-      for (const migration of migrationFiles) {
-        const applied = appliedByName.get(migration.name);
-
-        if (applied) {
-          if (applied.checksum !== migration.checksum) {
+        for (const applied of appliedRows) {
+          if (!migrationFiles.some((migration) => migration.name === applied.name)) {
             throw new DatabaseSchemaNotReadyError(
               "Database migration metadata does not match the checked-in migration files.",
               createEmptySchemaStatus({
-                driftedMigrations: [migration.name],
+                driftedMigrations: [applied.name],
                 failureReason: "migration_drift"
               })
             );
           }
-
-          continue;
         }
 
-        const client = "connect" in queryable ? await queryable.connect() : queryable;
+        for (const migration of migrationFiles) {
+          const applied = appliedByName.get(migration.name);
 
-        try {
-          await client.query("BEGIN");
-          await client.query(migration.sql);
-          await client.query(
-            `
-              insert into ${SCHEMA_MIGRATIONS_TABLE} (name, checksum)
-              values ($1, $2)
-            `,
-            [migration.name, migration.checksum]
-          );
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK");
-          throw error;
-        } finally {
-          if (isPoolClient(client)) {
-            client.release();
+          if (applied) {
+            if (applied.checksum !== migration.checksum) {
+              throw new DatabaseSchemaNotReadyError(
+                "Database migration metadata does not match the checked-in migration files.",
+                createEmptySchemaStatus({
+                  driftedMigrations: [migration.name],
+                  failureReason: "migration_drift"
+                })
+              );
+            }
+
+            continue;
+          }
+
+          const client = "connect" in queryable ? await queryable.connect() : queryable;
+
+          try {
+            await client.query("BEGIN");
+            await client.query(migration.sql);
+            await client.query(
+              `
+                insert into ${SCHEMA_MIGRATIONS_TABLE} (name, checksum)
+                values ($1, $2)
+              `,
+              [migration.name, migration.checksum]
+            );
+            await client.query("COMMIT");
+          } catch (error) {
+            await client.query("ROLLBACK");
+            throw error;
+          } finally {
+            if (isPoolClient(client)) {
+              client.release();
+            }
           }
         }
+      } finally {
+        await advisoryLock.release();
       }
     }
   );

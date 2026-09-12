@@ -11,22 +11,23 @@
  * 7. Template interpolation (missing vars, recursive templates, injection)
  * 8. Briefing generation (empty task list, timezone edge cases, midnight boundary)
  *
- * BUGS DOCUMENTED (not fixed):
- * - BUG-001: interpolateTemplate does not guard against recursive template patterns
- *   like [date] being re-expanded if the value itself contains [date].
- * - BUG-002: computeNextRun ignores the timezone parameter entirely — it uses
- *   local Date.setHours() which operates in the host's local timezone, not the
- *   requested one. This means scheduled runs fire at wrong wall-clock times for
- *   non-local timezones.
- * - BUG-003: formatBriefingDate silently falls back to UTC ISO slice when an
- *   invalid timezone is provided, producing a date that may disagree with the
- *   user's expected locale without any warning.
- * - BUG-004: The model planner's extractJsonObject uses indexOf/lastIndexOf
- *   which can match braces inside string values, potentially extracting invalid
- *   JSON from model output containing nested brace-like content.
- * - BUG-005: detectRefinementHeuristic matches keywords anywhere in the string,
- *   so "don't remove anything" triggers the removal heuristic. False positives
- *   on negated instructions.
+ * SWEEP BUG STATUS:
+ * - BUG-001 (interpolateTemplate single-pass on [key]-shaped values): accepted
+ *   behavior — single-pass replacement is the safe design; documented, not fixed.
+ * - BUG-002 (computeNextRun ignored timezone): FIXED — timezone-aware via
+ *   Intl.DateTimeFormat; covered by "REGRESSION: computeNextRun respects
+ *   timezone parameter".
+ * - BUG-003 (formatBriefingDate silent UTC fallback on invalid timezone):
+ *   accepted behavior — briefings must render even with a bad preference;
+ *   covered by "BUG-003: invalid timezone falls back silently" as documentation.
+ * - BUG-004 (extractJsonObject brace matching): FIXED — string-aware balanced
+ *   scanner returning the first slice that parses as a JSON object; covered by
+ *   the two extractJsonObject REGRESSION tests.
+ * - BUG-005 (refinement heuristic fired on negated instructions): FIXED —
+ *   clause-scoped negation guard; covered by the negated-removal REGRESSION
+ *   test plus a positive control.
+ * - BUG-006 (briefing granted draft outside knowledge allowlist): FIXED — see
+ *   "REGRESSION: all five briefing types produce valid bundles".
  */
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
@@ -322,8 +323,8 @@ describe("adversarial: model planner boundaries", () => {
     expect(result).toBeNull();
   });
 
-  it("BUG-004: extractJsonObject can match braces inside string values", async () => {
-    // Model output with JSON embedded in a code block that has braces in strings
+  it("REGRESSION: extractJsonObject survives braces inside JSON string values", async () => {
+    // Model output whose JSON string values themselves contain braces.
     const trickyOutput = 'Here is the plan: {"tasks":[{"title":"Use {braces} carefully","summary":"Handle {nested} content","assignedAgent":"research","capabilities":["read"],"riskClass":"R2","confidence":0.8}]}';
 
     const planner = createModelPlanner({
@@ -332,12 +333,30 @@ describe("adversarial: model planner boundaries", () => {
       modelClient: async () => trickyOutput,
     });
 
-    // This should still work because extractJsonObject finds outermost braces
-    // But if the model puts garbage before the opening brace with unmatched braces,
-    // it could fail. Documenting the fragility.
     const result = await planner.plan({ request: "test" });
-    // In this case it works because the outermost {} are correct
     expect(result).not.toBeNull();
+    expect(result![0]).toMatchObject({ title: "Use {braces} carefully" });
+  });
+
+  it("REGRESSION: extractJsonObject skips prose braces and recovers the JSON object", async () => {
+    // Regression for adversarial-sweep BUG-004: indexOf("{")/lastIndexOf("}")
+    // extraction grabbed everything between the FIRST brace (even one inside
+    // prose) and the LAST brace, so a response with brace-containing prose
+    // BEFORE the JSON produced an unparseable slice and the whole model plan
+    // was discarded. The string-aware balanced scanner now skips prose braces
+    // and returns the first slice that parses as a JSON object.
+    const proseBracesOutput =
+      'Sure! (remember: keep replies {brief} and {kind}) {"tasks":[{"title":"Draft the reply","summary":"Keep it short","assignedAgent":"research","capabilities":["read"],"riskClass":"R2","confidence":0.8}]} trailing note }';
+
+    const planner = createModelPlanner({
+      enabled: true,
+      isConfigured: () => true,
+      modelClient: async () => proseBracesOutput,
+    });
+
+    const result = await planner.plan({ request: "test" });
+    expect(result).not.toBeNull();
+    expect(result![0]).toMatchObject({ title: "Draft the reply" });
   });
 });
 
@@ -475,22 +494,44 @@ describe("adversarial: goal refinement boundaries", () => {
     ).rejects.toThrow("2000 character safety limit");
   });
 
-  it("BUG-005: heuristic falsely detects removal on negated instruction", async () => {
+  it("REGRESSION: negated removal instructions no longer trigger the removal heuristic", async () => {
+    // Regression for adversarial-sweep BUG-005: keyword matching used to fire
+    // anywhere in the string, so a negated instruction naming a real task
+    // ("don't remove <task title>") matched `remove`, title-matched the task,
+    // and deleted it. Negated keywords (within the same clause) are skipped.
     const { refineGoal } = await import("@agentic/orchestrator");
     const bundle = await buildValidBundle();
+    const target = bundle.tasks[0]!;
+    const originalIds = bundle.tasks.map((t) => t.id);
 
-    // "Don't remove anything" contains the word "remove" which triggers the heuristic
     const result = await refineGoal({
       bundle,
-      refinement: "Please don't remove anything from the plan",
+      refinement: `Please don't remove ${target.title.toLowerCase()} from the plan`,
       memories: [],
     });
 
-    // BUG: The heuristic sees "remove" and tries to match a task.
-    // Whether it actually removes depends on title matching, but the intent
-    // was clearly to NOT remove. This is a false positive in the heuristic.
-    // The heuristic also adds a generic task since "don't" doesn't match add/change.
-    expect(result.tasks.length).toBeGreaterThanOrEqual(1);
+    const resultIds = result.tasks.map((t) => t.id);
+    for (const id of originalIds) {
+      expect(resultIds).toContain(id);
+    }
+    // No branch matched, so the generic "Handle refinement" fallback task is
+    // the only addition.
+    expect(resultIds.length).toBe(originalIds.length + 1);
+  });
+
+  it("non-negated removal instructions still remove the matching task", async () => {
+    // Positive control: the negation guard must not neuter real removals.
+    const { refineGoal } = await import("@agentic/orchestrator");
+    const bundle = await buildValidBundle();
+    const target = bundle.tasks[0]!;
+
+    const result = await refineGoal({
+      bundle,
+      refinement: `remove ${target.title.toLowerCase()} from the plan`,
+      memories: [],
+    });
+
+    expect(result.tasks.map((t) => t.id)).not.toContain(target.id);
   });
 });
 

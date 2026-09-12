@@ -279,7 +279,7 @@ describe("action-log-append adversarial", () => {
     ).rejects.toThrow(/Goal goal-missing was not found/);
   });
 
-  it("should handle concurrent appends without losing entries", async () => {
+  it("REGRESSION: concurrent appends are serialized per store and lose no entries", async () => {
     const store = {
       goals: [{ id: "goal-1" }],
       actionLogs: [] as ActionLog[]
@@ -292,41 +292,51 @@ describe("action-log-append adversarial", () => {
     const logs1 = [makeActionLog({ id: "c-1", goalId: "goal-1" }), makeActionLog({ id: "c-2", goalId: "goal-1" })];
     const logs2 = [makeActionLog({ id: "c-3", goalId: "goal-1" }), makeActionLog({ id: "c-4", goalId: "goal-1" })];
 
-    // Fire both concurrently — note: this is intentionally racy
+    // Fire both concurrently against ONE shared store object.
     const [r1, r2] = await Promise.all([
       appendGoalActionLogsToStore(store, "goal-1", logs1, writeStore),
       appendGoalActionLogsToStore(store, "goal-1", logs2, writeStore)
     ]);
 
-    // BUG DOCUMENTED: Due to non-atomic read-modify-write, concurrent appends
-    // can lose entries. The store uses in-memory mutation without locking.
-    // In production with file-based stores, this could cause data loss.
-    // Expected: 4 unique logs. Actual may vary due to race.
-    const totalAppended = r1.length + r2.length;
-    expect(totalAppended).toBe(4); // Both calls return their own logs
-    // But store may have fewer due to race condition
-    // This documents the bug: store.actionLogs.length might be < 4
+    // Regression for adversarial-sweep bug: the read-modify-write used to
+    // interleave, so the second reassignment could drop the first call's
+    // entries from both memory and the persisted store. Appends are now
+    // chained per store object: each write observes the previous append.
+    expect(r1.length + r2.length).toBe(4);
+    expect(store.actionLogs.map((log) => log.id).sort()).toEqual(["c-1", "c-2", "c-3", "c-4"]);
+    // Both writes persisted the cumulative state (the second write saw 4 logs).
+    expect(writeStore).toHaveBeenCalledTimes(2);
+    const lastWrittenLogs = (writeStore.mock.calls[1]![0] as typeof store).actionLogs;
+    expect(lastWrittenLogs).toHaveLength(4);
   });
 
-  it("should handle writeStore rejection and not corrupt in-memory state", async () => {
+  it("REGRESSION: writeStore rejection rolls back in-memory state so retries persist", async () => {
     const existingLog = makeActionLog({ id: "existing-1", goalId: "goal-1" });
     const store = {
       goals: [{ id: "goal-1" }],
       actionLogs: [existingLog]
     };
-    const writeStore = vi.fn().mockRejectedValue(new Error("disk full"));
+    const failingWrite = vi.fn().mockRejectedValue(new Error("disk full"));
     const newLog = makeActionLog({ id: "new-1", goalId: "goal-1" });
 
     await expect(
-      appendGoalActionLogsToStore(store, "goal-1", [newLog], writeStore)
+      appendGoalActionLogsToStore(store, "goal-1", [newLog], failingWrite)
     ).rejects.toThrow("disk full");
 
-    // BUG DOCUMENTED: The store's actionLogs are mutated BEFORE writeStore is called.
-    // If writeStore fails, the in-memory state is already modified (dirty).
-    // This means the in-memory store has the new log even though persistence failed.
-    // In a retry scenario, the dedup logic would prevent re-adding, but if the
-    // process restarts and reloads from disk, the log is lost.
-    expect(store.actionLogs.length).toBe(2); // Mutated despite failure
+    // Regression for adversarial-sweep bug: the store used to be mutated BEFORE
+    // writeStore, so a failed write left the unpersisted log in memory and the
+    // dedup guard silently skipped it on every retry — permanent data loss for
+    // direct callers holding a long-lived store. The in-memory view now rolls
+    // back to match the (unwritten) durable state.
+    expect(store.actionLogs).toHaveLength(1);
+    expect(store.actionLogs[0]!.id).toBe("existing-1");
+
+    // A retry with a healthy writer re-appends and persists the log.
+    const okWrite = vi.fn().mockResolvedValue(undefined);
+    const appended = await appendGoalActionLogsToStore(store, "goal-1", [newLog], okWrite);
+    expect(appended.map((log) => log.id)).toEqual(["new-1"]);
+    expect(store.actionLogs.map((log) => log.id)).toEqual(["existing-1", "new-1"]);
+    expect(okWrite).toHaveBeenCalledTimes(1);
   });
 
   it("should handle oversized log arrays without stack overflow", async () => {

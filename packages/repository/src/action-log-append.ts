@@ -38,7 +38,13 @@ export function cloneActionLogs(logs: ActionLog[]): ActionLog[] {
   return logs.map((log) => ActionLogSchema.parse(clone(log)));
 }
 
-export async function appendGoalActionLogsToStore<TStore extends ActionLogStore>(
+// Per-store serialization chain: direct callers that share one store object
+// get atomic read-modify-write appends without needing an external lock.
+// Keyed weakly so chains do not keep stores alive; each entry swallows errors
+// so one failed append never blocks the next.
+const appendChains = new WeakMap<object, Promise<unknown>>();
+
+async function commitGoalActionLogsAppend<TStore extends ActionLogStore>(
   store: TStore,
   goalId: string,
   logs: ActionLog[],
@@ -49,9 +55,35 @@ export async function appendGoalActionLogsToStore<TStore extends ActionLogStore>
   }
 
   const validatedLogs = validateGoalActionLogs(goalId, logs);
-  store.actionLogs = appendMissingActionLogs(store.actionLogs, validatedLogs);
-  await writeStore(store);
+  const appendedLogs = appendMissingActionLogs(store.actionLogs, validatedLogs);
+  const originalLogs = store.actionLogs;
+
+  // Roll back the in-memory view if persistence fails so a failed write never
+  // leaves the store diverged from disk (previously a failed writeStore left
+  // the appended logs in memory, where dedup would then silently skip them on
+  // every retry — losing the entries for good).
+  store.actionLogs = appendedLogs;
+  try {
+    await writeStore(store);
+  } catch (error) {
+    store.actionLogs = originalLogs;
+    throw error;
+  }
+
   return cloneActionLogs(validatedLogs);
+}
+
+export async function appendGoalActionLogsToStore<TStore extends ActionLogStore>(
+  store: TStore,
+  goalId: string,
+  logs: ActionLog[],
+  writeStore: (store: TStore) => Promise<void>
+): Promise<ActionLog[]> {
+  const run = () => commitGoalActionLogsAppend(store, goalId, logs, writeStore);
+  const previous = appendChains.get(store) ?? Promise.resolve();
+  const current = previous.then(run, run);
+  appendChains.set(store, current.catch(() => undefined));
+  return current;
 }
 
 export async function appendGoalActionLogsWithClient(

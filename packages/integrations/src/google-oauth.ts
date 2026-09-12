@@ -93,7 +93,33 @@ export async function buildGoogleAuthorizationUrl(params: {
   });
 }
 
-export async function exchangeGoogleAuthorizationCode(params: {
+// In-flight dedup for authorization-code exchange. Google auth codes are
+// single-use: a concurrent second exchange of the same code always fails and
+// can revoke the token issued by the first. Callers racing the same callback
+// (double navigation, retrying webhook, impatient double-click) now share one
+// token-endpoint call and receive the identical result (adversarial sweep
+// observation: no concurrency guard on token refresh/exchange).
+const inFlightCodeExchanges = new Map<string, Promise<GoogleOAuthTokenResult>>();
+
+export function exchangeGoogleAuthorizationCode(params: {
+  code: string;
+  redirectUri: string;
+}): Promise<GoogleOAuthTokenResult> {
+  const key = `${params.code}\u0000${params.redirectUri}`;
+  const inFlight = inFlightCodeExchanges.get(key);
+
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const exchange = performGoogleAuthorizationCodeExchange(params).finally(() => {
+    inFlightCodeExchanges.delete(key);
+  });
+  inFlightCodeExchanges.set(key, exchange);
+  return exchange;
+}
+
+async function performGoogleAuthorizationCodeExchange(params: {
   code: string;
   redirectUri: string;
 }): Promise<GoogleOAuthTokenResult> {
