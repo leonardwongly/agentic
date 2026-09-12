@@ -32,6 +32,20 @@ export const OperationsRecoveryRequestSchema = z.discriminatedUnion("action", [
     .strict(),
   z
     .object({
+      // Operator-reviewed retirement of a permanently failed (dead-letter) job.
+      // Replay only supports approval_follow_up / autopilot_process /
+      // approval_notification kinds; every other kind had NO governed exit from
+      // dead_letter, so a stale failed job pinned readiness to not_ready forever.
+      // Retiring transitions dead_letter -> cancelled with a mandatory audit
+      // reason and journal entry; it never re-executes side effects.
+      action: z.literal("retire_dead_letter_job"),
+      jobId: RecoveryJobIdSchema,
+      confirm: z.literal(true),
+      reason: z.string().trim().min(1).max(500)
+    })
+    .strict(),
+  z
+    .object({
       action: z.literal("release_expired_lease"),
       jobId: RecoveryJobIdSchema,
       reason: RecoveryReasonSchema
@@ -74,7 +88,7 @@ export type RedactedProviderCredential = Pick<
 
 export type OperationsRecoveryResponse =
   | {
-      action: "cancel_job" | "release_expired_lease";
+      action: "cancel_job" | "retire_dead_letter_job" | "release_expired_lease";
       job: JobRecord;
       dashboardStatusUrl: string;
     }
@@ -202,6 +216,62 @@ async function cancelJob(params: RecoveryContext & { request: Extract<Operations
 
   return {
     action: "cancel_job" as const,
+    job: saved,
+    dashboardStatusUrl: buildStatusUrl(saved)
+  };
+}
+
+async function retireDeadLetterJob(
+  params: RecoveryContext & { request: Extract<OperationsRecoveryRequest, { action: "retire_dead_letter_job" }> }
+) {
+  const job = await assertJobRecoveryAllowed({
+    repository: params.repository,
+    userId: params.userId,
+    jobId: params.request.jobId
+  });
+
+  if (job.status !== "dead_letter") {
+    throw new ApiRouteError(409, `Job ${job.id} is ${job.status}; only dead-letter jobs can be retired.`);
+  }
+
+  const at = nowIso(params.now);
+  const reason = params.request.reason.trim();
+  const retired = JobRecordSchema.parse({
+    ...job,
+    status: "cancelled",
+    idempotencyKey: `${job.id}:retired:${Date.parse(at) || Date.now()}`,
+    claimedBy: null,
+    claimedAt: null,
+    leaseExpiresAt: null,
+    lastError: reason,
+    updatedAt: at,
+    journal: appendJobExecutionJournalEntry({
+      journal: job.journal,
+      at,
+      status: "cancelled",
+      attemptCount: job.attemptCount,
+      summary: `Operator retired dead-letter job ${job.id} after review; no side effects were re-executed.`,
+      error: reason,
+      metadata: {
+        recoveryAction: "retire_dead_letter_job",
+        actorUserId: params.actorContext.subjectUserId,
+        retiredFromStatus: "dead_letter",
+        originalLastError: job.lastError
+      },
+      recovery: JobRecoveryStateSchema.parse({
+        strategy: "manual_review",
+        note: "The job permanently failed, was reviewed by an operator, and was retired without replay.",
+        operatorActionLabel: null,
+        statusUrl: buildStatusUrl(job),
+        replayedFromJobId: job.journal.replayedFromJobId,
+        compensationHints: []
+      })
+    })
+  });
+  const saved = await params.repository.enqueueJob(retired);
+
+  return {
+    action: "retire_dead_letter_job" as const,
     job: saved,
     dashboardStatusUrl: buildStatusUrl(saved)
   };
@@ -371,6 +441,10 @@ export async function executeOperationsRecoveryAction(params: RecoveryContext): 
   switch (params.request.action) {
     case "cancel_job":
       return cancelJob(params as RecoveryContext & { request: Extract<OperationsRecoveryRequest, { action: "cancel_job" }> });
+    case "retire_dead_letter_job":
+      return retireDeadLetterJob(
+        params as RecoveryContext & { request: Extract<OperationsRecoveryRequest, { action: "retire_dead_letter_job" }> }
+      );
     case "release_expired_lease":
       return releaseExpiredLease(
         params as RecoveryContext & { request: Extract<OperationsRecoveryRequest, { action: "release_expired_lease" }> }

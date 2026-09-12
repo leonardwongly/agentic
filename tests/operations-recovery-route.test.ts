@@ -347,6 +347,123 @@ describe("operations recovery route", () => {
     });
   });
 
+  it("retires a dead-lettered job with an audit journal entry and no replay", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const queued = await repository.enqueueJob(
+      createJobRecord({
+        userId: DEFAULT_OWNER_USER_ID,
+        kind: "docs_render",
+        payload: {
+          type: "docs_render",
+          metadata: {}
+        },
+        availableAt: nowIso()
+      })
+    );
+    const claimed = await repository.claimNextJob({ runnerId: "worker-retire-test", leaseMs: 1_000 });
+    expect(claimed?.id).toBe(queued.id);
+    const deadLettered = await repository.deadLetterJob({
+      jobId: queued.id,
+      runnerId: "worker-retire-test",
+      error: "Document render failed."
+    });
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await recoveryRoute(
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
+        action: "retire_dead_letter_job",
+        jobId: deadLettered.id,
+        confirm: true,
+        reason: "Stale test-era render job; reviewed and retired without replay."
+      })
+    );
+    const payload = (await response.json()) as {
+      recovery: {
+        action: string;
+        job: {
+          status: string;
+          lastError: string;
+          claimedBy: string | null;
+          journal: { lifecycleState: string; entries: Array<{ state: string; metadata: Record<string, unknown> }> };
+        };
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.recovery.action).toBe("retire_dead_letter_job");
+    // Retired jobs leave the dead_letter population (readiness) without re-running side effects.
+    expect(payload.recovery.job.status).toBe("cancelled");
+    expect(payload.recovery.job.lastError).toBe("Stale test-era render job; reviewed and retired without replay.");
+    expect(payload.recovery.job.claimedBy).toBeNull();
+    expect(payload.recovery.job.journal.lifecycleState).toBe("cancelled");
+    expect(payload.recovery.job.journal.entries.at(-1)).toMatchObject({
+      state: "cancelled",
+      metadata: expect.objectContaining({
+        recoveryAction: "retire_dead_letter_job",
+        retiredFromStatus: "dead_letter",
+        originalLastError: "Document render failed."
+      })
+    });
+  });
+
+  it("rejects retiring a job that is not dead-lettered", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+    const queued = await repository.enqueueJob(
+      createJobRecord({
+        userId: DEFAULT_OWNER_USER_ID,
+        kind: "docs_render",
+        payload: {
+          type: "docs_render",
+          metadata: {}
+        },
+        availableAt: nowIso()
+      })
+    );
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const response = await recoveryRoute(
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
+        action: "retire_dead_letter_job",
+        jobId: queued.id,
+        confirm: true,
+        reason: "Trying to retire a still-queued job."
+      })
+    );
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(409);
+    expect(payload.error).toContain("only dead-letter jobs can be retired");
+  });
+
+  it("rejects retire requests without an explicit reason or confirmation", async () => {
+    const repository = createRouteTestRepository();
+    await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
+
+    Reflect.set(globalThis, "__agenticRepository", undefined);
+
+    const missingReason = await recoveryRoute(
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
+        action: "retire_dead_letter_job",
+        jobId: "job-1",
+        confirm: true
+      })
+    );
+    expect(missingReason.status).toBe(400);
+
+    const missingConfirm = await recoveryRoute(
+      buildRecoveryRequest("http://localhost/api/operations/recovery", {
+        action: "retire_dead_letter_job",
+        jobId: "job-1",
+        reason: "reviewed"
+      })
+    );
+    expect(missingConfirm.status).toBe(400);
+  });
+
   it("does not recover another user's queued job", async () => {
     const repository = createRouteTestRepository();
     await repository.seedDefaults(DEFAULT_OWNER_USER_ID);
