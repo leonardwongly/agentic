@@ -29,13 +29,16 @@ jobs:
         with:
           fetch-depth: 2
 
+      # pnpm must be installed BEFORE setup-node: the `cache: pnpm` input runs
+      # `pnpm store path` to resolve the cache directory and fails with
+      # "Unable to locate executable file: pnpm" when pnpm is not yet on PATH.
+      - name: Install pnpm
+        run: npm install -g pnpm@11.5.2
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 22
           cache: pnpm
-
-      - name: Install pnpm
-        run: npm install -g pnpm@11.5.2
 
       - name: Report provenance runtime
         run: |
@@ -77,13 +80,14 @@ jobs:
         with:
           fetch-depth: 2
 
+      # pnpm must precede setup-node (see provenance-gate).
+      - name: Install pnpm
+        run: npm install -g pnpm@11.5.2
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 22
           cache: pnpm
-
-      - name: Install pnpm
-        run: npm install -g pnpm@11.5.2
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -125,6 +129,10 @@ jobs:
         with:
           fetch-depth: 2
 
+      # pnpm must precede setup-node (see provenance-gate).
+      - name: Install pnpm
+        run: npm install -g pnpm@11.5.2
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 22
@@ -134,9 +142,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc
-
-      - name: Install pnpm
-        run: npm install -g pnpm@11.5.2
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

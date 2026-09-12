@@ -73,17 +73,39 @@ test("empty note form is rejected inline without creating a note", async ({ page
 
 test("rapid double-submit is guarded: only one goal job posts despite repeated clicks", async ({ page }) => {
   // submitGoalRequest() sets isPending(true) and awaits the polled job AFTER the POST
-  // response resolves, so "Submit request" stays disabled for the whole flight
-  // (dashboard-goals-card.tsx disabled={isPending}) -> a second click cannot fire a
-  // second POST /api/goals. We verify the invariant (exactly 1 POST) rather than the
-  // intermediate disabled state, which is inherently racy when the job completes fast.
+  // response resolves, so "Submit request" stays disabled for the whole in-flight
+  // window (dashboard-goals-card.tsx disabled={isPending}) -> a second click during
+  // the flight cannot fire a second POST /api/goals.
+  //
+  // Deterministic by construction: the first POST response is HELD at the network
+  // layer (page.route) until the hostile second click attempt has fully resolved.
+  // The earlier version clicked after waitForResponse, which on fast CI machines
+  // landed after the whole submit flight had already completed and the button had
+  // legitimately re-enabled — producing a second, user-initiated POST (flaky
+  // "Expected 1, Received 2"). Holding the flight pins the guard window open:
+  // - guard works  -> button stays disabled, the hostile click times out, 1 POST
+  // - guard broken -> button enabled mid-flight, hostile click posts, 2 POSTs, FAIL
   await unlockDashboard(page);
 
-  const goalPosts: string[] = [];
-  page.on("request", (request) => {
-    if (request.method() === "POST" && request.url().includes("/api/goals")) {
-      goalPosts.push(request.url());
+  let goalPostCount = 0;
+  let firstPostHeld = false;
+  let releaseFirstPost: () => void = () => {};
+  const firstPostGate = new Promise<void>((resolve) => {
+    releaseFirstPost = resolve;
+  });
+
+  await page.route("**/api/goals", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
     }
+
+    goalPostCount += 1;
+    if (!firstPostHeld) {
+      firstPostHeld = true;
+      await firstPostGate;
+    }
+    await route.continue();
   });
 
   const { requestCard, requestInput } = await openRequestComposer(page);
@@ -92,22 +114,27 @@ test("rapid double-submit is guarded: only one goal job posts despite repeated c
   await requestInput.press("Tab");
   await expect(submitButton).toBeEnabled({ timeout: E2E_UI_TIMEOUT_MS });
 
-  await Promise.all([
-    page.waitForResponse(
-      (response) => response.url().includes("/api/goals") && response.request().method() === "POST",
-      { timeout: 20_000 }
-    ),
-    submitButton.click()
-  ]);
+  await submitButton.click();
 
-  // Hostile immediate second attempt: even if the button has already re-enabled
-  // (fast job completion), the guard must prevent a duplicate POST.
-  await submitButton.click({ timeout: 800, noWaitAfter: true }).catch(() => {});
+  // Sync point: the guarded in-flight window is now provably open (button disabled
+  // while the POST response is held by the route above).
+  await expect(submitButton).toBeDisabled({ timeout: E2E_UI_TIMEOUT_MS });
+
+  // Hostile second attempt DURING the held flight. With the guard working the
+  // button never re-enables within the timeout and the click is swallowed; with a
+  // broken guard this fires a second POST and the count assertion below fails.
+  await submitButton.click({ timeout: 1_000, noWaitAfter: true }).catch(() => {});
+
+  releaseFirstPost();
+  await page.waitForResponse(
+    (response) => response.url().includes("/api/goals") && response.request().method() === "POST",
+    { timeout: 20_000 }
+  );
 
   await expect(requestCard.locator(".status-chip.success").getByText("Created a new goal bundle.")).toBeVisible({
     timeout: E2E_UI_TIMEOUT_MS * 3
   });
-  expect(goalPosts.length).toBe(1);
+  expect(goalPostCount).toBe(1);
   await expect(submitButton).toBeEnabled({ timeout: E2E_UI_TIMEOUT_MS });
 });
 

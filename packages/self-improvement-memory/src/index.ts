@@ -1,16 +1,22 @@
 import { getRuntimeContext, type RuntimeContext } from "@agentic/runtime-adapters";
 import { z } from "zod";
 
-// Compatibility shims - these will be replaced with direct adapter calls
-// as the migration progresses. For now, we use the adapter through helper functions.
+// Runtime context accessor; the repository factory accepts an explicit context
+// or falls back to auto-detection.
 const _runtime = () => getRuntimeContext();
-const _storage = () => _runtime().storage;
-const _randomUUID = () => _runtime().randomUUID();
 
 const MAX_METADATA_DEPTH = 4;
 const MAX_METADATA_SERIALIZED_LENGTH = 4_000;
 
-const boundedString = (max: number) => z.string().trim().min(1).max(max);
+const boundedString = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .refine((value) => !value.includes("\u0000"), {
+      message: "String must not contain null bytes."
+    });
 const IsoDateTimeSchema = z.string().datetime();
 
 const JsonPrimitiveSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);

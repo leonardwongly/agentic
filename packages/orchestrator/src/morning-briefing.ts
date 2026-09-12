@@ -191,7 +191,7 @@ const briefingCatalog: Record<BriefingType, BriefingDefinition> = {
         title: "Context carry-forward",
         summary: "Surface memories and artifacts that should explicitly carry forward into tomorrow's execution context.",
         assignedAgent: "knowledge",
-        capabilities: ["read", "search", "draft"],
+        capabilities: ["read", "search"],
         confidence: 0.8
       }
     ]

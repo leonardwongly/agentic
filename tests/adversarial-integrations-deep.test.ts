@@ -1025,24 +1025,35 @@ describe("Gmail readiness checks", () => {
     vi.restoreAllMocks();
   });
 
-  it("should report not ready when refresh token is missing", async () => {
+  it("REGRESSION: reports not ready when refresh token is missing", async () => {
     vi.resetModules();
     delete process.env.GOOGLE_REFRESH_TOKEN;
 
-    // isGmailReady calls getOAuth2Client() which checks process.env synchronously-ish
-    // but since createGoogleOAuthClient is now async, isGmailReady may behave differently
     const gmail = await import("../packages/integrations/src/gmail");
 
-    // isGmailReady checks if getOAuth2Client() returns non-null
-    // Without GOOGLE_REFRESH_TOKEN, it should return false
-    // Note: isGmailReady is synchronous but internally calls async getOAuth2Client
-    // This is actually a potential bug - the function signature says boolean but
-    // the underlying call is async
-    const result = gmail.isGmailReady();
-    // Since getOAuth2Client returns a Promise (truthy), isGmailReady may incorrectly return true
-    // BUG DOCUMENTED: isGmailReady() compares a Promise to null, which is always truthy
-    // This means isGmailReady() always returns true regardless of configuration
-    expect(typeof result).toBe("boolean");
+    // Regression for adversarial-sweep bug: after the lazy-loading conversion,
+    // getOAuth2Client() became async and isGmailReady() compared a Promise to
+    // null — always truthy, so it returned true with no token configured.
+    // isGmailReady now checks the env directly.
+    expect(gmail.isGmailReady()).toBe(false);
+  });
+
+  it("REGRESSION: reports ready when refresh token is configured", async () => {
+    vi.resetModules();
+    process.env.GOOGLE_REFRESH_TOKEN = "test-refresh-token";
+
+    const gmail = await import("../packages/integrations/src/gmail");
+
+    expect(gmail.isGmailReady()).toBe(true);
+  });
+
+  it("REGRESSION: treats whitespace-only refresh token as missing", async () => {
+    vi.resetModules();
+    process.env.GOOGLE_REFRESH_TOKEN = "   ";
+
+    const gmail = await import("../packages/integrations/src/gmail");
+
+    expect(gmail.isGmailReady()).toBe(false);
   });
 });
 
@@ -1058,16 +1069,25 @@ describe("Calendar readiness checks", () => {
     vi.restoreAllMocks();
   });
 
-  it("should report readiness status based on refresh token presence", async () => {
+  it("REGRESSION: reports not ready when refresh token is missing", async () => {
     vi.resetModules();
     delete process.env.GOOGLE_REFRESH_TOKEN;
 
     const calendar =
       await import("../packages/integrations/src/google-calendar");
 
-    // Same pattern as Gmail - isCalendarReady may have the same async/sync mismatch
-    const result = calendar.isCalendarReady();
-    expect(typeof result).toBe("boolean");
+    // Same async/sync mismatch regression as Gmail.
+    expect(calendar.isCalendarReady()).toBe(false);
+  });
+
+  it("REGRESSION: reports ready when refresh token is configured", async () => {
+    vi.resetModules();
+    process.env.GOOGLE_REFRESH_TOKEN = "test-refresh-token";
+
+    const calendar =
+      await import("../packages/integrations/src/google-calendar");
+
+    expect(calendar.isCalendarReady()).toBe(true);
   });
 });
 

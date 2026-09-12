@@ -223,12 +223,13 @@ describe("Adversarial self-improvement-memory deep tests", () => {
       expect(listed.length).toBe(1);
     });
 
-    it("BUG: accepts null bytes in episode id without rejection", async () => {
-      // BUG DOCUMENTED: Null bytes pass through Zod string validation and are persisted.
-      // This could cause issues with filesystem operations or downstream consumers.
-      const result = await repo.appendEpisode(baseEpisode({ id: "ep\x00evil" }));
-      expect(result.id).toContain("\x00");
-      // The episode is stored and retrievable — null byte is NOT sanitized.
+    it("REGRESSION: rejects null bytes in episode id", async () => {
+      // Regression for adversarial-sweep bug: null bytes used to pass through
+      // Zod string validation and were persisted to disk, risking platform-specific
+      // filesystem truncation. boundedString now rejects \u0000.
+      await expect(repo.appendEpisode(rawEpisode({ id: "ep\x00evil" }) as any)).rejects.toThrow(
+        SelfImprovementValidationError
+      );
     });
 
     it("handles path separator injection in skill field", async () => {

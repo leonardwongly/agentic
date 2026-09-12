@@ -5,6 +5,12 @@ RUN npm install -g pnpm@11.5.2
 FROM base AS deps
 COPY package*.json ./
 COPY pnpm-lock.yaml ./
+# pnpm-workspace.yaml must be present for the install to run in workspace mode:
+# it carries the allowBuilds approval for the esbuild/workerd postinstall
+# scripts. Without it pnpm 11 hard-fails the frozen install with
+# ERR_PNPM_IGNORED_BUILDS (and npm-workspace scripts like `npm run build -w`
+# keep working off the root package.json workspaces field either way).
+COPY pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/package.json
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/agents/package.json packages/agents/package.json

@@ -851,41 +851,33 @@ describe("adversarial: briefing generation boundaries", () => {
     expect(bundle.goal.title).toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
-  it("all five briefing types produce valid bundles", async () => {
+  it("REGRESSION: all five briefing types produce valid bundles within agent allowlists", async () => {
     const types = ["startup", "midday", "pre_meeting", "end_of_day", "next_day"] as const;
 
     for (const type of types) {
-      // next_day and pre_meeting assign "draft" to the "knowledge" agent which
-      // is outside its allowlist. This is a known configuration issue in the
-      // briefing catalog — documenting it rather than skipping.
-      try {
-        const bundle = await generateBriefing({
-          type,
-          userId: "user-1",
-          memories: [],
-          integrations: [],
-          pendingApprovals: [],
-          activeWatchers: [],
-        });
+      // Regression for adversarial-sweep BUG-006: next_day used to assign "draft"
+      // to the "knowledge" agent, outside its allowlist [read, search, create,
+      // monitor], causing CapabilityAllowlistViolationError at generation time.
+      // The catalog now grants only [read, search], so every type must succeed.
+      const bundle = await generateBriefing({
+        type,
+        userId: "user-1",
+        memories: [],
+        integrations: [],
+        pendingApprovals: [],
+        activeWatchers: [],
+      });
 
-        expect(bundle.goal.intent).toBe(`briefing:${type}`);
-        expect(bundle.tasks.length).toBe(3); // Each briefing type defines exactly 3 tasks
-      } catch (error) {
-        // BUG-006: The briefing catalog grants "draft" to the "knowledge" agent
-        // for next_day and pre_meeting types, but knowledge's allowlist is
-        // [read, search, create, monitor]. This causes a CapabilityAllowlistViolationError.
-        if (type === "next_day" || type === "pre_meeting") {
-          expect((error as Error).message).toContain("draft");
-        } else {
-          throw error; // Unexpected failure for other types
-        }
-      }
+      expect(bundle.goal.intent).toBe(`briefing:${type}`);
+      expect(bundle.tasks.length).toBe(3); // Each briefing type defines exactly 3 tasks
     }
   });
 
-  it("computeNextRun respects timezone parameter", () => {
-    // computeNextRun now correctly handles timezone conversions.
-    // The same cron expression in different timezones should produce different UTC instants.
+  it("REGRESSION: computeNextRun respects timezone parameter", () => {
+    // Regression for adversarial-sweep BUG-002: computeNextRun used to ignore the
+    // timezone parameter and call Date.setHours() in the host's local timezone.
+    // It now resolves wall-clock time through Intl.DateTimeFormat, so the same
+    // cron expression in different timezones produces different UTC instants.
     const cron = "0 9 * * *"; // Daily at 9:00
 
     const utcResult = computeNextRun(cron, "UTC");
@@ -896,6 +888,10 @@ describe("adversarial: briefing generation boundaries", () => {
     // Both should be valid ISO strings
     expect(utcResult).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/);
     expect(tokyoResult).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/);
+
+    // 9:00 in Asia/Tokyo (UTC+9) is 0:00 UTC — the UTC hour must reflect the offset.
+    expect(new Date(utcResult!).getUTCHours()).toBe(9);
+    expect(new Date(tokyoResult!).getUTCHours()).toBe(0);
   });
 
   it("computeNextRun returns null for invalid cron expressions", () => {

@@ -288,7 +288,6 @@ describe("adversarial self-improvement memory paths", () => {
 
   const hostileEpisodes = [
     buildEpisode({ id: "../../outside", skill: "../../etc", task: "passwd", timestamp: "2026-04-03T09:00:00.000Z" }),
-    buildEpisode({ id: "ep-nul\u0000", skill: "日本語のスキル", task: "emoji 🎉 outcome", timestamp: "2026-04-03T10:00:00.000Z" }),
     buildEpisode({ id: "..\\escape", skill: "  padded skill  ", task: "x".repeat(300), timestamp: "2026-04-03T11:00:00.000Z" })
   ];
 
@@ -324,6 +323,26 @@ describe("adversarial self-improvement memory paths", () => {
       SelfImprovementValidationError
     );
     await expect(repository.listEpisodes({ year: "2099" })).resolves.toEqual([]);
+  });
+
+  it("REGRESSION: rejects null bytes in episode identifiers at the schema boundary", () => {
+    // Regression for the 2026-09 adversarial sweep: null bytes used to pass
+    // boundedString validation and were persisted verbatim. On platforms where
+    // filesystem APIs truncate at NUL this allows distinct ids to collide on the
+    // same path. The schema now rejects them up front.
+    const withNullByte = EpisodeRecordSchema.safeParse({
+      id: "ep-nul\u0000",
+      timestamp: "2026-04-03T10:00:00.000Z",
+      skill: "日本語のスキル",
+      task: "emoji 🎉 outcome",
+      outcome: "success",
+      situation: "adversarial probe",
+      solution: "reject at the boundary",
+      lesson: "null bytes must never reach storage"
+    });
+
+    expect(withNullByte.success).toBe(false);
+    expect(JSON.stringify(withNullByte.error?.issues ?? [])).toContain("null bytes");
   });
 
   it("keeps every sanitised-slug collision instead of silently overwriting one", async () => {
